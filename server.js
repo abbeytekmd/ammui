@@ -34,7 +34,7 @@ const SEARCH_TARGETS = [
 
 async function parseDescription(url, isServer, isRenderer) {
     try {
-        console.log(`Fetching description from ${url}...`);
+        console.log(`Fetching description from ${url}...`, isServer, isRenderer);
         const response = await axios.get(url, { timeout: 5000 });
         const parser = new xml2js.Parser({ explicitArray: false });
         const result = await parser.parseStringPromise(response.data);
@@ -64,6 +64,9 @@ async function parseDescription(url, isServer, isRenderer) {
         };
         extractServices(device);
         console.log(`Extracted ${services.length} services from ${url}`);
+        for (const service of services) {
+            console.log(`Service: ${service.serviceType}`);
+        }
 
         let type = 'unknown';
         const hasOpenHome = services.some(s => s.serviceType.includes('Playlist'));
@@ -98,6 +101,7 @@ async function parseDescription(url, isServer, isRenderer) {
 ssdpClient.on('response', async (headers, statusCode, rinfo) => {
     const location = headers.LOCATION;
     if (location && !devices.has(location)) {
+        console.log(`Discovered device with ST ${headers.ST}`);
         const isServer = (headers.ST || '').includes('MediaServer');
         const serverHeader = (headers.SERVER || '').toLowerCase();
         const isSonosSSDP = (headers.ST || '').includes('ZonePlayer') || serverHeader.includes('sonos') || serverHeader.includes('play:');
