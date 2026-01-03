@@ -83,7 +83,17 @@ async function browse(udn, objectId) {
 }
 
 function updateBreadcrumbs() {
-    browserBreadcrumbs.innerHTML = browsePath.map((item, index) => `
+    const homeIndicator = `
+        <button id="btn-go-home" class="btn-control home-breadcrumb-btn" onclick="goHome()" title="Go to home folder">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+            </svg>
+        </button>
+        <span class="breadcrumb-separator" style="margin-right: 0.5rem"></span>
+    `;
+
+    browserBreadcrumbs.innerHTML = homeIndicator + browsePath.map((item, index) => `
         <span class="breadcrumb-item" onclick="navigateToPath(${index})">${item.title}</span>
     `).join('<span class="breadcrumb-separator">/</span>');
 }
@@ -101,7 +111,7 @@ async function enterFolder(id, title) {
     await browse(selectedServerUdn, id);
 }
 
-async function addToPlaylist(uri, title, artist, album, protocolInfo) {
+async function addToPlaylist(uri, title, artist, album, protocolInfo, autoSwitch = true) {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -120,9 +130,50 @@ async function addToPlaylist(uri, title, artist, album, protocolInfo) {
         }
 
         await fetchPlaylist(selectedRendererUdn);
+
+        // On mobile, switch to playlist view after adding if requested
+        if (autoSwitch && window.innerWidth <= 800) {
+            switchView('playlist');
+        }
     } catch (err) {
         console.error('Client: Error adding track:', err);
         throw err;
+    }
+}
+
+async function playTrack(uri, title, artist, album, protocolInfo) {
+    if (!selectedRendererUdn) {
+        alert('Please select a Renderer on the left first!');
+        return;
+    }
+
+    try {
+        await clearPlaylist();
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri, title, artist, album, protocolInfo })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to add track');
+        }
+
+        const data = await response.json();
+        const newId = data.newId;
+
+        await fetchPlaylist(selectedRendererUdn);
+
+        if (newId) {
+            await playPlaylistItem(newId);
+        }
+
+        if (window.innerWidth <= 800) {
+            switchView('playlist');
+        }
+    } catch (err) {
+        console.error('Play track from browser error:', err);
     }
 }
 
@@ -141,13 +192,73 @@ async function addAllToPlaylist() {
 
     try {
         for (const track of tracks) {
-            await addToPlaylist(track.uri, track.title, track.artist, track.album, track.protocolInfo);
+            await addToPlaylist(track.uri, track.title, track.artist, track.album, track.protocolInfo, false);
+        }
+
+        // Switch once at the end for mobile
+        if (window.innerWidth <= 800) {
+            switchView('playlist');
         }
     } catch (err) {
         console.error('Failed to add some tracks:', err);
     } finally {
         btn.classList.remove('disabled');
         btn.textContent = 'Add All';
+    }
+}
+
+async function playAll() {
+    const tracks = currentBrowserItems.filter(item => item.type === 'item');
+    if (tracks.length === 0) return;
+
+    if (!selectedRendererUdn) {
+        alert('Please select a Renderer on the left first!');
+        return;
+    }
+
+    const btn = document.getElementById('btn-play-all');
+    btn.classList.add('disabled');
+    btn.textContent = 'Preparing...';
+
+    try {
+        await clearPlaylist();
+
+        let firstTrackId = null;
+        for (let i = 0; i < tracks.length; i++) {
+            const track = tracks[i];
+            const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    uri: track.uri,
+                    title: track.title,
+                    artist: track.artist,
+                    album: track.album,
+                    protocolInfo: track.protocolInfo
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (i === 0) firstTrackId = data.newId;
+            }
+        }
+
+        await fetchPlaylist(selectedRendererUdn);
+
+        if (firstTrackId) {
+            await playPlaylistItem(firstTrackId);
+        }
+
+        // On mobile, switch to playlist view
+        if (window.innerWidth <= 800) {
+            switchView('playlist');
+        }
+    } catch (err) {
+        console.error('Play All error:', err);
+    } finally {
+        btn.classList.remove('disabled');
+        btn.textContent = 'Play All';
     }
 }
 
@@ -207,6 +318,7 @@ function renderBrowser(items) {
     currentBrowserItems = items;
     const tracks = items.filter(item => item.type === 'item');
     const addAllBtn = document.getElementById('btn-add-all');
+    const playAllBtn = document.getElementById('btn-play-all');
 
     if (addAllBtn) {
         if (tracks.length > 0) {
@@ -215,6 +327,17 @@ function renderBrowser(items) {
             addAllBtn.classList.add('disabled');
         }
     }
+
+    if (playAllBtn) {
+        if (tracks.length > 0) {
+            playAllBtn.classList.remove('disabled');
+        } else {
+            playAllBtn.classList.add('disabled');
+        }
+    }
+
+    updateHomeButtons();
+
 
     if (items.length === 0) {
         browserItems.innerHTML = '<div class="empty-state">Folder is empty</div>';
@@ -240,13 +363,19 @@ function renderBrowser(items) {
             <div class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
-                `addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.protocolInfo)}')`}">
+                `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.protocolInfo)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
-                    ${item.artist ? `<div class="item-artist">${item.artist}</div>` : (isContainer ? '' : '<div class="item-artist">Unknown Artist</div>')}
                 </div>
-                ${!isContainer ? `<div class="item-album">${item.album || ''}</div>` : ''}
+                ${!isContainer ? `
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14M5 12h14"></path>
+                        </svg>
+                        Queue
+                    </button>
+                ` : ''}
             </div>
         `;
     }).join('');
@@ -257,6 +386,11 @@ async function fetchPlaylist(udn) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(udn)}`);
         if (!response.ok) throw new Error('Failed to fetch playlist');
         const playlist = await response.json();
+
+        // Only re-render if the playlist items have changed
+        if (JSON.stringify(playlist) !== JSON.stringify(currentPlaylistItems)) {
+            renderPlaylist(playlist);
+        }
 
         // Also fetch status to have latest track info
         const statusRes = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
@@ -298,6 +432,7 @@ function renderPlaylist(items) {
 
     if (items.length === 0) {
         playlistItems.innerHTML = '<div class="empty-state">Playlist is empty</div>';
+        updateTransportControls();
         return;
     }
 
@@ -334,6 +469,49 @@ function renderPlaylist(items) {
             </div>
         `;
     }).join('');
+
+    updateTransportControls();
+}
+
+function updateTransportControls() {
+    const btnPlay = document.getElementById('btn-play');
+    const btnPause = document.getElementById('btn-pause');
+    const btnStop = document.getElementById('btn-stop');
+    const btnClear = document.getElementById('btn-clear');
+
+    if (!btnPlay) return;
+
+    const isPlaylistEmpty = currentPlaylistItems.length === 0;
+    const isPlaying = currentTransportState === 'Playing';
+    const isPaused = currentTransportState === 'Paused';
+
+    // Play: enabled if not empty and not already playing
+    if (isPlaylistEmpty || isPlaying) {
+        btnPlay.classList.add('disabled');
+    } else {
+        btnPlay.classList.remove('disabled');
+    }
+
+    // Pause: enabled only if playing
+    if (isPlaying) {
+        btnPause.classList.remove('disabled');
+    } else {
+        btnPause.classList.add('disabled');
+    }
+
+    // Stop: enabled if playing or paused
+    if (isPlaying || isPaused) {
+        btnStop.classList.remove('disabled');
+    } else {
+        btnStop.classList.add('disabled');
+    }
+
+    // Clear: enabled if playlist not empty
+    if (isPlaylistEmpty) {
+        btnClear.classList.add('disabled');
+    } else {
+        btnClear.classList.remove('disabled');
+    }
 }
 
 function openServerModal() {
@@ -445,15 +623,98 @@ function renderDeviceCard(device, forceHighlight = false) {
             <div class="device-info">
                 <div class="device-name">${device.friendlyName}</div>
                 <div class="device-meta">
-                    <span>${device.manufacturer || 'Unknown'}</span>
-                    <span>•</span>
-                    <span>${device.modelName || (isServer ? 'Media Server' : 'Renderer')}</span>
-                    <span>•</span>
                     <span style="font-family: monospace; opacity: 0.7;">${new URL(device.location).hostname}</span>
                 </div>
             </div>
         </div>
     `;
+}
+
+function switchView(view) {
+    const leftCol = document.querySelector('.left-column');
+    const rightCol = document.querySelector('.right-column');
+    const tabPlaylist = document.getElementById('tab-playlist');
+    const tabBrowser = document.getElementById('tab-browser');
+
+    if (view === 'playlist') {
+        leftCol.classList.add('active');
+        rightCol.classList.remove('active');
+        tabPlaylist ? tabPlaylist.classList.add('active') : null;
+        tabBrowser ? tabBrowser.classList.remove('active') : null;
+    } else {
+        leftCol.classList.remove('active');
+        rightCol.classList.add('active');
+        tabPlaylist ? tabPlaylist.classList.remove('active') : null;
+        tabBrowser ? tabBrowser.classList.add('active') : null;
+    }
+}
+
+function setHome() {
+    if (!selectedServerUdn) return;
+    localStorage.setItem('homeServerUdn', selectedServerUdn);
+    localStorage.setItem('homeBrowsePath', JSON.stringify(browsePath));
+
+    // Visual feedback
+    const btn = document.getElementById('btn-set-home');
+    const originalContent = btn.innerHTML;
+    btn.innerHTML = `
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        Home Set!
+    `;
+    btn.style.color = '#4ade80';
+    setTimeout(() => {
+        btn.innerHTML = originalContent;
+        btn.style.color = '';
+    }, 2000);
+
+    updateHomeButtons();
+}
+
+async function goHome() {
+    const homeServerUdn = localStorage.getItem('homeServerUdn');
+    const homeBrowsePath = localStorage.getItem('homeBrowsePath');
+
+    if (homeServerUdn === selectedServerUdn && homeBrowsePath) {
+        try {
+            browsePath = JSON.parse(homeBrowsePath);
+            updateBreadcrumbs();
+            const lastFolder = browsePath[browsePath.length - 1];
+            await browse(selectedServerUdn, lastFolder.id);
+        } catch (e) {
+            console.error('Failed to go home:', e);
+            await browse(selectedServerUdn, '0');
+        }
+    } else {
+        await browse(selectedServerUdn, '0');
+    }
+}
+
+function updateHomeButtons() {
+    const btnSetHome = document.getElementById('btn-set-home');
+    const btnGoHome = document.getElementById('btn-go-home');
+
+    const homeBrowsePath = localStorage.getItem('homeBrowsePath');
+    const isAtHome = homeBrowsePath === JSON.stringify(browsePath);
+
+    if (btnSetHome) {
+        if (isAtHome) {
+            btnSetHome.classList.add('disabled');
+            btnSetHome.title = "This folder is already your home";
+        } else {
+            btnSetHome.classList.remove('disabled');
+            btnSetHome.title = "Set current folder as home";
+        }
+    }
+
+    if (btnGoHome) {
+        if (isAtHome) {
+            btnGoHome.classList.add('disabled');
+        } else {
+            btnGoHome.classList.remove('disabled');
+        }
+    }
 }
 
 // Initial fetch
@@ -472,7 +733,22 @@ async function init() {
     if (selectedServerUdn) {
         const server = currentDevices.find(d => d.udn === selectedServerUdn && d.type === 'server');
         if (server) {
-            await browse(selectedServerUdn, '0');
+            const homeServerUdn = localStorage.getItem('homeServerUdn');
+            const homeBrowsePath = localStorage.getItem('homeBrowsePath');
+
+            if (homeServerUdn === selectedServerUdn && homeBrowsePath) {
+                try {
+                    browsePath = JSON.parse(homeBrowsePath);
+                    updateBreadcrumbs();
+                    const lastFolder = browsePath[browsePath.length - 1];
+                    await browse(selectedServerUdn, lastFolder.id);
+                } catch (e) {
+                    console.error('Failed to parse saved home path:', e);
+                    await browse(selectedServerUdn, '0');
+                }
+            } else {
+                await browse(selectedServerUdn, '0');
+            }
         }
     }
 }
@@ -481,5 +757,12 @@ init();
 
 // Poll every 3 seconds for UI responsiveness
 setInterval(fetchDevices, 3000);
-// Poll status more frequently for better responsiveness
-setInterval(fetchStatus, 1000);
+// Poll status frequently for responsiveness
+setInterval(fetchStatus, 2000);
+
+// Poll playlist every 5 seconds to sync with other controllers
+setInterval(() => {
+    if (selectedRendererUdn) {
+        fetchPlaylist(selectedRendererUdn);
+    }
+}, 5000);

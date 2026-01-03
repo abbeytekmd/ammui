@@ -13,13 +13,33 @@
 
 <body>
     <div class="container">
-        <header>
-            <h1>AMCUI</h1>
-        </header>
+        <div class="top-bar">
+            <header>
+                <h1>AMCUI</h1>
+            </header>
+
+            <nav class="mobile-tabs">
+                <button onclick="switchView('playlist')" id="tab-playlist" class="tab-item active">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 18V5l12-2v13"></path>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <circle cx="18" cy="16" r="3"></circle>
+                    </svg>
+                    Playlist
+                </button>
+                <button onclick="switchView('browser')" id="tab-browser" class="tab-item">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                        <path d="M12 18V6M6 12h12"></path>
+                    </svg>
+                    Browse
+                </button>
+            </nav>
+        </div>
 
         <main class="main-layout">
             <!-- Left Column: Renderers & Playlist -->
-            <div class="column left-column">
+            <div class="column left-column active">
                 <section class="device-section">
                     <div class="section-header">
                         <h2>Renderers</h2>
@@ -33,27 +53,30 @@
                 <div id="playlist-container" class="playlist-container">
                     <div class="section-header">
                         <div class="header-group">
-                            <h2>Renderer Playlist</h2>
                             <div class="playlist-controls">
                                 <div class="transport-group">
-                                    <button onclick="transportAction('play')" class="btn-control primary" title="Play">
+                                    <button id="btn-play" onclick="transportAction('play')" class="btn-control primary"
+                                        title="Play">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                             <path d="M8 5v14l11-7z"></path>
                                         </svg>
                                     </button>
-                                    <button onclick="transportAction('pause')" class="btn-control" title="Pause">
+                                    <button id="btn-pause" onclick="transportAction('pause')" class="btn-control"
+                                        title="Pause">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                             <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
                                         </svg>
                                     </button>
-                                    <button onclick="transportAction('stop')" class="btn-control" title="Stop">
+                                    <button id="btn-stop" onclick="transportAction('stop')" class="btn-control"
+                                        title="Stop">
                                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                                             <path d="M6 6h12v12H6z"></path>
                                         </svg>
                                     </button>
                                 </div>
                                 <span class="divider"></span>
-                                <button onclick="clearPlaylist()" class="btn-control" title="Clear Playlist">
+                                <button id="btn-clear" onclick="clearPlaylist()" class="btn-control"
+                                    title="Clear Playlist">
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                         stroke-width="2">
                                         <path
@@ -87,16 +110,36 @@
                 <div id="browser-container" class="playlist-container">
                     <div class="section-header">
                         <div class="header-group">
-                            <h2>Media Browser</h2>
                             <div class="header-controls">
-                                <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
-                                    title="Add all tracks on view">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                        stroke-width="2">
-                                        <path d="M12 5v14M5 12h14"></path>
-                                    </svg>
-                                    Add All
-                                </button>
+                                <div class="browser-control-group">
+                                    <button id="btn-play-all" onclick="playAll()" class="btn-control disabled primary"
+                                        title="Clear and play all tracks">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M5 3l14 9-14 9V3z"></path>
+                                        </svg>
+                                        Play All
+                                    </button>
+                                    <span class="divider"></span>
+                                    <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
+                                        title="Add all tracks on view">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M12 5v14M5 12h14"></path>
+                                        </svg>
+                                        Add All
+                                    </button>
+                                    <span class="divider"></span>
+                                    <button id="btn-set-home" onclick="setHome()" class="btn-control"
+                                        title="Set current folder as home">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                                            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                                        </svg>
+                                        Set Home
+                                    </button>
+                                </div>
                             </div>
                             <div id="browser-breadcrumbs" class="breadcrumbs">
                                 <!-- Breadcrumbs will go here -->
