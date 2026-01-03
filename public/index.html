@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMCUI | OpenHome Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>AMCUI</h1>
+        </header>
+
+        <main class="main-layout">
+            <!-- Left Column: Renderers & Playlist -->
+            <div class="column left-column">
+                <section class="device-section">
+                    <div class="section-header">
+                        <h2>Renderers</h2>
+                        <span id="renderer-count" class="badge">0 found</span>
+                    </div>
+                    <div id="device-list" class="device-list">
+                        <div class="empty-state">Searching for Renderers...</div>
+                    </div>
+                </section>
+
+                <div id="playlist-container" class="playlist-container">
+                    <div class="section-header">
+                        <div class="header-group">
+                            <h2>Renderer Playlist</h2>
+                            <div class="playlist-controls">
+                                <div class="transport-group">
+                                    <button onclick="transportAction('play')" class="btn-control primary" title="Play">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M8 5v14l11-7z"></path>
+                                        </svg>
+                                    </button>
+                                    <button onclick="transportAction('pause')" class="btn-control" title="Pause">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+                                        </svg>
+                                    </button>
+                                    <button onclick="transportAction('stop')" class="btn-control" title="Stop">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                            <path d="M6 6h12v12H6z"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <span class="divider"></span>
+                                <button onclick="clearPlaylist()" class="btn-control" title="Clear Playlist">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path
+                                            d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6">
+                                        </path>
+                                    </svg>
+                                    Clear
+                                </button>
+                            </div>
+                        </div>
+                        <span id="playlist-count" class="badge">0 items</span>
+                    </div>
+                    <div id="playlist-items" class="playlist-items">
+                        <div class="empty-state">Select a renderer to view playlist</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Servers & Folders -->
+            <div class="column right-column">
+                <section class="device-section">
+                    <div class="section-header">
+                        <h2>Media Servers</h2>
+                        <span id="server-count" class="badge">0 found</span>
+                    </div>
+                    <div id="server-list" class="device-list">
+                        <div class="empty-state">Searching for Media Servers...</div>
+                    </div>
+                </section>
+
+                <div id="browser-container" class="playlist-container">
+                    <div class="section-header">
+                        <div class="header-group">
+                            <h2>Media Browser</h2>
+                            <div class="header-controls">
+                                <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
+                                    title="Add all tracks on view">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path d="M12 5v14M5 12h14"></path>
+                                    </svg>
+                                    Add All
+                                </button>
+                            </div>
+                            <div id="browser-breadcrumbs" class="breadcrumbs">
+                                <!-- Breadcrumbs will go here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div id="browser-items" class="playlist-items">
+                        <div class="empty-state">Select a server to browse folders</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer id="status-bar" class="status-bar">
+            Connecting to AMCUI service...
+        </footer>
+    </div>
+
+    <div id="server-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Select Media Server</h2>
+                <button class="btn-close" onclick="closeServerModal()">✕</button>
+            </div>
+            <div id="modal-server-list" class="device-list">
+                <!-- Servers will be listed here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="renderer-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Select Renderer</h2>
+                <button class="btn-close" onclick="closeRendererModal()">✕</button>
+            </div>
+            <div id="modal-renderer-list" class="device-list">
+                <!-- Renderers will be listed here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
