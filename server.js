@@ -18,6 +18,8 @@ const port = 3000;
 
 // Store discovered devices
 let devices = new Map();
+// Cache renderer instances to avoid recreating them on every API call
+let rendererCache = new Map();
 
 const ssdpClient = new Client();
 
@@ -177,9 +179,27 @@ setInterval(() => {
     for (const [location, device] of devices) {
         if (now - device.lastSeen > 30000) {
             devices.delete(location);
+            // Also remove from renderer cache if it exists
+            if (device.udn && rendererCache.has(device.udn)) {
+                rendererCache.delete(device.udn);
+            }
         }
     }
 }, 5000);
+
+// Helper function to get or create a cached renderer
+function getRenderer(device) {
+    if (!device.udn) {
+        // If no UDN, create a new instance (shouldn't happen normally)
+        return new Renderer(device);
+    }
+
+    if (!rendererCache.has(device.udn)) {
+        rendererCache.set(device.udn, new Renderer(device));
+    }
+
+    return rendererCache.get(device.udn);
+}
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -208,7 +228,7 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
 
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         const ids = await renderer.getIdArray();
         const afterId = ids.length > 0 ? ids[ids.length - 1] : 0;
 
@@ -226,7 +246,7 @@ app.post('/api/playlist/:udn/clear', async (req, res) => {
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
 
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.clearPlaylist();
         res.json({ success: true });
     } catch (err) {
@@ -240,7 +260,7 @@ app.post('/api/playlist/:udn/delete/:id', async (req, res) => {
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
 
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.deleteTrack(id);
         res.json({ success: true });
     } catch (err) {
@@ -253,7 +273,7 @@ app.post('/api/playlist/:udn/play', async (req, res) => {
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.play();
         res.json({ success: true });
     } catch (err) {
@@ -266,7 +286,7 @@ app.post('/api/playlist/:udn/pause', async (req, res) => {
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.pause();
         res.json({ success: true });
     } catch (err) {
@@ -279,7 +299,7 @@ app.post('/api/playlist/:udn/stop', async (req, res) => {
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.stop();
         res.json({ success: true });
     } catch (err) {
@@ -292,7 +312,7 @@ app.post('/api/playlist/:udn/seek/:id', async (req, res) => {
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         await renderer.seekId(id);
         res.json({ success: true });
     } catch (err) {
@@ -305,7 +325,7 @@ app.get('/api/playlist/:udn/status', async (req, res) => {
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         const status = await renderer.getCurrentStatus();
         res.json(status);
     } catch (err) {
@@ -324,7 +344,7 @@ app.get('/api/playlist/:udn', async (req, res) => {
 
     console.error(`[DEBUG] Fetching playlist for device: ${device.friendlyName}`);
     try {
-        const renderer = new Renderer(device);
+        const renderer = getRenderer(device);
         const items = await renderer.getPlaylist();
         console.error(`[DEBUG] Playlist fetch returned ${items.length} items`);
         res.json(items);

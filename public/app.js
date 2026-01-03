@@ -51,10 +51,38 @@ async function selectServer(udn) {
     renderDevices();
 
     browserContainer.style.display = 'block';
-    browsePath = [{ id: '0', title: 'Root' }];
-    updateBreadcrumbs();
 
-    await browse(udn, '0');
+    // Check if this server has a saved home location
+    let homeLocations = {};
+    try {
+        const stored = localStorage.getItem('serverHomeLocations');
+        if (stored) {
+            homeLocations = JSON.parse(stored);
+        }
+    } catch (e) {
+        console.error('Failed to parse home locations:', e);
+    }
+
+    const homeBrowsePath = homeLocations[udn];
+
+    // If home location exists, navigate there; otherwise go to root
+    if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
+        try {
+            browsePath = homeBrowsePath;
+            updateBreadcrumbs();
+            const lastFolder = browsePath[browsePath.length - 1];
+            await browse(udn, lastFolder.id);
+        } catch (e) {
+            console.error('Failed to navigate to home:', e);
+            browsePath = [{ id: '0', title: 'Root' }];
+            updateBreadcrumbs();
+            await browse(udn, '0');
+        }
+    } else {
+        browsePath = [{ id: '0', title: 'Root' }];
+        updateBreadcrumbs();
+        await browse(udn, '0');
+    }
 }
 
 async function selectDevice(udn) {
@@ -695,8 +723,21 @@ function switchView(view) {
 
 function setHome() {
     if (!selectedServerUdn) return;
-    localStorage.setItem('homeServerUdn', selectedServerUdn);
-    localStorage.setItem('homeBrowsePath', JSON.stringify(browsePath));
+
+    // Get existing home locations map
+    let homeLocations = {};
+    try {
+        const stored = localStorage.getItem('serverHomeLocations');
+        if (stored) {
+            homeLocations = JSON.parse(stored);
+        }
+    } catch (e) {
+        console.error('Failed to parse home locations:', e);
+    }
+
+    // Store home path for this specific server
+    homeLocations[selectedServerUdn] = browsePath;
+    localStorage.setItem('serverHomeLocations', JSON.stringify(homeLocations));
 
     // Visual feedback
     const btn = document.getElementById('btn-set-home');
@@ -717,12 +758,24 @@ function setHome() {
 }
 
 async function goHome() {
-    const homeServerUdn = localStorage.getItem('homeServerUdn');
-    const homeBrowsePath = localStorage.getItem('homeBrowsePath');
+    if (!selectedServerUdn) return;
 
-    if (homeServerUdn === selectedServerUdn && homeBrowsePath) {
+    // Get home path for this specific server
+    let homeLocations = {};
+    try {
+        const stored = localStorage.getItem('serverHomeLocations');
+        if (stored) {
+            homeLocations = JSON.parse(stored);
+        }
+    } catch (e) {
+        console.error('Failed to parse home locations:', e);
+    }
+
+    const homeBrowsePath = homeLocations[selectedServerUdn];
+
+    if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
         try {
-            browsePath = JSON.parse(homeBrowsePath);
+            browsePath = homeBrowsePath;
             updateBreadcrumbs();
             const lastFolder = browsePath[browsePath.length - 1];
             await browse(selectedServerUdn, lastFolder.id);
@@ -739,8 +792,21 @@ function updateHomeButtons() {
     const btnSetHome = document.getElementById('btn-set-home');
     const btnGoHome = document.getElementById('btn-go-home');
 
-    const homeBrowsePath = localStorage.getItem('homeBrowsePath');
-    const isAtHome = homeBrowsePath === JSON.stringify(browsePath);
+    if (!selectedServerUdn) return;
+
+    // Get home path for this specific server
+    let homeLocations = {};
+    try {
+        const stored = localStorage.getItem('serverHomeLocations');
+        if (stored) {
+            homeLocations = JSON.parse(stored);
+        }
+    } catch (e) {
+        console.error('Failed to parse home locations:', e);
+    }
+
+    const homeBrowsePath = homeLocations[selectedServerUdn];
+    const isAtHome = homeBrowsePath && JSON.stringify(homeBrowsePath) === JSON.stringify(browsePath);
 
     if (btnSetHome) {
         if (isAtHome) {
@@ -777,12 +843,22 @@ async function init() {
     if (selectedServerUdn) {
         const server = currentDevices.find(d => d.udn === selectedServerUdn && d.type === 'server');
         if (server) {
-            const homeServerUdn = localStorage.getItem('homeServerUdn');
-            const homeBrowsePath = localStorage.getItem('homeBrowsePath');
+            // Get home path for this specific server
+            let homeLocations = {};
+            try {
+                const stored = localStorage.getItem('serverHomeLocations');
+                if (stored) {
+                    homeLocations = JSON.parse(stored);
+                }
+            } catch (e) {
+                console.error('Failed to parse home locations:', e);
+            }
 
-            if (homeServerUdn === selectedServerUdn && homeBrowsePath) {
+            const homeBrowsePath = homeLocations[selectedServerUdn];
+
+            if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
                 try {
-                    browsePath = JSON.parse(homeBrowsePath);
+                    browsePath = homeBrowsePath;
                     updateBreadcrumbs();
                     const lastFolder = browsePath[browsePath.length - 1];
                     await browse(selectedServerUdn, lastFolder.id);
@@ -799,14 +875,40 @@ async function init() {
 
 init();
 
-// Poll every 3 seconds for UI responsiveness
-setInterval(fetchDevices, 3000);
-// Poll status frequently for responsiveness
-setInterval(fetchStatus, 2000);
+// Track page visibility to avoid polling when page is hidden
+let isPageVisible = !document.hidden;
 
-// Poll playlist every 5 seconds to sync with other controllers
+document.addEventListener('visibilitychange', () => {
+    isPageVisible = !document.hidden;
+
+    // When page becomes visible again, immediately fetch latest data
+    if (isPageVisible) {
+        fetchDevices();
+        if (selectedRendererUdn) {
+            fetchStatus();
+            fetchPlaylist(selectedRendererUdn);
+        }
+    }
+});
+
+// Poll devices every 3 seconds (only when page is visible)
 setInterval(() => {
-    if (selectedRendererUdn) {
+    if (isPageVisible) {
+        fetchDevices();
+    }
+}, 3000);
+
+// Poll status frequently for responsiveness (only when page is visible and renderer is selected)
+setInterval(() => {
+    if (isPageVisible && selectedRendererUdn) {
+        fetchStatus();
+    }
+}, 2000);
+
+// Poll playlist every 10 seconds to sync with other controllers (only when page is visible and renderer is selected)
+setInterval(() => {
+    if (isPageVisible && selectedRendererUdn) {
         fetchPlaylist(selectedRendererUdn);
     }
-}, 5000);
+}, 10000);
+
