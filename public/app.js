@@ -283,7 +283,10 @@ async function playPlaylistItem(id) {
             method: 'POST'
         });
 
-        if (!response.ok) throw new Error('Failed to play track');
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to play track');
+        }
 
         // Force a status refresh to show playing icon immediately
         await fetchStatus();
@@ -583,12 +586,37 @@ function renderDevices() {
     }
 
     // Populate Modal Lists
+    updateModalDeviceLists();
+}
+
+function updateModalDeviceLists() {
+    const modalServerList = document.getElementById('modal-server-list');
+    const modalRendererList = document.getElementById('modal-renderer-list');
+
+    const renderers = currentDevices.filter(d => d.type === 'renderer');
+    const servers = currentDevices.filter(d => d.type === 'server');
+
     if (modalServerList) {
-        modalServerList.innerHTML = servers.map(device => renderDeviceCard(device)).join('');
+        modalServerList.innerHTML = servers.map(device => renderModalDeviceItem(device)).join('');
     }
     if (modalRendererList) {
-        modalRendererList.innerHTML = renderers.map(device => renderDeviceCard(device)).join('');
+        modalRendererList.innerHTML = renderers.map(device => renderModalDeviceItem(device)).join('');
     }
+}
+
+function renderModalDeviceItem(device) {
+    const isServer = device.type === 'server';
+    const isSelected = isServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn);
+    const clickAction = isServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
+
+    return `
+        <div class="modal-device-item ${isSelected ? 'selected' : ''}" 
+             onclick="${clickAction}"
+             id="modal-device-${device.udn?.replace(/:/g, '-') || Math.random()}">
+            <div class="modal-device-name">${device.friendlyName}</div>
+            ${isSelected ? '<div class="selected-indicator">✓</div>' : ''}
+        </div>
+    `;
 }
 
 function renderDeviceCard(device, forceHighlight = false) {
@@ -596,20 +624,36 @@ function renderDeviceCard(device, forceHighlight = false) {
     const isSelected = forceHighlight || (isServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
 
     // Different icon for servers
-    const icon = isServer ? `
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-            <line x1="6" y1="6" x2="6.01" y2="6"></line>
-            <line x1="6" y1="18" x2="6.01" y2="18"></line>
-        </svg>
-    ` : `
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-            <line x1="8" y1="21" x2="16" y2="21"></line>
-            <line x1="12" y1="17" x2="12" y2="21"></line>
-        </svg>
-    `;
+    const isSonos = device.manufacturer?.toLowerCase().includes('sonos');
+    let icon = '';
+
+    if (isServer) {
+        icon = `
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+                <line x1="6" y1="6" x2="6.01" y2="6"></line>
+                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+        `;
+    } else if (isSonos) {
+        icon = `
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="4"></circle>
+                <line x1="12" y1="8" x2="12" y2="8.01"></line>
+                <line x1="12" y1="16" x2="12" y2="16.01"></line>
+            </svg>
+        `;
+    } else {
+        icon = `
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+        `;
+    }
 
     const clickAction = isServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
