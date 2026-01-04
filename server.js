@@ -36,9 +36,19 @@ async function parseDescription(url, isServer, isRenderer) {
     try {
         console.log(`Fetching description from ${url}...`, isServer, isRenderer);
         const response = await axios.get(url, { timeout: 5000 });
-        const parser = new xml2js.Parser({ explicitArray: false });
-        const result = await parser.parseStringPromise(response.data);
-        const device = result.root.device;
+        let result;
+        if (typeof response.data === 'object' && response.data !== null) {
+            result = response.data;
+        } else if (typeof response.data === 'string' && response.data.trim().startsWith('<')) {
+            const parser = new xml2js.Parser({ explicitArray: false });
+            result = await parser.parseStringPromise(response.data);
+        } else if (typeof response.data === 'string' && (response.data.trim().startsWith('{') || response.data.trim().startsWith('['))) {
+            result = JSON.parse(response.data);
+        } else {
+            throw new Error(`Invalid description format: starts with ${typeof response.data === 'string' ? response.data.trim().substring(0, 5) : typeof response.data}`);
+        }
+
+        const device = result.root ? result.root.device : (result.device || result);
 
         const services = [];
         const extractServices = (dev, depth = 0) => {
@@ -73,13 +83,18 @@ async function parseDescription(url, isServer, isRenderer) {
         const manufacturer = (device.manufacturer || '').toLowerCase();
         const model = (device.modelName || '').toLowerCase();
         const hasSonos = manufacturer.includes('sonos') || model.includes('sonos') || services.some(s => s.serviceType.includes('Queue'));
+        const hasAVTransport = services.some(s => s.serviceType.includes('AVTransport'));
+        const hasContentDirectory = services.some(s => s.serviceType.includes('ContentDirectory'));
 
-        if (isServer) {
-            type = 'server';
-        } else if (isRenderer || hasOpenHome || hasSonos) {
+        const isRendererType = isRenderer || hasOpenHome || hasSonos || hasAVTransport;
+        const isServerType = isServer || hasContentDirectory;
+
+        if (isRendererType && isServerType) {
+            type = 'both';
+        } else if (isRendererType) {
             type = 'renderer';
-        } else {
-            type = 'server'; // Default to server for DLNA if not identified as renderer
+        } else if (isServerType) {
+            type = 'server';
         }
 
         return {
@@ -90,6 +105,8 @@ async function parseDescription(url, isServer, isRenderer) {
             udn: device.UDN,
             services: services,
             type: type,
+            isRenderer: isRendererType,
+            isServer: isServerType,
             isSonos: hasSonos
         };
     } catch (err) {
@@ -99,15 +116,24 @@ async function parseDescription(url, isServer, isRenderer) {
 }
 
 ssdpClient.on('response', async (headers, statusCode, rinfo) => {
+    console.log(`SSDP response received from ${rinfo.address}:${rinfo.port}`);
     const location = headers.LOCATION;
     if (location && !devices.has(location)) {
         console.log(`Discovered device with ST ${headers.ST}`);
         const isServer = (headers.ST || '').includes('MediaServer');
         const serverHeader = (headers.SERVER || '').toLowerCase();
         const isSonosSSDP = (headers.ST || '').includes('ZonePlayer') || serverHeader.includes('sonos') || serverHeader.includes('play:');
-        const isRenderer = (headers.ST || '').includes('MediaRenderer') || isSonosSSDP;
+        const isRenderer = (headers.ST || '').includes('MediaRenderer') || (headers.ST || '').includes('AVTransport') || isSonosSSDP;
 
-        devices.set(location, { location, friendlyName: 'Discovering...', loading: true, type: 'unknown', isSonos: isSonosSSDP });
+        devices.set(location, {
+            location,
+            friendlyName: 'Discovering...',
+            loading: true,
+            type: isRenderer ? (isServer ? 'both' : 'renderer') : (isServer ? 'server' : 'unknown'),
+            isSonos: isSonosSSDP,
+            isRenderer,
+            isServer
+        });
 
         const deviceDetails = await parseDescription(location, isServer, isRenderer);
         if (deviceDetails) {
@@ -117,6 +143,7 @@ ssdpClient.on('response', async (headers, statusCode, rinfo) => {
                 devices.set(deviceDetails.udn, merged);
             }
         } else {
+            console.log("Removing device: " + location);
             devices.delete(location);
         }
     } else if (location) {
@@ -140,10 +167,18 @@ try {
         const location = `http://${host}:1400/xml/device_description.xml`;
         const existingDevice = devices.get(location);
 
-        if (!existingDevice || existingDevice.loading || existingDevice.type !== 'renderer') {
+        if (!existingDevice || existingDevice.loading || !existingDevice.isRenderer) {
             console.log(`Sonos library found/updated candidate: ${host}`);
-            devices.set(location, { location, friendlyName: `Discovering Sonos (${host})...`, loading: true, type: 'renderer' });
-            const deviceDetails = await parseDescription(location, false, true);
+            devices.set(location, {
+                location,
+                friendlyName: `Discovering Sonos (${host})...`,
+                loading: true,
+                type: 'both',
+                isSonos: true,
+                isRenderer: true,
+                isServer: true
+            });
+            const deviceDetails = await parseDescription(location, true, true);
             if (deviceDetails) {
                 console.log(`Successfully discovered Sonos: ${deviceDetails.friendlyName}`);
                 devices.set(location, { ...deviceDetails, loading: false, lastSeen: Date.now() });
@@ -181,7 +216,8 @@ startDiscovery();
 setInterval(() => {
     const now = Date.now();
     for (const [location, device] of devices) {
-        if (now - device.lastSeen > 30000) {
+        if (now - device.lastSeen > 5 * 60000) {
+            console.log(`Device ${device.friendlyName} (${location}) has not been seen in 5 minutes, removing...`);
             devices.delete(location);
             // Also remove from renderer cache if it exists
             if (device.udn && rendererCache.has(device.udn)) {
@@ -332,6 +368,33 @@ app.get('/api/playlist/:udn/status', async (req, res) => {
         const renderer = getRenderer(device);
         const status = await renderer.getCurrentStatus();
         res.json(status);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/playlist/:udn/volume', async (req, res) => {
+    const { udn } = req.params;
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
+    try {
+        const renderer = getRenderer(device);
+        const volume = await renderer.getVolume();
+        res.json({ volume });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/playlist/:udn/volume', express.json(), async (req, res) => {
+    const { udn } = req.params;
+    const { volume } = req.body;
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
+    try {
+        const renderer = getRenderer(device);
+        await renderer.setVolume(volume);
+        res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

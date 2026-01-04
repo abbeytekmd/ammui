@@ -3,6 +3,8 @@ const serverListElement = document.getElementById('server-list');
 const statusBar = document.getElementById('status-bar');
 const rendererCount = document.getElementById('renderer-count');
 const serverCount = document.getElementById('server-count');
+const tabRendererCount = document.getElementById('tab-renderer-count');
+const tabServerCount = document.getElementById('tab-server-count');
 
 const playlistContainer = document.getElementById('playlist-container');
 const playlistItems = document.getElementById('playlist-items');
@@ -50,7 +52,7 @@ async function selectServer(udn) {
     closeServerModal();
     renderDevices();
 
-    browserContainer.style.display = 'block';
+    browserContainer.style.display = 'flex';
 
     // Check if this server has a saved home location
     let homeLocations = {};
@@ -418,12 +420,7 @@ async function fetchPlaylist(udn) {
         if (!response.ok) throw new Error('Failed to fetch playlist');
         const playlist = await response.json();
 
-        // Only re-render if the playlist items have changed
-        if (JSON.stringify(playlist) !== JSON.stringify(currentPlaylistItems)) {
-            renderPlaylist(playlist);
-        }
-
-        // Also fetch status to have latest track info
+        // Update status and track info before rendering
         const statusRes = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
         if (statusRes.ok) {
             const status = await statusRes.json();
@@ -459,8 +456,6 @@ function renderPlaylist(items) {
     currentPlaylistItems = items;
     playlistCount.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
 
-    playlistCount.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
-
     if (items.length === 0) {
         playlistItems.innerHTML = '<div class="empty-state">Playlist is empty</div>';
         updateTransportControls();
@@ -468,10 +463,12 @@ function renderPlaylist(items) {
     }
 
     playlistItems.innerHTML = items.map((item, index) => {
-        const isPlaying = currentTrackId == item.id;
+        // Track is highlighted if it's the current track AND the transport is moving (or paused)
+        const isCurrent = currentTrackId != null && item.id != null && currentTrackId == item.id;
+        const isHighlightActive = isCurrent && currentTransportState !== 'Stopped';
 
         let icon = '';
-        if (isPlaying) {
+        if (isCurrent) {
             if (currentTransportState === 'Playing') {
                 icon = `
                     <div class="playing-icon">
@@ -490,7 +487,7 @@ function renderPlaylist(items) {
         }
 
         return `
-            <div class="playlist-item ${isPlaying ? 'playing' : ''}" onclick="playPlaylistItem(${item.id})">
+            <div class="playlist-item ${isHighlightActive ? 'playing' : ''}" onclick="playPlaylistItem(${item.id})">
                 <div class="item-index">${index + 1}</div>
                 <div class="item-status">${icon}</div>
                 <div class="item-info">
@@ -562,11 +559,13 @@ function closeRendererModal() {
 }
 
 function renderDevices() {
-    const renderers = currentDevices.filter(d => d.type === 'renderer');
-    const servers = currentDevices.filter(d => d.type === 'server');
+    const renderers = currentDevices.filter(d => d.isRenderer);
+    const servers = currentDevices.filter(d => d.isServer);
 
     if (rendererCount) rendererCount.textContent = `${renderers.length} found`;
     if (serverCount) serverCount.textContent = `${servers.length} found`;
+    if (tabRendererCount) tabRendererCount.textContent = renderers.length;
+    if (tabServerCount) tabServerCount.textContent = servers.length;
 
     // Renderers (Single Primary Card)
     if (deviceListElement) {
@@ -584,7 +583,7 @@ function renderDevices() {
 
             deviceListElement.innerHTML = `
                 <div class="active-server-display" onclick="openRendererModal()">
-                    ${renderDeviceCard(activeRenderer, true)}
+                    ${renderDeviceCard(activeRenderer, true, false)}
                 </div>
             `;
         }
@@ -607,7 +606,7 @@ function renderDevices() {
             // Create a wrapper that opens the modal when clicked
             serverListElement.innerHTML = `
                 <div class="active-server-display" onclick="openServerModal()">
-                    ${renderDeviceCard(activeServer, true)}
+                    ${renderDeviceCard(activeServer, true, true)}
                 </div>
             `;
         }
@@ -621,41 +620,39 @@ function updateModalDeviceLists() {
     const modalServerList = document.getElementById('modal-server-list');
     const modalRendererList = document.getElementById('modal-renderer-list');
 
-    const renderers = currentDevices.filter(d => d.type === 'renderer');
-    const servers = currentDevices.filter(d => d.type === 'server');
+    const renderers = currentDevices.filter(d => d.isRenderer);
+    const servers = currentDevices.filter(d => d.isServer);
 
     if (modalServerList) {
-        modalServerList.innerHTML = servers.map(device => renderModalDeviceItem(device)).join('');
+        modalServerList.innerHTML = servers.map(device => renderModalDeviceItem(device, true)).join('');
     }
     if (modalRendererList) {
-        modalRendererList.innerHTML = renderers.map(device => renderModalDeviceItem(device)).join('');
+        modalRendererList.innerHTML = renderers.map(device => renderModalDeviceItem(device, false)).join('');
     }
 }
 
-function renderModalDeviceItem(device) {
-    const isServer = device.type === 'server';
-    const isSelected = isServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn);
-    const clickAction = isServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
+function renderModalDeviceItem(device, asServer) {
+    const isSelected = asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn);
+    const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
     return `
         <div class="modal-device-item ${isSelected ? 'selected' : ''}" 
              onclick="${clickAction}"
-             id="modal-device-${device.udn?.replace(/:/g, '-') || Math.random()}">
+             id="modal-device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
             <div class="modal-device-name">${device.friendlyName}</div>
             ${isSelected ? '<div class="selected-indicator">✓</div>' : ''}
         </div>
     `;
 }
 
-function renderDeviceCard(device, forceHighlight = false) {
-    const isServer = device.type === 'server';
-    const isSelected = forceHighlight || (isServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
+function renderDeviceCard(device, forceHighlight = false, asServer = false) {
+    const isSelected = forceHighlight || (asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
 
     // Different icon for servers
-    const isSonos = device.manufacturer?.toLowerCase().includes('sonos');
+    const isSonos = device.isSonos;
     let icon = '';
 
-    if (isServer) {
+    if (asServer) {
         icon = `
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
@@ -683,19 +680,25 @@ function renderDeviceCard(device, forceHighlight = false) {
         `;
     }
 
-    const clickAction = isServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
+    const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
     return `
-        <div class="device-card ${isSelected ? 'selected' : ''} ${isServer ? 'server-card' : ''}" 
+        <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
              onclick="${clickAction}"
-             id="device-${device.udn?.replace(/:/g, '-') || Math.random()}">
-            <div class="device-icon ${isServer ? 'server-icon' : ''}">
+             id="device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
+            <div class="device-icon ${asServer ? 'server-icon' : ''}">
                 ${icon}
             </div>
             <div class="device-info">
                 <div class="device-name">${device.friendlyName}</div>
                 <div class="device-meta">
-                    <span style="font-family: monospace; opacity: 0.7;">${new URL(device.location).hostname}</span>
+                    <span style="font-family: monospace; opacity: 0.7;">${(() => {
+            try {
+                return new URL(device.location).hostname;
+            } catch (e) {
+                return device.location || 'unknown';
+            }
+        })()}</span>
                 </div>
             </div>
         </div>
@@ -883,6 +886,7 @@ document.addEventListener('visibilitychange', () => {
 
     // When page becomes visible again, immediately fetch latest data
     if (isPageVisible) {
+        window.scrollTo(0, 0);
         fetchDevices();
         if (selectedRendererUdn) {
             fetchStatus();
@@ -898,10 +902,75 @@ setInterval(() => {
     }
 }, 3000);
 
-// Poll status frequently for responsiveness (only when page is visible and renderer is selected)
+// Volume Control Logic
+let volumeDebounceTimeout = null;
+
+function toggleVolumePopup() {
+    const popup = document.getElementById('volume-popup');
+    if (popup.style.display === 'none') {
+        popup.style.display = 'flex';
+        fetchVolume(); // Get current volume when opening
+    } else {
+        popup.style.display = 'none';
+    }
+}
+
+async function fetchVolume() {
+    if (!selectedRendererUdn) return;
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/volume`);
+        if (response.ok) {
+            const data = await response.json();
+            const slider = document.getElementById('volume-slider');
+            const valueSpan = document.getElementById('volume-value');
+            if (slider && valueSpan) {
+                slider.value = data.volume;
+                valueSpan.textContent = `${data.volume}%`;
+            }
+        }
+    } catch (err) {
+        console.error('Failed to fetch volume:', err);
+    }
+}
+
+async function updateVolume(value) {
+    const valueSpan = document.getElementById('volume-value');
+    if (valueSpan) valueSpan.textContent = `${value}%`;
+
+    // Debounce volume updates to avoid flooding the network
+    if (volumeDebounceTimeout) clearTimeout(volumeDebounceTimeout);
+    volumeDebounceTimeout = setTimeout(async () => {
+        if (!selectedRendererUdn) return;
+        try {
+            await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/volume`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ volume: parseInt(value, 10) })
+            });
+        } catch (err) {
+            console.error('Failed to update volume:', err);
+        }
+    }, 100);
+}
+
+// Close volume popup when clicking outside
+document.addEventListener('click', (e) => {
+    const wrapper = document.querySelector('.volume-control-wrapper');
+    const popup = document.getElementById('volume-popup');
+    if (wrapper && !wrapper.contains(e.target) && popup && popup.style.display === 'flex') {
+        popup.style.display = 'none';
+    }
+});
+
+// Update status and volume frequently
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchStatus();
+        // Only fetch volume if the popup is open, to save bandwidth
+        const popup = document.getElementById('volume-popup');
+        if (popup && popup.style.display === 'flex') {
+            fetchVolume();
+        }
     }
 }, 2000);
 
