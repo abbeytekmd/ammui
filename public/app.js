@@ -1,6 +1,35 @@
+(function () {
+    const originalLog = console.log;
+    const originalError = console.error;
+    const originalWarn = console.warn;
+
+    function getTimestamp() {
+        const now = new Date();
+        const year = now.getFullYear();
+        const month = String(now.getMonth() + 1).padStart(2, '0');
+        const day = String(now.getDate()).padStart(2, '0');
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        const ms = String(now.getMilliseconds()).padStart(3, '0');
+        return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
+    }
+
+    console.log = (...args) => {
+        originalLog(`[${getTimestamp()}]`, ...args);
+    };
+
+    console.error = (...args) => {
+        originalError(`[${getTimestamp()}]`, ...args);
+    };
+
+    console.warn = (...args) => {
+        originalWarn(`[${getTimestamp()}]`, ...args);
+    };
+})();
+
 const deviceListElement = document.getElementById('device-list');
 const serverListElement = document.getElementById('server-list');
-const statusBar = document.getElementById('status-bar');
 const rendererCount = document.getElementById('renderer-count');
 const serverCount = document.getElementById('server-count');
 const tabRendererCount = document.getElementById('tab-renderer-count');
@@ -38,10 +67,8 @@ async function fetchDevices() {
             renderDevices();
         }
 
-        statusBar.textContent = `Last scan: ${new Date().toLocaleTimeString()} • ${devices.length} device(s) found`;
     } catch (err) {
         console.error('Failed to fetch devices:', err);
-        statusBar.textContent = 'Connection to discovery service lost...';
     }
 }
 
@@ -542,6 +569,50 @@ function updateTransportControls() {
     }
 }
 
+async function triggerDiscovery(btn) {
+    const originalContent = btn ? btn.innerHTML : null;
+    if (btn) {
+        btn.classList.add('scanning');
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            Seeking...
+        `;
+    }
+
+    try {
+        console.log('Triggering manual SSDP discovery...');
+        await fetch('/api/discover', { method: 'POST' });
+
+        // Initial fetch to show immediate results
+        await fetchDevices();
+
+        // Sequence of fetches to catch SSDP responses as they come in
+        let count = 0;
+        const interval = setInterval(async () => {
+            count++;
+            await fetchDevices();
+            if (count >= 5) clearInterval(interval);
+        }, 1000);
+
+        if (btn) {
+            setTimeout(() => {
+                console.log('Manual discovery period ended.');
+                btn.classList.remove('scanning');
+                btn.innerHTML = originalContent;
+            }, 6000);
+        }
+    } catch (err) {
+        console.error('Failed to trigger discovery:', err);
+        if (btn) {
+            btn.classList.remove('scanning');
+            btn.innerHTML = originalContent;
+        }
+    }
+}
+
 function openServerModal() {
     serverModal.style.display = 'flex';
 }
@@ -573,13 +644,19 @@ function renderDevices() {
             deviceListElement.innerHTML = `<div class="empty-state">No renderers found...</div>`;
         } else {
             // Ensure we have a valid selection if devices are available
-            const rendererExists = renderers.some(r => r.udn === selectedRendererUdn);
-            if (!selectedRendererUdn || !rendererExists) {
-                selectedRendererUdn = renderers[0].udn;
-                fetchPlaylist(selectedRendererUdn);
-            }
-
             const activeRenderer = renderers.find(r => r.udn === selectedRendererUdn) || renderers[0];
+
+            // If the active renderer changed or if we haven't loaded its playlist yet
+            if (activeRenderer.udn !== selectedRendererUdn || (currentPlaylistItems.length === 0 && !activeRenderer.loading)) {
+                const oldUdn = selectedRendererUdn;
+                selectedRendererUdn = activeRenderer.udn;
+                localStorage.setItem('selectedRendererUdn', selectedRendererUdn);
+
+                // Only fetch if UDN changed OR if we are literally at the empty state
+                if (oldUdn !== activeRenderer.udn || playlistItems.querySelector('.empty-state')) {
+                    fetchPlaylist(selectedRendererUdn);
+                }
+            }
 
             deviceListElement.innerHTML = `
                 <div class="active-server-display" onclick="openRendererModal()">
@@ -836,7 +913,7 @@ async function init() {
 
     // Auto-select and fetch playlist if a renderer was previously selected
     if (selectedRendererUdn) {
-        const renderer = currentDevices.find(d => d.udn === selectedRendererUdn && d.type === 'renderer');
+        const renderer = currentDevices.find(d => d.udn === selectedRendererUdn && d.isRenderer);
         if (renderer) {
             await fetchPlaylist(selectedRendererUdn);
         }
@@ -844,7 +921,7 @@ async function init() {
 
     // Auto-browse if a server was previously selected
     if (selectedServerUdn) {
-        const server = currentDevices.find(d => d.udn === selectedServerUdn && d.type === 'server');
+        const server = currentDevices.find(d => d.udn === selectedServerUdn && d.isServer);
         if (server) {
             // Get home path for this specific server
             let homeLocations = {};
@@ -895,12 +972,14 @@ document.addEventListener('visibilitychange', () => {
     }
 });
 
+/*
 // Poll devices every 3 seconds (only when page is visible)
 setInterval(() => {
     if (isPageVisible) {
         fetchDevices();
     }
 }, 3000);
+*/
 
 // Volume Control Logic
 let volumeDebounceTimeout = null;
@@ -962,7 +1041,7 @@ document.addEventListener('click', (e) => {
     }
 });
 
-// Update status and volume frequently
+// Update status and volume periodically to sync the "playing" track highlight
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchStatus();
@@ -972,12 +1051,14 @@ setInterval(() => {
             fetchVolume();
         }
     }
-}, 2000);
+}, 5000);
 
 // Poll playlist every 10 seconds to sync with other controllers (only when page is visible and renderer is selected)
+/*
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchPlaylist(selectedRendererUdn);
     }
 }, 10000);
+*/
 

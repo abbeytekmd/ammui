@@ -1,3 +1,4 @@
+import './lib/logger-init.js';
 import express from 'express';
 import ssdp from 'node-ssdp';
 const { Client } = ssdp;
@@ -21,21 +22,32 @@ let devices = new Map();
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 
-const ssdpClient = new Client();
+const ssdpClient = new Client({
+    // Explicitly bind to help on multi-NIC systems
+    explicitSocketBind: true,
+    reuseAddr: true
+});
 
-// Search targets for OpenHome Renderers and DLNA Media Servers
-const SEARCH_TARGETS = [
+// Search targets for OpenHome/DLNA Renderers and Media Servers
+const SEARCH_TARGETS_SERVERS = [
+    'urn:schemas-upnp-org:device:MediaServer:1',
+    'urn:schemas-upnp-org:service:ContentDirectory:1',
+    'upnp:rootdevice',
+    'ssdp:all'
+];
+
+const SEARCH_TARGETS_RENDERERS = [
+    'urn:schemas-upnp-org:device:MediaRenderer:1',
+    'urn:schemas-upnp-org:service:AVTransport:1',
     'urn:av-openhome-org:service:Product:1',
     'urn:linn-co-uk:device:NetReceiver:1',
-    'urn:schemas-upnp-org:device:MediaServer:1',
-    'urn:schemas-upnp-org:device:ZonePlayer:1',
-    'urn:schemas-sonos-com:service:Queue:1'
+    'urn:schemas-upnp-org:device:ZonePlayer:1'
 ];
 
 async function parseDescription(url, isServer, isRenderer) {
     try {
         console.log(`Fetching description from ${url}...`, isServer, isRenderer);
-        const response = await axios.get(url, { timeout: 5000 });
+        const response = await axios.get(url, { timeout: 10000 });
         let result;
         if (typeof response.data === 'object' && response.data !== null) {
             result = response.data;
@@ -115,15 +127,37 @@ async function parseDescription(url, isServer, isRenderer) {
     }
 }
 
-ssdpClient.on('response', async (headers, statusCode, rinfo) => {
-    console.log(`SSDP response received from ${rinfo.address}:${rinfo.port}`);
+async function handleSSDPMessage(headers, rinfo) {
     const location = headers.LOCATION;
-    if (location && !devices.has(location)) {
-        console.log(`Discovered device with ST ${headers.ST}`);
-        const isServer = (headers.ST || '').includes('MediaServer');
-        const serverHeader = (headers.SERVER || '').toLowerCase();
-        const isSonosSSDP = (headers.ST || '').includes('ZonePlayer') || serverHeader.includes('sonos') || serverHeader.includes('play:');
-        const isRenderer = (headers.ST || '').includes('MediaRenderer') || (headers.ST || '').includes('AVTransport') || isSonosSSDP;
+    if (!location) return;
+
+    const st = (headers.ST || headers.NT || '').toLowerCase();
+    const serverHeader = (headers.SERVER || '').toLowerCase();
+
+    // Log the discovery type
+    const msgType = headers.ST ? 'Response' : (headers.NTS === 'ssdp:alive' ? 'Alive' : 'Announcement');
+    if (rinfo.address === '192.168.0.2') {
+        console.log(`[DEBUG-LINUX] SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
+        console.log(`[DEBUG-LINUX] Headers:`, JSON.stringify(headers));
+    } else {
+        console.log(`SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
+    }
+
+    if (!devices.has(location)) {
+        // Broad initial detection
+        const isServer = st.includes('mediaserver') || st.includes('contentdirectory');
+        const isSonosSSDP = st.includes('zoneplayer') || serverHeader.includes('sonos') || serverHeader.includes('play:');
+        const isRenderer = st.includes('mediarenderer') || st.includes('avtransport') || st.includes('playlist') || isSonosSSDP;
+        const isGeneric = st.includes('rootdevice') || st.includes('upnp:rootdevice');
+
+        if (!isServer && !isRenderer && !isGeneric) {
+            if (rinfo.address === '192.168.0.2') {
+                console.log(`[DEBUG-LINUX] Ignored 192.168.0.2 because it didn't match Server/Renderer/Generic filters.`);
+            }
+            return;
+        }
+
+        console.log(`Discovered candidate via ${msgType} at ${rinfo.address} (ST/NT: ${st})`);
 
         devices.set(location, {
             location,
@@ -146,7 +180,7 @@ ssdpClient.on('response', async (headers, statusCode, rinfo) => {
             console.log("Removing device: " + location);
             devices.delete(location);
         }
-    } else if (location) {
+    } else {
         const device = devices.get(location);
         if (device) {
             device.lastSeen = Date.now();
@@ -156,9 +190,21 @@ ssdpClient.on('response', async (headers, statusCode, rinfo) => {
             }
         }
     }
+}
+
+ssdpClient.on('response', (headers, statusCode, rinfo) => handleSSDPMessage(headers, rinfo));
+ssdpClient.on('advertise-alive', (headers, rinfo) => handleSSDPMessage(headers, rinfo));
+
+ssdpClient.on('advertise-bye', (headers, rinfo) => {
+    const location = headers.LOCATION;
+    if (location && devices.has(location)) {
+        const device = devices.get(location);
+        console.log(`Device leaving network (bye-bye): ${device.friendlyName || location}`);
+        devices.delete(location);
+        if (device.udn) devices.delete(device.udn);
+    }
 });
 
-// Sonos specific discovery listener
 console.log('Initializing Sonos discovery listener...');
 try {
     const sonosDiscovery = DeviceDiscovery();
@@ -203,17 +249,22 @@ try {
     console.error('Failed to start Sonos discovery:', err.message);
 }
 
-function startDiscovery() {
-    console.log('Starting SSDP discovery...');
-    for (const target of SEARCH_TARGETS) {
-        ssdpClient.search(target);
-    }
-}
+app.post('/api/discover', async (req, res) => {
+    console.log('Manual discovery triggered - Searching for specific targets...');
+    ssdpClient.search('ssdp:all');
+    // Search for specific targets as well
+    SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
+    SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
+    res.json({ success: true });
+});
 
-setInterval(startDiscovery, 10000);
-startDiscovery();
+// Perform initial discovery on startup
+console.log('Performing startup SSDP discovery...');
+ssdpClient.search('ssdp:all');
+SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
+SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
 
-setInterval(() => {
+/*setInterval(() => {
     const now = Date.now();
     for (const [location, device] of devices) {
         if (now - device.lastSeen > 5 * 60000) {
@@ -225,7 +276,7 @@ setInterval(() => {
             }
         }
     }
-}, 5000);
+}, 5000);*/
 
 // Helper function to get or create a cached renderer
 function getRenderer(device) {
@@ -419,6 +470,31 @@ app.get('/api/playlist/:udn', async (req, res) => {
         console.error('Playlist fetch failed:', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/diag/probe/:ip', async (req, res) => {
+    const { ip } = req.params;
+    const paths = [
+        ':8080/description.xml',
+        ':4000/description.xml',
+        ':2869/upnphost/udhisapi.dll?Controliee=1', // Windows Media
+        ':8200/rootDesc.xml', // MiniDLNA
+        ':4040/description.xml', // Subsonic usually
+        ':1400/xml/device_description.xml' // Sonos
+    ];
+
+    let results = [];
+    for (const p of paths) {
+        const url = `http://${ip}${p}`;
+        try {
+            console.log(`Diagnostic: Probing ${url}...`);
+            const response = await axios.get(url, { timeout: 2000 });
+            results.push({ url, status: response.status, found: true });
+        } catch (err) {
+            results.push({ url, error: err.message, found: false });
+        }
+    }
+    res.json({ ip, results });
 });
 
 app.get('/api/devices', (req, res) => {

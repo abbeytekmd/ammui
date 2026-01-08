@@ -175,15 +175,24 @@
             </div>
         </main>
 
-        <footer id="status-bar" class="status-bar">
-            Connecting to AMCUI service...
-        </footer>
+
     </div>
 
     <div id="server-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Select Media Server</h2>
+                <div class="modal-title-group">
+                    <h2>Select Media Server</h2>
+                    <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
+                        title="Search for more servers">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        Seek
+                    </button>
+                </div>
                 <button class="btn-close" onclick="closeServerModal()">✕</button>
             </div>
             <div id="modal-server-list" class="device-list">
@@ -195,7 +204,18 @@
     <div id="renderer-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Select Player</h2>
+                <div class="modal-title-group">
+                    <h2>Select Player</h2>
+                    <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
+                        title="Search for more players">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        Seek
+                    </button>
+                </div>
                 <button class="btn-close" onclick="closeRendererModal()">✕</button>
             </div>
             <div id="modal-renderer-list" class="device-list">
