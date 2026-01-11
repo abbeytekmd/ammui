@@ -1101,3 +1101,327 @@ p.subtitle {
         transform: rotate(360deg);
     }
 }
+
+/* Header Main Layout */
+.header-main {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+@media (max-width: 600px) {
+    .header-main {
+        gap: 0.75rem;
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .btn-control.ghost {
+        padding: 0.3rem 0.6rem;
+        font-size: 0.7rem;
+    }
+}
+
+
+.btn-control.ghost {
+    background: transparent;
+    border-color: transparent;
+    opacity: 0.6;
+}
+
+.btn-control.ghost:hover {
+    background: rgba(255, 255, 255, 0.05);
+    opacity: 1;
+}
+
+/* Manage Modal Styles */
+.manage-modal-content {
+    max-width: 600px;
+}
+
+.manage-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+    margin-top: 1rem;
+    padding-right: 0.5rem;
+}
+
+.manage-section h3 {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.manage-device-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.manage-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    transition: all 0.2s;
+}
+
+.manage-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.manage-item-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.manage-item-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.manage-item-host {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.btn-delete {
+    background: rgba(244, 63, 94, 0.1);
+    color: var(--accent);
+    border: 1px solid rgba(244, 63, 94, 0.2);
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.btn-delete:hover {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+.manage-item-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.manage-item-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.btn-rename {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 0.25rem;
+    cursor: pointer;
+    border-radius: 0.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    opacity: 0.5;
+}
+
+.btn-rename:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--primary);
+    opacity: 1;
+}
+
+.manage-name-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--primary);
+    border-radius: 0.4rem;
+    color: white;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    width: 200px;
+    outline: none;
+}
+
+.manage-name-input:focus {
+    box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.btn-toggle {
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+}
+
+.btn-disable {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+    border-color: var(--card-border);
+}
+
+.btn-disable:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+.btn-enable {
+    background: rgba(99, 102, 241, 0.1);
+    color: var(--primary);
+    border-color: rgba(99, 102, 241, 0.2);
+}
+
+.btn-enable:hover {
+    background: var(--primary);
+    color: white;
+}
+
+.item-disabled {
+    opacity: 0.6;
+}
+
+.disabled-tag {
+    color: var(--accent);
+    font-style: italic;
+    margin-left: 0.5rem;
+}
+
+.manage-item.item-disabled {
+    background: rgba(0, 0, 0, 0.2);
+}
+
+/* Mobile responsiveness for Manage Modal */
+@media (max-width: 600px) {
+    .manage-modal-content {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        border-radius: 0;
+        margin: 0;
+        padding: calc(1rem + env(safe-area-inset-top)) 1.25rem calc(1rem + env(safe-area-inset-bottom));
+        display: flex;
+        flex-direction: column;
+    }
+
+    .manage-list-container {
+        max-height: none;
+        flex: 1;
+        padding-right: 0;
+        margin-bottom: 2rem;
+    }
+
+    .manage-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 1rem;
+        padding: 1rem;
+    }
+
+    .manage-item-actions {
+        width: 100%;
+        gap: 0.5rem;
+    }
+
+    .manage-item-actions button {
+        flex: 1;
+        justify-content: center;
+        padding: 0.75rem;
+        /* Larger touch target */
+        font-size: 0.875rem;
+    }
+
+    .manage-item-info {
+        width: 100%;
+    }
+}
+
+.empty-state-mini {
+    padding: 2rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.875rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px dashed var(--card-border);
+    border-radius: 1rem;
+    font-style: italic;
+}
+
+.manage-item-icon {
+    width: 40px;
+    height: 40px;
+    object-fit: contain;
+    border-radius: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.25rem;
+    flex-shrink: 0;
+}
+
+.manage-item-icon-placeholder,
+.modal-device-icon-placeholder {
+    width: 40px;
+    height: 40px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    border-radius: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    color: white;
+    font-size: 1.25rem;
+    flex-shrink: 0;
+}
+
+.modal-device-icon-placeholder {
+    width: 32px;
+    height: 32px;
+    font-size: 1rem;
+}
+
+.modal-device-item-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.modal-device-icon {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.15rem;
+    flex-shrink: 0;
+}
+
+.device-card-img {
+    width: 64px;
+    height: 64px;
+    object-fit: contain;
+    border-radius: 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* Adjust manage-item for icon */
+.manage-item {
+    gap: 1.25rem;
+}

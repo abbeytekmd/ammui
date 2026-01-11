@@ -10,15 +10,51 @@ import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
 const { Sonos, DeviceDiscovery } = sonos;
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const DEVICES_FILE = path.join(__dirname, 'devices.json');
 
 const app = express();
 const port = 3000;
 
 // Store discovered devices
 let devices = new Map();
+
+function loadDevices() {
+    try {
+        if (fs.existsSync(DEVICES_FILE)) {
+            const data = fs.readFileSync(DEVICES_FILE, 'utf8');
+            const list = JSON.parse(data);
+            list.forEach(d => {
+                if (d.location) devices.set(d.location, d);
+                if (d.udn) devices.set(d.udn, d);
+            });
+            console.log(`Loaded ${list.length} devices from storage.`);
+        }
+    } catch (err) {
+        console.error('Failed to load devices:', err.message);
+    }
+}
+
+function saveDevices() {
+    try {
+        const uniqueDevices = [];
+        const seenUdns = new Set();
+        for (const device of devices.values()) {
+            if (device.udn && !seenUdns.has(device.udn)) {
+                uniqueDevices.push(device);
+                seenUdns.add(device.udn);
+            }
+        }
+        fs.writeFileSync(DEVICES_FILE, JSON.stringify(uniqueDevices, null, 2));
+    } catch (err) {
+        console.error('Failed to save devices:', err.message);
+    }
+}
+
+loadDevices();
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 
@@ -109,12 +145,28 @@ async function parseDescription(url, isServer, isRenderer) {
             type = 'server';
         }
 
+        let iconUrl = null;
+        const iconList = device.iconList || device.IconList;
+        if (iconList) {
+            console.log(`[DEBUG] Found iconList for ${device.friendlyName}`);
+            const icons = iconList.icon || iconList.Icon;
+            if (icons) {
+                const iconArray = Array.isArray(icons) ? icons : [icons];
+                const bestIcon = iconArray.sort((a, b) => (parseInt(b.width) || 0) - (parseInt(a.width) || 0))[0];
+                if (bestIcon && (bestIcon.url || bestIcon.URL)) {
+                    iconUrl = new URL(bestIcon.url || bestIcon.URL, url).toString();
+                    console.log(`[DEBUG] Selected iconUrl: ${iconUrl}`);
+                }
+            }
+        }
+
         return {
             friendlyName: device.friendlyName,
             manufacturer: device.manufacturer,
             modelName: device.modelName,
             location: url,
             udn: device.UDN,
+            iconUrl: iconUrl,
             services: services,
             type: type,
             isRenderer: isRendererType,
@@ -171,11 +223,19 @@ async function handleSSDPMessage(headers, rinfo) {
 
         const deviceDetails = await parseDescription(location, isServer, isRenderer);
         if (deviceDetails) {
+            const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
             const merged = { ...deviceDetails, lastSeen: Date.now(), isSonos: deviceDetails.isSonos || isSonosSSDP };
+
+            // Preserve custom name if it exists
+            if (existing && existing.customName) {
+                merged.customName = existing.customName;
+            }
+
             devices.set(location, merged);
             if (deviceDetails.udn) {
                 devices.set(deviceDetails.udn, merged);
             }
+            saveDevices();
         } else {
             console.log("Removing device: " + location);
             devices.delete(location);
@@ -184,6 +244,23 @@ async function handleSSDPMessage(headers, rinfo) {
         const device = devices.get(location);
         if (device) {
             device.lastSeen = Date.now();
+
+            // Re-fetch description if iconUrl is missing or if it was marked as loading previously
+            // This ensures existing saved devices get their icons updated
+            if (!device.iconUrl && !device.loading && (!device.lastIconCheck || Date.now() - device.lastIconCheck > 3600000)) {
+                device.lastIconCheck = Date.now();
+                console.log(`Re-fetching description for ${device.friendlyName} to check for icons...`);
+                // We use a separate async function to not block the SSDP handler
+                (async () => {
+                    const details = await parseDescription(location, device.isServer, device.isRenderer);
+                    if (details && details.iconUrl) {
+                        console.log(`Found missing icon for ${device.friendlyName}: ${details.iconUrl}`);
+                        Object.assign(device, details);
+                        saveDevices();
+                    }
+                })();
+            }
+
             if (device.udn) {
                 const udnDevice = devices.get(device.udn);
                 if (udnDevice) udnDevice.lastSeen = Date.now();
@@ -199,9 +276,8 @@ ssdpClient.on('advertise-bye', (headers, rinfo) => {
     const location = headers.LOCATION;
     if (location && devices.has(location)) {
         const device = devices.get(location);
-        console.log(`Device leaving network (bye-bye): ${device.friendlyName || location}`);
-        devices.delete(location);
-        if (device.udn) devices.delete(device.udn);
+        console.log(`Device leaving network (bye-bye): ${device.friendlyName || location} - keeping in database.`);
+        // We no longer delete on bye-bye to maintain a persistent database
     }
 });
 
@@ -227,10 +303,19 @@ try {
             const deviceDetails = await parseDescription(location, true, true);
             if (deviceDetails) {
                 console.log(`Successfully discovered Sonos: ${deviceDetails.friendlyName}`);
-                devices.set(location, { ...deviceDetails, loading: false, lastSeen: Date.now() });
-                if (deviceDetails.udn) {
-                    devices.set(deviceDetails.udn, devices.get(location));
+                const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
+                const merged = { ...deviceDetails, loading: false, lastSeen: Date.now() };
+
+                // Preserve custom name if it exists
+                if (existing && existing.customName) {
+                    merged.customName = existing.customName;
                 }
+
+                devices.set(location, merged);
+                if (deviceDetails.udn) {
+                    devices.set(deviceDetails.udn, merged);
+                }
+                saveDevices();
             } else {
                 console.warn(`Failed to discover Sonos details for ${host}`);
                 if (!existingDevice) devices.delete(location);
@@ -509,6 +594,78 @@ app.get('/api/devices', (req, res) => {
         }
     }
     res.json(uniqueDevices);
+});
+
+app.delete('/api/devices/:udn', (req, res) => {
+    const { udn } = req.params;
+    console.log(`Manually deleting device: ${udn}`);
+
+    // Find device by UDN to get its location
+    let locationToDelete = null;
+    for (const device of devices.values()) {
+        if (device.udn === udn) {
+            locationToDelete = device.location;
+            break;
+        }
+    }
+
+    if (udn) devices.delete(udn);
+    if (locationToDelete) devices.delete(locationToDelete);
+
+    // Also remove from cache
+    if (rendererCache.has(udn)) {
+        rendererCache.delete(udn);
+    }
+
+    saveDevices();
+    res.json({ success: true });
+});
+
+app.post('/api/devices/:udn/toggle-disabled/:role', (req, res) => {
+    const { udn, role } = req.params;
+
+    // role should be 'server' or 'player'
+    const property = role === 'server' ? 'disabledServer' : 'disabledPlayer';
+
+    // Use a Set to track objects we've already toggled, in case multiple keys point to the same object
+    const toggledObjects = new Set();
+    let found = false;
+    let deviceRef = null;
+
+    for (const [key, device] of devices.entries()) {
+        if (device.udn === udn && !toggledObjects.has(device)) {
+            device[property] = !device[property];
+            deviceRef = device;
+            toggledObjects.add(device);
+            found = true;
+        }
+    }
+
+    if (!found) return res.status(404).json({ error: 'Device not found' });
+
+    saveDevices();
+    res.json({ success: true, disabled: deviceRef[property] });
+});
+
+app.post('/api/devices/:udn/name', express.json(), (req, res) => {
+    const { udn } = req.params;
+    const { name } = req.body;
+
+    const toggledObjects = new Set();
+    let found = false;
+
+    for (const [key, device] of devices.entries()) {
+        if (device.udn === udn && !toggledObjects.has(device)) {
+            device.customName = name;
+            toggledObjects.add(device);
+            found = true;
+        }
+    }
+
+    if (!found) return res.status(404).json({ error: 'Device not found' });
+
+    saveDevices();
+    res.json({ success: true, customName: name });
 });
 
 app.listen(port, () => {

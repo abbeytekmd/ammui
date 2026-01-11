@@ -47,6 +47,9 @@ const serverModal = document.getElementById('server-modal');
 const modalServerList = document.getElementById('modal-server-list');
 const rendererModal = document.getElementById('renderer-modal');
 const modalRendererList = document.getElementById('modal-renderer-list');
+const manageModal = document.getElementById('manage-modal');
+const manageRendererList = document.getElementById('manage-renderer-list');
+const manageServerList = document.getElementById('manage-server-list');
 
 let currentDevices = [];
 let selectedRendererUdn = localStorage.getItem('selectedRendererUdn');
@@ -327,6 +330,9 @@ async function transportAction(action) {
             method: 'POST'
         });
         if (!response.ok) throw new Error(`Failed to ${action}`);
+
+        // Instant update of status and playlist to reflect the new state
+        await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error(`${action} error:`, err);
     }
@@ -336,6 +342,12 @@ async function playPlaylistItem(id) {
     if (!selectedRendererUdn) return;
 
     try {
+        // If clicking the current track and it's paused, just resume
+        if (currentTrackId != null && id != null && currentTrackId == id && currentTransportState === 'Paused') {
+            await transportAction('play'); // transportAction now triggers a refresh
+            return;
+        }
+
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/seek/${id}`, {
             method: 'POST'
         });
@@ -345,8 +357,8 @@ async function playPlaylistItem(id) {
             throw new Error(errData.error || 'Failed to play track');
         }
 
-        // Force a status refresh to show playing icon immediately
-        await fetchStatus();
+        // Force a full playlist and status refresh to show playing icon immediately
+        await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error('Play track error:', err);
     }
@@ -514,7 +526,7 @@ function renderPlaylist(items) {
         }
 
         return `
-            <div class="playlist-item ${isHighlightActive ? 'playing' : ''}" onclick="playPlaylistItem(${item.id})">
+            <div class="playlist-item ${isHighlightActive ? 'playing' : ''}" onclick="playPlaylistItem('${item.id}')">
                 <div class="item-index">${index + 1}</div>
                 <div class="item-status">${icon}</div>
                 <div class="item-info">
@@ -629,9 +641,162 @@ function closeRendererModal() {
     rendererModal.style.display = 'none';
 }
 
-function renderDevices() {
+function openManageModal() {
+    manageModal.style.display = 'flex';
+    renderManageDevices();
+}
+
+function closeManageModal() {
+    manageModal.style.display = 'none';
+}
+
+function renderManageDevices() {
     const renderers = currentDevices.filter(d => d.isRenderer);
     const servers = currentDevices.filter(d => d.isServer);
+
+    const renderItem = (device, role) => {
+        let host = 'unknown';
+        try { host = new URL(device.location).hostname; } catch (e) { host = device.location; }
+        const isDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
+
+        const displayName = device.customName || device.friendlyName;
+        const iconHtml = device.iconUrl
+            ? `<img src="${device.iconUrl}" class="manage-item-icon" alt="">`
+            : `<div class="manage-item-icon-placeholder">${displayName.charAt(0)}</div>`;
+
+        return `
+            <div class="manage-item ${isDisabled ? 'item-disabled' : ''}">
+                ${iconHtml}
+                <div class="manage-item-info">
+                    <div class="manage-item-name-row" id="name-row-${device.udn?.replace(/:/g, '-')}">
+                        <span class="manage-item-name">${displayName}</span>
+                        <button class="btn-rename" onclick="startRename('${device.udn}')" title="Rename device">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <span class="manage-item-host">${host} ${isDisabled ? '<span class="disabled-tag">(Disabled as ' + role + ')</span>' : ''}</span>
+                </div>
+                <div class="manage-item-actions">
+                    <button class="btn-toggle ${isDisabled ? 'btn-enable' : 'btn-disable'}" onclick="toggleDeviceDisabled('${device.udn}', '${role}')">
+                        ${isDisabled ? 'Enable' : 'Disable'}
+                    </button>
+                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')">Delete</button>
+                </div>
+            </div>
+        `;
+    };
+
+    if (manageRendererList) {
+        manageRendererList.innerHTML = renderers.length ? renderers.map(d => renderItem(d, 'player')).join('') : '<div class="empty-state-mini">No players saved</div>';
+    }
+    if (manageServerList) {
+        manageServerList.innerHTML = servers.length ? servers.map(d => renderItem(d, 'server')).join('') : '<div class="empty-state-mini">No servers saved</div>';
+    }
+}
+
+async function toggleDeviceDisabled(udn, role) {
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/toggle-disabled/${role}`, {
+            method: 'POST'
+        });
+        if (!response.ok) throw new Error('Failed to toggle device state');
+
+        await fetchDevices();
+        renderManageDevices();
+        renderDevices();
+    } catch (err) {
+        console.error('Toggle error:', err);
+    }
+}
+
+async function deleteDevice(udn) {
+    if (!confirm('Are you sure you want to delete this device? It will be removed from the saved database.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete device');
+
+        // Fetch fresh list and update UI
+        await fetchDevices();
+        renderManageDevices();
+        renderDevices(); // Update the main dashboard cards too
+    } catch (err) {
+        console.error('Delete error:', err);
+        alert('Failed to delete device');
+    }
+}
+
+function startRename(udn) {
+    const nameRow = document.getElementById(`name-row-${udn.replace(/:/g, '-')}`);
+    if (!nameRow) return;
+
+    const device = currentDevices.find(d => d.udn === udn);
+    if (!device) return;
+
+    const currentName = device.customName || device.friendlyName;
+
+    nameRow.innerHTML = `
+        <input type="text" class="manage-name-input" id="input-${udn.replace(/:/g, '-')}" value="${currentName.replace(/"/g, '&quot;')}" onkeydown="handleRenameKey(event, '${udn}')">
+        <button class="btn-toggle btn-enable" onclick="saveRename('${udn}')" style="padding: 0.2rem 0.5rem">Save</button>
+        <button class="btn-toggle btn-disable" onclick="cancelRename('${udn}')" style="padding: 0.2rem 0.5rem">Cancel</button>
+    `;
+
+    const input = document.getElementById(`input-${udn.replace(/:/g, '-')}`);
+    input.focus();
+    input.select();
+}
+
+function handleRenameKey(event, udn) {
+    if (event.key === 'Enter') {
+        saveRename(udn);
+    } else if (event.key === 'Escape') {
+        cancelRename(udn);
+    }
+}
+
+function cancelRename(udn) {
+    renderManageDevices();
+}
+
+async function saveRename(udn) {
+    const input = document.getElementById(`input-${udn.replace(/:/g, '-')}`);
+    if (!input) return;
+
+    const newName = input.value.trim();
+    if (!newName) {
+        alert('Name cannot be empty');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/name`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+        });
+
+        if (!response.ok) throw new Error('Failed to rename device');
+
+        await fetchDevices();
+        renderManageDevices();
+        renderDevices();
+    } catch (err) {
+        console.error('Rename error:', err);
+        alert('Failed to rename device');
+    }
+}
+
+function renderDevices() {
+    // Filter out disabled devices for the main dashboard and modals
+    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer);
+    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer);
 
     if (rendererCount) rendererCount.textContent = `${renderers.length} found`;
     if (serverCount) serverCount.textContent = `${servers.length} found`;
@@ -697,8 +862,8 @@ function updateModalDeviceLists() {
     const modalServerList = document.getElementById('modal-server-list');
     const modalRendererList = document.getElementById('modal-renderer-list');
 
-    const renderers = currentDevices.filter(d => d.isRenderer);
-    const servers = currentDevices.filter(d => d.isServer);
+    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer);
+    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer);
 
     if (modalServerList) {
         modalServerList.innerHTML = servers.map(device => renderModalDeviceItem(device, true)).join('');
@@ -712,11 +877,19 @@ function renderModalDeviceItem(device, asServer) {
     const isSelected = asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn);
     const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
+    const displayName = device.customName || device.friendlyName;
+    const iconHtml = device.iconUrl
+        ? `<img src="${device.iconUrl}" class="modal-device-icon" alt="">`
+        : `<div class="modal-device-icon-placeholder">${displayName.charAt(0)}</div>`;
+
     return `
         <div class="modal-device-item ${isSelected ? 'selected' : ''}" 
              onclick="${clickAction}"
              id="modal-device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
-            <div class="modal-device-name">${device.friendlyName}</div>
+            <div class="modal-device-item-left">
+                ${iconHtml}
+                <div class="modal-device-name">${displayName}</div>
+            </div>
             ${isSelected ? '<div class="selected-indicator">✓</div>' : ''}
         </div>
     `;
@@ -729,7 +902,9 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
     const isSonos = device.isSonos;
     let icon = '';
 
-    if (asServer) {
+    if (device.iconUrl) {
+        icon = `<img src="${device.iconUrl}" class="device-card-img" alt="">`;
+    } else if (asServer) {
         icon = `
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
@@ -767,7 +942,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
                 ${icon}
             </div>
             <div class="device-info">
-                <div class="device-name">${device.friendlyName}</div>
+                <div class="device-name">${device.customName || device.friendlyName}</div>
                 <div class="device-meta">
                     <span style="font-family: monospace; opacity: 0.7;">${(() => {
             try {
