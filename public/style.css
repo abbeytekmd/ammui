@@ -471,12 +471,12 @@ p.subtitle {
 .volume-slider {
     -webkit-appearance: none;
     appearance: none;
-    width: 8px;
+    width: 6px;
     height: 160px;
     border-radius: 4px;
     background: rgba(255, 255, 255, 0.1);
     outline: none;
-    writing-mode: bt-lr;
+    writing-mode: vertical-lr;
     -webkit-appearance: slider-vertical;
     cursor: pointer;
 }
@@ -491,6 +491,23 @@ p.subtitle {
     cursor: pointer;
     box-shadow: 0 0 15px var(--primary-glow);
     border: 2px solid white;
+}
+
+.volume-slider::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+    box-shadow: 0 0 15px var(--primary-glow);
+    border: 2px solid white;
+}
+
+.volume-slider::-moz-range-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    width: 6px;
+    height: 160px;
 }
 
 #volume-value {
