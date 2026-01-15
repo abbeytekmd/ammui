@@ -538,6 +538,32 @@ function renderPlaylist(items) {
     }).join('');
 
     updateTransportControls();
+    updateDocumentTitle();
+}
+
+function updateDocumentTitle() {
+    const defaultTitle = 'AMCUI | OpenHome Explorer';
+
+    if (!currentPlaylistItems || currentPlaylistItems.length === 0) {
+        document.title = defaultTitle;
+        return;
+    }
+
+    const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+    
+    // Only show track info if something is playing or paused (and we have a valid track)
+    if (currentTrack && (currentTransportState === 'Playing' || currentTransportState === 'Paused')) {
+        let titleText = currentTrack.title || 'Unknown Title';
+        if (currentTrack.artist) {
+            titleText += ` - ${currentTrack.artist}`;
+        }
+        
+        // Add a play/pause indicator
+        const stateIcon = currentTransportState === 'Playing' ? '▶' : '❘❘';
+        document.title = `${stateIcon} ${titleText}`;
+    } else {
+        document.title = defaultTitle;
+    }
 }
 
 function updateTransportControls() {
