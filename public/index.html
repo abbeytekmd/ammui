@@ -29,6 +29,14 @@
             </header>
 
             <nav class="mobile-tabs">
+                <button onclick="switchView('browser')" id="tab-browser" class="tab-item">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                        <path d="M12 18V6M6 12h12"></path>
+                    </svg>
+                    Sources
+                    <span id="tab-server-count" class="tab-badge">0</span>
+                </button>
                 <button onclick="switchView('playlist')" id="tab-playlist" class="tab-item active">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M9 18V5l12-2v13"></path>
@@ -38,20 +46,69 @@
                     Players
                     <span id="tab-renderer-count" class="tab-badge">0</span>
                 </button>
-                <button onclick="switchView('browser')" id="tab-browser" class="tab-item">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                        <path d="M12 18V6M6 12h12"></path>
-                    </svg>
-                    Sources
-                    <span id="tab-server-count" class="tab-badge">0</span>
-                </button>
             </nav>
         </div>
 
         <main class="main-layout">
-            <!-- Left Column: Renderers & Playlist -->
-            <div class="column left-column active">
+            <!-- Left Column: Media Sources & Folders -->
+            <div class="column browser-column">
+                <section class="device-section">
+                    <div class="section-header">
+                        <h2>Media Sources</h2>
+                        <span id="server-count" class="badge">0 found</span>
+                    </div>
+                    <div id="server-list" class="device-list">
+                        <div class="empty-state">Searching for Media Sources...</div>
+                    </div>
+                </section>
+
+                <div id="browser-container" class="playlist-container">
+                    <div class="section-header">
+                        <div class="header-group">
+                            <div class="header-controls">
+                                <div class="browser-control-group">
+                                    <button id="btn-play-all" onclick="playAll()" class="btn-control disabled primary"
+                                        title="Clear and play all tracks">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M5 3l14 9-14 9V3z"></path>
+                                        </svg>
+                                        Play All
+                                    </button>
+                                    <span class="divider"></span>
+                                    <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
+                                        title="Add all tracks on view">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M12 5v14M5 12h14"></path>
+                                        </svg>
+                                        Add All
+                                    </button>
+                                    <span class="divider"></span>
+                                    <button id="btn-set-home" onclick="setHome()" class="btn-control"
+                                        title="Set current folder as home">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+                                            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                                        </svg>
+                                        Set Home
+                                    </button>
+                                </div>
+                            </div>
+                            <div id="browser-breadcrumbs" class="breadcrumbs">
+                                <!-- Breadcrumbs will go here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div id="browser-items" class="playlist-items">
+                        <div class="empty-state">Select a server to browse folders</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Players & Playlist -->
+            <div class="column player-column active">
                 <section class="device-section">
                     <div class="section-header">
                         <h2>Players</h2>
@@ -120,67 +177,19 @@
                                 </button>
                             </div>
                         </div>
-                        <span id="playlist-count" class="badge">0 items</span>
+                        <div class="header-status-group">
+                            <span id="playlist-count" class="badge">0 items</span>
+                            <button id="btn-toggle-playlist" onclick="togglePlaylist()"
+                                class="btn-control toggle-playlist-btn" title="Toggle Playlist view">
+                                <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2">
+                                    <polyline points="6 9 12 15 18 9"></polyline>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                     <div id="playlist-items" class="playlist-items">
                         <div class="empty-state">Select a renderer to view playlist</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Right Column: Servers & Folders -->
-            <div class="column right-column">
-                <section class="device-section">
-                    <div class="section-header">
-                        <h2>Media Sources</h2>
-                        <span id="server-count" class="badge">0 found</span>
-                    </div>
-                    <div id="server-list" class="device-list">
-                        <div class="empty-state">Searching for Media Sources...</div>
-                    </div>
-                </section>
-
-                <div id="browser-container" class="playlist-container">
-                    <div class="section-header">
-                        <div class="header-group">
-                            <div class="header-controls">
-                                <div class="browser-control-group">
-                                    <button id="btn-play-all" onclick="playAll()" class="btn-control disabled primary"
-                                        title="Clear and play all tracks">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2">
-                                            <path d="M5 3l14 9-14 9V3z"></path>
-                                        </svg>
-                                        Play All
-                                    </button>
-                                    <span class="divider"></span>
-                                    <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
-                                        title="Add all tracks on view">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2">
-                                            <path d="M12 5v14M5 12h14"></path>
-                                        </svg>
-                                        Add All
-                                    </button>
-                                    <span class="divider"></span>
-                                    <button id="btn-set-home" onclick="setHome()" class="btn-control"
-                                        title="Set current folder as home">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2">
-                                            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                                            <polyline points="9 22 9 12 15 12 15 22"></polyline>
-                                        </svg>
-                                        Set Home
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="browser-breadcrumbs" class="breadcrumbs">
-                                <!-- Breadcrumbs will go here -->
-                            </div>
-                        </div>
-                    </div>
-                    <div id="browser-items" class="playlist-items">
-                        <div class="empty-state">Select a server to browse folders</div>
                     </div>
                 </div>
             </div>

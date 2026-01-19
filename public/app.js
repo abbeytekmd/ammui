@@ -501,6 +501,8 @@ function renderPlaylist(items) {
         return;
     }
 
+    const esc = (s) => (s || '').toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     playlistItems.innerHTML = items.map((item, index) => {
         // Track is highlighted if it's the current track AND the transport is moving (or paused)
         const isCurrent = currentTrackId != null && item.id != null && currentTrackId == item.id;
@@ -526,19 +528,47 @@ function renderPlaylist(items) {
         }
 
         return `
-            <div class="playlist-item ${isHighlightActive ? 'playing' : ''}" onclick="playPlaylistItem('${item.id}')">
+            <div class="playlist-item ${isHighlightActive ? 'playing' : ''}" onclick="playPlaylistItem('${esc(item.id)}')">
                 <div class="item-index">${index + 1}</div>
                 <div class="item-status">${icon}</div>
                 <div class="item-info">
-                    <div class="item-title">${item.title || 'Unknown Title'}</div>
-                    <div class="item-artist">${item.artist || ''}</div>
+                    <div class="item-title">${esc(item.title) || 'Unknown Title'}</div>
+                    <div class="item-artist">${esc(item.artist) || ''}</div>
                 </div>
+                <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrackFromPlaylist('${esc(item.id)}')" title="Remove from playlist">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6L6 18M6 6l12 12"></path>
+                    </svg>
+                </button>
             </div>
         `;
     }).join('');
 
     updateTransportControls();
     updateDocumentTitle();
+}
+
+async function deleteTrackFromPlaylist(id) {
+    if (!selectedRendererUdn) return;
+
+    // Visual feedback (optional, but good for UX)
+    console.log('Attempting to delete track:', id);
+
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/delete/${encodeURIComponent(id)}`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.error || 'Failed to delete track');
+        }
+
+        await fetchPlaylist(selectedRendererUdn);
+    } catch (err) {
+        console.error('Delete track error:', err);
+        alert('Failed to delete track: ' + err.message);
+    }
 }
 
 function updateDocumentTitle() {
@@ -550,14 +580,14 @@ function updateDocumentTitle() {
     }
 
     const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
-    
+
     // Only show track info if something is playing or paused (and we have a valid track)
     if (currentTrack && (currentTransportState === 'Playing' || currentTransportState === 'Paused')) {
         let titleText = currentTrack.title || 'Unknown Title';
         if (currentTrack.artist) {
             titleText += ` - ${currentTrack.artist}`;
         }
-        
+
         // Add a play/pause indicator
         const stateIcon = currentTransportState === 'Playing' ? '▶' : '❘❘';
         document.title = `${stateIcon} ${titleText}`;
@@ -984,19 +1014,19 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
 }
 
 function switchView(view) {
-    const leftCol = document.querySelector('.left-column');
-    const rightCol = document.querySelector('.right-column');
+    const playerCol = document.querySelector('.player-column');
+    const browserCol = document.querySelector('.browser-column');
     const tabPlaylist = document.getElementById('tab-playlist');
     const tabBrowser = document.getElementById('tab-browser');
 
     if (view === 'playlist') {
-        leftCol.classList.add('active');
-        rightCol.classList.remove('active');
+        playerCol.classList.add('active');
+        browserCol.classList.remove('active');
         tabPlaylist ? tabPlaylist.classList.add('active') : null;
         tabBrowser ? tabBrowser.classList.remove('active') : null;
     } else {
-        leftCol.classList.remove('active');
-        rightCol.classList.add('active');
+        playerCol.classList.remove('active');
+        browserCol.classList.add('active');
         tabPlaylist ? tabPlaylist.classList.remove('active') : null;
         tabBrowser ? tabBrowser.classList.add('active') : null;
     }
@@ -1262,4 +1292,21 @@ setInterval(() => {
     }
 }, 10000);
 */
+
+function togglePlaylist() {
+    const items = document.getElementById('playlist-items');
+    const btn = document.getElementById('btn-toggle-playlist');
+    const container = document.getElementById('playlist-container');
+
+    if (items) {
+        items.classList.toggle('expanded');
+    }
+    if (btn) {
+        btn.classList.toggle('expanded');
+    }
+    if (container) {
+        container.classList.toggle('expanded');
+    }
+}
+
 
