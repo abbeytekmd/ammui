@@ -145,23 +145,15 @@
                                 </div>
                                 <span class="divider"></span>
                                 <div class="volume-control-wrapper">
-                                    <button id="btn-volume" onclick="toggleVolumePopup()" class="btn-control"
-                                        title="Volume">
-                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2">
-                                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07">
-                                            </path>
-                                        </svg>
-                                    </button>
-                                    <div id="volume-popup" class="volume-popup" style="display: none;">
-                                        <div class="volume-slider-container">
-                                            <input type="range" id="volume-slider" min="0" max="100" step="1"
-                                                oninput="updateVolume(this.value)" class="volume-slider"
-                                                orient="vertical">
-                                            <div id="volume-value">0%</div>
-                                        </div>
-                                        <button class="btn-close-mini" onclick="toggleVolumePopup()">✕</button>
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                                    </svg>
+                                    <div class="volume-slider-container">
+                                        <input type="range" id="volume-slider" min="0" max="100" step="1"
+                                            oninput="updateVolume(this.value)" class="volume-slider">
+                                        <div id="volume-value">0%</div>
                                     </div>
                                 </div>
                                 <span class="divider"></span>
@@ -178,7 +170,7 @@
                             </div>
                         </div>
                         <div class="header-status-group">
-                            <span id="playlist-count" class="badge">0 items</span>
+                            <span id="playlist-count" class="badge">0</span>
                             <button id="btn-toggle-playlist" onclick="togglePlaylist()"
                                 class="btn-control toggle-playlist-btn" title="Toggle Playlist view">
                                 <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"

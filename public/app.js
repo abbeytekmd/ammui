@@ -126,6 +126,7 @@ async function selectDevice(udn) {
     playlistItems.innerHTML = '<div class="loading">Loading playlist...</div>';
 
     await fetchPlaylist(udn);
+    await fetchVolume();
 }
 
 
@@ -493,7 +494,7 @@ async function fetchStatus() {
 
 function renderPlaylist(items) {
     currentPlaylistItems = items;
-    playlistCount.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
+    playlistCount.textContent = items.length;
 
     if (items.length === 0) {
         playlistItems.innerHTML = '<div class="empty-state">Playlist is empty</div>';
@@ -714,6 +715,7 @@ function renderManageDevices() {
         let host = 'unknown';
         try { host = new URL(device.location).hostname; } catch (e) { host = device.location; }
         const isDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
+        const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
 
         const displayName = device.customName || device.friendlyName;
         const iconHtml = device.iconUrl
@@ -721,7 +723,7 @@ function renderManageDevices() {
             : `<div class="manage-item-icon-placeholder">${displayName.charAt(0)}</div>`;
 
         return `
-            <div class="manage-item ${isDisabled ? 'item-disabled' : ''}">
+            <div class="manage-item ${isDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
                 ${iconHtml}
                 <div class="manage-item-info">
                     <div class="manage-item-name-row" id="name-row-${device.udn?.replace(/:/g, '-')}">
@@ -736,6 +738,24 @@ function renderManageDevices() {
                     <span class="manage-item-host">${host} ${isDisabled ? '<span class="disabled-tag">(Disabled as ' + role + ')</span>' : ''}</span>
                 </div>
                 <div class="manage-item-actions">
+                    ${!isDisabled ? (isActive ? `
+                        <span class="active-badge">Active</span>
+                    ` : `
+                        <button class="btn-select ${role === 'server' ? 'btn-select-server' : 'btn-select-player'}" onclick="${role === 'server' ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`}; renderManageDevices();">
+                            ${role === 'server' ? `
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                    <path d="M9 18V5l12-2v13"></path>
+                                    <circle cx="6" cy="18" r="3"></circle>
+                                    <circle cx="18" cy="16" r="3"></circle>
+                                </svg>
+                            ` : `
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="#4ade80">
+                                    <path d="M8 5v14l11-7z"></path>
+                                </svg>
+                            `}
+                            <span>Select</span>
+                        </button>
+                    `) : ''}
                     <button class="btn-toggle ${isDisabled ? 'btn-enable' : 'btn-disable'}" onclick="toggleDeviceDisabled('${device.udn}', '${role}')">
                         ${isDisabled ? 'Enable' : 'Disable'}
                     </button>
@@ -962,11 +982,10 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
         icon = `<img src="${device.iconUrl}" class="device-card-img" alt="">`;
     } else if (asServer) {
         icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
-                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
-                <line x1="6" y1="6" x2="6.01" y2="6"></line>
-                <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18V5l12-2v13"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="16" r="3"></circle>
             </svg>
         `;
     } else if (isSonos) {
@@ -980,10 +999,8 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
         `;
     } else {
         icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="#4ade80">
+                <path d="M8 5v14l11-7z"></path>
             </svg>
         `;
     }
@@ -994,11 +1011,24 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
         <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
              onclick="${clickAction}"
              id="device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
-            <div class="device-icon ${asServer ? 'server-icon' : ''}">
-                ${icon}
+            <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}">
+                ${asServer ? `
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+                        <path d="M9 18V5l12-2v13"></path>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <circle cx="18" cy="16" r="3"></circle>
+                    </svg>
+                ` : `
+                    <svg viewBox="0 0 24 24" fill="white">
+                        <path d="M8 5v14l11-7z"></path>
+                    </svg>
+                `}
             </div>
             <div class="device-info">
-                <div class="device-name">${device.customName || device.friendlyName}</div>
+                <div class="device-name-container">
+                    <div class="device-name">${device.customName || device.friendlyName}</div>
+                    ${device.iconUrl ? `<img src="${device.iconUrl}" class="device-brand-icon" alt="">` : ''}
+                </div>
                 <div class="device-meta">
                     <span style="font-family: monospace; opacity: 0.7;">${(() => {
             try {
@@ -1147,6 +1177,7 @@ async function init() {
         const renderer = currentDevices.find(d => d.udn === selectedRendererUdn && d.isRenderer);
         if (renderer) {
             await fetchPlaylist(selectedRendererUdn);
+            await fetchVolume();
         }
     }
 
@@ -1215,16 +1246,6 @@ setInterval(() => {
 // Volume Control Logic
 let volumeDebounceTimeout = null;
 
-function toggleVolumePopup() {
-    const popup = document.getElementById('volume-popup');
-    if (popup.style.display === 'none') {
-        popup.style.display = 'flex';
-        fetchVolume(); // Get current volume when opening
-    } else {
-        popup.style.display = 'none';
-    }
-}
-
 async function fetchVolume() {
     if (!selectedRendererUdn) return;
     try {
@@ -1263,24 +1284,11 @@ async function updateVolume(value) {
     }, 100);
 }
 
-// Close volume popup when clicking outside
-document.addEventListener('click', (e) => {
-    const wrapper = document.querySelector('.volume-control-wrapper');
-    const popup = document.getElementById('volume-popup');
-    if (wrapper && !wrapper.contains(e.target) && popup && popup.style.display === 'flex') {
-        popup.style.display = 'none';
-    }
-});
-
 // Update status and volume periodically to sync the "playing" track highlight
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchStatus();
-        // Only fetch volume if the popup is open, to save bandwidth
-        const popup = document.getElementById('volume-popup');
-        if (popup && popup.style.display === 'flex') {
-            fetchVolume();
-        }
+        fetchVolume();
     }
 }, 5000);
 
