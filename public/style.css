@@ -104,28 +104,6 @@ body {
 }
 
 /* New Mobile UI Elements */
-.toggle-playlist-btn {
-    display: none;
-    padding: 0.25rem 0.5rem;
-    border: 1px solid var(--card-border);
-    border-radius: 0.5rem;
-    background: rgba(255, 255, 255, 0.05);
-    color: var(--text-muted);
-    cursor: pointer;
-}
-
-.toggle-playlist-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text);
-}
-
-.toggle-playlist-btn.expanded svg {
-    transform: rotate(180deg);
-}
-
-.toggle-playlist-btn svg {
-    transition: transform 0.3s ease;
-}
 
 .header-status-group {
     display: flex;
@@ -169,14 +147,16 @@ body {
         flex: none;
     }
 
-    /* Collapsible playlist */
-    #playlist-items {
+    /* Collapsible sections on mobile */
+    #playlist-items,
+    #browser-items {
         display: none;
     }
 
-    #playlist-items.expanded {
+    #playlist-items.expanded,
+    #browser-items.expanded {
         display: flex;
-        max-height: 40vh;
+        max-height: 50vh;
         overflow-y: auto;
         border-top: 1px solid var(--card-border);
         margin-top: 0.5rem;
@@ -537,8 +517,8 @@ p.subtitle {
     border: 1px solid var(--card-border);
     height: 38px;
     flex: 1;
-    min-width: 151px;
-    max-width: 250px;
+    min-width: 200px;
+    max-width: 300px;
 }
 
 .volume-control-wrapper svg {
@@ -550,7 +530,30 @@ p.subtitle {
     flex: 1;
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.4rem;
+}
+
+.btn-volume-step {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 4px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+
+.btn-volume-step:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+.btn-volume-step svg {
+    opacity: 0.8;
 }
 
 .volume-slider {

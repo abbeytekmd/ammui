@@ -900,7 +900,7 @@ function renderDevices() {
             }
 
             deviceListElement.innerHTML = `
-                <div class="active-server-display" onclick="openRendererModal()">
+                <div class="active-server-display" onclick="handleRendererClick()">
                     ${renderDeviceCard(activeRenderer, true, false)}
                 </div>
             `;
@@ -923,7 +923,7 @@ function renderDevices() {
 
             // Create a wrapper that opens the modal when clicked
             serverListElement.innerHTML = `
-                <div class="active-server-display" onclick="openServerModal()">
+                <div class="active-server-display" onclick="handleServerClick()">
                     ${renderDeviceCard(activeServer, true, true)}
                 </div>
             `;
@@ -1284,6 +1284,16 @@ async function updateVolume(value) {
     }, 100);
 }
 
+function adjustVolume(delta) {
+    const slider = document.getElementById('volume-slider');
+    if (!slider) return;
+    let newValue = parseInt(slider.value, 10) + delta;
+    if (newValue < 0) newValue = 0;
+    if (newValue > 100) newValue = 100;
+    slider.value = newValue;
+    updateVolume(newValue);
+}
+
 // Update status and volume periodically to sync the "playing" track highlight
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
@@ -1303,18 +1313,60 @@ setInterval(() => {
 
 function togglePlaylist() {
     const items = document.getElementById('playlist-items');
-    const btn = document.getElementById('btn-toggle-playlist');
     const container = document.getElementById('playlist-container');
 
     if (items) {
         items.classList.toggle('expanded');
     }
-    if (btn) {
-        btn.classList.toggle('expanded');
+    if (container) {
+        container.classList.toggle('expanded');
+    }
+}
+
+function toggleBrowser() {
+    const items = document.getElementById('browser-items');
+    const container = document.getElementById('browser-container');
+
+    if (items) {
+        items.classList.toggle('expanded');
     }
     if (container) {
         container.classList.toggle('expanded');
     }
+}
+
+function handleRendererClick() {
+    if (window.innerWidth <= 800) {
+        // When clicking player, if browser is expanded, collapse it
+        const browserItems = document.getElementById('browser-items');
+        if (browserItems && browserItems.classList.contains('expanded')) {
+            toggleBrowser();
+        }
+
+        const items = document.getElementById('playlist-items');
+        if (items && !items.classList.contains('expanded')) {
+            togglePlaylist();
+            return;
+        }
+    }
+    openRendererModal();
+}
+
+function handleServerClick() {
+    if (window.innerWidth <= 800) {
+        // When clicking server, if playlist is expanded, collapse it
+        const playlistItems = document.getElementById('playlist-items');
+        if (playlistItems && playlistItems.classList.contains('expanded')) {
+            togglePlaylist();
+        }
+
+        const items = document.getElementById('browser-items');
+        if (items && !items.classList.contains('expanded')) {
+            toggleBrowser();
+            return;
+        }
+    }
+    openServerModal();
 }
 
 

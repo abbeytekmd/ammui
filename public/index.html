@@ -151,33 +151,39 @@
                                         <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
                                     </svg>
                                     <div class="volume-slider-container">
+                                        <button class="btn-volume-step" onclick="adjustVolume(-5)"
+                                            title="Decrease volume">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2.5">
+                                                <path d="M5 12h14"></path>
+                                            </svg>
+                                        </button>
                                         <input type="range" id="volume-slider" min="0" max="100" step="1"
                                             oninput="updateVolume(this.value)" class="volume-slider">
+                                        <button class="btn-volume-step" onclick="adjustVolume(5)"
+                                            title="Increase volume">
+                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2.5">
+                                                <path d="M12 5v14M5 12h14"></path>
+                                            </svg>
+                                        </button>
                                         <div id="volume-value">0%</div>
                                     </div>
                                 </div>
-                                <span class="divider"></span>
-                                <button id="btn-clear" onclick="clearPlaylist()" class="btn-control"
-                                    title="Clear Playlist">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                        stroke-width="2">
-                                        <path
-                                            d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6">
-                                        </path>
-                                    </svg>
-                                    Clear
-                                </button>
+                                <!-- Clear button moved to status group -->
                             </div>
                         </div>
                         <div class="header-status-group">
-                            <span id="playlist-count" class="badge">0</span>
-                            <button id="btn-toggle-playlist" onclick="togglePlaylist()"
-                                class="btn-control toggle-playlist-btn" title="Toggle Playlist view">
-                                <svg class="chevron-icon" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2">
-                                    <polyline points="6 9 12 15 18 9"></polyline>
+                            <button id="btn-clear" onclick="clearPlaylist()" class="btn-control" title="Clear Playlist">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path
+                                        d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6">
+                                    </path>
                                 </svg>
+                                Clear
                             </button>
+                            <span id="playlist-count" class="badge">0</span>
                         </div>
                     </div>
                     <div id="playlist-items" class="playlist-items">
