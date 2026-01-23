@@ -1337,16 +1337,21 @@ function toggleBrowser() {
 
 function handleRendererClick() {
     if (window.innerWidth <= 800) {
-        // When clicking player, if browser is expanded, collapse it
         const browserItems = document.getElementById('browser-items');
+        const playlistItems = document.getElementById('playlist-items');
+
+        // If we are switching from browser to playlist
         if (browserItems && browserItems.classList.contains('expanded')) {
             toggleBrowser();
+            if (playlistItems && !playlistItems.classList.contains('expanded')) {
+                togglePlaylist();
+            }
+            return; // Switched view, don't open modal
         }
 
-        const items = document.getElementById('playlist-items');
-        if (items && !items.classList.contains('expanded')) {
+        // If not switching, just ensure playlist is expanded
+        if (playlistItems && !playlistItems.classList.contains('expanded')) {
             togglePlaylist();
-            return;
         }
     }
     openRendererModal();
@@ -1354,16 +1359,21 @@ function handleRendererClick() {
 
 function handleServerClick() {
     if (window.innerWidth <= 800) {
-        // When clicking server, if playlist is expanded, collapse it
         const playlistItems = document.getElementById('playlist-items');
+        const browserItems = document.getElementById('browser-items');
+
+        // If we are switching from playlist to browser
         if (playlistItems && playlistItems.classList.contains('expanded')) {
             togglePlaylist();
+            if (browserItems && !browserItems.classList.contains('expanded')) {
+                toggleBrowser();
+            }
+            return; // Switched view, don't open modal
         }
 
-        const items = document.getElementById('browser-items');
-        if (items && !items.classList.contains('expanded')) {
+        // If not switching, just ensure browser is expanded
+        if (browserItems && !browserItems.classList.contains('expanded')) {
             toggleBrowser();
-            return;
         }
     }
     openServerModal();
