@@ -31,17 +31,15 @@
             <nav class="mobile-tabs">
                 <button onclick="switchView('browser')" id="tab-browser" class="tab-item">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                        <path d="M12 18V6M6 12h12"></path>
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                     </svg>
                     Sources
                     <span id="tab-server-count" class="tab-badge">0</span>
                 </button>
                 <button onclick="switchView('playlist')" id="tab-playlist" class="tab-item active">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M9 18V5l12-2v13"></path>
-                        <circle cx="6" cy="18" r="3"></circle>
-                        <circle cx="18" cy="16" r="3"></circle>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linejoin="round">
+                        <path d="M6 9h5l7-7v20l-7-7H6V9z" fill="currentColor"></path>
                     </svg>
                     Players
                     <span id="tab-renderer-count" class="tab-badge">0</span>
@@ -170,10 +168,18 @@
                                         <div id="volume-value">0%</div>
                                     </div>
                                 </div>
-                                <!-- Clear button moved to status group -->
+                            </div>
+                            <div class="position-control-wrapper">
+                                <span id="pos-current" class="time-label">0:00</span>
+                                <div class="position-slider-container">
+                                    <input type="range" id="position-slider" min="0" max="100" value="0" step="1"
+                                        class="position-slider" disabled>
+                                </div>
+                                <span id="pos-duration" class="time-label">0:00</span>
                             </div>
                         </div>
                         <div class="header-status-group">
+                            <span id="playlist-count" class="badge">0</span>
                             <button id="btn-clear" onclick="clearPlaylist()" class="btn-control" title="Clear Playlist">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -183,7 +189,6 @@
                                 </svg>
                                 Clear
                             </button>
-                            <span id="playlist-count" class="badge">0</span>
                         </div>
                     </div>
                     <div id="playlist-items" class="playlist-items">

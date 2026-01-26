@@ -156,7 +156,6 @@ body {
     #playlist-items.expanded,
     #browser-items.expanded {
         display: flex;
-        max-height: 50vh;
         overflow-y: auto;
         border-top: 1px solid var(--card-border);
         margin-top: 0.5rem;
@@ -289,8 +288,8 @@ p.subtitle {
 }
 
 .device-icon svg {
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
 }
 
@@ -601,6 +600,62 @@ p.subtitle {
     color: var(--text-muted);
     min-width: 35px;
     text-align: right;
+}
+
+/* Position Control */
+.position-control-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 0.75rem;
+    border: 1px solid var(--card-border);
+    margin-top: 0.25rem;
+}
+
+.position-slider-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+}
+
+.position-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.1);
+    outline: none;
+    cursor: default;
+}
+
+.position-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: default;
+}
+
+.position-slider::-moz-range-thumb {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: default;
+    border: none;
+}
+
+.time-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    min-width: 45px;
+    text-align: center;
 }
 
 .section-header h2 {
@@ -1665,7 +1720,7 @@ p.subtitle {
         min-height: 0;
         overflow: hidden;
         padding-bottom: 0;
-        /* Remove bottom padding to use full screen */
+        /* Removed justify-content: flex-end which was creating the bottom gap */
     }
 
     .column {
@@ -1684,7 +1739,6 @@ p.subtitle {
         border-bottom: 1px solid var(--card-border);
         z-index: 10;
         /* Ensure it's not too large */
-        max-height: 50vh;
         overflow-y: auto;
     }
 
@@ -1692,6 +1746,8 @@ p.subtitle {
     .browser-column {
         flex: 1;
         min-height: 0;
+        display: flex;
+        flex-direction: column;
         padding: 0 0.5rem 0.5rem 0.5rem;
     }
 

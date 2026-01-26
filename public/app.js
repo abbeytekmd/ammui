@@ -59,6 +59,10 @@ let currentBrowserItems = [];
 let currentPlaylistItems = [];
 let currentTrackId = null;
 let currentTransportState = 'Stopped';
+let currentPositionSeconds = 0;
+let durationSeconds = 0;
+let lastStatusFetchTime = Date.now();
+let lastStatusPositionSeconds = 0;
 
 async function fetchDevices() {
     try {
@@ -172,7 +176,7 @@ async function enterFolder(id, title) {
     await browse(selectedServerUdn, id);
 }
 
-async function addToPlaylist(uri, title, artist, album, protocolInfo, autoSwitch = true) {
+async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, autoSwitch = true) {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -182,7 +186,7 @@ async function addToPlaylist(uri, title, artist, album, protocolInfo, autoSwitch
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, protocolInfo })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo })
         });
 
         if (!response.ok) {
@@ -202,7 +206,7 @@ async function addToPlaylist(uri, title, artist, album, protocolInfo, autoSwitch
     }
 }
 
-async function playTrack(uri, title, artist, album, protocolInfo) {
+async function playTrack(uri, title, artist, album, duration, protocolInfo) {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -213,7 +217,7 @@ async function playTrack(uri, title, artist, album, protocolInfo) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, protocolInfo })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo })
         });
 
         if (!response.ok) {
@@ -253,7 +257,7 @@ async function addAllToPlaylist() {
 
     try {
         for (const track of tracks) {
-            await addToPlaylist(track.uri, track.title, track.artist, track.album, track.protocolInfo, false);
+            await addToPlaylist(track.uri, track.title, track.artist, track.album, track.duration, track.protocolInfo, false);
         }
 
         // Switch once at the end for mobile
@@ -295,6 +299,7 @@ async function playAll() {
                     title: track.title,
                     artist: track.artist,
                     album: track.album,
+                    duration: track.duration,
                     protocolInfo: track.protocolInfo
                 })
             });
@@ -436,13 +441,13 @@ function renderBrowser(items) {
             <div class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
-                `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.protocolInfo)}')`}">
+                `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
                 </div>
                 ${!isContainer ? `
-                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
                         </svg>
@@ -464,8 +469,7 @@ async function fetchPlaylist(udn) {
         const statusRes = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
         if (statusRes.ok) {
             const status = await statusRes.json();
-            currentTrackId = status.trackId;
-            currentTransportState = status.transportState;
+            updateStatus(status);
         }
 
         renderPlaylist(playlist);
@@ -481,16 +485,118 @@ async function fetchStatus() {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
         if (!response.ok) throw new Error('Failed to fetch status');
         const status = await response.json();
-
-        if (status.trackId !== currentTrackId || status.transportState !== currentTransportState) {
-            currentTrackId = status.trackId;
-            currentTransportState = status.transportState;
-            renderPlaylist(currentPlaylistItems);
-        }
+        updateStatus(status);
     } catch (err) {
         console.error('Status fetch error:', err);
     }
 }
+
+function updateStatus(status) {
+    const trackChanged = status.trackId !== currentTrackId;
+    const transportChanged = status.transportState !== currentTransportState;
+
+    if (trackChanged || transportChanged) {
+        currentTrackId = status.trackId;
+        currentTransportState = status.transportState;
+        renderPlaylist(currentPlaylistItems);
+    }
+
+    // Update position only if it differs by more than 2 second, or track/transport changed
+    if (status.relTime !== undefined) {
+        const diff = Math.abs(status.relTime - currentPositionSeconds);
+        if (diff > 2 || trackChanged || transportChanged) {
+            lastStatusPositionSeconds = status.relTime;
+            lastStatusFetchTime = Date.now();
+            currentPositionSeconds = status.relTime;
+        }
+    }
+
+    // Duration handling: use status duration if valid, otherwise fallback to playlist metadata
+    let newDuration = status.duration || 0;
+
+    if (newDuration <= 0 && currentTrackId != null) {
+        // If playlist is empty, try to fetch it first
+        if (currentPlaylistItems.length === 0 && selectedRendererUdn) {
+            console.log('[DEBUG] Playlist empty during status check, fetching...');
+            fetchPlaylist(selectedRendererUdn);
+        }
+
+        const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+        if (currentTrack && currentTrack.duration) {
+            newDuration = formatToSeconds(currentTrack.duration);
+            console.log(`[DEBUG] Found fallback duration: ${newDuration}s for track ${currentTrackId}`);
+        } else {
+            console.log(`[DEBUG] No duration found for track ${currentTrackId} in playlist`);
+        }
+    } else if (newDuration > 0) {
+        console.log(`[DEBUG] Device reported duration: ${newDuration}s`);
+    }
+
+    durationSeconds = newDuration;
+    //    lastStatusFetchTime = Date.now();
+    updatePositionUI();
+}
+
+// Helper to convert HH:MM:SS to seconds on the client side
+function formatToSeconds(time) {
+    if (!time) return 0;
+    if (typeof time === 'number') return Math.floor(time);
+    const parts = time.split(':');
+    if (parts.length === 3) {
+        return parseInt(parts[0], 10) * 3600 + parseInt(parts[1], 10) * 60 + parseInt(parts[2], 10);
+    } else if (parts.length === 2) {
+        return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+    }
+    return parseInt(time, 10) || 0;
+}
+
+function formatTime(seconds) {
+    if (isNaN(seconds) || seconds < 0) return '0:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    if (h > 0) {
+        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function updatePositionUI() {
+    const posCurrent = document.getElementById('pos-current');
+    const posDuration = document.getElementById('pos-duration');
+    const posSlider = document.getElementById('position-slider');
+
+    if (posCurrent) posCurrent.textContent = formatTime(currentPositionSeconds);
+    if (posDuration) posDuration.textContent = formatTime(durationSeconds);
+
+    if (posSlider) {
+        if (durationSeconds > 0) {
+            posSlider.max = durationSeconds;
+            posSlider.value = currentPositionSeconds;
+            posSlider.disabled = false;
+        } else {
+            posSlider.max = 100;
+            posSlider.value = 0;
+            posSlider.disabled = true;
+        }
+    }
+}
+
+setInterval(() => {
+    if (isPageVisible) {
+        if (currentTransportState === 'Playing') {
+            const now = Date.now();
+            const elapsed = (now - lastStatusFetchTime) / 1000;
+            console.log('position', elapsed + lastStatusPositionSeconds, elapsed, lastStatusPositionSeconds);
+            let currentPos = lastStatusPositionSeconds + elapsed;
+
+            currentPositionSeconds = currentPos;
+        } else {
+            currentPositionSeconds = lastStatusPositionSeconds;
+        }
+        updatePositionUI();
+    }
+}, 1000);
 
 function renderPlaylist(items) {
     currentPlaylistItems = items;
@@ -744,13 +850,11 @@ function renderManageDevices() {
                         <button class="btn-select ${role === 'server' ? 'btn-select-server' : 'btn-select-player'}" onclick="${role === 'server' ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`}; renderManageDevices();">
                             ${role === 'server' ? `
                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                    <path d="M9 18V5l12-2v13"></path>
-                                    <circle cx="6" cy="18" r="3"></circle>
-                                    <circle cx="18" cy="16" r="3"></circle>
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                                 </svg>
                             ` : `
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="#4ade80">
-                                    <path d="M8 5v14l11-7z"></path>
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="#4ade80">
+                                    <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
                                 </svg>
                             `}
                             <span>Select</span>
@@ -899,11 +1003,7 @@ function renderDevices() {
                 }
             }
 
-            deviceListElement.innerHTML = `
-                <div class="active-server-display" onclick="handleRendererClick()">
-                    ${renderDeviceCard(activeRenderer, true, false)}
-                </div>
-            `;
+            deviceListElement.innerHTML = renderDeviceCard(activeRenderer, true, false, true);
         }
     }
 
@@ -921,12 +1021,7 @@ function renderDevices() {
 
             const activeServer = servers.find(s => s.udn === selectedServerUdn) || servers[0];
 
-            // Create a wrapper that opens the modal when clicked
-            serverListElement.innerHTML = `
-                <div class="active-server-display" onclick="handleServerClick()">
-                    ${renderDeviceCard(activeServer, true, true)}
-                </div>
-            `;
+            serverListElement.innerHTML = renderDeviceCard(activeServer, true, true, true);
         }
     }
 
@@ -971,7 +1066,7 @@ function renderModalDeviceItem(device, asServer) {
     `;
 }
 
-function renderDeviceCard(device, forceHighlight = false, asServer = false) {
+function renderDeviceCard(device, forceHighlight = false, asServer = false, isStatic = false) {
     const isSelected = forceHighlight || (asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
 
     // Different icon for servers
@@ -983,9 +1078,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
     } else if (asServer) {
         icon = `
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 18V5l12-2v13"></path>
-                <circle cx="6" cy="18" r="3"></circle>
-                <circle cx="18" cy="16" r="3"></circle>
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
             </svg>
         `;
     } else if (isSonos) {
@@ -999,13 +1092,13 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
         `;
     } else {
         icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="#4ade80">
-                <path d="M8 5v14l11-7z"></path>
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="#4ade80">
+                <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
             </svg>
         `;
     }
 
-    const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
+    const clickAction = isStatic ? (asServer ? 'handleServerClick()' : 'handleRendererClick()') : (asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`);
 
     return `
         <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
@@ -1014,13 +1107,11 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false) {
             <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}">
                 ${asServer ? `
                     <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-                        <path d="M9 18V5l12-2v13"></path>
-                        <circle cx="6" cy="18" r="3"></circle>
-                        <circle cx="18" cy="16" r="3"></circle>
+                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                     </svg>
                 ` : `
                     <svg viewBox="0 0 24 24" fill="white">
-                        <path d="M8 5v14l11-7z"></path>
+                        <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
                     </svg>
                 `}
             </div>
@@ -1211,6 +1302,11 @@ async function init() {
             } else {
                 await browse(selectedServerUdn, '0');
             }
+
+            // On mobile, auto-expand the browser since we just loaded content
+            if (window.innerWidth <= 800 && browserItems && !browserItems.classList.contains('expanded')) {
+                toggleBrowser();
+            }
         }
     }
 }
@@ -1337,46 +1433,31 @@ function toggleBrowser() {
 
 function handleRendererClick() {
     if (window.innerWidth <= 800) {
-        const browserItems = document.getElementById('browser-items');
-        const playlistItems = document.getElementById('playlist-items');
-
-        // If we are switching from browser to playlist
-        if (browserItems && browserItems.classList.contains('expanded')) {
-            toggleBrowser();
-            if (playlistItems && !playlistItems.classList.contains('expanded')) {
-                togglePlaylist();
-            }
-            return; // Switched view, don't open modal
+        if (playlistItems && playlistItems.classList.contains('expanded')) {
+            openRendererModal();
+            return;
         }
-
-        // If not switching, just ensure playlist is expanded
-        if (playlistItems && !playlistItems.classList.contains('expanded')) {
-            togglePlaylist();
-        }
+        if (browserItems && browserItems.classList.contains('expanded')) toggleBrowser();
+        if (playlistItems && !playlistItems.classList.contains('expanded')) togglePlaylist();
+        return;
     }
     openRendererModal();
 }
 
 function handleServerClick() {
-    if (window.innerWidth <= 800) {
-        const playlistItems = document.getElementById('playlist-items');
-        const browserItems = document.getElementById('browser-items');
-
-        // If we are switching from playlist to browser
-        if (playlistItems && playlistItems.classList.contains('expanded')) {
-            togglePlaylist();
-            if (browserItems && !browserItems.classList.contains('expanded')) {
-                toggleBrowser();
-            }
-            return; // Switched view, don't open modal
-        }
-
-        // If not switching, just ensure browser is expanded
-        if (browserItems && !browserItems.classList.contains('expanded')) {
-            toggleBrowser();
-        }
+    // On desktop, always open the modal immediately
+    if (window.innerWidth > 800) {
+        openServerModal();
+        return;
     }
-    openServerModal();
+
+    // On mobile, check expansion state
+    if (browserItems && browserItems.classList.contains('expanded')) {
+        openServerModal();
+        return;
+    }
+    if (playlistItems && playlistItems.classList.contains('expanded')) togglePlaylist();
+    if (browserItems && !browserItems.classList.contains('expanded')) toggleBrowser();
 }
 
 

@@ -398,7 +398,7 @@ app.get('/api/browse/:udn', async (req, res) => {
 
 app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     const { udn } = req.params;
-    const { uri, title, artist, album } = req.body;
+    const { uri, title, artist, album, duration, protocolInfo } = req.body;
 
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
@@ -408,7 +408,7 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
         const ids = await renderer.getIdArray();
         const afterId = ids.length > 0 ? ids[ids.length - 1] : 0;
 
-        const newId = await renderer.insertTrack({ uri, title, artist, album }, afterId);
+        const newId = await renderer.insertTrack({ uri, title, artist, album, duration, protocolInfo }, afterId);
         res.json({ success: true, newId });
     } catch (err) {
         console.error('Insert failed:', err.message);
