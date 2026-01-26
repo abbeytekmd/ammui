@@ -168,27 +168,31 @@
                                         <div id="volume-value">0%</div>
                                     </div>
                                 </div>
+                                <span class="divider"></span>
+                                <div class="header-status-group">
+                                    <span id="playlist-count" class="badge">0</span>
+                                    <button id="btn-clear" onclick="clearPlaylist()" class="btn-control"
+                                        title="Clear Playlist">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <path
+                                                d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6">
+                                            </path>
+                                        </svg>
+                                        Clear
+                                    </button>
+                                </div>
                             </div>
                             <div class="position-control-wrapper">
+                                <div id="now-playing-label" class="now-playing-label">Not Playing</div>
                                 <span id="pos-current" class="time-label">0:00</span>
                                 <div class="position-slider-container">
                                     <input type="range" id="position-slider" min="0" max="100" value="0" step="1"
-                                        class="position-slider" disabled>
+                                        oninput="updatePositionDisplay(this.value)" onchange="seekTo(this.value)"
+                                        class="position-slider">
                                 </div>
                                 <span id="pos-duration" class="time-label">0:00</span>
                             </div>
-                        </div>
-                        <div class="header-status-group">
-                            <span id="playlist-count" class="badge">0</span>
-                            <button id="btn-clear" onclick="clearPlaylist()" class="btn-control" title="Clear Playlist">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path
-                                        d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6">
-                                    </path>
-                                </svg>
-                                Clear
-                            </button>
                         </div>
                     </div>
                     <div id="playlist-items" class="playlist-items">

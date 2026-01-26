@@ -496,6 +496,19 @@ app.post('/api/playlist/:udn/seek/:id', async (req, res) => {
     }
 });
 
+app.post('/api/playlist/:udn/seek-time/:seconds', async (req, res) => {
+    const { udn, seconds } = req.params;
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
+    try {
+        const renderer = getRenderer(device);
+        await renderer.seekTime(parseInt(seconds, 10));
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/playlist/:udn/status', async (req, res) => {
     const { udn } = req.params;
     const device = Array.from(devices.values()).find(d => d.udn === udn);

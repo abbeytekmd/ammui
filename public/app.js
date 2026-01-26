@@ -63,6 +63,7 @@ let currentPositionSeconds = 0;
 let durationSeconds = 0;
 let lastStatusFetchTime = Date.now();
 let lastStatusPositionSeconds = 0;
+let isUserDraggingSlider = false;
 
 async function fetchDevices() {
     try {
@@ -534,6 +535,23 @@ function updateStatus(status) {
 
     durationSeconds = newDuration;
     //    lastStatusFetchTime = Date.now();
+
+    // Update Now Playing label
+    const nowPlayingLabel = document.getElementById('now-playing-label');
+    if (nowPlayingLabel) {
+        if (currentTrackId != null) {
+            const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+            if (currentTrack) {
+                nowPlayingLabel.textContent = `${currentTrack.title} - ${currentTrack.artist || 'Unknown Artist'}`;
+                nowPlayingLabel.title = nowPlayingLabel.textContent; // Tooltip for full name
+            } else {
+                nowPlayingLabel.textContent = `Track ${currentTrackId}`;
+            }
+        } else {
+            nowPlayingLabel.textContent = 'Not Playing';
+        }
+    }
+
     updatePositionUI();
 }
 
@@ -569,7 +587,7 @@ function updatePositionUI() {
     if (posCurrent) posCurrent.textContent = formatTime(currentPositionSeconds);
     if (posDuration) posDuration.textContent = formatTime(durationSeconds);
 
-    if (posSlider) {
+    if (posSlider && !isUserDraggingSlider) {
         if (durationSeconds > 0) {
             posSlider.max = durationSeconds;
             posSlider.value = currentPositionSeconds;
@@ -582,13 +600,49 @@ function updatePositionUI() {
     }
 }
 
+async function seekTo(seconds) {
+    if (!selectedRendererUdn || durationSeconds <= 0) return;
+
+    isUserDraggingSlider = false; // Release lock
+    const targetSeconds = parseFloat(seconds);
+
+    // Optimistically update local state
+    currentPositionSeconds = targetSeconds;
+    lastStatusPositionSeconds = targetSeconds;
+    lastStatusFetchTime = Date.now();
+    updatePositionUI();
+
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/seek-time/${Math.floor(targetSeconds)}`, {
+            method: 'POST'
+        });
+        if (!response.ok) throw new Error('Seek failed');
+
+        // After seek, force a status refresh after a short delay
+        setTimeout(fetchStatus, 1000);
+    } catch (err) {
+        console.error('Seek error:', err);
+    }
+}
+
+function updatePositionDisplay(seconds) {
+    isUserDraggingSlider = true;
+    const posCurrent = document.getElementById('pos-current');
+    if (posCurrent) {
+        posCurrent.textContent = formatTime(parseFloat(seconds));
+    }
+}
+
 setInterval(() => {
-    if (isPageVisible) {
+    if (isPageVisible && !isUserDraggingSlider) {
         if (currentTransportState === 'Playing') {
             const now = Date.now();
             const elapsed = (now - lastStatusFetchTime) / 1000;
-            console.log('position', elapsed + lastStatusPositionSeconds, elapsed, lastStatusPositionSeconds);
             let currentPos = lastStatusPositionSeconds + elapsed;
+
+            if (durationSeconds > 0 && currentPos > durationSeconds) {
+                currentPos = durationSeconds;
+            }
 
             currentPositionSeconds = currentPos;
         } else {
