@@ -61,7 +61,7 @@ let currentTrackId = null;
 let currentTransportState = 'Stopped';
 let currentPositionSeconds = 0;
 let durationSeconds = 0;
-let lastStatusFetchTime = Date.now();
+let lastStatusFetchTime = 0; // Initialize to 0 to prevent interpolation before first sync
 let lastStatusPositionSeconds = 0;
 let isUserDraggingSlider = false;
 
@@ -634,7 +634,7 @@ function updatePositionDisplay(seconds) {
 }
 
 setInterval(() => {
-    if (isPageVisible && !isUserDraggingSlider) {
+    if (isPageVisible && !isUserDraggingSlider && lastStatusFetchTime > 0) {
         if (currentTransportState === 'Playing') {
             const now = Date.now();
             const elapsed = (now - lastStatusFetchTime) / 1000;
@@ -1321,6 +1321,7 @@ async function init() {
     if (selectedRendererUdn) {
         const renderer = currentDevices.find(d => d.udn === selectedRendererUdn && d.isRenderer);
         if (renderer) {
+            await fetchStatus();
             await fetchPlaylist(selectedRendererUdn);
             await fetchVolume();
         }
@@ -1413,6 +1414,21 @@ async function fetchVolume() {
         console.error('Failed to fetch volume:', err);
     }
 }
+
+// Poll status every 5 seconds (only when page is visible)
+setInterval(() => {
+    if (isPageVisible && selectedRendererUdn) {
+        fetchStatus();
+    }
+}, 5000);
+
+// Poll playlist and volume every 15 seconds (less frequent)
+setInterval(() => {
+    if (isPageVisible && selectedRendererUdn) {
+        fetchPlaylist(selectedRendererUdn);
+        fetchVolume();
+    }
+}, 15000);
 
 async function updateVolume(value) {
     const valueSpan = document.getElementById('volume-value');
