@@ -458,10 +458,10 @@ p.subtitle {
 .transport-group,
 .browser-control-group {
     display: flex;
-    gap: 0.25rem;
+    gap: 0.5rem;
     background: rgba(255, 255, 255, 0.03);
-    padding: 0.25rem;
-    border-radius: 0.75rem;
+    padding: 0.35rem;
+    border-radius: 0.85rem;
     border: 1px solid var(--card-border);
 }
 
@@ -503,8 +503,57 @@ p.subtitle {
     box-shadow: 0 0 15px var(--primary-glow);
 }
 
+/* Transport Specific Controls */
+.transport-group .btn-control {
+    padding: 0.6rem 1rem;
+}
+
+.btn-transport-play {
+    background: rgba(34, 197, 94, 0.1) !important;
+    border-color: rgba(34, 197, 94, 0.3) !important;
+    color: #22c55e !important;
+}
+
+.btn-transport-play:hover {
+    background: #22c55e !important;
+    color: white !important;
+    box-shadow: 0 0 20px rgba(34, 197, 94, 0.4) !important;
+    border-color: #22c55e !important;
+}
+
+.btn-transport-pause {
+    background: rgba(245, 158, 11, 0.1) !important;
+    border-color: rgba(245, 158, 11, 0.3) !important;
+    color: #f59e0b !important;
+}
+
+.btn-transport-pause:hover {
+    background: #f59e0b !important;
+    color: white !important;
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.4) !important;
+    border-color: #f59e0b !important;
+}
+
+.btn-transport-stop {
+    background: rgba(239, 68, 68, 0.1) !important;
+    border-color: rgba(239, 68, 68, 0.3) !important;
+    color: #ef4444 !important;
+}
+
+.btn-transport-stop:hover {
+    background: #ef4444 !important;
+    color: white !important;
+    box-shadow: 0 0 20px rgba(239, 68, 68, 0.4) !important;
+    border-color: #ef4444 !important;
+}
+
 .btn-control svg {
     opacity: 0.9;
+    transition: transform 0.2s ease;
+}
+
+.transport-group .btn-control:hover svg {
+    transform: scale(1.1);
 }
 
 .btn-control.disabled {

@@ -466,6 +466,10 @@ async function fetchPlaylist(udn) {
         if (!response.ok) throw new Error('Failed to fetch playlist');
         const playlist = await response.json();
 
+        // Update the global state immediately before status is updated
+        // so that metadata lookups in updateStatus use the fresh playlist.
+        currentPlaylistItems = playlist;
+
         // Update status and track info before rendering
         const statusRes = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
         if (statusRes.ok) {
@@ -1415,21 +1419,6 @@ async function fetchVolume() {
     }
 }
 
-// Poll status every 5 seconds (only when page is visible)
-setInterval(() => {
-    if (isPageVisible && selectedRendererUdn) {
-        fetchStatus();
-    }
-}, 5000);
-
-// Poll playlist and volume every 15 seconds (less frequent)
-setInterval(() => {
-    if (isPageVisible && selectedRendererUdn) {
-        fetchPlaylist(selectedRendererUdn);
-        fetchVolume();
-    }
-}, 15000);
-
 async function updateVolume(value) {
     const valueSpan = document.getElementById('volume-value');
     if (valueSpan) valueSpan.textContent = `${value}%`;
@@ -1460,7 +1449,7 @@ function adjustVolume(delta) {
     updateVolume(newValue);
 }
 
-// Update status and volume periodically to sync the "playing" track highlight
+// Poll status and volume every 5 seconds (only when page is visible)
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchStatus();
@@ -1468,14 +1457,12 @@ setInterval(() => {
     }
 }, 5000);
 
-// Poll playlist every 10 seconds to sync with other controllers (only when page is visible and renderer is selected)
-/*
+// Poll playlist every 15 seconds (less frequent)
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn) {
         fetchPlaylist(selectedRendererUdn);
     }
-}, 10000);
-*/
+}, 15000);
 
 function togglePlaylist() {
     const items = document.getElementById('playlist-items');
