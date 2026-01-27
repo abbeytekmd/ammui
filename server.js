@@ -11,6 +11,8 @@ import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
 const { Sonos, DeviceDiscovery } = sonos;
 import fs from 'fs';
+import { setupLocalDlna, getLocalIp } from './lib/local-dlna-server.js';
+const hostIp = getLocalIp();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,6 +20,15 @@ const DEVICES_FILE = path.join(__dirname, 'devices.json');
 
 const app = express();
 const port = 3000;
+
+app.use(express.json());
+
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+});
+
+setupLocalDlna(app, port);
 
 // Store discovered devices
 let devices = new Map();
@@ -28,10 +39,14 @@ function loadDevices() {
             const data = fs.readFileSync(DEVICES_FILE, 'utf8');
             const list = JSON.parse(data);
             list.forEach(d => {
+                // Skip any stale entries for the local server from previous runs on different IPs
+                if (d.udn === 'uuid:amcui-local-media-server' || d.friendlyName === 'AMCUI Local Server') {
+                    return;
+                }
                 if (d.location) devices.set(d.location, d);
                 if (d.udn) devices.set(d.udn, d);
             });
-            console.log(`Loaded ${list.length} devices from storage.`);
+            console.log(`Loaded ${devices.size / 2} devices from storage (filtered).`);
         }
     } catch (err) {
         console.error('Failed to load devices:', err.message);
@@ -209,6 +224,15 @@ async function handleSSDPMessage(headers, rinfo) {
             return;
         }
 
+        // PREVENT HIJACKING: If this is our own local server discovered on a VPN IP, IGNORE IT.
+        if (st.includes('amcui-local-media-server') || (location && location.includes('amcui-local-media-server'))) {
+            const url = new URL(location);
+            if (url.hostname !== hostIp) {
+                console.log(`[DEBUG] Ignoring local server discovered on non-primary IP: ${url.hostname} (Expected: ${hostIp})`);
+                return;
+            }
+        }
+
         console.log(`Discovered candidate via ${msgType} at ${rinfo.address} (ST/NT: ${st})`);
 
         devices.set(location, {
@@ -223,17 +247,26 @@ async function handleSSDPMessage(headers, rinfo) {
 
         const deviceDetails = await parseDescription(location, isServer, isRenderer);
         if (deviceDetails) {
-            const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
+            const udn = deviceDetails.udn;
+            const existingByUdn = udn ? devices.get(udn) : null;
+
+            // If we already know this device by UDN, and it has moved location,
+            // clean up the old location key to prevent stale "ghost" devices.
+            if (existingByUdn && existingByUdn.location !== location) {
+                console.log(`[DEBUG] Device ${deviceDetails.friendlyName} moved: ${existingByUdn.location} -> ${location}`);
+                devices.delete(existingByUdn.location);
+            }
+
             const merged = { ...deviceDetails, lastSeen: Date.now(), isSonos: deviceDetails.isSonos || isSonosSSDP };
 
             // Preserve custom name if it exists
-            if (existing && existing.customName) {
-                merged.customName = existing.customName;
+            if (existingByUdn && existingByUdn.customName) {
+                merged.customName = existingByUdn.customName;
             }
 
             devices.set(location, merged);
-            if (deviceDetails.udn) {
-                devices.set(deviceDetails.udn, merged);
+            if (udn) {
+                devices.set(udn, merged);
             }
             saveDevices();
         } else {
@@ -382,7 +415,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/browse/:udn', async (req, res) => {
     const { udn } = req.params;
     const { objectId = '0' } = req.query;
-    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    const device = Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
 
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
@@ -399,8 +434,12 @@ app.get('/api/browse/:udn', async (req, res) => {
 app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     const { udn } = req.params;
     const { uri, title, artist, album, duration, protocolInfo } = req.body;
+    console.log(`[DEBUG] API Insert for ${udn}: uri="${uri}", title="${title}"`);
 
-    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    const device = Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
 
     try {
@@ -596,17 +635,21 @@ app.get('/api/diag/probe/:ip', async (req, res) => {
 });
 
 app.get('/api/devices', (req, res) => {
-    const uniqueDevices = [];
-    const seenUdns = new Set();
-    for (const device of devices.values()) {
-        if (device.udn && !seenUdns.has(device.udn)) {
-            uniqueDevices.push(device);
-            seenUdns.add(device.udn);
-        } else if (!device.udn && !device.loading) {
-            uniqueDevices.push(device);
+    const uniqueDevicesMap = new Map();
+
+    // Sort devices by lastSeen descending so we keep the freshest one
+    const devList = Array.from(devices.values()).sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+
+    for (const device of devList) {
+        if (!device.udn) {
+            if (!device.loading) uniqueDevicesMap.set(device.location, device);
+            continue;
+        }
+        if (!uniqueDevicesMap.has(device.udn)) {
+            uniqueDevicesMap.set(device.udn, device);
         }
     }
-    res.json(uniqueDevices);
+    res.json(Array.from(uniqueDevicesMap.values()));
 });
 
 app.delete('/api/devices/:udn', (req, res) => {
@@ -681,6 +724,76 @@ app.post('/api/devices/:udn/name', express.json(), (req, res) => {
     res.json({ success: true, customName: name });
 });
 
+app.post('/api/download', express.json(), async (req, res) => {
+    const { uri, title, artist, album } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+
+        // Sanitize components
+        const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
+        const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
+        const safeTitle = (title || 'Track').replace(/[<>:"/\\|?*]/g, '_');
+
+        // Create target directory structure: local/[Artist]/[Album]
+        const targetDir = path.join(localDir, safeArtist, safeAlbum);
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+
+        // Get extension from URI or default to .mp3
+        let ext = '.mp3';
+        try {
+            const url = new URL(uri);
+            const pathname = url.pathname;
+            const foundExt = path.extname(pathname);
+            if (foundExt && foundExt.length >= 3 && foundExt.length <= 5) ext = foundExt;
+        } catch (e) { }
+
+        const filename = `${safeTitle}${ext}`;
+        const filePath = path.join(targetDir, filename);
+
+        console.log(`Downloading ${uri} to ${filePath}...`);
+
+        const response = await axios({
+            method: 'get',
+            url: uri,
+            responseType: 'stream',
+            timeout: 30000
+        });
+
+        const writer = fs.createWriteStream(filePath);
+        response.data.pipe(writer);
+
+        writer.on('finish', () => {
+            console.log(`Download finished: ${filename}`);
+            res.json({ success: true, filename });
+        });
+
+        writer.on('error', (err) => {
+            console.error('Writer error:', err);
+            res.status(500).json({ error: 'Failed to write file' });
+        });
+
+    } catch (err) {
+        console.error('Download error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(port, () => {
     console.log(`AMCUI server listening at http://localhost:${port}`);
+});
+
+// 404 Handler - MUST BE LAST
+app.use((req, res) => {
+    console.error(`[404] ${req.method} ${req.url}`);
+    res.status(404).json({ error: `Not Found: ${req.method} ${req.url}` });
+});
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error(`[ERROR] ${err.stack}`);
+    res.status(500).json({ error: err.message || 'Internal Server Error' });
 });

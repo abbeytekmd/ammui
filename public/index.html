@@ -18,12 +18,12 @@
                 <div class="header-main">
                     <h1>AMCUI</h1>
                     <button id="btn-manage-devices" onclick="openManageModal()" class="btn-control ghost"
-                        title="Manage saved devices">
+                        title="Settings for saved devices">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                         </svg>
-                        Manage
+                        Settings
                     </button>
                 </div>
             </header>
@@ -53,7 +53,7 @@
                 <section class="device-section">
                     <div class="section-header">
                         <h2>Media Sources</h2>
-                        <span id="server-count" class="badge">0 found</span>
+                        <span id="server-count" class="badge">0 active</span>
                     </div>
                     <div id="server-list" class="device-list">
                         <div class="empty-state">Searching for Media Sources...</div>
@@ -110,7 +110,7 @@
                 <section class="device-section">
                     <div class="section-header">
                         <h2>Players</h2>
-                        <span id="renderer-count" class="badge">0 found</span>
+                        <span id="renderer-count" class="badge">0 active</span>
                     </div>
                     <div id="device-list" class="device-list">
                         <div class="empty-state">Searching for Players...</div>
@@ -255,7 +255,7 @@
         <div class="modal-content manage-modal-content">
             <div class="modal-header">
                 <div class="modal-title-group">
-                    <h2>Manage Devices</h2>
+                    <h2>Settings</h2>
                 </div>
                 <button class="btn-close" onclick="closeManageModal()">✕</button>
             </div>
@@ -272,6 +272,7 @@
         </div>
     </div>
 
+    <div id="toast-container" class="toast-container"></div>
     <script src="app.js"></script>
 </body>
 

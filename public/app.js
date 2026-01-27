@@ -65,6 +65,49 @@ let lastStatusFetchTime = 0; // Initialize to 0 to prevent interpolation before 
 let lastStatusPositionSeconds = 0;
 let isUserDraggingSlider = false;
 
+function showToast(message, type = 'error', duration = 5000) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+
+    const icon = document.createElement('div');
+    icon.className = 'toast-icon';
+    if (type === 'error') {
+        icon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>';
+    } else {
+        icon.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>';
+    }
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'toast-message';
+    msgEl.textContent = message;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'toast-close';
+    closeBtn.innerHTML = '✕';
+    closeBtn.onclick = () => {
+        toast.classList.add('toast-fade-out');
+        setTimeout(() => toast.remove(), 300);
+    };
+
+    toast.appendChild(icon);
+    toast.appendChild(msgEl);
+    toast.appendChild(closeBtn);
+
+    container.appendChild(toast);
+
+    if (duration > 0) {
+        setTimeout(() => {
+            if (toast.parentElement) {
+                toast.classList.add('toast-fade-out');
+                setTimeout(() => toast.remove(), 300);
+            }
+        }, duration);
+    }
+}
+
 async function fetchDevices() {
     try {
         const response = await fetch('/api/devices');
@@ -195,6 +238,7 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
             throw new Error(errData.error || 'Failed to add track');
         }
 
+        showToast(`Added: ${title}`, 'success', 2000);
         await fetchPlaylist(selectedRendererUdn);
 
         // On mobile, switch to playlist view after adding if requested
@@ -203,7 +247,30 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
         }
     } catch (err) {
         console.error('Client: Error adding track:', err);
+        showToast(`Failed to add track: ${err.message}`);
         throw err;
+    }
+}
+
+async function downloadTrack(uri, title, artist, album) {
+    showToast(`Downloading: ${title}...`, 'info', 3000);
+    try {
+        const response = await fetch('/api/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri, title, artist, album })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Download failed');
+        }
+
+        const data = await response.json();
+        showToast(`Saved: ${data.filename}`, 'success', 3000);
+    } catch (err) {
+        console.error('Download error:', err);
+        showToast(`Download failed: ${err.message}`);
     }
 }
 
@@ -229,6 +296,7 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo) {
         const data = await response.json();
         const newId = data.newId;
 
+        showToast(`Playing: ${title}`, 'success', 2000);
         await fetchPlaylist(selectedRendererUdn);
 
         if (newId) {
@@ -336,12 +404,17 @@ async function transportAction(action) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/${action}`, {
             method: 'POST'
         });
-        if (!response.ok) throw new Error(`Failed to ${action}`);
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || `Failed to ${action}`);
+        }
 
         // Instant update of status and playlist to reflect the new state
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error(`${action} error:`, err);
+        showToast(`Playback Error: ${err.message}`);
     }
 }
 
@@ -368,6 +441,7 @@ async function playPlaylistItem(id) {
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error('Play track error:', err);
+        showToast(`Failed to play track: ${err.message}`);
     }
 }
 
@@ -384,7 +458,7 @@ async function clearPlaylist() {
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error('Clear error:', err);
-        alert('Failed to clear playlist');
+        showToast(`Failed to clear playlist: ${err.message}`);
     }
 }
 
@@ -438,6 +512,7 @@ function renderBrowser(items) {
 
         const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
+        const isLocalServer = selectedServerUdn === 'uuid:amcui-local-media-server';
         return `
             <div class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
@@ -448,12 +523,24 @@ function renderBrowser(items) {
                     <div class="item-title">${item.title}</div>
                 </div>
                 ${!isContainer ? `
-                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M12 5v14M5 12h14"></path>
-                        </svg>
-                        Queue
-                    </button>
+                    <div class="item-actions">
+                        <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"></path>
+                            </svg>
+                            Queue
+                        </button>
+                        ${!isLocalServer ? `
+                        <button class="btn-control download-btn" onclick="event.stopPropagation(); downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')" title="Download to local folder">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            Download
+                        </button>
+                        ` : ''}
+                    </div>
                 ` : ''}
             </div>
         `;
@@ -506,6 +593,26 @@ function updateStatus(status) {
         renderPlaylist(currentPlaylistItems);
     }
 
+    // Handle Transport Status (Errors)
+    if (status.transportStatus && status.transportStatus !== 'OK' && status.transportStatus !== 'ERROR_OCCURRED') {
+        const s = status.transportStatus;
+        // Known Sonos non-OK statuses that represent failures
+        const errorConditions = [
+            'ERROR', 'FAILED', 'NOT_FOUND', 'UNSUPPORTED', 'INVALID',
+            'DENIED', 'FORBIDDEN', 'ILLEGAL', 'EXPIRED'
+        ];
+
+        if (errorConditions.some(cond => s.includes(cond))) {
+            console.warn(`[DEBUG] Transport Error Status: ${s}`);
+            showToast(`Device Status: ${s.replace(/_/g, ' ')}`);
+        }
+    }
+
+    // If status itself has an error message
+    if (status.error) {
+        showToast(`Renderer Error: ${status.error}`);
+    }
+
     // Update position only if it differs by more than 2 second, or track/transport changed
     if (status.relTime !== undefined) {
         const diff = Math.abs(status.relTime - currentPositionSeconds);
@@ -520,18 +627,11 @@ function updateStatus(status) {
     let newDuration = status.duration || 0;
 
     if (newDuration <= 0 && currentTrackId != null) {
-        // If playlist is empty, try to fetch it first
-        if (currentPlaylistItems.length === 0 && selectedRendererUdn) {
-            console.log('[DEBUG] Playlist empty during status check, fetching...');
-            fetchPlaylist(selectedRendererUdn);
-        }
-
+        // Fallback: Try to find duration in the already loaded playlist items
         const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
         if (currentTrack && currentTrack.duration) {
             newDuration = formatToSeconds(currentTrack.duration);
             console.log(`[DEBUG] Found fallback duration: ${newDuration}s for track ${currentTrackId}`);
-        } else {
-            console.log(`[DEBUG] No duration found for track ${currentTrackId} in playlist`);
         }
     } else if (newDuration > 0) {
         console.log(`[DEBUG] Device reported duration: ${newDuration}s`);
@@ -626,6 +726,7 @@ async function seekTo(seconds) {
         setTimeout(fetchStatus, 1000);
     } catch (err) {
         console.error('Seek error:', err);
+        showToast(`Seek Error: ${err.message}`);
     }
 }
 
@@ -732,7 +833,7 @@ async function deleteTrackFromPlaylist(id) {
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error('Delete track error:', err);
-        alert('Failed to delete track: ' + err.message);
+        showToast(`Failed to delete track: ${err.message}`);
     }
 }
 
@@ -904,24 +1005,11 @@ function renderManageDevices() {
                 <div class="manage-item-actions">
                     ${!isDisabled ? (isActive ? `
                         <span class="active-badge">Active</span>
-                    ` : `
-                        <button class="btn-select ${role === 'server' ? 'btn-select-server' : 'btn-select-player'}" onclick="${role === 'server' ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`}; renderManageDevices();">
-                            ${role === 'server' ? `
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                                </svg>
-                            ` : `
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="#4ade80">
-                                    <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
-                                </svg>
-                            `}
-                            <span>Select</span>
-                        </button>
-                    `) : ''}
+                    ` : '') : ''}
                     <button class="btn-toggle ${isDisabled ? 'btn-enable' : 'btn-disable'}" onclick="toggleDeviceDisabled('${device.udn}', '${role}')">
                         ${isDisabled ? 'Enable' : 'Disable'}
                     </button>
-                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')">Delete</button>
+                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')">Forget</button>
                 </div>
             </div>
         `;
@@ -951,7 +1039,7 @@ async function toggleDeviceDisabled(udn, role) {
 }
 
 async function deleteDevice(udn) {
-    if (!confirm('Are you sure you want to delete this device? It will be removed from the saved database.')) {
+    if (!confirm('Are you sure you want to forget this device? It will be removed from the saved database.')) {
         return;
     }
 
@@ -959,17 +1047,18 @@ async function deleteDevice(udn) {
         const response = await fetch(`/api/devices/${encodeURIComponent(udn)}`, {
             method: 'DELETE'
         });
-        if (!response.ok) throw new Error('Failed to delete device');
+        if (!response.ok) throw new Error('Failed to forget device');
 
         // Fetch fresh list and update UI
         await fetchDevices();
         renderManageDevices();
         renderDevices(); // Update the main dashboard cards too
     } catch (err) {
-        console.error('Delete error:', err);
-        alert('Failed to delete device');
+        console.error('Forget error:', err);
+        alert('Failed to forget device');
     }
 }
+
 
 function startRename(udn) {
     const nameRow = document.getElementById(`name-row-${udn.replace(/:/g, '-')}`);
@@ -1036,8 +1125,8 @@ function renderDevices() {
     const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer);
     const servers = currentDevices.filter(d => d.isServer && !d.disabledServer);
 
-    if (rendererCount) rendererCount.textContent = `${renderers.length} found`;
-    if (serverCount) serverCount.textContent = `${servers.length} found`;
+    if (rendererCount) rendererCount.textContent = `${renderers.length} active`;
+    if (serverCount) serverCount.textContent = `${servers.length} active`;
     if (tabRendererCount) tabRendererCount.textContent = renderers.length;
     if (tabServerCount) tabServerCount.textContent = servers.length;
 
@@ -1516,5 +1605,4 @@ function handleServerClick() {
     if (playlistItems && playlistItems.classList.contains('expanded')) togglePlaylist();
     if (browserItems && !browserItems.classList.contains('expanded')) toggleBrowser();
 }
-
 
