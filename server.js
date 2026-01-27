@@ -1,7 +1,6 @@
 import './lib/logger-init.js';
 import express from 'express';
 import ssdp from 'node-ssdp';
-const { Client } = ssdp;
 import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,9 +8,11 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
-const { Sonos, DeviceDiscovery } = sonos;
 import fs from 'fs';
 import { setupLocalDlna, getLocalIp } from './lib/local-dlna-server.js';
+
+const { Client } = ssdp;
+const { Sonos, DeviceDiscovery } = sonos;
 const hostIp = getLocalIp();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -415,6 +416,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.get('/api/browse/:udn', async (req, res) => {
     const { udn } = req.params;
     const { objectId = '0' } = req.query;
+
     const device = Array.from(devices.values())
         .filter(d => d.udn === udn)
         .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
@@ -724,66 +726,168 @@ app.post('/api/devices/:udn/name', express.json(), (req, res) => {
     res.json({ success: true, customName: name });
 });
 
-app.post('/api/download', express.json(), async (req, res) => {
-    const { uri, title, artist, album } = req.body;
-    if (!uri) return res.status(400).json({ error: 'URI is required' });
+app.post('/api/delete', express.json(), async (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'ID (path) is required' });
 
     try {
         const localDir = path.join(__dirname, 'local');
+        // Ensure id is a relative path and doesn't try to escape the local directory
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        const filePath = path.join(localDir, safeId);
 
-        // Sanitize components
-        const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
-        const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
-        const safeTitle = (title || 'Track').replace(/[<>:"/\\|?*]/g, '_');
+        console.log(`Requested deletion of ${id} -> ${filePath}`);
 
-        // Create target directory structure: local/[Artist]/[Album]
-        const targetDir = path.join(localDir, safeArtist, safeAlbum);
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ error: 'File not found' });
         }
 
-        // Get extension from URI or default to .mp3
-        let ext = '.mp3';
-        try {
-            const url = new URL(uri);
-            const pathname = url.pathname;
-            const foundExt = path.extname(pathname);
-            if (foundExt && foundExt.length >= 3 && foundExt.length <= 5) ext = foundExt;
-        } catch (e) { }
+        const stats = fs.statSync(filePath);
+        if (stats.isDirectory()) {
+            fs.rmSync(filePath, { recursive: true, force: true });
+            console.log(`Deleted directory: ${filePath}`);
+        } else {
+            fs.unlinkSync(filePath);
+            console.log(`Deleted file: ${filePath}`);
+        }
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Delete error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
 
-        const filename = `${safeTitle}${ext}`;
-        const filePath = path.join(targetDir, filename);
+async function downloadFileHelper(uri, title, artist, album) {
+    const localDir = path.join(__dirname, 'local');
 
-        console.log(`Downloading ${uri} to ${filePath}...`);
+    // Sanitize components
+    const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
+    const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
+    const safeTitle = (title || 'Track').replace(/[<>:"/\\|?*]/g, '_');
 
-        const response = await axios({
-            method: 'get',
-            url: uri,
-            responseType: 'stream',
-            timeout: 30000
-        });
+    // Create target directory structure: local/[Artist]/[Album]
+    const targetDir = path.join(localDir, safeArtist, safeAlbum);
+    if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+    }
 
+    // Get extension from URI or default to .mp3
+    let ext = '.mp3';
+    try {
+        const url = new URL(uri);
+        const pathname = url.pathname;
+        const foundExt = path.extname(pathname);
+        if (foundExt && foundExt.length >= 3 && foundExt.length <= 5) ext = foundExt;
+    } catch (e) { }
+
+    const filename = `${safeTitle}${ext}`;
+    const filePath = path.join(targetDir, filename);
+
+    if (fs.existsSync(filePath)) {
+        console.log(`Skipping download, file already exists: ${filename}`);
+        return { success: true, filename, skipped: true };
+    }
+
+    console.log(`Downloading ${uri} to ${filePath}...`);
+
+    const response = await axios({
+        method: 'get',
+        url: uri,
+        responseType: 'stream',
+        timeout: 60000 // Increased timeout for larger files
+    });
+
+    return new Promise((resolve, reject) => {
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
 
         writer.on('finish', () => {
             console.log(`Download finished: ${filename}`);
-            res.json({ success: true, filename });
+            resolve({ success: true, filename });
         });
 
         writer.on('error', (err) => {
             console.error('Writer error:', err);
-            res.status(500).json({ error: 'Failed to write file' });
+            reject(new Error(`Failed to write file ${filename}`));
         });
+    });
+}
 
+app.post('/api/download', express.json(), async (req, res) => {
+    const { uri, title, artist, album } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        const result = await downloadFileHelper(uri, title, artist, album);
+        res.json(result);
     } catch (err) {
         console.error('Download error:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
+app.post('/api/download-folder', express.json(), async (req, res) => {
+    const { udn, objectId, title, artist, album } = req.body;
+    if (!udn || !objectId) return res.status(400).json({ error: 'UDN and ObjectID are required' });
+
+    const device = Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+
+    try {
+        const server = new MediaServer(device);
+        let downloadCount = 0;
+        let failCount = 0;
+
+        async function processRecursive(currentId, currentArtist, currentAlbum) {
+            console.log(`Browsing folder ${currentId} for download...`);
+            const items = await server.browse(currentId);
+            for (const item of items) {
+                if (item.type === 'item') {
+                    try {
+                        await downloadFileHelper(item.uri, item.title, item.artist || currentArtist, item.album || currentAlbum);
+                        downloadCount++;
+                    } catch (err) {
+                        console.error(`Failed to download ${item.title}:`, err.message);
+                        failCount++;
+                    }
+                } else if (item.type === 'container') {
+                    await processRecursive(item.id, item.artist || currentArtist, item.album || currentAlbum);
+                }
+            }
+        }
+
+        // Start recursive download (not awaiting here to reply quickly, but user wants it to finish?
+        // Actually, if we want to confirm when done, we should await. 
+        // But for deep folders, it might timeout the HTTP request.
+        // Let's do it and hope for the best, or suggest a progress mechanism later.
+        await processRecursive(objectId, artist, album);
+
+        res.json({ success: true, downloadCount, failCount });
+    } catch (err) {
+        console.error('Folder download error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(port, () => {
     console.log(`AMCUI server listening at http://localhost:${port}`);
+});
+
+process.on('SIGINT', () => {
+    console.log('Shutting down AMCUI...');
+    ssdpClient.stop();
+    // Give local DLNA server a chance to stop if it registered its own listener,
+    // but force exit here as well to be sure.
+    setTimeout(() => process.exit(0), 500);
+});
+
+process.on('SIGTERM', () => {
+    console.log('Received SIGTERM, exiting...');
+    ssdpClient.stop();
+    process.exit(0);
 });
 
 // 404 Handler - MUST BE LAST

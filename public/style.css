@@ -492,6 +492,21 @@ p.subtitle {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
+.queue-btn:hover {
+    color: #22c55e !important;
+    border-color: rgba(34, 197, 94, 0.4) !important;
+}
+
+.download-btn:hover {
+    color: var(--primary) !important;
+    border-color: var(--primary-glow) !important;
+}
+
+.delete-btn:hover {
+    color: var(--accent) !important;
+    border-color: rgba(244, 63, 94, 0.4) !important;
+}
+
 .btn-control.primary {
     background: var(--primary);
     border-color: var(--primary);

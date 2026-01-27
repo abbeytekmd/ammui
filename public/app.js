@@ -267,10 +267,58 @@ async function downloadTrack(uri, title, artist, album) {
         }
 
         const data = await response.json();
-        showToast(`Saved: ${data.filename}`, 'success', 3000);
+        const msg = data.skipped ? `Already exists: ${data.filename}` : `Saved: ${data.filename}`;
+        showToast(msg, 'success', 3000);
     } catch (err) {
         console.error('Download error:', err);
         showToast(`Download failed: ${err.message}`);
+    }
+}
+
+async function downloadFolder(udn, objectId, title, artist, album) {
+    showToast(`Downloading folder: ${title}...`, 'info', 5000);
+    try {
+        const response = await fetch('/api/download-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ udn, objectId, title, artist, album })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Folder download failed');
+        }
+
+        const data = await response.json();
+        showToast(`Folder download complete! Saved ${data.downloadCount} tracks.`, 'success', 5000);
+    } catch (err) {
+        console.error('Folder download error:', err);
+        showToast(`Folder download failed: ${err.message}`);
+    }
+}
+
+async function deleteTrack(id, title) {
+    if (!confirm(`Are you sure you want to delete "${title}"?`)) return;
+
+    try {
+        const response = await fetch('/api/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Delete failed');
+        }
+
+        showToast(`Deleted: ${title}`, 'success', 2000);
+        // Refresh the browser view
+        const lastFolder = browsePath[browsePath.length - 1];
+        await browse(selectedServerUdn, lastFolder.id);
+    } catch (err) {
+        console.error('Delete error:', err);
+        showToast(`Delete failed: ${err.message}`);
     }
 }
 
@@ -522,16 +570,26 @@ function renderBrowser(items) {
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
                 </div>
-                ${!isContainer ? `
+                ${!isLocalServer || isLocalServer || !isContainer ? `
                     <div class="item-actions">
+                        ${!isContainer ? `
                         <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 5v14M5 12h14"></path>
                             </svg>
                             Queue
                         </button>
-                        ${!isLocalServer ? `
-                        <button class="btn-control download-btn" onclick="event.stopPropagation(); downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')" title="Download to local folder">
+                        ` : ''}
+                        
+                        ${isLocalServer ? `
+                        <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrack('${esc(item.id)}', '${esc(item.title)}')" title="Delete from local folder">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
+                            </svg>
+                            Delete
+                        </button>
+                        ` : `
+                        <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local folder">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                 <polyline points="7 10 12 15 17 10"></polyline>
@@ -539,7 +597,7 @@ function renderBrowser(items) {
                             </svg>
                             Download
                         </button>
-                        ` : ''}
+                        `}
                     </div>
                 ` : ''}
             </div>
