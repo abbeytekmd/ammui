@@ -129,6 +129,7 @@ async function selectServer(udn) {
     localStorage.setItem('selectedServerUdn', udn);
     closeServerModal();
     renderDevices();
+    updateLocalOnlyUI();
 
     browserContainer.style.display = 'flex';
 
@@ -1737,4 +1738,76 @@ async function applyEq(type, value) {
         showToast(`Failed to set ${type}`);
     }
 }
+
+// Upload functionality
+function triggerUpload() {
+    const input = document.getElementById('upload-input');
+    if (input) input.click();
+}
+
+async function handleFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const btn = document.getElementById('btn-upload');
+    const originalContent = btn ? btn.innerHTML : '';
+
+    try {
+        if (btn) {
+            btn.classList.add('disabled');
+            btn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
+                </svg>
+                Uploading...
+            `;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch('/api/upload', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error || 'Upload failed');
+        }
+
+        const result = await response.json();
+        showToast(`Successfully uploaded: ${result.title} by ${result.artist}`, 'success');
+
+        // Refresh current folder if we are browsing local server
+        if (selectedServerUdn === 'uuid:amcui-local-media-server') {
+            const currentFolder = browsePath[browsePath.length - 1];
+            await browse(selectedServerUdn, currentFolder.id);
+        }
+    } catch (err) {
+        console.error('Upload error:', err);
+        showToast(`Upload failed: ${err.message}`);
+    } finally {
+        if (btn) {
+            btn.classList.remove('disabled');
+            btn.innerHTML = originalContent;
+        }
+        event.target.value = ''; // Reset input
+    }
+}
+
+function updateLocalOnlyUI() {
+    const isLocalServer = selectedServerUdn === 'uuid:amcui-local-media-server';
+    const localOnlyElements = document.querySelectorAll('.local-only');
+    localOnlyElements.forEach(el => {
+        if (el.tagName === 'SPAN' && el.classList.contains('divider')) {
+            el.style.display = isLocalServer ? 'inline-block' : 'none';
+        } else {
+            el.style.display = isLocalServer ? 'flex' : 'none';
+        }
+    });
+}
+
+// Initial update
+updateLocalOnlyUI();
 

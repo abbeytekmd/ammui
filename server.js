@@ -10,6 +10,8 @@ import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
 import fs from 'fs';
 import { setupLocalDlna, getLocalIp } from './lib/local-dlna-server.js';
+import multer from 'multer';
+import * as mm from 'music-metadata';
 
 const { Client } = ssdp;
 const { Sonos, DeviceDiscovery } = sonos;
@@ -21,6 +23,10 @@ const DEVICES_FILE = path.join(__dirname, 'devices.json');
 
 const app = express();
 const port = 3000;
+
+// Ensure directories exist
+if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+if (!fs.existsSync(path.join(__dirname, 'local'))) fs.mkdirSync(path.join(__dirname, 'local'), { recursive: true });
 
 app.use(express.json());
 
@@ -751,6 +757,48 @@ app.post('/api/devices/:udn/name', express.json(), (req, res) => {
 
     saveDevices();
     res.json({ success: true, customName: name });
+});
+
+const upload = multer({ dest: 'uploads/' });
+
+app.post('/api/upload', upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    try {
+        console.log(`Processing upload: ${req.file.originalname}`);
+        const metadata = await mm.parseFile(req.file.path);
+        const artist = metadata.common.artist || 'Unknown Artist';
+        const album = metadata.common.album || 'Unknown Album';
+        const title = metadata.common.title || path.basename(req.file.originalname, path.extname(req.file.originalname));
+
+        const localDir = path.join(__dirname, 'local');
+        const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
+        const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
+        const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+
+        const ext = path.extname(req.file.originalname);
+        const targetDir = path.join(localDir, safeArtist, safeAlbum);
+
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+
+        const targetPath = path.join(targetDir, `${safeTitle}${ext}`);
+
+        // Move the file from temp to target (using copy + unlink because rename cross-device may fail)
+        fs.copyFileSync(req.file.path, targetPath);
+        fs.unlinkSync(req.file.path);
+
+        console.log(`Uploaded and saved: ${targetPath}`);
+        res.json({ success: true, path: targetPath, artist, album, title });
+    } catch (err) {
+        console.error('Upload processing error:', err);
+        // Clean up temp file if it exists
+        if (req.file && fs.existsSync(req.file.path)) {
+            try { fs.unlinkSync(req.file.path); } catch (e) { }
+        }
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/delete', express.json(), async (req, res) => {
