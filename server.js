@@ -590,6 +590,33 @@ app.post('/api/playlist/:udn/volume', express.json(), async (req, res) => {
     }
 });
 
+app.get('/api/playlist/:udn/eq', async (req, res) => {
+    const { udn } = req.params;
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
+    try {
+        const renderer = getRenderer(device);
+        const eq = await renderer.getEQ();
+        res.json(eq || { bass: 0, treble: 0 });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/playlist/:udn/eq', express.json(), async (req, res) => {
+    const { udn } = req.params;
+    const { type, value } = req.body;
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
+    try {
+        const renderer = getRenderer(device);
+        await renderer.setEQ(type, value);
+        res.json({ success: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/playlist/:udn', async (req, res) => {
     const { udn } = req.params;
     console.error(`[DEBUG] Playlist requested for UDN: ${udn}`);

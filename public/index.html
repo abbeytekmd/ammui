@@ -168,6 +168,21 @@
                                         <div id="volume-value">0%</div>
                                     </div>
                                 </div>
+                                <button id="id-sonos-eq" onclick="openSonosEqModal()" class="btn-control"
+                                    style="display: none;" title="Equalizer Settings">
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2.5">
+                                        <line x1="4" y1="21" x2="4" y2="14" />
+                                        <line x1="4" y1="10" x2="4" y2="3" />
+                                        <line x1="12" y1="21" x2="12" y2="12" />
+                                        <line x1="12" y1="8" x2="12" y2="3" />
+                                        <line x1="20" y1="21" x2="20" y2="16" />
+                                        <line x1="20" y1="12" x2="20" y2="3" />
+                                        <line x1="1" y1="14" x2="7" y2="14" />
+                                        <line x1="9" y1="8" x2="15" y2="8" />
+                                        <line x1="17" y1="16" x2="23" y2="16" />
+                                    </svg>
+                                </button>
                                 <span class="divider"></span>
                                 <div class="header-status-group">
                                     <span id="playlist-count" class="badge">0</span>
@@ -267,6 +282,33 @@
                 <div class="manage-section">
                     <h3>Media Servers</h3>
                     <div id="manage-server-list" class="manage-device-list"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="sonos-eq-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content eq-modal-content">
+            <div class="modal-header">
+                <h2>Sonos Equalizer</h2>
+                <button class="btn-close" onclick="closeSonosEqModal()">✕</button>
+            </div>
+            <div class="eq-controls">
+                <div class="eq-group">
+                    <div class="eq-label-row">
+                        <label>Bass</label>
+                        <span id="bass-value">0</span>
+                    </div>
+                    <input type="range" id="bass-slider" min="-10" max="10" step="1"
+                        oninput="updateEqValue('bass', this.value)" onchange="applyEq('bass', this.value)">
+                </div>
+                <div class="eq-group">
+                    <div class="eq-label-row">
+                        <label>Treble</label>
+                        <span id="treble-value">0</span>
+                    </div>
+                    <input type="range" id="treble-slider" min="-10" max="10" step="1"
+                        oninput="updateEqValue('treble', this.value)" onchange="applyEq('treble', this.value)">
                 </div>
             </div>
         </div>

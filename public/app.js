@@ -1209,6 +1209,15 @@ function renderDevices() {
             }
 
             deviceListElement.innerHTML = renderDeviceCard(activeRenderer, true, false, true);
+
+            // Show/hide and enable/disable Sonos EQ button
+            const eqBtn = document.getElementById('id-sonos-eq');
+            if (eqBtn) {
+                const canDoEq = activeRenderer.isSonos;
+                eqBtn.style.display = canDoEq ? 'flex' : 'none';
+                eqBtn.disabled = !canDoEq;
+                eqBtn.classList.toggle('disabled', !canDoEq);
+            }
         }
     }
 
@@ -1662,5 +1671,70 @@ function handleServerClick() {
     }
     if (playlistItems && playlistItems.classList.contains('expanded')) togglePlaylist();
     if (browserItems && !browserItems.classList.contains('expanded')) toggleBrowser();
+}
+
+// Sonos EQ Modal logic
+function openSonosEqModal() {
+    if (!selectedRendererUdn) return;
+    const modal = document.getElementById('sonos-eq-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        fetchEq();
+    }
+}
+
+function closeSonosEqModal() {
+    const modal = document.getElementById('sonos-eq-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+async function fetchEq() {
+    if (!selectedRendererUdn) return;
+    try {
+        console.log('[DEBUG] Fetching EQ for:', selectedRendererUdn);
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/eq`);
+        if (!response.ok) throw new Error('Failed to fetch EQ');
+        const eq = await response.json();
+        console.log('[DEBUG] Received EQ:', eq);
+
+        const bassSlider = document.getElementById('bass-slider');
+        const bassValue = document.getElementById('bass-value');
+        const trebleSlider = document.getElementById('treble-slider');
+        const trebleValue = document.getElementById('treble-value');
+
+        if (bassSlider) bassSlider.value = eq.bass;
+        if (bassValue) bassValue.textContent = eq.bass;
+        if (trebleSlider) trebleSlider.value = eq.treble;
+        if (trebleValue) trebleValue.textContent = eq.treble;
+    } catch (err) {
+        console.error('EQ fetch error:', err);
+    }
+}
+
+function updateEqValue(type, value) {
+    const el = document.getElementById(`${type}-value`);
+    if (el) el.textContent = value;
+}
+
+async function applyEq(type, value) {
+    if (!selectedRendererUdn) return;
+    const val = parseInt(value, 10);
+    try {
+        console.log(`[DEBUG] Applying EQ: ${type} = ${val}`);
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/eq`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type, value: val })
+        });
+        if (!response.ok) throw new Error('Failed to apply EQ');
+
+        // Short delay then refresh to confirm
+        setTimeout(fetchEq, 500);
+    } catch (err) {
+        console.error(`Failed to set ${type}:`, err);
+        showToast(`Failed to set ${type}`);
+    }
 }
 
