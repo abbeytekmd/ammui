@@ -1024,6 +1024,49 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
     }
 });
 
+app.get('/api/art/search', async (req, res) => {
+    const { artist, album } = req.query;
+    if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
+
+    try {
+        const query = `${artist || ''} ${album || ''}`.trim();
+        console.log(`[ART] Searching for: ${query}`);
+
+        // Try iTunes Search API first (Fast, High Quality, No Auth)
+        try {
+            const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=1`;
+            const itunesRes = await axios.get(itunesUrl, { timeout: 5000 });
+            if (itunesRes.data.results && itunesRes.data.results.length > 0) {
+                const art = itunesRes.data.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
+                console.log(`[ART] Found on iTunes: ${art}`);
+                return res.json({ url: art, source: 'itunes' });
+            }
+        } catch (e) {
+            console.warn('[ART] iTunes search failed:', e.message);
+        }
+
+        // Try Wikipedia (Slower, but good for older/rarer stuff)
+        try {
+            const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&titles=${encodeURIComponent(query)}&pithumbsize=600&redirects=1`;
+            const wikiRes = await axios.get(wikiUrl, { timeout: 5000 });
+            const pages = wikiRes.data.query.pages;
+            const pageId = Object.keys(pages)[0];
+            if (pageId !== '-1' && pages[pageId].thumbnail) {
+                const art = pages[pageId].thumbnail.source;
+                console.log(`[ART] Found on Wikipedia: ${art}`);
+                return res.json({ url: art, source: 'wikipedia' });
+            }
+        } catch (e) {
+            console.warn('[ART] Wikipedia search failed:', e.message);
+        }
+
+        res.status(404).json({ error: 'No artwork found' });
+    } catch (err) {
+        console.error('[ART] Search error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(port, () => {
     console.log(`AMCUI server listening at http://localhost:${port}`);
 });

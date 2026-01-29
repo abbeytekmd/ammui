@@ -62,6 +62,8 @@ let lastStatusFetchTime = 0; // Initialize to 0 to prevent interpolation before 
 let lastStatusPositionSeconds = 0;
 let isUserDraggingSlider = false;
 let currentExistingLetters = [];
+let currentArtworkQuery = '';
+let currentArtworkUrl = '';
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -167,6 +169,9 @@ async function selectDevice(udn) {
 
     playlistItems.innerHTML = '<div class="loading">Loading playlist...</div>';
 
+    currentArtworkQuery = '';
+    currentArtworkUrl = '';
+    hideAllPlayerArt();
     await fetchPlaylist(udn);
     await fetchVolume();
 }
@@ -816,23 +821,69 @@ function updateStatus(status) {
     durationSeconds = newDuration;
     //    lastStatusFetchTime = Date.now();
 
-    // Update Now Playing label
+    // Update Now Playing label and fetch artwork
     const nowPlayingLabel = document.getElementById('now-playing-label');
-    if (nowPlayingLabel) {
-        if (currentTrackId != null) {
-            const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
-            if (currentTrack) {
+    if (currentTrackId != null) {
+        const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+        if (currentTrack) {
+            if (nowPlayingLabel) {
                 nowPlayingLabel.textContent = `${currentTrack.title} - ${currentTrack.artist || 'Unknown Artist'}`;
-                nowPlayingLabel.title = nowPlayingLabel.textContent; // Tooltip for full name
-            } else {
-                nowPlayingLabel.textContent = `Track ${currentTrackId}`;
+                nowPlayingLabel.title = nowPlayingLabel.textContent;
             }
-        } else {
-            nowPlayingLabel.textContent = 'Not Playing';
+            // Fetch artwork if track changed or query differs
+            const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
+            if (query && query !== currentArtworkQuery) {
+                updatePlayerArtwork(currentTrack.artist, currentTrack.album);
+            }
+        } else if (nowPlayingLabel) {
+            nowPlayingLabel.textContent = `Track ${currentTrackId}`;
         }
+    } else if (nowPlayingLabel) {
+        nowPlayingLabel.textContent = 'Not Playing';
+        currentArtworkQuery = '';
+        currentArtworkUrl = '';
+        hideAllPlayerArt();
     }
 
     updatePositionUI();
+}
+
+async function updatePlayerArtwork(artist, album) {
+    if (!artist && !album) return;
+    const query = `${artist || ''} ${album || ''}`.trim();
+    currentArtworkQuery = query;
+
+    try {
+        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`);
+        if (res.ok) {
+            const data = await res.json();
+            currentArtworkUrl = data.url;
+            showPlayerArt(data.url);
+        } else {
+            hideAllPlayerArt();
+        }
+    } catch (e) {
+        console.warn('[ART] Failed to fetch player artwork:', e);
+        hideAllPlayerArt();
+    }
+}
+
+function showPlayerArt(url) {
+    if (!selectedRendererUdn) return;
+    const safeUdn = selectedRendererUdn.replace(/:/g, '-');
+    const container = document.getElementById(`player-art-container-${safeUdn}`);
+    const img = document.getElementById(`player-art-${safeUdn}`);
+
+    if (container && img) {
+        img.src = url;
+        img.onload = () => container.classList.add('visible');
+    }
+}
+
+function hideAllPlayerArt() {
+    document.querySelectorAll('.player-artwork-container').forEach(el => {
+        el.classList.remove('visible');
+    });
 }
 
 // Helper to convert HH:MM:SS to seconds on the client side
@@ -1485,7 +1536,14 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
         })()}</span>
                 </div>
             </div>
-            ${transportHtml}
+            ${transportHtml ? `
+                <div class="card-transport-wrapper">
+                    ${transportHtml}
+                    <div id="player-art-container-${device.udn?.replace(/:/g, '-')}" class="player-artwork-container">
+                        <img id="player-art-${device.udn?.replace(/:/g, '-')}" class="player-artwork" alt="">
+                    </div>
+                </div>
+            ` : ''}
         </div>
     `;
 }
