@@ -993,29 +993,16 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         let downloadCount = 0;
         let failCount = 0;
 
-        async function processRecursive(currentId, currentArtist, currentAlbum) {
-            console.log(`Browsing folder ${currentId} for download...`);
-            const items = await server.browse(currentId);
-            for (const item of items) {
-                if (item.type === 'item') {
-                    try {
-                        await downloadFileHelper(item.uri, item.title, item.artist || currentArtist, item.album || currentAlbum);
-                        downloadCount++;
-                    } catch (err) {
-                        console.error(`Failed to download ${item.title}:`, err.message);
-                        failCount++;
-                    }
-                } else if (item.type === 'container') {
-                    await processRecursive(item.id, item.artist || currentArtist, item.album || currentAlbum);
-                }
+        const tracks = await server.browseRecursive(objectId);
+        for (const track of tracks) {
+            try {
+                await downloadFileHelper(track.uri, track.title, track.artist || artist, track.album || album);
+                downloadCount++;
+            } catch (err) {
+                console.error(`Failed to download ${track.title}:`, err.message);
+                failCount++;
             }
         }
-
-        // Start recursive download (not awaiting here to reply quickly, but user wants it to finish?
-        // Actually, if we want to confirm when done, we should await. 
-        // But for deep folders, it might timeout the HTTP request.
-        // Let's do it and hope for the best, or suggest a progress mechanism later.
-        await processRecursive(objectId, artist, album);
 
         res.json({ success: true, downloadCount, failCount });
     } catch (err) {

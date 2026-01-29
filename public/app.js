@@ -64,6 +64,7 @@ let isUserDraggingSlider = false;
 let currentExistingLetters = [];
 let currentArtworkQuery = '';
 let currentArtworkUrl = '';
+let browseScrollPositions = {}; // Store scroll position by folder ID
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -226,10 +227,29 @@ async function navigateToPath(index) {
 }
 
 async function enterFolder(id, title) {
+    saveCurrentScrollPosition();
     browsePath.push({ id, title });
     saveLastPath();
     updateBreadcrumbs();
     await browse(selectedServerUdn, id);
+}
+
+function saveCurrentScrollPosition() {
+    if (browsePath.length > 0 && browserItems) {
+        const currentFolder = browsePath[browsePath.length - 1];
+        browseScrollPositions[currentFolder.id] = browserItems.scrollTop;
+
+        // Prune any saved positions that are no longer in our current path
+        // (Ensures we only remember "parents" of where we are going)
+        const pathIds = new Set(browsePath.map(p => p.id));
+        Object.keys(browseScrollPositions).forEach(id => {
+            if (!pathIds.has(id)) {
+                delete browseScrollPositions[id];
+            }
+        });
+
+        console.log(`[DEBUG] Saved scroll for parent ${currentFolder.title}. Cache size: ${Object.keys(browseScrollPositions).length}`);
+    }
 }
 
 async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, autoSwitch = true) {
@@ -432,6 +452,12 @@ async function addAllToPlaylist() {
     const tracks = currentBrowserItems.filter(item => item.type === 'item');
     if (tracks.length === 0) return;
 
+    // Sort by disc then track
+    tracks.sort((a, b) => {
+        if (a.discNumber !== b.discNumber) return (a.discNumber || 1) - (b.discNumber || 1);
+        return (a.trackNumber || 0) - (b.trackNumber || 0);
+    });
+
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -462,6 +488,12 @@ async function addAllToPlaylist() {
 async function playAll() {
     const tracks = currentBrowserItems.filter(item => item.type === 'item');
     if (tracks.length === 0) return;
+
+    // Sort by disc then track
+    tracks.sort((a, b) => {
+        if (a.discNumber !== b.discNumber) return (a.discNumber || 1) - (b.discNumber || 1);
+        return (a.trackNumber || 0) - (b.trackNumber || 0);
+    });
 
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
@@ -594,7 +626,7 @@ function scrollToLetter(letter) {
             const topPos = el.offsetTop - container.offsetTop;
             container.scrollTo({
                 top: topPos,
-                behavior: 'smooth'
+                behavior: 'auto'
             });
         }
     }
@@ -602,7 +634,12 @@ function scrollToLetter(letter) {
 
 function renderBrowser(items) {
     currentBrowserItems = items;
-    browserItems.scrollTop = 0;
+
+    // Restore scroll position
+    const currentId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
+    const savedScrollTop = browseScrollPositions[currentId] || 0;
+
+    console.log(`[DEBUG] Rendering browser, restoring scroll ${savedScrollTop} for ${currentId}`);
     const tracks = items.filter(item => item.type === 'item');
     const addAllBtn = document.getElementById('btn-add-all');
     const playAllBtn = document.getElementById('btn-play-all');
@@ -726,6 +763,15 @@ function renderBrowser(items) {
             </div>
         `;
     }).join('');
+
+    // Restore scroll position after DOM update
+    if (savedScrollTop > 0) {
+        setTimeout(() => {
+            browserItems.scrollTop = savedScrollTop;
+        }, 10);
+    } else {
+        browserItems.scrollTop = 0;
+    }
 }
 
 async function fetchPlaylist(udn) {
@@ -1626,6 +1672,8 @@ function setHome() {
 
 async function goHome() {
     if (!selectedServerUdn) return;
+    // Don't save current scroll here because the current folder won't be a parent of Home
+    // We only want to go back to Home's previously saved position if it was a parent.
 
     // Get home path for this specific server
     let homeLocations = {};
