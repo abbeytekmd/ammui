@@ -463,6 +463,48 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     }
 });
 
+app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
+    const { udn } = req.params;
+    const { serverUdn, objectId } = req.body;
+
+    const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
+    const serverDevice = Array.from(devices.values()).find(d => d.udn === serverUdn);
+
+    if (!rendererDevice) return res.status(404).json({ error: 'Renderer not found' });
+    if (!serverDevice) return res.status(404).json({ error: 'Media Server not found' });
+
+    try {
+        const server = new MediaServer(serverDevice);
+        const tracks = await server.browseRecursive(objectId);
+
+        if (tracks.length === 0) {
+            return res.json({ success: true, count: 0 });
+        }
+
+        const renderer = getRenderer(rendererDevice);
+
+        // Clear playlist first for "Play Folder"
+        await renderer.clearPlaylist();
+
+        let lastId = 0;
+        for (const track of tracks) {
+            lastId = await renderer.insertTrack(track, lastId);
+        }
+
+        // Start playing the first track
+        let ids = await renderer.getIdArray();
+        if (ids.length > 0) {
+            await renderer.seekId(ids[0]);
+            await renderer.play();
+        }
+
+        res.json({ success: true, count: tracks.length });
+    } catch (err) {
+        console.error('Play folder failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => {
     const { udn } = req.params;
     const { serverUdn, objectId } = req.body;
@@ -495,6 +537,7 @@ app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => 
         res.status(500).json({ error: err.message });
     }
 });
+
 
 
 app.post('/api/playlist/:udn/clear', async (req, res) => {

@@ -131,33 +131,28 @@ async function selectServer(udn) {
 
     browserContainer.style.display = 'flex';
 
-    // Check if this server has a saved home location
+    // Prioritize last browsed path, then home location, then root
+    let lastPaths = {};
     let homeLocations = {};
     try {
-        const stored = localStorage.getItem('serverHomeLocations');
-        if (stored) {
-            homeLocations = JSON.parse(stored);
-        }
+        const storedLast = localStorage.getItem('serverLastPaths');
+        if (storedLast) lastPaths = JSON.parse(storedLast);
+
+        const storedHome = localStorage.getItem('serverHomeLocations');
+        if (storedHome) homeLocations = JSON.parse(storedHome);
     } catch (e) {
-        console.error('Failed to parse home locations:', e);
+        console.error('Failed to parse paths:', e);
     }
 
-    const homeBrowsePath = homeLocations[udn];
+    const pathToUse = lastPaths[udn] || homeLocations[udn] || [{ id: '0', title: 'Root' }];
 
-    // If home location exists, navigate there; otherwise go to root
-    if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
-        try {
-            browsePath = homeBrowsePath;
-            updateBreadcrumbs();
-            const lastFolder = browsePath[browsePath.length - 1];
-            await browse(udn, lastFolder.id);
-        } catch (e) {
-            console.error('Failed to navigate to home:', e);
-            browsePath = [{ id: '0', title: 'Root' }];
-            updateBreadcrumbs();
-            await browse(udn, '0');
-        }
-    } else {
+    try {
+        browsePath = pathToUse;
+        updateBreadcrumbs();
+        const lastFolder = browsePath[browsePath.length - 1];
+        await browse(udn, lastFolder.id);
+    } catch (e) {
+        console.error('Failed to navigate to saved path:', e);
         browsePath = [{ id: '0', title: 'Root' }];
         updateBreadcrumbs();
         await browse(udn, '0');
@@ -206,8 +201,20 @@ function updateBreadcrumbs() {
     `).join('<span class="breadcrumb-separator">/</span>');
 }
 
+function saveLastPath() {
+    if (!selectedServerUdn) return;
+    let lastPaths = {};
+    try {
+        const stored = localStorage.getItem('serverLastPaths');
+        if (stored) lastPaths = JSON.parse(stored);
+    } catch (e) { }
+    lastPaths[selectedServerUdn] = browsePath;
+    localStorage.setItem('serverLastPaths', JSON.stringify(lastPaths));
+}
+
 async function navigateToPath(index) {
     browsePath = browsePath.slice(0, index + 1);
+    saveLastPath();
     updateBreadcrumbs();
     const item = browsePath[index];
     await browse(selectedServerUdn, item.id);
@@ -215,6 +222,7 @@ async function navigateToPath(index) {
 
 async function enterFolder(id, title) {
     browsePath.push({ id, title });
+    saveLastPath();
     updateBreadcrumbs();
     await browse(selectedServerUdn, id);
 }
@@ -276,6 +284,34 @@ async function queueFolder(objectId, title) {
     } catch (err) {
         console.error('Queue folder error:', err);
         showToast(`Failed to queue folder: ${err.message}`);
+    }
+}
+
+async function playFolder(objectId, title) {
+    if (!selectedRendererUdn) {
+        alert('Please select a Renderer on the left first!');
+        return;
+    }
+
+    showToast(`Playing folder: ${title}...`, 'info', 3000);
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/play-folder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to play folder');
+        }
+
+        const data = await response.json();
+        showToast(`Playing ${data.count} tracks from: ${title}`, 'success', 3000);
+        await fetchPlaylist(selectedRendererUdn);
+    } catch (err) {
+        console.error('Play folder error:', err);
+        showToast(`Failed to play folder: ${err.message}`);
     }
 }
 
@@ -398,7 +434,8 @@ async function addAllToPlaylist() {
 
     const btn = document.getElementById('btn-add-all');
     btn.classList.add('disabled');
-    btn.textContent = 'Adding...';
+    const originalContent = btn.innerHTML;
+    btn.textContent = 'Queuing...';
 
     try {
         for (const track of tracks) {
@@ -413,7 +450,7 @@ async function addAllToPlaylist() {
         console.error('Failed to add some tracks:', err);
     } finally {
         btn.classList.remove('disabled');
-        btn.textContent = 'Add All';
+        btn.innerHTML = originalContent; // Restore icon and text
     }
 }
 
@@ -649,6 +686,12 @@ function renderBrowser(items) {
                             Queue
                         </button>
                         ` : `
+                        <button class="btn-control play-btn" onclick="event.stopPropagation(); playFolder('${esc(item.id)}', '${esc(item.title)}')" title="Play Whole Folder Recursively">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M8 5v14l11-7z"></path>
+                            </svg>
+                            Play
+                        </button>
                         <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 5v14M5 12h14"></path>
@@ -671,7 +714,6 @@ function renderBrowser(items) {
                                 <polyline points="7 10 12 15 17 10"></polyline>
                                 <line x1="12" y1="15" x2="12" y2="3"></line>
                             </svg>
-                            Download
                         </button>
                         `}
                     </div>
@@ -1522,14 +1564,21 @@ async function goHome() {
     if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
         try {
             browsePath = homeBrowsePath;
+            saveLastPath();
             updateBreadcrumbs();
             const lastFolder = browsePath[browsePath.length - 1];
             await browse(selectedServerUdn, lastFolder.id);
         } catch (e) {
             console.error('Failed to go home:', e);
+            browsePath = [{ id: '0', title: 'Root' }];
+            saveLastPath();
+            updateBreadcrumbs();
             await browse(selectedServerUdn, '0');
         }
     } else {
+        browsePath = [{ id: '0', title: 'Root' }];
+        saveLastPath();
+        updateBreadcrumbs();
         await browse(selectedServerUdn, '0');
     }
 }
@@ -1591,36 +1640,51 @@ async function init() {
     if (selectedServerUdn) {
         const server = currentDevices.find(d => d.udn === selectedServerUdn && d.isServer);
         if (server) {
-            // Get home path for this specific server
+            // Prioritize last browsed path, then home location, then root
+            let lastPaths = {};
             let homeLocations = {};
             try {
-                const stored = localStorage.getItem('serverHomeLocations');
-                if (stored) {
-                    homeLocations = JSON.parse(stored);
-                }
+                const storedLast = localStorage.getItem('serverLastPaths');
+                if (storedLast) lastPaths = JSON.parse(storedLast);
+
+                const storedHome = localStorage.getItem('serverHomeLocations');
+                if (storedHome) homeLocations = JSON.parse(storedHome);
             } catch (e) {
-                console.error('Failed to parse home locations:', e);
+                console.error('Failed to parse paths:', e);
             }
 
-            const homeBrowsePath = homeLocations[selectedServerUdn];
+            const pathToUse = lastPaths[selectedServerUdn] || homeLocations[selectedServerUdn] || [{ id: '0', title: 'Root' }];
 
-            if (homeBrowsePath && Array.isArray(homeBrowsePath)) {
-                try {
-                    browsePath = homeBrowsePath;
-                    updateBreadcrumbs();
-                    const lastFolder = browsePath[browsePath.length - 1];
-                    await browse(selectedServerUdn, lastFolder.id);
-                } catch (e) {
-                    console.error('Failed to parse saved home path:', e);
-                    await browse(selectedServerUdn, '0');
-                }
-            } else {
+            try {
+                browsePath = pathToUse;
+                updateBreadcrumbs();
+                const lastFolder = browsePath[browsePath.length - 1];
+                await browse(selectedServerUdn, lastFolder.id);
+            } catch (e) {
+                console.error('Failed to navigate to saved path:', e);
+                browsePath = [{ id: '0', title: 'Root' }];
+                updateBreadcrumbs();
                 await browse(selectedServerUdn, '0');
             }
 
-            // On mobile, auto-expand the browser since we just loaded content
-            if (window.innerWidth <= 800 && browserItems && !browserItems.classList.contains('expanded')) {
-                toggleBrowser();
+            // On mobile, auto-expand if browser is the active tab
+            if (window.innerWidth <= 800) {
+                const tabBrowser = document.getElementById('tab-browser');
+                if (tabBrowser && tabBrowser.classList.contains('active')) {
+                    if (browserItems && !browserItems.classList.contains('expanded')) {
+                        toggleBrowser();
+                    }
+                }
+            }
+        }
+    }
+
+    // Also handle renderer auto-expansion if that tab is active
+    if (window.innerWidth <= 800 && selectedRendererUdn) {
+        const tabPlaylist = document.getElementById('tab-playlist');
+        if (tabPlaylist && tabPlaylist.classList.contains('active')) {
+            if (playlistItems && !playlistItems.classList.contains('expanded')) {
+                togglePlaylist();
             }
         }
     }
