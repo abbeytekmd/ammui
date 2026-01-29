@@ -278,6 +278,19 @@
                     <h3>Media Servers</h3>
                     <div id="manage-server-list" class="manage-device-list"></div>
                 </div>
+                <div class="manage-section">
+                    <h3>Integrations</h3>
+                    <div class="settings-group">
+                        <label for="discogs-token-input">Discogs API Token</label>
+                        <div class="input-with-button">
+                            <input type="password" id="discogs-token-input"
+                                placeholder="Enter your Discogs Personal Access Token" onchange="saveDiscogsToken()">
+                        </div>
+                        <p class="settings-hint">Used for high-quality album artwork search. <a
+                                href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener">Get
+                                yours here</a>.</p>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

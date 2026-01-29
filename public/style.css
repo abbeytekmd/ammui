@@ -2503,3 +2503,52 @@ p.subtitle {
     gap: 0.25rem;
     margin-left: auto;
 }
+
+/* Settings & Integrations */
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
+.settings-group label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.settings-group input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    color: white;
+    font-family: inherit;
+    font-size: 0.9rem;
+    width: 100%;
+    transition: all 0.2s;
+}
+
+.settings-group input:focus {
+    outline: none;
+    border-color: var(--primary);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.settings-hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin: 0;
+    line-height: 1.4;
+}
+
+.settings-hint a {
+    color: var(--primary);
+    text-decoration: none;
+}
+
+.settings-hint a:hover {
+    text-decoration: underline;
+}

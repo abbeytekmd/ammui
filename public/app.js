@@ -900,7 +900,12 @@ async function updatePlayerArtwork(artist, album) {
     currentArtworkQuery = query;
 
     try {
-        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`);
+        const discogsToken = localStorage.getItem('discogsToken') || '';
+        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`, {
+            headers: {
+                'X-Discogs-Token': discogsToken
+            }
+        });
         if (res.ok) {
             const data = await res.json();
             currentArtworkUrl = data.url;
@@ -911,6 +916,20 @@ async function updatePlayerArtwork(artist, album) {
     } catch (e) {
         console.warn('[ART] Failed to fetch player artwork:', e);
         hideAllPlayerArt();
+    }
+}
+
+function saveDiscogsToken() {
+    const tokenInput = document.getElementById('discogs-token-input');
+    if (tokenInput) {
+        const token = tokenInput.value.trim();
+        if (token) {
+            localStorage.setItem('discogsToken', token);
+            showToast('Discogs token saved', 'success', 2000);
+        } else {
+            localStorage.removeItem('discogsToken');
+            showToast('Discogs token removed', 'success', 2000);
+        }
     }
 }
 
@@ -1259,6 +1278,12 @@ function closeRendererModal() {
 function openManageModal() {
     manageModal.style.display = 'flex';
     renderManageDevices();
+
+    // Load saved Discogs token
+    const tokenInput = document.getElementById('discogs-token-input');
+    if (tokenInput) {
+        tokenInput.value = localStorage.getItem('discogsToken') || '';
+    }
 }
 
 function closeManageModal() {

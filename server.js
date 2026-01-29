@@ -1015,30 +1015,32 @@ app.get('/api/art/search', async (req, res) => {
     const { artist, album } = req.query;
     if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
 
-    const DISCOGS_TOKEN = 'dbNpCwbazWWlDDKqvRcZKnftKNxMwvjcPXNMrOIz';
+    const DISCOGS_TOKEN = req.headers['x-discogs-token'];
 
     try {
         const query = `${artist || ''} ${album || ''}`.trim();
         console.log(`[ART] Deep Search for: "${query}" (Artist: ${artist}, Album: ${album})`);
 
-        // 1. Try Discogs (User's preferred primary)
-        try {
-            const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist || '')}&release_title=${encodeURIComponent(album || '')}&type=release&token=${DISCOGS_TOKEN}`;
-            const discogsRes = await axios.get(discogsUrl, {
-                timeout: 5000,
-                headers: { 'User-Agent': 'AMCUI/1.0' }
-            });
+        // 1. Try Discogs (User's preferred primary) - only if token is provided
+        if (DISCOGS_TOKEN) {
+            try {
+                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist || '')}&release_title=${encodeURIComponent(album || '')}&type=release&token=${DISCOGS_TOKEN}`;
+                const discogsRes = await axios.get(discogsUrl, {
+                    timeout: 5000,
+                    headers: { 'User-Agent': 'AMCUI/1.0' }
+                });
 
-            if (discogsRes.data.results && discogsRes.data.results.length > 0) {
-                // Discogs is usually quite accurate with artist/album filters
-                const bestMatch = discogsRes.data.results[0];
-                if (bestMatch.cover_image) {
-                    console.log(`[ART] Found on Discogs: ${bestMatch.title}`);
-                    return res.json({ url: bestMatch.cover_image, source: 'discogs' });
+                if (discogsRes.data.results && discogsRes.data.results.length > 0) {
+                    // Discogs is usually quite accurate with artist/album filters
+                    const bestMatch = discogsRes.data.results[0];
+                    if (bestMatch.cover_image) {
+                        console.log(`[ART] Found on Discogs: ${bestMatch.title}`);
+                        return res.json({ url: bestMatch.cover_image, source: 'discogs' });
+                    }
                 }
+            } catch (e) {
+                console.warn('[ART] Discogs search failed:', e.message);
             }
-        } catch (e) {
-            console.warn('[ART] Discogs search failed:', e.message);
         }
 
         // 2. Try iTunes with Artist Validation (Fallback 1)
