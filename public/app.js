@@ -886,6 +886,26 @@ function hideAllPlayerArt() {
     });
 }
 
+function openArtModal(url) {
+    if (!url) return;
+    const modal = document.getElementById('album-art-modal');
+    const img = document.getElementById('modal-art-img');
+    if (modal && img) {
+        img.src = url;
+        modal.style.display = 'flex';
+        modal.style.alignItems = 'center';
+        modal.style.justifyContent = 'center';
+        // Force reflow for animation if we add any
+    }
+}
+
+function closeArtModal() {
+    const modal = document.getElementById('album-art-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
 // Helper to convert HH:MM:SS to seconds on the client side
 function formatToSeconds(time) {
     if (!time) return 0;
@@ -1539,7 +1559,8 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
                     ${transportHtml}
-                    <div id="player-art-container-${device.udn?.replace(/:/g, '-')}" class="player-artwork-container">
+                    <div id="player-art-container-${device.udn?.replace(/:/g, '-')}" class="player-artwork-container" 
+                         onclick="event.stopPropagation(); openArtModal(document.getElementById('player-art-${device.udn?.replace(/:/g, '-')}').src)">
                         <img id="player-art-${device.udn?.replace(/:/g, '-')}" class="player-artwork" alt="">
                     </div>
                 </div>

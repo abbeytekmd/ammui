@@ -309,6 +309,13 @@
         </div>
     </div>
 
+    <!-- Album Art Fullscreen Modal -->
+    <div id="album-art-modal" class="modal-overlay" style="display: none; cursor: pointer; z-index: 3000;"
+        onclick="closeArtModal()">
+        <img id="modal-art-img"
+            style="max-width: 90vw; max-height: 90vh; border-radius: 1rem; box-shadow: 0 0 50px rgba(0,0,0,0.5); object-fit: contain;">
+    </div>
+
     <div id="toast-container" class="toast-container"></div>
     <script src="app.js"></script>
 </body>

@@ -1028,39 +1028,79 @@ app.get('/api/art/search', async (req, res) => {
     const { artist, album } = req.query;
     if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
 
+    const DISCOGS_TOKEN = 'dbNpCwbazWWlDDKqvRcZKnftKNxMwvjcPXNMrOIz';
+
     try {
         const query = `${artist || ''} ${album || ''}`.trim();
-        console.log(`[ART] Searching for: ${query}`);
+        console.log(`[ART] Deep Search for: "${query}" (Artist: ${artist}, Album: ${album})`);
 
-        // Try iTunes Search API first (Fast, High Quality, No Auth)
+        // 1. Try Discogs (User's preferred primary)
         try {
-            const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=1`;
+            const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist || '')}&release_title=${encodeURIComponent(album || '')}&type=release&token=${DISCOGS_TOKEN}`;
+            const discogsRes = await axios.get(discogsUrl, {
+                timeout: 5000,
+                headers: { 'User-Agent': 'AMCUI/1.0' }
+            });
+
+            if (discogsRes.data.results && discogsRes.data.results.length > 0) {
+                // Discogs is usually quite accurate with artist/album filters
+                const bestMatch = discogsRes.data.results[0];
+                if (bestMatch.cover_image) {
+                    console.log(`[ART] Found on Discogs: ${bestMatch.title}`);
+                    return res.json({ url: bestMatch.cover_image, source: 'discogs' });
+                }
+            }
+        } catch (e) {
+            console.warn('[ART] Discogs search failed:', e.message);
+        }
+
+        // 2. Try iTunes with Artist Validation (Fallback 1)
+        try {
+            const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=5`;
             const itunesRes = await axios.get(itunesUrl, { timeout: 5000 });
+
             if (itunesRes.data.results && itunesRes.data.results.length > 0) {
-                const art = itunesRes.data.results[0].artworkUrl100.replace('100x100bb', '600x600bb');
-                console.log(`[ART] Found on iTunes: ${art}`);
-                return res.json({ url: art, source: 'itunes' });
+                const bestMatch = itunesRes.data.results.find(item => {
+                    const resArtist = (item.artistName || '').toLowerCase();
+                    const searchArtist = (artist || '').toLowerCase();
+                    return resArtist.includes(searchArtist) || searchArtist.includes(resArtist);
+                });
+
+                if (bestMatch) {
+                    const art = bestMatch.artworkUrl100.replace('100x100bb', '600x600bb');
+                    console.log(`[ART] Confirmed Match on iTunes: ${bestMatch.artistName} - ${bestMatch.collectionName}`);
+                    return res.json({ url: art, source: 'itunes' });
+                }
             }
         } catch (e) {
             console.warn('[ART] iTunes search failed:', e.message);
         }
 
-        // Try Wikipedia (Slower, but good for older/rarer stuff)
+        // 3. Try Wikipedia Search (Fallback 2)
         try {
-            const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&titles=${encodeURIComponent(query)}&pithumbsize=600&redirects=1`;
-            const wikiRes = await axios.get(wikiUrl, { timeout: 5000 });
-            const pages = wikiRes.data.query.pages;
-            const pageId = Object.keys(pages)[0];
-            if (pageId !== '-1' && pages[pageId].thumbnail) {
-                const art = pages[pageId].thumbnail.source;
-                console.log(`[ART] Found on Wikipedia: ${art}`);
-                return res.json({ url: art, source: 'wikipedia' });
+            const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&limit=1`;
+            const wikiSearchRes = await axios.get(wikiSearchUrl, { timeout: 5000 });
+
+            if (wikiSearchRes.data.query && wikiSearchRes.data.query.search && wikiSearchRes.data.query.search.length > 0) {
+                const title = wikiSearchRes.data.query.search[0].title;
+                const wikiArtUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&titles=${encodeURIComponent(title)}&pithumbsize=1000&redirects=1`;
+                const wikiArtRes = await axios.get(wikiArtUrl, { timeout: 5000 });
+
+                if (wikiArtRes.data.query && wikiArtRes.data.query.pages) {
+                    const pages = wikiArtRes.data.query.pages;
+                    const pageId = Object.keys(pages)[0];
+                    if (pageId !== '-1' && pages[pageId].thumbnail) {
+                        const art = pages[pageId].thumbnail.source;
+                        console.log(`[ART] Found on Wikipedia: ${title}`);
+                        return res.json({ url: art, source: 'wikipedia' });
+                    }
+                }
             }
         } catch (e) {
             console.warn('[ART] Wikipedia search failed:', e.message);
         }
 
-        res.status(404).json({ error: 'No artwork found' });
+        res.status(404).json({ error: 'No high-confidence artwork found' });
     } catch (err) {
         console.error('[ART] Search error:', err.message);
         res.status(500).json({ error: err.message });
