@@ -64,6 +64,7 @@ let durationSeconds = 0;
 let lastStatusFetchTime = 0; // Initialize to 0 to prevent interpolation before first sync
 let lastStatusPositionSeconds = 0;
 let isUserDraggingSlider = false;
+let currentExistingLetters = [];
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -252,6 +253,35 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
         throw err;
     }
 }
+
+async function queueFolder(objectId, title) {
+    if (!selectedRendererUdn) {
+        alert('Please select a Renderer on the left first!');
+        return;
+    }
+
+    showToast(`Queuing folder: ${title}...`, 'info', 3000);
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/queue-folder`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to queue folder');
+        }
+
+        const data = await response.json();
+        showToast(`Queued ${data.count} tracks from: ${title}`, 'success', 3000);
+        await fetchPlaylist(selectedRendererUdn);
+    } catch (err) {
+        console.error('Queue folder error:', err);
+        showToast(`Failed to queue folder: ${err.message}`);
+    }
+}
+
 
 async function downloadTrack(uri, title, artist, album) {
     showToast(`Downloading: ${title}...`, 'info', 3000);
@@ -516,8 +546,24 @@ function selectPlaylistItem(id) {
 }
 
 
+function scrollToLetter(letter) {
+    const el = document.getElementById(`letter-${letter}`);
+    if (el) {
+        // Find the scrollable container
+        const container = document.getElementById('browser-items');
+        if (container) {
+            const topPos = el.offsetTop - container.offsetTop;
+            container.scrollTo({
+                top: topPos,
+                behavior: 'smooth'
+            });
+        }
+    }
+}
+
 function renderBrowser(items) {
     currentBrowserItems = items;
+    browserItems.scrollTop = 0;
     const tracks = items.filter(item => item.type === 'item');
     const addAllBtn = document.getElementById('btn-add-all');
     const playAllBtn = document.getElementById('btn-play-all');
@@ -540,14 +586,39 @@ function renderBrowser(items) {
 
     updateHomeButtons();
 
+    // Alphabet logic
+    const alphabetScroll = document.getElementById('alphabet-scroll');
+    if (alphabetScroll) {
+        // Only consider items that start with a letter
+        currentExistingLetters = [...new Set(items
+            .filter(i => i.title && /^[a-zA-Z]/.test(i.title))
+            .map(i => i.title[0].toUpperCase())
+        )];
+
+        if (items.length > 20) { // Increased threshold for showing alphabet
+            alphabetScroll.classList.add('visible');
+            renderAlphabet();
+        } else {
+            alphabetScroll.classList.remove('visible');
+        }
+    }
 
     if (items.length === 0) {
         browserItems.innerHTML = '<div class="empty-state">Folder is empty</div>';
         return;
     }
 
+    let lastLetter = null;
     browserItems.innerHTML = items.map(item => {
         const isContainer = item.type === 'container';
+        const firstLetter = (item.title || '')[0].toUpperCase();
+        let letterIdAttr = '';
+
+        if (/^[A-Z]$/.test(firstLetter) && firstLetter !== lastLetter) {
+            letterIdAttr = `id="letter-${firstLetter}"`;
+            lastLetter = firstLetter;
+        }
+
         const icon = isContainer ? `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -563,7 +634,7 @@ function renderBrowser(items) {
 
         const isLocalServer = selectedServerUdn === 'uuid:amcui-local-media-server';
         return `
-            <div class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
+            <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
                 `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
@@ -580,7 +651,14 @@ function renderBrowser(items) {
                             </svg>
                             Queue
                         </button>
-                        ` : ''}
+                        ` : `
+                        <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 5v14M5 12h14"></path>
+                            </svg>
+                            Queue
+                        </button>
+                        `}
                         
                         ${isLocalServer ? `
                         <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrack('${esc(item.id)}', '${esc(item.title)}')" title="Delete from local folder">
@@ -1810,4 +1888,52 @@ function updateLocalOnlyUI() {
 
 // Initial update
 updateLocalOnlyUI();
+
+function renderAlphabet() {
+    const alphabetScroll = document.getElementById('alphabet-scroll');
+    if (!alphabetScroll || !alphabetScroll.classList.contains('visible')) return;
+
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+    const containerHeight = alphabetScroll.clientHeight;
+    // Each letter height in CSS is 1.5rem ≈ 24px
+    const letterHeight = 24;
+    const maxLettersAvailable = Math.floor(containerHeight / letterHeight);
+
+    let displayLetters = letters;
+
+    if (maxLettersAvailable < 26 && maxLettersAvailable > 5) {
+        // Calculate a subset of letters to show, spreading them equally
+        displayLetters = [];
+        // Always include A (0) and Z (25)
+        for (let i = 0; i < maxLettersAvailable; i++) {
+            const index = Math.min(25, Math.floor((i / (maxLettersAvailable - 1)) * 25));
+            const letter = letters[index];
+            if (!displayLetters.includes(letter)) {
+                displayLetters.push(letter);
+            }
+        }
+    } else if (maxLettersAvailable <= 5) {
+        // Very tight space, just show first/middle/last or something minimal
+        displayLetters = ['A', 'M', 'Z'];
+    }
+
+    alphabetScroll.innerHTML = displayLetters.map(letter => {
+        const hasLetter = currentExistingLetters.includes(letter);
+        return `<div class="alphabet-letter ${hasLetter ? '' : 'disabled'}" 
+                     onclick="${hasLetter ? `event.stopPropagation(); scrollToLetter('${letter}')` : ''}">${letter}</div>`;
+    }).join('');
+}
+
+// Setup ResizeObserver to handle vertical space changes dynamically
+const alphabetObserver = new ResizeObserver(() => {
+    if (document.getElementById('alphabet-scroll')?.classList.contains('visible')) {
+        renderAlphabet();
+    }
+});
+
+const alphabetEl = document.getElementById('alphabet-scroll');
+if (alphabetEl) {
+    alphabetObserver.observe(alphabetEl);
+}
+
 
