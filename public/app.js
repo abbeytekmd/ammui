@@ -35,7 +35,6 @@ const serverCount = document.getElementById('server-count');
 const tabRendererCount = document.getElementById('tab-renderer-count');
 const tabServerCount = document.getElementById('tab-server-count');
 
-const playlistContainer = document.getElementById('playlist-container');
 const playlistItems = document.getElementById('playlist-items');
 const playlistCount = document.getElementById('playlist-count');
 
@@ -44,9 +43,7 @@ const browserItems = document.getElementById('browser-items');
 const browserBreadcrumbs = document.getElementById('browser-breadcrumbs');
 
 const serverModal = document.getElementById('server-modal');
-const modalServerList = document.getElementById('modal-server-list');
 const rendererModal = document.getElementById('renderer-modal');
-const modalRendererList = document.getElementById('modal-renderer-list');
 const manageModal = document.getElementById('manage-modal');
 const manageRendererList = document.getElementById('manage-renderer-list');
 const manageServerList = document.getElementById('manage-server-list');
@@ -1393,6 +1390,29 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
 
     const clickAction = isStatic ? (asServer ? 'handleServerClick()' : 'handleRendererClick()') : (asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`);
 
+    const transportHtml = (!asServer && isStatic) ? `
+        <div class="transport-group card-transport">
+            <button id="btn-play" onclick="event.stopPropagation(); transportAction('play')"
+                class="btn-control primary btn-transport-play" title="Play">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"></path>
+                </svg>
+            </button>
+            <button id="btn-pause" onclick="event.stopPropagation(); transportAction('pause')"
+                class="btn-control btn-transport-pause" title="Pause">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+                </svg>
+            </button>
+            <button id="btn-stop" onclick="event.stopPropagation(); transportAction('stop')"
+                class="btn-control btn-transport-stop" title="Stop">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M6 6h12v12H6z"></path>
+                </svg>
+            </button>
+        </div>
+    ` : '';
+
     return `
         <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
              onclick="${clickAction}"
@@ -1423,6 +1443,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
         })()}</span>
                 </div>
             </div>
+            ${transportHtml}
         </div>
     `;
 }

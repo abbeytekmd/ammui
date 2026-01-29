@@ -136,6 +136,7 @@ body {
         display: flex !important;
         flex: 0 0 auto;
         height: auto;
+        width: 100%;
     }
 
     /* Disable internal scrolling for lists, let page scroll */
@@ -157,7 +158,9 @@ body {
 
     /* Collapsible sections on mobile */
     #playlist-items,
-    #browser-items {
+    #browser-items,
+    #playlist-container .section-header,
+    #browser-container .section-header {
         display: none;
     }
 
@@ -168,6 +171,14 @@ body {
         border-top: 1px solid var(--card-border);
         margin-top: 0.5rem;
         padding-top: 0.5rem;
+    }
+
+    #playlist-container.expanded .section-header,
+    #browser-container.expanded .section-header {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
     }
 
     /* Show toggle button */
@@ -448,13 +459,15 @@ p.subtitle {
     flex-direction: column;
     gap: 0.75rem;
     flex: 1;
-    margin-right: 0.5rem;
+    min-width: 0;
+    width: 100%;
 }
 
 .playlist-controls {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    width: 100%;
 }
 
 .header-status-group {
@@ -580,6 +593,30 @@ p.subtitle {
     transform: scale(1.1);
 }
 
+.card-transport {
+    margin-left: auto;
+    background: rgba(0, 0, 0, 0.2) !important;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 0.5rem !important;
+}
+
+@media (max-width: 600px) {
+    .card-transport {
+        padding: 0.25rem !important;
+        gap: 0.25rem !important;
+    }
+
+    .card-transport .btn-control {
+        padding: 0.4rem 0.6rem !important;
+    }
+
+    .card-transport .btn-control svg {
+        width: 18px;
+        height: 18px;
+    }
+}
+
 .btn-control.disabled {
     opacity: 0.3;
     cursor: not-allowed;
@@ -597,8 +634,7 @@ p.subtitle {
     border: 1px solid var(--card-border);
     height: 38px;
     flex: 1;
-    min-width: 80px;
-    max-width: 300px;
+    min-width: 100px;
     container-type: inline-size;
 }
 
@@ -698,7 +734,6 @@ p.subtitle {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 300px;
     min-width: 0;
     flex: 1;
     text-shadow: 0 0 10px var(--primary-glow);
@@ -713,6 +748,7 @@ p.subtitle {
     border-radius: 0.75rem;
     border: 1px solid var(--card-border);
     margin-top: 0.25rem;
+    width: 100%;
 }
 
 .position-slider-container {
@@ -2269,6 +2305,7 @@ p.subtitle {
 
 .eq-group input[type='range'] {
     -webkit-appearance: none;
+    appearance: none;
     width: 100%;
     height: 8px;
     background: rgba(255, 255, 255, 0.05);

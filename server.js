@@ -14,7 +14,7 @@ import multer from 'multer';
 import * as mm from 'music-metadata';
 
 const { Client } = ssdp;
-const { Sonos, DeviceDiscovery } = sonos;
+const { DeviceDiscovery } = sonos;
 const hostIp = getLocalIp();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -374,7 +374,7 @@ try {
     console.error('Failed to start Sonos discovery:', err.message);
 }
 
-app.post('/api/discover', async (req, res) => {
+app.post('/api/discover', async (_req, res) => {
     console.log('Manual discovery triggered - Searching for specific targets...');
     ssdpClient.search('ssdp:all');
     // Search for specific targets as well
@@ -703,7 +703,7 @@ app.get('/api/diag/probe/:ip', async (req, res) => {
     res.json({ ip, results });
 });
 
-app.get('/api/devices', (req, res) => {
+app.get('/api/devices', (_req, res) => {
     const uniqueDevicesMap = new Map();
 
     // Sort devices by lastSeen descending so we keep the freshest one
