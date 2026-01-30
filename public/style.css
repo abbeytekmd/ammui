@@ -163,6 +163,13 @@ body {
         display: none;
     }
 
+    /* Show browser by default in mobile mode */
+    #browser-container #browser-items,
+    #browser-container .section-header {
+        display: flex;
+        flex-direction: column;
+    }
+
     #playlist-container.expanded #playlist-items,
     #playlist-container.expanded .section-header,
     #browser-container.expanded #browser-items,
@@ -246,13 +253,15 @@ p.subtitle {
     flex: 0 0 auto;
     /* Increased margin for hint text */
     animation: fadeInUp 0.8s ease-out;
+    padding: 0.5rem 0;
 }
 
 .device-list {
     display: grid;
-    gap: 0rem;
+    gap: 0.5rem;
     max-height: 250px;
     overflow-y: auto;
+    padding: 0.25rem;
 }
 
 .server-icon {
@@ -275,9 +284,10 @@ p.subtitle {
 }
 
 .device-card:hover {
-    transform: translateY(-4px);
-    border-color: rgba(99, 102, 241, 0.3);
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+    transform: scale(1.01);
+    border-color: rgba(99, 102, 241, 0.6);
+    box-shadow: 0 16px 24px -8px rgba(0, 0, 0, 0.4), 0 6px 12px -4px rgba(99, 102, 241, 0.3);
+    cursor: pointer;
 }
 
 .device-icon {
@@ -341,6 +351,15 @@ p.subtitle {
     color: var(--text-muted);
     display: flex;
     gap: 1rem;
+}
+
+.media-library-label {
+    margin-left: auto;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: white;
+    white-space: nowrap;
+    align-self: center;
 }
 
 .status-badge {

@@ -9,7 +9,7 @@ import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, FRIENDLY_NAME } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 
@@ -47,7 +47,7 @@ function loadDevices() {
             const list = JSON.parse(data);
             list.forEach(d => {
                 // Skip any stale entries for the local server from previous runs on different IPs
-                if (d.udn === 'uuid:amcui-local-media-server' || d.friendlyName === 'AMCUI Local Server') {
+                if (d.udn === SERVER_UDN || d.friendlyName === FRIENDLY_NAME) {
                     return;
                 }
                 if (d.location) devices.set(d.location, d);
@@ -210,12 +210,7 @@ async function handleSSDPMessage(headers, rinfo) {
 
     // Log the discovery type
     const msgType = headers.ST ? 'Response' : (headers.NTS === 'ssdp:alive' ? 'Alive' : 'Announcement');
-    if (rinfo.address === '192.168.0.2') {
-        console.log(`[DEBUG-LINUX] SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
-        console.log(`[DEBUG-LINUX] Headers:`, JSON.stringify(headers));
-    } else {
-        console.log(`SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
-    }
+    console.log(`SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
 
     if (!devices.has(location)) {
         // Broad initial detection
@@ -225,14 +220,11 @@ async function handleSSDPMessage(headers, rinfo) {
         const isGeneric = st.includes('rootdevice') || st.includes('upnp:rootdevice');
 
         if (!isServer && !isRenderer && !isGeneric) {
-            if (rinfo.address === '192.168.0.2') {
-                console.log(`[DEBUG-LINUX] Ignored 192.168.0.2 because it didn't match Server/Renderer/Generic filters.`);
-            }
             return;
         }
 
         // PREVENT HIJACKING: If this is our own local server discovered on a VPN IP, IGNORE IT.
-        if (st.includes('amcui-local-media-server') || (location && location.includes('amcui-local-media-server'))) {
+        if (st.includes('ammui-local-media-server') || (location && location.includes('ammui-local-media-server'))) {
             const url = new URL(location);
             if (url.hostname !== hostIp) {
                 console.log(`[DEBUG] Ignoring local server discovered on non-primary IP: ${url.hostname} (Expected: ${hostIp})`);
@@ -1097,7 +1089,7 @@ app.get('/api/art/search', async (req, res) => {
 });
 
 app.listen(port, () => {
-    console.log(`AMCUI server listening at http://localhost:${port}`);
+    console.log(`AMMUI server listening at http://localhost:${port}`);
 });
 
 process.on('SIGINT', () => {

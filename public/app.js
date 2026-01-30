@@ -28,6 +28,9 @@
     };
 })();
 
+// Constants
+const LOCAL_SERVER_UDN = 'uuid:ammui-local-media-server';
+
 const deviceListElement = document.getElementById('device-list');
 const serverListElement = document.getElementById('server-list');
 const rendererCount = document.getElementById('renderer-count');
@@ -708,7 +711,7 @@ function renderBrowser(items) {
 
         const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
-        const isLocalServer = selectedServerUdn === 'uuid:amcui-local-media-server';
+        const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
         return `
             <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
@@ -1124,6 +1127,24 @@ function renderPlaylist(items) {
 
     updateTransportControls();
     updateDocumentTitle();
+
+    // Scroll currently playing track into view
+    scrollToCurrentTrack();
+}
+
+function scrollToCurrentTrack() {
+    // Find the currently playing item
+    const playingItem = playlistItems.querySelector('.playlist-item.playing');
+    if (playingItem) {
+        // Use setTimeout to ensure DOM is fully rendered
+        setTimeout(() => {
+            playingItem.scrollIntoView({
+                behavior: 'smooth',
+                block: 'center',
+                inline: 'nearest'
+            });
+        }, 100);
+    }
 }
 
 async function deleteTrackFromPlaylist(id) {
@@ -1150,7 +1171,7 @@ async function deleteTrackFromPlaylist(id) {
 }
 
 function updateDocumentTitle() {
-    const defaultTitle = 'AMCUI | OpenHome Explorer';
+    const defaultTitle = 'AMMUI | OpenHome Explorer';
 
     if (!currentPlaylistItems || currentPlaylistItems.length === 0) {
         document.title = defaultTitle;
@@ -1627,6 +1648,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
         })()}</span>
                 </div>
             </div>
+            ${asServer ? `<div class="media-library-label">Media Library</div>` : ''}
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
                     ${transportHtml}
@@ -2095,7 +2117,7 @@ async function handleFileUpload(event) {
         showToast(`Successfully uploaded: ${result.title} by ${result.artist}`, 'success');
 
         // Refresh current folder if we are browsing local server
-        if (selectedServerUdn === 'uuid:amcui-local-media-server') {
+        if (selectedServerUdn === LOCAL_SERVER_UDN) {
             const currentFolder = browsePath[browsePath.length - 1];
             await browse(selectedServerUdn, currentFolder.id);
         }
@@ -2112,7 +2134,7 @@ async function handleFileUpload(event) {
 }
 
 function updateLocalOnlyUI() {
-    const isLocalServer = selectedServerUdn === 'uuid:amcui-local-media-server';
+    const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
     const localOnlyElements = document.querySelectorAll('.local-only');
     localOnlyElements.forEach(el => {
         if (el.tagName === 'SPAN' && el.classList.contains('divider')) {
