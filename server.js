@@ -80,6 +80,7 @@ function saveDevices() {
 loadDevices();
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
+let ssdpRegistry = new Map(); // ip -> { services: Set, lastSeen: timestamp }
 
 const ssdpClient = new Client({
     // Explicitly bind to help on multi-NIC systems
@@ -208,10 +209,18 @@ async function handleSSDPMessage(headers, rinfo) {
 
     const st = (headers.ST || headers.NT || '').toLowerCase();
     const serverHeader = (headers.SERVER || '').toLowerCase();
+    const ip = rinfo.address;
 
-    // Log the discovery type
-    const msgType = headers.ST ? 'Response' : (headers.NTS === 'ssdp:alive' ? 'Alive' : 'Announcement');
-    console.log(`SSDP ${msgType} from ${rinfo.address}:${rinfo.port} (Type: ${st})`);
+    // Track in registry
+    if (!ssdpRegistry.has(ip)) {
+        ssdpRegistry.set(ip, { services: new Set(), lastSeen: Date.now() });
+    }
+    const regEntry = ssdpRegistry.get(ip);
+    regEntry.services.add(st);
+    regEntry.lastSeen = Date.now();
+
+    // Log only if it's a first discovery of a high-value target
+    const isNewHost = regEntry.services.size === 1;
 
     if (!devices.has(location)) {
         // Broad initial detection
@@ -233,7 +242,8 @@ async function handleSSDPMessage(headers, rinfo) {
             }
         }
 
-        console.log(`Discovered candidate via ${msgType} at ${rinfo.address} (ST/NT: ${st})`);
+        const msgType = headers.ST ? 'Response' : (headers.NTS === 'ssdp:alive' ? 'Alive' : 'Announcement');
+        console.log(`Discovered candidate via ${msgType} from ${rinfo.address} (Type: ${st})`);
 
         devices.set(location, {
             location,
@@ -1144,7 +1154,26 @@ app.get('/api/track-metadata', async (req, res) => {
 });
 
 app.get('/api/logs', (req, res) => {
-    res.json(serverLogs);
+    const ssdpData = {};
+    for (const [ip, data] of ssdpRegistry.entries()) {
+        let name = 'Unknown Device';
+        // Try to find a friendly name from our discovered devices
+        for (const device of devices.values()) {
+            try {
+                if (device.location && new URL(device.location).hostname === ip) {
+                    name = device.friendlyName;
+                    if (name && name !== 'Discovering...') break;
+                }
+            } catch (e) { }
+        }
+
+        ssdpData[ip] = {
+            name,
+            lastSeen: new Date(data.lastSeen).toLocaleTimeString(),
+            services: Array.from(data.services)
+        };
+    }
+    res.json({ logs: serverLogs, ssdp: ssdpData });
 });
 
 // 404 Handler - MUST BE LAST

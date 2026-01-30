@@ -2242,11 +2242,14 @@ async function fetchServerLogs() {
     try {
         const response = await fetch('/api/logs');
         if (!response.ok) return;
-        const logs = await response.json();
+        const data = await response.json();
+        const logs = data.logs || [];
+        const ssdp = data.ssdp || {};
 
-        // Filter out logs we've already displayed by comparing timestamps
-        // Simple approach: just rebuild or append new ones. 
-        // For simplicity and since it's a small app, we'll just check what's new.
+        if (document.getElementById('console-modal').style.display === 'flex') {
+            renderSSDPRegistry(ssdp);
+        }
+
         const newLogs = logs.filter(log => {
             if (!lastServerLogTimestamp) return true;
             return log.timestamp > lastServerLogTimestamp;
@@ -2255,7 +2258,6 @@ async function fetchServerLogs() {
         if (newLogs.length > 0) {
             newLogs.forEach(log => {
                 log.source = 'SERVER';
-                // Avoid duplicates if multiple polls catch same log (unlikely with this logic)
                 window.appLogs.push(log);
                 if (window.appLogs.length > 1000) window.appLogs.shift();
 
@@ -2268,6 +2270,48 @@ async function fetchServerLogs() {
     } catch (err) {
         console.error('Failed to fetch server logs:', err);
     }
+}
+
+function renderSSDPRegistry(ssdp) {
+    const container = document.getElementById('ssdp-registry-container');
+    if (!container) return;
+
+    const ips = Object.keys(ssdp).sort();
+    if (ips.length === 0) {
+        container.innerHTML = '<div style="color: var(--text-muted); font-size: 0.8rem; padding: 0.5rem;">Waiting for SSDP advertisements...</div>';
+        return;
+    }
+
+    let html = `
+        <table class="ssdp-table">
+            <thead>
+                <tr>
+                    <th style="width: 110px;">IP Address</th>
+                    <th style="width: 160px;">Device</th>
+                    <th style="width: 100px;">Last Seen</th>
+                    <th>Advertised Services</th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    ips.forEach(ip => {
+        const entry = ssdp[ip];
+        const services = entry.services || [];
+        const servicesHtml = services.map(s => `<span class="ssdp-service-tag">${s}</span>`).join('');
+        const tooltip = services.join('\n');
+        html += `
+            <tr>
+                <td class="ssdp-ip">${ip}</td>
+                <td class="ssdp-name" style="font-weight: 600; color: var(--primary);">${entry.name || 'Unknown'}</td>
+                <td class="ssdp-time">${entry.lastSeen}</td>
+                <td title="${tooltip}"><div class="ssdp-services-list">${servicesHtml}</div></td>
+            </tr>
+        `;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
 }
 
 function openConsoleModal() {
