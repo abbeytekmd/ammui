@@ -1,4 +1,4 @@
-import './lib/logger-init.js';
+import { serverLogs, terminalLog } from './lib/logger-init.js';
 import express from 'express';
 import ssdp from 'node-ssdp';
 import axios from 'axios';
@@ -30,8 +30,9 @@ if (!fs.existsSync(path.join(__dirname, 'local'))) fs.mkdirSync(path.join(__dirn
 
 app.use(express.json());
 
+
 app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    terminalLog(`${req.method} ${req.url}`);
     next();
 });
 
@@ -1011,76 +1012,70 @@ app.get('/api/art/search', async (req, res) => {
 
     try {
         const query = `${artist || ''} ${album || ''}`.trim();
-        console.log(`[ART] Deep Search for: "${query}" (Artist: ${artist}, Album: ${album})`);
+        const normalize = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const isFuzzyMatch = (s1, s2) => {
+            const n1 = normalize(s1);
+            const n2 = normalize(s2);
+            if (!n1 || !n2) return false;
+            if (n1 === n2) return true;
 
-        // 1. Try Discogs (User's preferred primary) - only if token is provided
+            const longer = n1.length > n2.length ? n1 : n2;
+            const shorter = n1.length > n2.length ? n2 : n1;
+
+            if (longer.includes(shorter)) {
+                // To avoid "am" matching "whateverpeoplesayiam...",
+                // the shorter string must be a significant part of the longer one.
+                // Or if it's a very long string, we allow a bit more leeway.
+                const ratio = shorter.length / longer.length;
+                if (ratio >= 0.35) return true;
+
+                // Special case: If the shorter string is quite long themselves (e.g. 15+ chars), 
+                // it's likely a match even if the ratio is low (e.g. very long album titles)
+                if (shorter.length >= 15) return true;
+            }
+            return false;
+        };
+
+        // 1. Try Discogs
         if (DISCOGS_TOKEN) {
             try {
-                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist || '')}&release_title=${encodeURIComponent(album || '')}&type=release&token=${DISCOGS_TOKEN}`;
+                console.log(`[ART] Querying Discogs...`);
+                // Parameterized search is much more accurate than 'q'
+                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(album)}&type=release&token=${DISCOGS_TOKEN}`;
                 const discogsRes = await axios.get(discogsUrl, {
                     timeout: 5000,
                     headers: { 'User-Agent': 'AMCUI/1.0' }
                 });
 
                 if (discogsRes.data.results && discogsRes.data.results.length > 0) {
-                    // Discogs is usually quite accurate with artist/album filters
-                    const bestMatch = discogsRes.data.results[0];
-                    if (bestMatch.cover_image) {
-                        console.log(`[ART] Found on Discogs: ${bestMatch.title}`);
+                    console.log(`[ART] Discogs: Found ${discogsRes.data.results.length} potentials, validating...`);
+
+                    const bestMatch = discogsRes.data.results.find(item => {
+                        // Discogs 'title' usually comes as 'Artist - Album Title' or might be just 'Album Title'
+                        // if we use specific params. We validate both for safety.
+                        const titleParts = item.title.split(' - ');
+                        const isMatch = isFuzzyMatch(titleParts[0], artist) && isFuzzyMatch(titleParts[titleParts.length - 1], album);
+
+                        if (!isMatch) {
+                            console.log(`[ART] Discogs: Rejected "${item.title}"`);
+                        }
+                        return isMatch;
+                    });
+
+                    if (bestMatch && bestMatch.cover_image) {
+                        console.log(`[ART] SUCCESS: Found on Discogs: "${bestMatch.title}"`);
                         return res.json({ url: bestMatch.cover_image, source: 'discogs' });
                     }
                 }
+                console.log(`[ART] Discogs: No high-confidence matches found.`);
             } catch (e) {
-                console.warn('[ART] Discogs search failed:', e.message);
+                console.warn(`[ART] Discogs search failed: ${e.message}`);
             }
+        } else {
+            console.log(`[ART] Discogs: Skipped (No token provided).`);
         }
 
-        // 2. Try iTunes with Artist Validation (Fallback 1)
-        try {
-            const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&media=music&entity=album&limit=5`;
-            const itunesRes = await axios.get(itunesUrl, { timeout: 5000 });
-
-            if (itunesRes.data.results && itunesRes.data.results.length > 0) {
-                const bestMatch = itunesRes.data.results.find(item => {
-                    const resArtist = (item.artistName || '').toLowerCase();
-                    const searchArtist = (artist || '').toLowerCase();
-                    return resArtist.includes(searchArtist) || searchArtist.includes(resArtist);
-                });
-
-                if (bestMatch) {
-                    const art = bestMatch.artworkUrl100.replace('100x100bb', '600x600bb');
-                    console.log(`[ART] Confirmed Match on iTunes: ${bestMatch.artistName} - ${bestMatch.collectionName}`);
-                    return res.json({ url: art, source: 'itunes' });
-                }
-            }
-        } catch (e) {
-            console.warn('[ART] iTunes search failed:', e.message);
-        }
-
-        // 3. Try Wikipedia Search (Fallback 2)
-        try {
-            const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&limit=1`;
-            const wikiSearchRes = await axios.get(wikiSearchUrl, { timeout: 5000 });
-
-            if (wikiSearchRes.data.query && wikiSearchRes.data.query.search && wikiSearchRes.data.query.search.length > 0) {
-                const title = wikiSearchRes.data.query.search[0].title;
-                const wikiArtUrl = `https://en.wikipedia.org/w/api.php?action=query&format=json&prop=pageimages&titles=${encodeURIComponent(title)}&pithumbsize=1000&redirects=1`;
-                const wikiArtRes = await axios.get(wikiArtUrl, { timeout: 5000 });
-
-                if (wikiArtRes.data.query && wikiArtRes.data.query.pages) {
-                    const pages = wikiArtRes.data.query.pages;
-                    const pageId = Object.keys(pages)[0];
-                    if (pageId !== '-1' && pages[pageId].thumbnail) {
-                        const art = pages[pageId].thumbnail.source;
-                        console.log(`[ART] Found on Wikipedia: ${title}`);
-                        return res.json({ url: art, source: 'wikipedia' });
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn('[ART] Wikipedia search failed:', e.message);
-        }
-
+        console.log(`[ART] FAILURE: No artwork found for "${query}" on Discogs.`);
         res.status(404).json({ error: 'No high-confidence artwork found' });
     } catch (err) {
         console.error('[ART] Search error:', err.message);
@@ -1106,9 +1101,55 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 
+app.get('/api/track-metadata', async (req, res) => {
+    const { uri } = req.query;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        terminalLog(`[METADATA] Fetching for: ${uri}`);
+
+        let metadata;
+        if (uri.startsWith('http')) {
+            const response = await axios.get(uri, { responseType: 'stream', timeout: 10000 });
+            // Only need the start of the file for metadata usually, but parseStream handles the stream
+            metadata = await mm.parseStream(response.data, { mimeType: response.headers['content-type'] });
+            // Close the stream once we have metadata to avoid downloading the whole file
+            response.data.destroy();
+        } else if (fs.existsSync(uri)) {
+            // Local filesystem path
+            metadata = await mm.parseFile(uri);
+        } else {
+            return res.status(400).json({ error: 'Invalid URI' });
+        }
+
+        // Flatten and simplify metadata for the client
+        const result = {
+            common: metadata.common,
+            format: {
+                duration: metadata.format.duration,
+                bitrate: metadata.format.bitrate,
+                sampleRate: metadata.format.sampleRate,
+                bitsPerSample: metadata.format.bitsPerSample,
+                numberOfChannels: metadata.format.numberOfChannels,
+                codec: metadata.format.codec,
+                container: metadata.format.container
+            }
+        };
+
+        res.json(result);
+    } catch (err) {
+        terminalLog(`[METADATA] ERROR: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/logs', (req, res) => {
+    res.json(serverLogs);
+});
+
 // 404 Handler - MUST BE LAST
 app.use((req, res) => {
-    console.error(`[404] ${req.method} ${req.url}`);
+    terminalLog(`[${new Date().toISOString()}] [404] ${req.method} ${req.url}`);
     res.status(404).json({ error: `Not Found: ${req.method} ${req.url}` });
 });
 

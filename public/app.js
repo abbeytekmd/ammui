@@ -1,4 +1,7 @@
 (function () {
+    window.appLogs = [];
+    const MAX_LOGS = 500;
+
     const originalLog = console.log;
     const originalError = console.error;
     const originalWarn = console.warn;
@@ -15,15 +18,36 @@
         return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
     }
 
+    function captureLog(type, source, ...args) {
+        const timestamp = getTimestamp();
+        const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
+
+        // Don't log DEBUG messages to the app console modal
+        if (message.includes('[DEBUG]')) return;
+
+        window.appLogs.push({ type, timestamp, message, source });
+        if (window.appLogs.length > MAX_LOGS) {
+            window.appLogs.shift();
+        }
+
+        const consoleList = document.getElementById('console-log-list');
+        if (consoleList && document.getElementById('console-modal').style.display === 'flex') {
+            appendLogToUI({ type, timestamp, message, source });
+        }
+    }
+
     console.log = (...args) => {
+        captureLog('log', 'CLIENT', ...args);
         originalLog(`[${getTimestamp()}]`, ...args);
     };
 
     console.error = (...args) => {
+        captureLog('error', 'CLIENT', ...args);
         originalError(`[${getTimestamp()}]`, ...args);
     };
 
     console.warn = (...args) => {
+        captureLog('warn', 'CLIENT', ...args);
         originalWarn(`[${getTimestamp()}]`, ...args);
     };
 })();
@@ -642,7 +666,7 @@ function renderBrowser(items) {
     const currentId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
     const savedScrollTop = browseScrollPositions[currentId] || 0;
 
-    console.log(`[DEBUG] Rendering browser, restoring scroll ${savedScrollTop} for ${currentId}`);
+    //    console.log(`[DEBUG] Rendering browser, restoring scroll ${savedScrollTop} for ${currentId}`);
     const tracks = items.filter(item => item.type === 'item');
     const addAllBtn = document.getElementById('btn-add-all');
     const playAllBtn = document.getElementById('btn-play-all');
@@ -674,12 +698,8 @@ function renderBrowser(items) {
             .map(i => i.title[0].toUpperCase())
         )];
 
-        if (items.length > 20) { // Increased threshold for showing alphabet
-            alphabetScroll.classList.add('visible');
-            renderAlphabet();
-        } else {
-            alphabetScroll.classList.remove('visible');
-        }
+        alphabetScroll.classList.add('visible');
+        renderAlphabet();
     }
 
     if (items.length === 0) {
@@ -688,7 +708,7 @@ function renderBrowser(items) {
     }
 
     let lastLetter = null;
-    browserItems.innerHTML = items.map(item => {
+    browserItems.innerHTML = items.map((item, index) => {
         const isContainer = item.type === 'container';
         const firstLetter = (item.title || '')[0].toUpperCase();
         let letterIdAttr = '';
@@ -724,6 +744,13 @@ function renderBrowser(items) {
                 ${!isLocalServer || isLocalServer || !isContainer ? `
                     <div class="item-actions">
                         ${!isContainer ? `
+                        <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromBrowser(${index})" title="View track metadata">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <path d="M12 16v-4"></path>
+                                <path d="M12 8h.01"></path>
+                            </svg>
+                        </button>
                         <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 5v14M5 12h14"></path>
@@ -753,7 +780,7 @@ function renderBrowser(items) {
                             Delete
                         </button>
                         ` : `
-                        <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local folder">
+                        <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local media library">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                 <polyline points="7 10 12 15 17 10"></polyline>
@@ -864,7 +891,7 @@ function updateStatus(status) {
             console.log(`[DEBUG] Found fallback duration: ${newDuration}s for track ${currentTrackId}`);
         }
     } else if (newDuration > 0) {
-        console.log(`[DEBUG] Device reported duration: ${newDuration}s`);
+        //        console.log(`[DEBUG] Device reported duration: ${newDuration}s`);
     }
 
     durationSeconds = newDuration;
@@ -914,10 +941,12 @@ async function updatePlayerArtwork(artist, album) {
             currentArtworkUrl = data.url;
             showPlayerArt(data.url);
         } else {
+            currentArtworkUrl = '';
             hideAllPlayerArt();
         }
     } catch (e) {
         console.warn('[ART] Failed to fetch player artwork:', e);
+        currentArtworkUrl = '';
         hideAllPlayerArt();
     }
 }
@@ -951,6 +980,8 @@ function showPlayerArt(url) {
 function hideAllPlayerArt() {
     document.querySelectorAll('.player-artwork-container').forEach(el => {
         el.classList.remove('visible');
+        const img = el.querySelector('img');
+        if (img) img.src = ''; // Clear src to avoid stale art in modal
     });
 }
 
@@ -1116,11 +1147,20 @@ function renderPlaylist(items) {
                     <div class="item-title">${esc(item.title) || 'Unknown Title'}</div>
                     <div class="item-artist">${esc(item.artist) || ''}</div>
                 </div>
-                <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrackFromPlaylist('${esc(item.id)}')" title="Remove from playlist">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M18 6L6 18M6 6l12 12"></path>
-                    </svg>
-                </button>
+                <div class="item-actions">
+                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromPlaylist('${esc(item.id)}')" title="View track metadata">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M12 16v-4"></path>
+                            <path d="M12 8h.01"></path>
+                        </svg>
+                    </button>
+                    <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrackFromPlaylist('${esc(item.id)}')" title="Remove from playlist">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 6L6 18M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
             </div>
         `;
     }).join('');
@@ -2195,4 +2235,267 @@ if (alphabetEl) {
     alphabetObserver.observe(alphabetEl);
 }
 
+let consolePollInterval = null;
+let lastServerLogTimestamp = null;
 
+async function fetchServerLogs() {
+    try {
+        const response = await fetch('/api/logs');
+        if (!response.ok) return;
+        const logs = await response.json();
+
+        // Filter out logs we've already displayed by comparing timestamps
+        // Simple approach: just rebuild or append new ones. 
+        // For simplicity and since it's a small app, we'll just check what's new.
+        const newLogs = logs.filter(log => {
+            if (!lastServerLogTimestamp) return true;
+            return log.timestamp > lastServerLogTimestamp;
+        });
+
+        if (newLogs.length > 0) {
+            newLogs.forEach(log => {
+                log.source = 'SERVER';
+                // Avoid duplicates if multiple polls catch same log (unlikely with this logic)
+                window.appLogs.push(log);
+                if (window.appLogs.length > 1000) window.appLogs.shift();
+
+                if (document.getElementById('console-modal').style.display === 'flex') {
+                    appendLogToUI(log);
+                }
+            });
+            lastServerLogTimestamp = newLogs[newLogs.length - 1].timestamp;
+        }
+    } catch (err) {
+        console.error('Failed to fetch server logs:', err);
+    }
+}
+
+function openConsoleModal() {
+    const modal = document.getElementById('console-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        renderLogs();
+        fetchServerLogs(); // Initial fetch
+        if (!consolePollInterval) {
+            consolePollInterval = setInterval(fetchServerLogs, 2000);
+        }
+    }
+}
+
+function closeConsoleModal() {
+    const modal = document.getElementById('console-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        if (consolePollInterval) {
+            clearInterval(consolePollInterval);
+            consolePollInterval = null;
+        }
+    }
+}
+
+function renderLogs() {
+    const container = document.getElementById('console-log-list');
+    if (!container) return;
+
+    container.innerHTML = '';
+    // Sort all logs by timestamp before rendering
+    const allLogs = [...window.appLogs].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    allLogs.forEach(log => appendLogToUI(log));
+}
+
+function appendLogToUI(log) {
+    const container = document.getElementById('console-log-list');
+    if (!container) return;
+
+    const entry = document.createElement('div');
+    entry.className = `log-entry log-${log.type}`;
+    const sourceClass = log.source === 'SERVER' ? 'source-server' : 'source-client';
+    entry.innerHTML = `<span class="log-time">[${log.timestamp}]</span> <span class="log-source ${sourceClass}">${log.source}</span> <span class="log-msg">${log.message}</span>`;
+    container.appendChild(entry);
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function clearLogs() {
+    window.appLogs = [];
+    lastServerLogTimestamp = null;
+    renderLogs();
+}
+
+async function openTrackInfoModal(trackData) {
+    const modal = document.getElementById('track-info-modal');
+    const container = document.getElementById('track-metadata-list');
+    if (!modal || !container) return;
+
+    modal.style.display = 'flex';
+    container.innerHTML = `
+        <div class="metadata-grid">
+            <div class="metadata-header">Field</div>
+            <div class="metadata-header">Media Server</div>
+            <div class="metadata-header">File Tags (Deep Scan)</div>
+            
+            <div class="metadata-loading-row" id="metadata-loading-spinner">
+                <div class="spinner"></div>
+                <span style="margin-left: 1rem; color: var(--text-muted);">Analyzing track file...</span>
+            </div>
+            
+            <div id="metadata-rows" style="display: contents;"></div>
+        </div>
+    `;
+
+    const rowsContainer = document.getElementById('metadata-rows');
+
+    // Fetch Deep Metadata early
+    let embeddedMeta = null;
+    let fetchError = null;
+    try {
+        if (trackData.uri) {
+            const response = await fetch(`/api/track-metadata?uri=${encodeURIComponent(trackData.uri)}`);
+            if (response.ok) {
+                embeddedMeta = await response.json();
+            } else {
+                fetchError = "Deep scan failed";
+            }
+        }
+    } catch (e) {
+        fetchError = e.message;
+    }
+
+    // Hide loader
+    const loader = document.getElementById('metadata-loading-spinner');
+    if (loader) loader.style.display = 'none';
+
+    function getEmbeddedValue(path) {
+        if (!embeddedMeta) return undefined;
+        const keys = path.split('.');
+        let val = embeddedMeta;
+        for (const k of keys) {
+            val = val ? val[k] : undefined;
+        }
+        return val;
+    }
+
+    function normalizeForComparison(val) {
+        if (val === undefined || val === null) return '';
+        return String(val).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    }
+
+    function formatValue(key, value) {
+        if (value === undefined || value === null || value === '') return '-';
+        if (key.includes('bitrate') && typeof value === 'number') {
+            return (value / 1000).toFixed(0) + ' kbps';
+        }
+        if (key.includes('sampleRate') && typeof value === 'number') {
+            return (value / 1000).toFixed(1) + ' kHz';
+        }
+        if (key.includes('duration') && typeof value === 'number') {
+            const mins = Math.floor(value / 60);
+            const secs = Math.floor(value % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+        return value;
+    }
+
+    const fieldGroups = [
+        {
+            title: 'Primary Metadata',
+            fields: [
+                { label: 'Title', sKey: 'title', eKey: 'common.title' },
+                { label: 'Artist', sKey: 'artist', eKey: 'common.artist' },
+                { label: 'Album', sKey: 'album', eKey: 'common.album' },
+                { label: 'Year', sKey: 'year', eKey: 'common.year' },
+                { label: 'Genre', sKey: 'genre', eKey: 'common.genre' }
+            ]
+        },
+        {
+            title: 'Technical Specs',
+            fields: [
+                { label: 'Codec', sKey: '', eKey: 'format.codec' },
+                { label: 'Bitrate', sKey: 'bitrate', eKey: 'format.bitrate' },
+                { label: 'Sample Rate', sKey: 'sampleRate', eKey: 'format.sampleRate' },
+                { label: 'Bit Depth', sKey: '', eKey: 'format.bitsPerSample' },
+                { label: 'Channels', sKey: 'channels', eKey: 'format.numberOfChannels' },
+                { label: 'Duration', sKey: 'duration', eKey: 'format.duration' }
+            ]
+        }
+    ];
+
+    fieldGroups.forEach(group => {
+        group.fields.forEach(f => {
+            const sValRaw = f.sKey ? trackData[f.sKey] : undefined;
+            const eValRaw = f.eKey ? getEmbeddedValue(f.eKey) : undefined;
+
+            const sVal = formatValue(f.sKey || '', sValRaw);
+            const eVal = formatValue(f.eKey || '', eValRaw);
+
+            // Comparison
+            let isMismatch = false;
+            if (sValRaw && eValRaw) {
+                if (f.label === 'Duration') {
+                    const parseDuration = (val) => {
+                        if (typeof val === 'number') return val;
+                        if (typeof val === 'string') {
+                            const parts = val.split(':').map(Number);
+                            if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+                            if (parts.length === 2) return parts[0] * 60 + parts[1];
+                            if (parts.length === 1) return parts[0];
+                        }
+                        return 0;
+                    };
+                    const sSec = parseDuration(sValRaw);
+                    const eSec = parseDuration(eValRaw);
+                    // Allow 1 second difference
+                    if (Math.abs(sSec - eSec) > 1.1) {
+                        isMismatch = true;
+                    }
+                } else {
+                    const ns = normalizeForComparison(sValRaw);
+                    const ne = normalizeForComparison(eValRaw);
+                    // Only compare if we have both
+                    if (ns && ne && ns !== ne) {
+                        isMismatch = true;
+                    }
+                }
+            }
+
+            const mismatchClass = isMismatch ? 'mismatch' : '';
+            const mismatchIcon = isMismatch ? '<div class="mismatch-badge" title="Data Mismatch">!</div>' : '';
+
+            rowsContainer.innerHTML += `
+                <div class="metadata-cell metadata-label-cell">${f.label}</div>
+                <div class="metadata-cell metadata-value-cell ${mismatchClass}">${sVal}</div>
+                <div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>
+            `;
+        });
+    });
+
+    if (fetchError) {
+        rowsContainer.innerHTML += `
+            <div class="metadata-cell" style="grid-column: span 3; color: #f87171; text-align: center; padding: 1rem;">
+                Note: File scan was limited: ${fetchError}
+            </div>
+        `;
+    }
+}
+
+
+function closeTrackInfoModal() {
+    const modal = document.getElementById('track-info-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function showTrackInfoFromBrowser(index) {
+    const item = currentBrowserItems[index];
+    if (item) {
+        openTrackInfoModal(item);
+    }
+}
+
+function showTrackInfoFromPlaylist(id) {
+    const item = currentPlaylistItems.find(i => i.id == id);
+    if (item) {
+        openTrackInfoModal(item);
+    }
+}
