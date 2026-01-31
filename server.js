@@ -9,9 +9,12 @@ import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, FRIENDLY_NAME } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
+import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
+import { promises as fsp } from 'fs';
 
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
@@ -37,7 +40,7 @@ app.use((req, res, next) => {
     next();
 });
 
-setupLocalDlna(app, port);
+// setupLocalDlna will be called after settings are loaded below
 
 // Store discovered devices
 let devices = new Map();
@@ -49,7 +52,7 @@ function loadDevices() {
             const list = JSON.parse(data);
             list.forEach(d => {
                 // Skip any stale entries for the local server from previous runs on different IPs
-                if (d.udn === SERVER_UDN || d.friendlyName === FRIENDLY_NAME) {
+                if (d.udn === SERVER_UDN || (d.friendlyName && d.friendlyName.includes('Media Library'))) {
                     return;
                 }
                 if (d.location) devices.set(d.location, d);
@@ -78,13 +81,39 @@ function saveDevices() {
     }
 }
 
-let settings = { discogsToken: '' };
+let settings = {
+    discogsToken: '',
+    s3: {
+        endpoint: '',
+        region: 'auto',
+        accessKeyId: '',
+        secretAccessKey: '',
+        bucket: '',
+        enabled: false
+    },
+    deviceName: 'AMMUI'
+};
+
+let s3SyncStatus = {
+    running: false,
+    lastSync: null,
+    lastError: null,
+    currentFile: '',
+    syncedCount: 0,
+    totalCount: 0
+};
 
 function loadSettings() {
     try {
         if (fs.existsSync(SETTINGS_FILE)) {
             const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
-            settings = JSON.parse(data);
+            const loaded = JSON.parse(data);
+            settings = {
+                ...settings,
+                ...loaded,
+                s3: { ...settings.s3, ...(loaded.s3 || {}) },
+                deviceName: loaded.deviceName || settings.deviceName
+            };
             console.log('Loaded settings from storage.');
         }
     } catch (err) {
@@ -100,8 +129,147 @@ function saveSettings() {
     }
 }
 
+function findCaseInsensitivePath(parent, name) {
+    if (!fs.existsSync(parent)) return path.join(parent, name);
+    try {
+        const files = fs.readdirSync(parent);
+        const match = files.find(f => f.toLowerCase() === name.toLowerCase());
+        if (match) {
+            const fullPath = path.join(parent, match);
+            if (fs.statSync(fullPath).isDirectory()) {
+                return fullPath;
+            }
+        }
+    } catch (e) {
+        // Fallback
+    }
+    return path.join(parent, name);
+}
+
 loadDevices();
 loadSettings();
+setupLocalDlna(app, port, settings.deviceName);
+
+// Manually inject the local server into the devices map on startup
+// so it's always available even if SSDP discovery is slow or blocked.
+(function injectLocalServer() {
+    const localLocation = `http://${hostIp}:${port}/dlna/description.xml`;
+    const localServer = {
+        udn: SERVER_UDN,
+        location: localLocation,
+        friendlyName: `${settings.deviceName} Media Library`,
+        type: 'server',
+        isServer: true,
+        isRenderer: false,
+        iconUrl: '/amm-icon.png',
+        lastSeen: Date.now()
+    };
+    devices.set(localLocation, localServer);
+    devices.set(SERVER_UDN, localServer);
+    console.log(`[DEBUG] Manually injected local server at ${localLocation}`);
+})();
+
+async function syncToS3() {
+    if (s3SyncStatus.running) return;
+    if (!settings.s3.enabled || !settings.s3.bucket || !settings.s3.accessKeyId) {
+        console.log('[S3] Sync skipped: Not configured or disabled.');
+        return;
+    }
+
+    try {
+        console.log('[S3] Starting sync...');
+        s3SyncStatus.running = true;
+        s3SyncStatus.syncedCount = 0;
+        s3SyncStatus.totalCount = 0;
+        s3SyncStatus.lastError = null;
+
+        const s3 = new S3Client({
+            endpoint: settings.s3.endpoint || undefined,
+            region: settings.s3.region || 'auto',
+            credentials: {
+                accessKeyId: settings.s3.accessKeyId,
+                secretAccessKey: settings.s3.secretAccessKey
+            },
+            forcePathStyle: false
+        });
+
+        const localDir = path.join(__dirname, 'local');
+        if (!fs.existsSync(localDir)) return;
+
+        const allFiles = [];
+        async function walk(dir) {
+            const files = await fsp.readdir(dir, { withFileTypes: true });
+            for (const file of files) {
+                const res = path.resolve(dir, file.name);
+                if (file.isDirectory()) {
+                    await walk(res);
+                } else {
+                    allFiles.push(res);
+                }
+            }
+        }
+
+        await walk(localDir);
+        s3SyncStatus.totalCount = allFiles.length;
+
+        for (const filePath of allFiles) {
+            const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+            const relativePath = `${devicePrefix}/${path.relative(localDir, filePath).replace(/\\/g, '/')}`;
+            s3SyncStatus.currentFile = relativePath;
+
+            try {
+                // Check if file already exists in S3 (basic check)
+                try {
+                    await s3.send(new HeadObjectCommand({
+                        Bucket: settings.s3.bucket,
+                        Key: relativePath
+                    }));
+                    // console.log(`[S3] Skipping ${relativePath} (exists)`);
+                    s3SyncStatus.syncedCount++;
+                    continue;
+                } catch (e) {
+                    // Not found, proceed with upload
+                }
+
+                console.log(`[S3] Uploading ${relativePath}...`);
+                const fileStream = fs.createReadStream(filePath);
+                const parallelUploads3 = new Upload({
+                    client: s3,
+                    params: {
+                        Bucket: settings.s3.bucket,
+                        Key: relativePath,
+                        Body: fileStream,
+                        ContentType: 'audio/mpeg' // fallback, could be better
+                    },
+                    queueSize: 4,
+                    partSize: 5 * 1024 * 1024,
+                    leavePartsOnError: false,
+                });
+
+                await parallelUploads3.done();
+                s3SyncStatus.syncedCount++;
+            } catch (err) {
+                console.error(`[S3] Failed to upload ${relativePath}:`, err.message);
+                s3SyncStatus.lastError = `Upload failed for ${relativePath}: ${err.message}`;
+                // Continue with next file
+            }
+        }
+
+        s3SyncStatus.lastSync = new Date().toISOString();
+        console.log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
+    } catch (err) {
+        console.error('[S3] Global Sync Error:', err);
+        s3SyncStatus.lastError = err.message;
+    } finally {
+        s3SyncStatus.running = false;
+        s3SyncStatus.currentFile = '';
+    }
+}
+
+// Hourly Sync
+setInterval(syncToS3, 3600000);
+// Run a check shortly after startup
+setTimeout(syncToS3, 10000);
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 let ssdpRegistry = new Map(); // ip -> { services: Set, lastSeen: timestamp }
@@ -257,12 +425,14 @@ async function handleSSDPMessage(headers, rinfo) {
             return;
         }
 
-        // PREVENT HIJACKING: If this is our own local server discovered on a VPN IP, IGNORE IT.
-        if (st.includes('ammui-local-media-server') || (location && location.includes('ammui-local-media-server'))) {
+        // PREVENT HIJACKING: If this is our own local server discovered on a different IP/interface, 
+        // normally we'd ignore it to favor the primary hostIp. However, we allow it if the location
+        // matches our local DLNA server structure.
+        const isLocalPath = location && location.includes('/dlna/description.xml');
+        if (st.includes('ammui-local-media-server') || isLocalPath) {
             const url = new URL(location);
             if (url.hostname !== hostIp) {
-                console.log(`[DEBUG] Ignoring local server discovered on non-primary IP: ${url.hostname} (Expected: ${hostIp})`);
-                return;
+                console.log(`[DEBUG] Local server discovered on secondary interface/IP: ${url.hostname} (Primary: ${hostIp}). Allowing.`);
             }
         }
 
@@ -879,6 +1049,52 @@ app.post('/api/settings/discogs', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/settings/s3', (req, res) => {
+    const s3 = { ...settings.s3 };
+    // Mask secret
+    if (s3.secretAccessKey) {
+        s3.secretAccessKey = s3.secretAccessKey.substring(0, 4) + '****************';
+    }
+    res.json(s3);
+});
+
+app.post('/api/settings/s3', express.json(), (req, res) => {
+    const newS3 = req.body;
+    // If it's masked, preserve existing
+    if (newS3.secretAccessKey && newS3.secretAccessKey.includes('****')) {
+        newS3.secretAccessKey = settings.s3.secretAccessKey;
+    }
+    settings.s3 = { ...settings.s3, ...newS3 };
+    saveSettings();
+    console.log('[S3] Settings updated.');
+    res.json({ success: true });
+});
+
+app.get('/api/settings/general', (req, res) => {
+    res.json({ deviceName: settings.deviceName });
+});
+
+app.post('/api/settings/general', express.json(), (req, res) => {
+    const { deviceName } = req.body;
+    if (deviceName) {
+        settings.deviceName = deviceName;
+        saveSettings();
+        console.log(`Device name updated to: ${deviceName}`);
+        updateLocalDlnaName(deviceName);
+    }
+    res.json({ success: true });
+});
+
+app.get('/api/sync/s3/status', (req, res) => {
+    res.json(s3SyncStatus);
+});
+
+app.post('/api/sync/s3/start', (req, res) => {
+    if (s3SyncStatus.running) return res.status(400).json({ error: 'Sync already running' });
+    syncToS3(); // Trigger async
+    res.json({ success: true });
+});
+
 const upload = multer({ dest: 'uploads/' });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -897,7 +1113,8 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
 
         const ext = path.extname(req.file.originalname);
-        const targetDir = path.join(localDir, safeArtist, safeAlbum);
+        const artistDir = findCaseInsensitivePath(localDir, safeArtist);
+        const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
 
         if (!fs.existsSync(targetDir)) {
             fs.mkdirSync(targetDir, { recursive: true });
@@ -961,7 +1178,8 @@ async function downloadFileHelper(uri, title, artist, album) {
     const safeTitle = (title || 'Track').replace(/[<>:"/\\|?*]/g, '_');
 
     // Create target directory structure: local/[Artist]/[Album]
-    const targetDir = path.join(localDir, safeArtist, safeAlbum);
+    const artistDir = findCaseInsensitivePath(localDir, safeArtist);
+    const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
     if (!fs.existsSync(targetDir)) {
         fs.mkdirSync(targetDir, { recursive: true });
     }
@@ -1055,14 +1273,30 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
 });
 
 app.get('/api/art/search', async (req, res) => {
-    const { artist, album } = req.query;
+    let { artist, album, uri } = req.query;
+
+    // If uri is provided, try to get tags from the file to improve accuracy
+    if (uri) {
+        try {
+            const metadata = await getTrackMetadata(uri);
+            if (metadata && metadata.common) {
+                if (metadata.common.artist) artist = metadata.common.artist;
+                if (metadata.common.album) album = metadata.common.album;
+                console.log(`[ART] Using tags from file for search: "${artist}" - "${album}"`);
+            }
+        } catch (e) {
+            console.warn(`[ART] Failed to get tags from URI ${uri}: ${e.message}`);
+        }
+    }
+
     if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
 
     const DISCOGS_TOKEN = settings.discogsToken;
 
     try {
-        const query = `${artist || ''} ${album || ''}`.trim();
-        const normalize = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const queryStr = `${artist || ''} ${album || ''}`.trim();
+        const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+
         const isFuzzyMatch = (s1, s2) => {
             const n1 = normalize(s1);
             const n2 = normalize(s2);
@@ -1073,14 +1307,8 @@ app.get('/api/art/search', async (req, res) => {
             const shorter = n1.length > n2.length ? n2 : n1;
 
             if (longer.includes(shorter)) {
-                // To avoid "am" matching "whateverpeoplesayiam...",
-                // the shorter string must be a significant part of the longer one.
-                // Or if it's a very long string, we allow a bit more leeway.
                 const ratio = shorter.length / longer.length;
                 if (ratio >= 0.35) return true;
-
-                // Special case: If the shorter string is quite long themselves (e.g. 15+ chars), 
-                // it's likely a match even if the ratio is low (e.g. very long album titles)
                 if (shorter.length >= 15) return true;
             }
             return false;
@@ -1089,32 +1317,51 @@ app.get('/api/art/search', async (req, res) => {
         // 1. Try Discogs
         if (DISCOGS_TOKEN) {
             try {
-                console.log(`[ART] Querying Discogs...`);
-                // Parameterized search is much more accurate than 'q'
-                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(album)}&type=release&token=${DISCOGS_TOKEN}`;
+                console.log(`[ART] Querying Discogs for "${queryStr}"...`);
+                // Search without type restriction to include Master releases
+                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(album)}&token=${DISCOGS_TOKEN}`;
                 const discogsRes = await axios.get(discogsUrl, {
                     timeout: 5000,
                     headers: { 'User-Agent': 'AMCUI/1.0' }
                 });
 
                 if (discogsRes.data.results && discogsRes.data.results.length > 0) {
-                    console.log(`[ART] Discogs: Found ${discogsRes.data.results.length} potentials, validating...`);
+                    console.log(`[ART] Discogs: Found ${discogsRes.data.results.length} potentials, scoring...`);
 
-                    const bestMatch = discogsRes.data.results.find(item => {
-                        // Discogs 'title' usually comes as 'Artist - Album Title' or might be just 'Album Title'
-                        // if we use specific params. We validate both for safety.
+                    const scoredResults = discogsRes.data.results.map(item => {
+                        let score = 0;
                         const titleParts = item.title.split(' - ');
-                        const isMatch = isFuzzyMatch(titleParts[0], artist) && isFuzzyMatch(titleParts[titleParts.length - 1], album);
+                        const itemArtist = titleParts[0];
+                        const itemAlbum = titleParts[titleParts.length - 1];
 
-                        if (!isMatch) {
-                            console.log(`[ART] Discogs: Rejected "${item.title}"`);
-                        }
-                        return isMatch;
-                    });
+                        const artistMatch = isFuzzyMatch(itemArtist, artist);
+                        const albumMatch = isFuzzyMatch(itemAlbum, album);
 
-                    if (bestMatch && bestMatch.cover_image) {
-                        console.log(`[ART] SUCCESS: Found on Discogs: "${bestMatch.title}"`);
-                        // Use a proxy to avoid hotlinking/CORS issues on some mobile devices
+                        if (!artistMatch || !albumMatch) return { item, score: -1 };
+
+                        // Exact matches (after normalization) get high priority
+                        if (normalize(itemArtist) === normalize(artist)) score += 20;
+                        if (normalize(itemAlbum) === normalize(album)) score += 20;
+
+                        // Master releases are usually the most "popular/official" entry
+                        if (item.type === 'master') score += 50;
+
+                        // Prefer Albums over singles/EPs
+                        const format = (item.format || []).join(' ').toLowerCase();
+                        if (format.includes('album')) score += 15;
+                        if (format.includes('lp') || format.includes('vinyl')) score += 10;
+                        if (format.includes('cd')) score += 8;
+
+                        // Penalize things that look like bootlegs or unofficial
+                        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+
+                        return { item, score };
+                    }).filter(r => r.score > 0)
+                        .sort((a, b) => b.score - a.score);
+
+                    if (scoredResults.length > 0) {
+                        const bestMatch = scoredResults[0].item;
+                        console.log(`[ART] SUCCESS: Selected Discogs match (Score: ${scoredResults[0].score}): "${bestMatch.title}" (${bestMatch.type})`);
                         const proxyUrl = `/api/art/proxy?url=${encodeURIComponent(bestMatch.cover_image)}`;
                         return res.json({ url: proxyUrl, source: 'discogs' });
                     }
@@ -1127,7 +1374,7 @@ app.get('/api/art/search', async (req, res) => {
             console.log(`[ART] Discogs: Skipped (No token provided).`);
         }
 
-        console.log(`[ART] FAILURE: No artwork found for "${query}" on Discogs.`);
+        console.log(`[ART] FAILURE: No artwork found for "${queryStr}" on Discogs.`);
         res.status(404).json({ error: 'No high-confidence artwork found' });
     } catch (err) {
         console.error('[ART] Search error:', err.message);
@@ -1184,6 +1431,32 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 
+async function getTrackMetadata(uri) {
+    if (!uri) throw new Error('URI is required');
+    let metadata;
+    if (uri.startsWith('http')) {
+        const response = await axios.get(uri, { responseType: 'stream', timeout: 10000 });
+        metadata = await mm.parseStream(response.data, { mimeType: response.headers['content-type'] });
+        response.data.destroy();
+    } else {
+        // Resolve local path if it's relative to our storage
+        let localPath = uri;
+        if (!fs.existsSync(localPath)) {
+            // Try relative to local dir
+            const localDir = path.join(__dirname, 'local');
+            const absoluteLocal = path.join(localDir, uri);
+            if (fs.existsSync(absoluteLocal)) localPath = absoluteLocal;
+        }
+
+        if (fs.existsSync(localPath)) {
+            metadata = await mm.parseFile(localPath);
+        } else {
+            throw new Error(`File not found or invalid URI: ${uri}`);
+        }
+    }
+    return metadata;
+}
+
 app.get('/api/track-metadata', async (req, res) => {
     const { uri } = req.query;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
@@ -1191,19 +1464,7 @@ app.get('/api/track-metadata', async (req, res) => {
     try {
         terminalLog(`[METADATA] Fetching for: ${uri}`);
 
-        let metadata;
-        if (uri.startsWith('http')) {
-            const response = await axios.get(uri, { responseType: 'stream', timeout: 10000 });
-            // Only need the start of the file for metadata usually, but parseStream handles the stream
-            metadata = await mm.parseStream(response.data, { mimeType: response.headers['content-type'] });
-            // Close the stream once we have metadata to avoid downloading the whole file
-            response.data.destroy();
-        } else if (fs.existsSync(uri)) {
-            // Local filesystem path
-            metadata = await mm.parseFile(uri);
-        } else {
-            return res.status(400).json({ error: 'Invalid URI' });
-        }
+        const metadata = await getTrackMetadata(uri);
 
         // Flatten and simplify metadata for the client
         const result = {
