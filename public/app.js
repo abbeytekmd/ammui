@@ -908,7 +908,11 @@ function updateStatus(status) {
             }
             // Fetch artwork if track changed or query differs
             const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
-            if (query && query !== currentArtworkQuery) {
+            const safeUdn = selectedRendererUdn ? selectedRendererUdn.replace(/:/g, '-') : '';
+            const artContainer = safeUdn ? document.getElementById(`player-art-container-${safeUdn}`) : null;
+            const isArtVisible = artContainer && artContainer.classList.contains('visible');
+
+            if (query && (query !== currentArtworkQuery || !isArtVisible)) {
                 updatePlayerArtwork(currentTrack.artist, currentTrack.album);
             }
         } else if (nowPlayingLabel) {
@@ -930,12 +934,7 @@ async function updatePlayerArtwork(artist, album) {
     currentArtworkQuery = query;
 
     try {
-        const discogsToken = localStorage.getItem('discogsToken') || '';
-        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`, {
-            headers: {
-                'X-Discogs-Token': discogsToken
-            }
-        });
+        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`);
         if (res.ok) {
             const data = await res.json();
             currentArtworkUrl = data.url;
@@ -951,16 +950,32 @@ async function updatePlayerArtwork(artist, album) {
     }
 }
 
-function saveDiscogsToken() {
+async function saveDiscogsToken() {
     const tokenInput = document.getElementById('discogs-token-input');
     if (tokenInput) {
         const token = tokenInput.value.trim();
-        if (token) {
-            localStorage.setItem('discogsToken', token);
-            showToast('Discogs token saved', 'success', 2000);
-        } else {
-            localStorage.removeItem('discogsToken');
-            showToast('Discogs token removed', 'success', 2000);
+        // If it's the masked token, don't re-save it
+        if (token.includes('****')) return;
+
+        try {
+            const response = await fetch('/api/settings/discogs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token })
+            });
+
+            if (response.ok) {
+                if (token) {
+                    showToast('Discogs token saved to server', 'success', 2000);
+                } else {
+                    showToast('Discogs token removed from server', 'success', 2000);
+                }
+            } else {
+                throw new Error('Failed to save token');
+            }
+        } catch (err) {
+            console.error('Save settings error:', err);
+            showToast('Failed to save settings to server');
         }
     }
 }
@@ -972,8 +987,17 @@ function showPlayerArt(url) {
     const img = document.getElementById(`player-art-${safeUdn}`);
 
     if (container && img) {
+        console.log(`[ART] Loading artwork: ${url}`);
+        // Set onload before src to avoid missing cached loads
+        img.onload = () => {
+            console.log(`[ART] Loaded successfully: ${url}`);
+            container.classList.add('visible');
+        };
+        img.onerror = (err) => {
+            console.error(`[ART] Failed to load: ${url}`, err);
+            container.classList.remove('visible');
+        };
         img.src = url;
-        img.onload = () => container.classList.add('visible');
     }
 }
 
@@ -990,11 +1014,12 @@ function openArtModal(url) {
     const modal = document.getElementById('album-art-modal');
     const img = document.getElementById('modal-art-img');
     if (modal && img) {
+        console.log(`[ART] Opening modal for: ${url}`);
+        img.src = ''; // Clear previous
         img.src = url;
         modal.style.display = 'flex';
         modal.style.alignItems = 'center';
         modal.style.justifyContent = 'center';
-        // Force reflow for animation if we add any
     }
 }
 
@@ -1340,10 +1365,19 @@ function openManageModal() {
     manageModal.style.display = 'flex';
     renderManageDevices();
 
-    // Load saved Discogs token
+    // Load saved Discogs token status from server
     const tokenInput = document.getElementById('discogs-token-input');
     if (tokenInput) {
-        tokenInput.value = localStorage.getItem('discogsToken') || '';
+        fetch('/api/settings/discogs')
+            .then(res => res.json())
+            .then(data => {
+                if (data.hasToken) {
+                    tokenInput.value = data.maskedToken;
+                } else {
+                    tokenInput.value = '';
+                }
+            })
+            .catch(err => console.error('Failed to fetch settings:', err));
     }
 }
 
@@ -1838,6 +1872,23 @@ function updateHomeButtons() {
 
 // Initial fetch
 async function init() {
+    // Migrate Discogs token to server if it exists locally
+    const localToken = localStorage.getItem('discogsToken');
+    if (localToken) {
+        console.log('Migrating Discogs token to server...');
+        try {
+            await fetch('/api/settings/discogs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: localToken })
+            });
+            localStorage.removeItem('discogsToken');
+            console.log('Discogs token migrated and removed from localStorage');
+        } catch (e) {
+            console.error('Migration failed:', e);
+        }
+    }
+
     await fetchDevices();
 
     // Auto-select and fetch playlist if a renderer was previously selected
@@ -2543,3 +2594,30 @@ function showTrackInfoFromPlaylist(id) {
         openTrackInfoModal(item);
     }
 }
+
+// Idle Artwork Popup Logic
+let idleTimer = null;
+const IDLE_THRESHOLD = 60000; // 1 minute
+
+function resetIdleTimer() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(onIdle, IDLE_THRESHOLD);
+}
+
+function onIdle() {
+    const artModal = document.getElementById('album-art-modal');
+    const isShowingArt = artModal && artModal.style.display === 'flex';
+
+    if (!isShowingArt && currentTransportState === 'Playing' && currentArtworkUrl) {
+        console.log('[IDLE] User inactive for 30s and music playing. Showing artwork.');
+        openArtModal(currentArtworkUrl);
+    }
+}
+
+// Activity listeners
+['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'].forEach(event => {
+    window.addEventListener(event, resetIdleTimer, { passive: true });
+});
+
+// Initial start
+resetIdleTimer();

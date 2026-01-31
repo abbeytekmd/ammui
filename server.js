@@ -20,6 +20,7 @@ const hostIp = getLocalIp();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEVICES_FILE = path.join(__dirname, 'devices.json');
+const SETTINGS_FILE = path.join(__dirname, 'settings.json');
 
 const app = express();
 const port = 3000;
@@ -77,7 +78,30 @@ function saveDevices() {
     }
 }
 
+let settings = { discogsToken: '' };
+
+function loadSettings() {
+    try {
+        if (fs.existsSync(SETTINGS_FILE)) {
+            const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
+            settings = JSON.parse(data);
+            console.log('Loaded settings from storage.');
+        }
+    } catch (err) {
+        console.error('Failed to load settings:', err.message);
+    }
+}
+
+function saveSettings() {
+    try {
+        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+    } catch (err) {
+        console.error('Failed to save settings:', err.message);
+    }
+}
+
 loadDevices();
+loadSettings();
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 let ssdpRegistry = new Map(); // ip -> { services: Set, lastSeen: timestamp }
@@ -839,6 +863,22 @@ app.post('/api/devices/:udn/name', express.json(), (req, res) => {
     res.json({ success: true, customName: name });
 });
 
+app.get('/api/settings/discogs', (req, res) => {
+    // We only return whether it's set and a masked version for UI
+    const token = settings.discogsToken || '';
+    const hasToken = token.length > 0;
+    const maskedToken = hasToken ? token.substring(0, 4) + '****************' : '';
+    res.json({ hasToken, maskedToken });
+});
+
+app.post('/api/settings/discogs', express.json(), (req, res) => {
+    const { token } = req.body;
+    settings.discogsToken = token || '';
+    saveSettings();
+    console.log(`Discogs token ${token ? 'updated' : 'removed'} on server.`);
+    res.json({ success: true });
+});
+
 const upload = multer({ dest: 'uploads/' });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
@@ -1018,7 +1058,7 @@ app.get('/api/art/search', async (req, res) => {
     const { artist, album } = req.query;
     if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
 
-    const DISCOGS_TOKEN = req.headers['x-discogs-token'];
+    const DISCOGS_TOKEN = settings.discogsToken;
 
     try {
         const query = `${artist || ''} ${album || ''}`.trim();
@@ -1074,7 +1114,9 @@ app.get('/api/art/search', async (req, res) => {
 
                     if (bestMatch && bestMatch.cover_image) {
                         console.log(`[ART] SUCCESS: Found on Discogs: "${bestMatch.title}"`);
-                        return res.json({ url: bestMatch.cover_image, source: 'discogs' });
+                        // Use a proxy to avoid hotlinking/CORS issues on some mobile devices
+                        const proxyUrl = `/api/art/proxy?url=${encodeURIComponent(bestMatch.cover_image)}`;
+                        return res.json({ url: proxyUrl, source: 'discogs' });
                     }
                 }
                 console.log(`[ART] Discogs: No high-confidence matches found.`);
@@ -1090,6 +1132,37 @@ app.get('/api/art/search', async (req, res) => {
     } catch (err) {
         console.error('[ART] Search error:', err.message);
         res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/art/proxy', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'URL is required' });
+
+    try {
+        console.log(`[PROXY] Fetching: ${url}`);
+        const response = await axios.get(url, {
+            responseType: 'stream',
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'AMCUI/1.0',
+                'Accept': 'image/*'
+            }
+        });
+
+        // Copy over relevant headers
+        if (response.headers['content-type']) {
+            res.setHeader('Content-Type', response.headers['content-type']);
+        }
+        if (response.headers['content-length']) {
+            res.setHeader('Content-Length', response.headers['content-length']);
+        }
+        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for a year
+
+        response.data.pipe(res);
+    } catch (err) {
+        console.error('[PROXY] Error:', err.message);
+        res.status(500).json({ error: 'Failed to proxy image' });
     }
 });
 
