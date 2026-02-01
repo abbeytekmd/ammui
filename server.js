@@ -266,10 +266,10 @@ async function syncToS3() {
     }
 }
 
-// Hourly Sync
-setInterval(syncToS3, 3600000);
-// Run a check shortly after startup
-setTimeout(syncToS3, 10000);
+// Daily Sync (every 24 hours)
+setInterval(syncToS3, 86400000);
+// Run first sync after 24 hours
+setTimeout(syncToS3, 86400000);
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 let ssdpRegistry = new Map(); // ip -> { services: Set, lastSeen: timestamp }
@@ -625,6 +625,14 @@ app.get('/api/browse/:udn', async (req, res) => {
         .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
 
     if (!device) return res.status(404).json({ error: 'Device not found' });
+
+    if (device.loading) {
+        return res.status(503).json({ error: 'Device is still being discovered, please try again' });
+    }
+
+    if (!device.services || device.services.length === 0) {
+        return res.status(400).json({ error: 'Device has no services available. Try refreshing the device list.' });
+    }
 
     try {
         const server = new MediaServer(device);
@@ -1012,16 +1020,16 @@ app.post('/api/devices/:udn/toggle-disabled/:role', (req, res) => {
     res.json({ success: true, disabled: deviceRef[property] });
 });
 
-app.post('/api/devices/:udn/name', express.json(), (req, res) => {
+app.post('/api/devices/:udn/rename', express.json(), (req, res) => {
     const { udn } = req.params;
-    const { name } = req.body;
+    const { customName } = req.body;
 
     const toggledObjects = new Set();
     let found = false;
 
     for (const [key, device] of devices.entries()) {
         if (device.udn === udn && !toggledObjects.has(device)) {
-            device.customName = name;
+            device.customName = customName;
             toggledObjects.add(device);
             found = true;
         }
@@ -1030,7 +1038,7 @@ app.post('/api/devices/:udn/name', express.json(), (req, res) => {
     if (!found) return res.status(404).json({ error: 'Device not found' });
 
     saveDevices();
-    res.json({ success: true, customName: name });
+    res.json({ success: true, customName: customName });
 });
 
 app.get('/api/settings/discogs', (req, res) => {

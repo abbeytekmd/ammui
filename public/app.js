@@ -92,6 +92,7 @@ let isUserDraggingSlider = false;
 let currentExistingLetters = [];
 let currentArtworkQuery = '';
 let currentArtworkUrl = '';
+let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let browseScrollPositions = {}; // Store scroll position by folder ID
 
 function showToast(message, type = 'error', duration = 5000) {
@@ -200,6 +201,7 @@ async function selectDevice(udn) {
 
     currentArtworkQuery = '';
     currentArtworkUrl = '';
+    failedArtworkQueries.clear(); // Clear failed queries when switching devices
     hideAllPlayerArt();
     await fetchPlaylist(udn);
     await fetchVolume();
@@ -913,7 +915,8 @@ function updateStatus(status) {
             const artContainer = safeUdn ? document.getElementById(`player-art-container-${safeUdn}`) : null;
             const isArtVisible = artContainer && artContainer.classList.contains('visible');
 
-            if (query && (query !== currentArtworkQuery || !isArtVisible)) {
+            // Only fetch if query changed and hasn't failed before
+            if (query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) {
                 updatePlayerArtwork(currentTrack.artist, currentTrack.album);
             }
         } else if (nowPlayingLabel) {
@@ -941,11 +944,14 @@ async function updatePlayerArtwork(artist, album) {
             currentArtworkUrl = data.url;
             showPlayerArt(data.url);
         } else {
+            console.warn('[ART] No artwork found, will not retry this query');
+            failedArtworkQueries.add(query);
             currentArtworkUrl = '';
             hideAllPlayerArt();
         }
     } catch (e) {
         console.warn('[ART] Failed to fetch player artwork:', e);
+        failedArtworkQueries.add(query);
         currentArtworkUrl = '';
         hideAllPlayerArt();
     }
@@ -995,7 +1001,11 @@ function showPlayerArt(url) {
             container.classList.add('visible');
         };
         img.onerror = (err) => {
-            console.error(`[ART] Failed to load: ${url}`, err);
+            console.error(`[ART] Failed to load image: ${url}`, err);
+            // Mark this query as failed so we don't retry
+            if (currentArtworkQuery) {
+                failedArtworkQueries.add(currentArtworkQuery);
+            }
             container.classList.remove('visible');
         };
         img.src = url;
@@ -2324,6 +2334,76 @@ async function fetchServerLogs() {
     }
 }
 
+function getFriendlyServiceName(urn) {
+    // Map common UPnP/DLNA/OpenHome service URNs to friendly names
+    const serviceMap = {
+        // Generic/Root
+        'ssdp:all': 'All Services',
+        'upnp:rootdevice': 'Root Device',
+
+        // Media Server
+        'urn:schemas-upnp-org:device:MediaServer:1': 'Media Server',
+        'urn:schemas-upnp-org:device:MediaServer:2': 'Media Server v2',
+        'urn:schemas-upnp-org:service:ContentDirectory:1': 'Content Directory',
+        'urn:schemas-upnp-org:service:ContentDirectory:2': 'Content Directory v2',
+        'urn:schemas-upnp-org:service:ContentDirectory:3': 'Content Directory v3',
+        'urn:schemas-upnp-org:service:ConnectionManager:1': 'Connection Manager',
+        'urn:schemas-upnp-org:service:ConnectionManager:2': 'Connection Manager v2',
+
+        // Media Renderer
+        'urn:schemas-upnp-org:device:MediaRenderer:1': 'Media Renderer',
+        'urn:schemas-upnp-org:device:MediaRenderer:2': 'Media Renderer v2',
+        'urn:schemas-upnp-org:service:AVTransport:1': 'AV Transport',
+        'urn:schemas-upnp-org:service:AVTransport:2': 'AV Transport v2',
+        'urn:schemas-upnp-org:service:RenderingControl:1': 'Rendering Control',
+        'urn:schemas-upnp-org:service:RenderingControl:2': 'Rendering Control v2',
+
+        // OpenHome
+        'urn:av-openhome-org:service:Product:1': 'OpenHome Product',
+        'urn:av-openhome-org:service:Product:2': 'OpenHome Product v2',
+        'urn:av-openhome-org:service:Playlist:1': 'OpenHome Playlist',
+        'urn:av-openhome-org:service:Radio:1': 'OpenHome Radio',
+        'urn:av-openhome-org:service:Volume:1': 'OpenHome Volume',
+        'urn:av-openhome-org:service:Info:1': 'OpenHome Info',
+        'urn:av-openhome-org:service:Time:1': 'OpenHome Time',
+        'urn:av-openhome-org:service:Sender:1': 'OpenHome Sender',
+        'urn:av-openhome-org:service:Receiver:1': 'OpenHome Receiver',
+
+        // Linn/OpenHome devices
+        'urn:linn-co-uk:device:Source:1': 'Linn Source',
+        'urn:linn-co-uk:device:NetReceiver:1': 'Linn Network Receiver',
+
+        // Sonos
+        'urn:schemas-upnp-org:device:ZonePlayer:1': 'Sonos Zone Player',
+        'urn:schemas-sonos-com:service:Queue:1': 'Sonos Queue',
+        'urn:schemas-sonos-com:service:GroupManagement:1': 'Sonos Group Management',
+        'urn:schemas-sonos-com:service:AlarmClock:1': 'Sonos Alarm',
+        'urn:schemas-sonos-com:service:MusicServices:1': 'Sonos Music Services',
+
+        // Other common services
+        'urn:schemas-upnp-org:service:WANCommonInterfaceConfig:1': 'WAN Interface',
+        'urn:schemas-upnp-org:service:WANIPConnection:1': 'WAN IP Connection',
+        'urn:schemas-upnp-org:device:InternetGatewayDevice:1': 'Internet Gateway',
+        'urn:schemas-upnp-org:device:WANDevice:1': 'WAN Device',
+        'urn:schemas-upnp-org:device:WANConnectionDevice:1': 'WAN Connection Device',
+    };
+
+    // Return mapped name if found, otherwise try to extract a readable name from the URN
+    if (serviceMap[urn]) {
+        return serviceMap[urn];
+    }
+
+    // Try to extract meaningful parts from unknown URNs
+    // e.g., "urn:schemas-upnp-org:service:SomeService:1" -> "SomeService"
+    const match = urn.match(/:(service|device):([^:]+):/i);
+    if (match) {
+        return match[2].replace(/([A-Z])/g, ' $1').trim();
+    }
+
+    // Fallback: return the URN as-is
+    return urn;
+}
+
 function renderSSDPRegistry(ssdp) {
     const container = document.getElementById('ssdp-registry-container');
     if (!container) return;
@@ -2350,7 +2430,11 @@ function renderSSDPRegistry(ssdp) {
     ips.forEach(ip => {
         const entry = ssdp[ip];
         const services = entry.services || [];
-        const servicesHtml = services.map(s => `<span class="ssdp-service-tag">${s}</span>`).join('');
+        // Map services to friendly names for display, keep original for tooltip
+        const servicesHtml = services.map(s => {
+            const friendlyName = getFriendlyServiceName(s);
+            return `<span class="ssdp-service-tag" title="${s}">${friendlyName}</span>`;
+        }).join('');
         const tooltip = services.join('\n');
         html += `
             <tr>
