@@ -1305,6 +1305,49 @@ app.get('/api/art/search', async (req, res) => {
         const queryStr = `${artist || ''} ${album || ''}`.trim();
         const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
 
+        // Clean album name by removing edition info in brackets/parentheses
+        const cleanAlbumName = (albumName) => {
+            if (!albumName) return '';
+            // Remove content in brackets [], parentheses (), and common edition markers
+            return albumName
+                .replace(/\s*\[.*?\]\s*/g, ' ')  // Remove [anything]
+                .replace(/\s*\(.*?\)\s*/g, ' ')  // Remove (anything)
+                .replace(/\s*-\s*(Deluxe|Special|Limited|Remaster|Edition|Expanded|Anniversary).*$/i, '') // Remove edition suffixes
+                .replace(/\s+/g, ' ')  // Normalize whitespace
+                .trim();
+        };
+
+        // More aggressive cleaning for soundtracks and complex titles
+        const getAlbumVariations = (albumName) => {
+            if (!albumName) return [];
+
+            const variations = new Set();
+            variations.add(albumName); // Original
+
+            // Clean brackets/parens
+            const cleaned = cleanAlbumName(albumName);
+            if (cleaned) variations.add(cleaned);
+
+            // For soundtracks, try just the main title before the colon
+            if (albumName.includes(':')) {
+                const beforeColon = albumName.split(':')[0].trim();
+                variations.add(beforeColon);
+                variations.add(cleanAlbumName(beforeColon));
+            }
+
+            // Remove common soundtrack/compilation markers
+            const withoutMarkers = albumName
+                .replace(/\s*[:\-]\s*(Original|Motion Picture|Film|Movie)?\s*(Soundtrack|Score|OST).*$/i, '')
+                .replace(/\s*\&\s*additional\s+music.*$/i, '')
+                .replace(/\s*\[.*?\]\s*/g, ' ')
+                .replace(/\s*\(.*?\)\s*/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+            if (withoutMarkers) variations.add(withoutMarkers);
+
+            return Array.from(variations).filter(v => v && v.length > 0);
+        };
+
         const isFuzzyMatch = (s1, s2) => {
             const n1 = normalize(s1);
             const n2 = normalize(s2);
@@ -1324,60 +1367,85 @@ app.get('/api/art/search', async (req, res) => {
 
         // 1. Try Discogs
         if (DISCOGS_TOKEN) {
-            try {
-                console.log(`[ART] Querying Discogs for "${queryStr}"...`);
-                // Search without type restriction to include Master releases
-                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(album)}&token=${DISCOGS_TOKEN}`;
-                const discogsRes = await axios.get(discogsUrl, {
-                    timeout: 5000,
-                    headers: { 'User-Agent': 'AMCUI/1.0' }
-                });
+            // Prepare search variations
+            const albumVariations = getAlbumVariations(album);
 
-                if (discogsRes.data.results && discogsRes.data.results.length > 0) {
-                    console.log(`[ART] Discogs: Found ${discogsRes.data.results.length} potentials, scoring...`);
+            for (let attempt = 0; attempt < albumVariations.length; attempt++) {
+                const searchAlbum = albumVariations[attempt];
 
-                    const scoredResults = discogsRes.data.results.map(item => {
-                        let score = 0;
-                        const titleParts = item.title.split(' - ');
-                        const itemArtist = titleParts[0];
-                        const itemAlbum = titleParts[titleParts.length - 1];
+                try {
+                    console.log(`[ART] Discogs attempt ${attempt + 1}/${albumVariations.length}: "${artist}" - "${searchAlbum}"...`);
 
-                        const artistMatch = isFuzzyMatch(itemArtist, artist);
-                        const albumMatch = isFuzzyMatch(itemAlbum, album);
+                    // Search without type restriction to include Master releases
+                    const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+                    const discogsRes = await axios.get(discogsUrl, {
+                        timeout: 5000,
+                        headers: { 'User-Agent': 'AMCUI/1.0' }
+                    });
 
-                        if (!artistMatch || !albumMatch) return { item, score: -1 };
+                    if (discogsRes.data.results && discogsRes.data.results.length > 0) {
+                        console.log(`[ART] Discogs: Found ${discogsRes.data.results.length} potentials, scoring...`);
 
-                        // Exact matches (after normalization) get high priority
-                        if (normalize(itemArtist) === normalize(artist)) score += 20;
-                        if (normalize(itemAlbum) === normalize(album)) score += 20;
+                        const scoredResults = discogsRes.data.results.map(item => {
+                            let score = 0;
+                            const titleParts = item.title.split(' - ');
+                            const itemArtist = titleParts[0];
+                            const itemAlbum = titleParts[titleParts.length - 1];
 
-                        // Master releases are usually the most "popular/official" entry
-                        if (item.type === 'master') score += 50;
+                            const artistMatch = isFuzzyMatch(itemArtist, artist);
 
-                        // Prefer Albums over singles/EPs
-                        const format = (item.format || []).join(' ').toLowerCase();
-                        if (format.includes('album')) score += 15;
-                        if (format.includes('lp') || format.includes('vinyl')) score += 10;
-                        if (format.includes('cd')) score += 8;
+                            // Try matching against both original and cleaned album names
+                            const albumMatch = isFuzzyMatch(itemAlbum, album) ||
+                                isFuzzyMatch(itemAlbum, searchAlbum) ||
+                                isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
 
-                        // Penalize things that look like bootlegs or unofficial
-                        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+                            if (!artistMatch || !albumMatch) return { item, score: -1 };
 
-                        return { item, score };
-                    }).filter(r => r.score > 0)
-                        .sort((a, b) => b.score - a.score);
+                            // Exact matches (after normalization) get high priority
+                            if (normalize(itemArtist) === normalize(artist)) score += 20;
+                            if (normalize(itemAlbum) === normalize(album) ||
+                                normalize(itemAlbum) === normalize(searchAlbum) ||
+                                normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album))) {
+                                score += 20;
+                            }
 
-                    if (scoredResults.length > 0) {
-                        const bestMatch = scoredResults[0].item;
-                        console.log(`[ART] SUCCESS: Selected Discogs match (Score: ${scoredResults[0].score}): "${bestMatch.title}" (${bestMatch.type})`);
-                        const proxyUrl = `/api/art/proxy?url=${encodeURIComponent(bestMatch.cover_image)}`;
-                        return res.json({ url: proxyUrl, source: 'discogs' });
+                            // Master releases are usually the most "popular/official" entry
+                            if (item.type === 'master') score += 50;
+
+                            // Prefer Albums over singles/EPs
+                            const format = (item.format || []).join(' ').toLowerCase();
+                            if (format.includes('album')) score += 15;
+                            if (format.includes('lp') || format.includes('vinyl')) score += 10;
+                            if (format.includes('cd')) score += 8;
+
+                            // Penalize things that look like bootlegs or unofficial
+                            if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+
+                            return { item, score };
+                        }).filter(r => r.score > 0)
+                            .sort((a, b) => b.score - a.score);
+
+                        // Log all scored results for debugging
+                        if (scoredResults.length > 0) {
+                            console.log(`[ART] Discogs: ${scoredResults.length} matches after scoring:`);
+                            scoredResults.forEach((result, idx) => {
+                                console.log(`[ART]   ${idx + 1}. [Score: ${result.score}] "${result.item.title}" (${result.item.type}) - ${(result.item.format || []).join(', ')}`);
+                            });
+                        }
+
+                        if (scoredResults.length > 0) {
+                            const bestMatch = scoredResults[0].item;
+                            console.log(`[ART] SUCCESS: Selected Discogs match (Score: ${scoredResults[0].score}): "${bestMatch.title}" (${bestMatch.type})`);
+                            const proxyUrl = `/api/art/proxy?url=${encodeURIComponent(bestMatch.cover_image)}`;
+                            return res.json({ url: proxyUrl, source: 'discogs' });
+                        }
                     }
+                } catch (e) {
+                    console.warn(`[ART] Discogs search attempt ${attempt + 1} failed: ${e.message}`);
                 }
-                console.log(`[ART] Discogs: No high-confidence matches found.`);
-            } catch (e) {
-                console.warn(`[ART] Discogs search failed: ${e.message}`);
             }
+
+            console.log(`[ART] Discogs: No high-confidence matches found after ${albumVariations.length} attempts.`);
         } else {
             console.log(`[ART] Discogs: Skipped (No token provided).`);
         }
