@@ -851,6 +851,9 @@ function updateStatus(status) {
         currentTrackId = status.trackId;
         currentTransportState = status.transportState;
         renderPlaylist(currentPlaylistItems);
+
+        // Update modal track info if modal is open
+        updateModalTrackInfo();
     }
 
     // Handle Transport Status (Errors)
@@ -1024,10 +1027,35 @@ function openArtModal(url) {
     if (!url) return;
     const modal = document.getElementById('album-art-modal');
     const img = document.getElementById('modal-art-img');
+    const titleEl = document.getElementById('modal-track-title');
+    const artistEl = document.getElementById('modal-track-artist');
+    const albumEl = document.getElementById('modal-track-album');
+
     if (modal && img) {
         console.log(`[ART] Opening modal for: ${url}`);
         img.src = ''; // Clear previous
         img.src = url;
+
+        // Get current track info
+        if (currentTrackId != null) {
+            const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+            if (currentTrack) {
+                if (titleEl) titleEl.textContent = currentTrack.title || 'Unknown Title';
+                if (artistEl) artistEl.textContent = currentTrack.artist || 'Unknown Artist';
+                if (albumEl) albumEl.textContent = currentTrack.album || '';
+            } else {
+                // Clear track info if no track found
+                if (titleEl) titleEl.textContent = '';
+                if (artistEl) artistEl.textContent = '';
+                if (albumEl) albumEl.textContent = '';
+            }
+        } else {
+            // Clear track info if nothing is playing
+            if (titleEl) titleEl.textContent = '';
+            if (artistEl) artistEl.textContent = '';
+            if (albumEl) albumEl.textContent = '';
+        }
+
         modal.style.display = 'flex';
         modal.style.alignItems = 'center';
         modal.style.justifyContent = 'center';
@@ -1040,6 +1068,37 @@ function closeArtModal() {
         modal.style.display = 'none';
     }
 }
+
+function updateModalTrackInfo() {
+    const modal = document.getElementById('album-art-modal');
+    // Only update if modal is currently visible
+    if (!modal || modal.style.display !== 'flex') return;
+
+    const titleEl = document.getElementById('modal-track-title');
+    const artistEl = document.getElementById('modal-track-artist');
+    const albumEl = document.getElementById('modal-track-album');
+
+    // Get current track info
+    if (currentTrackId != null) {
+        const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+        if (currentTrack) {
+            if (titleEl) titleEl.textContent = currentTrack.title || 'Unknown Title';
+            if (artistEl) artistEl.textContent = currentTrack.artist || 'Unknown Artist';
+            if (albumEl) albumEl.textContent = currentTrack.album || '';
+        } else {
+            // Clear track info if no track found
+            if (titleEl) titleEl.textContent = '';
+            if (artistEl) artistEl.textContent = '';
+            if (albumEl) albumEl.textContent = '';
+        }
+    } else {
+        // Clear track info if nothing is playing
+        if (titleEl) titleEl.textContent = '';
+        if (artistEl) artistEl.textContent = '';
+        if (albumEl) albumEl.textContent = '';
+    }
+}
+
 
 // Helper to convert HH:MM:SS to seconds on the client side
 function formatToSeconds(time) {
