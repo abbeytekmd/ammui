@@ -2786,13 +2786,25 @@ function closeAboutModal() {
 }
 
 // Global modal click-outside-to-close handler
-window.addEventListener('click', (event) => {
-    if (event.target === serverModal) closeServerModal();
-    if (event.target === rendererModal) closeRendererModal();
-    if (event.target === manageModal) closeManageModal();
-    if (event.target === aboutModal) closeAboutModal();
-    if (event.target === document.getElementById('track-info-modal')) document.getElementById('track-info-modal').style.display = 'none';
-    if (event.target === document.getElementById('sonos-eq-modal')) closeSonosEqModal();
+// Track where mousedown occurred to prevent accidental closes
+let mouseDownTarget = null;
+
+window.addEventListener('mousedown', (event) => {
+    mouseDownTarget = event.target;
+});
+
+window.addEventListener('mouseup', (event) => {
+    // Only close if both mousedown and mouseup happened on the same modal overlay
+    if (mouseDownTarget === event.target) {
+        if (event.target === serverModal) closeServerModal();
+        if (event.target === rendererModal) closeRendererModal();
+        // Settings modal (manageModal) removed - only closes via close button
+        if (event.target === aboutModal) closeAboutModal();
+        if (event.target === document.getElementById('track-info-modal')) document.getElementById('track-info-modal').style.display = 'none';
+        if (event.target === document.getElementById('sonos-eq-modal')) closeSonosEqModal();
+        if (event.target === document.getElementById('album-art-modal')) closeArtModal();
+    }
+    mouseDownTarget = null;
 });
 
 // Settings Modal Functions added by assistant
