@@ -930,6 +930,22 @@ function updateStatus(status) {
         currentArtworkQuery = '';
         currentArtworkUrl = '';
         hideAllPlayerArt();
+
+        // Close album art modal when playback stops (playlist finishes)
+        const artModal = document.getElementById('album-art-modal');
+        if (artModal && artModal.style.display === 'flex') {
+            console.log('[ART] Closing modal - no track playing');
+            closeArtModal();
+        }
+    }
+
+    // Also close modal if transport state is not Playing
+    if (currentTransportState !== 'Playing' && currentTransportState !== 'TRANSITIONING') {
+        const artModal = document.getElementById('album-art-modal');
+        if (artModal && artModal.style.display === 'flex') {
+            console.log(`[ART] Closing modal - transport state is ${currentTransportState} (not Playing)`);
+            closeArtModal();
+        }
     }
 
     updatePositionUI();
