@@ -751,7 +751,7 @@ function renderBrowser(items) {
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
                 isImage ?
                     `openArtModal('${esc(item.uri)}', '${esc(item.title)}')` :
-                    `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">>
+                    `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
@@ -2642,7 +2642,7 @@ async function openTrackInfoModal(trackData) {
 
     function formatValue(key, value) {
         if (value === undefined || value === null || value === '') return '-';
-        if (key.includes('bitrate') && typeof value === 'number') {
+        if (key.includes('bitrate') && typeof value === 'number' && value > 0) {
             return (value / 1000).toFixed(0) + ' kbps';
         }
         if (key.includes('sampleRate') && typeof value === 'number') {
@@ -2653,10 +2653,42 @@ async function openTrackInfoModal(trackData) {
             const secs = Math.floor(value % 60);
             return `${mins}:${secs.toString().padStart(2, '0')}`;
         }
+        if ((key === 'format.size' || key === 'size') && typeof value === 'number') {
+            if (value >= 1048576) return (value / 1048576).toFixed(2) + ' MB';
+            if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
+            return value + ' B';
+        }
+        if ((key === 'format.width' || key === 'format.height' || key === 'width' || key === 'height') && (typeof value === 'number' || (typeof value === 'string' && value !== ''))) {
+            return value + ' px';
+        }
         return value;
     }
 
-    const fieldGroups = [
+    const isImage = (trackData.class && trackData.class.includes('imageItem')) ||
+        (trackData.protocolInfo && trackData.protocolInfo.includes('image/')) ||
+        (embeddedMeta && embeddedMeta.format && embeddedMeta.format.isImage);
+
+    // If we have resolution string from server, parse it for display
+    if (trackData.resolution && typeof trackData.resolution === 'string') {
+        const parts = trackData.resolution.split('x');
+        if (parts.length === 2) {
+            trackData.width = parts[0];
+            trackData.height = parts[1];
+        }
+    }
+
+    const fieldGroups = isImage ? [
+        {
+            title: 'Image Information',
+            fields: [
+                { label: 'Name', sKey: 'title', eKey: 'common.title' },
+                { label: 'Width', sKey: 'width', eKey: 'format.width' },
+                { label: 'Height', sKey: 'height', eKey: 'format.height' },
+                { label: 'Format', sKey: '', eKey: 'format.container' },
+                { label: 'File Size', sKey: 'size', eKey: 'format.size' }
+            ]
+        }
+    ] : [
         {
             title: 'Primary Metadata',
             fields: [

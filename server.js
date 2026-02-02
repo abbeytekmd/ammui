@@ -12,6 +12,7 @@ import fs from 'fs';
 import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
+import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
@@ -1538,11 +1539,33 @@ process.on('SIGTERM', () => {
 
 async function getTrackMetadata(uri) {
     if (!uri) throw new Error('URI is required');
+    const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(uri);
     let metadata;
+
     if (uri.startsWith('http')) {
-        const response = await axios.get(uri, { responseType: 'stream', timeout: 10000 });
-        metadata = await mm.parseStream(response.data, { mimeType: response.headers['content-type'] });
-        response.data.destroy();
+        const response = await axios.get(uri, { responseType: 'arraybuffer', timeout: 10000 });
+        const buffer = Buffer.from(response.data);
+        const contentType = response.headers['content-type'];
+
+        if (isImage || (contentType && contentType.startsWith('image/'))) {
+            try {
+                const dimensions = sizeOf(buffer);
+                metadata = {
+                    common: { title: path.basename(uri) },
+                    format: {
+                        container: dimensions.type,
+                        width: dimensions.width,
+                        height: dimensions.height,
+                        isImage: true
+                    }
+                };
+            } catch (e) {
+                console.warn(`[METADATA] Failed to get image dimensions for ${uri}: ${e.message}`);
+                metadata = { common: {}, format: {} };
+            }
+        } else {
+            metadata = await mm.parseBuffer(buffer, { mimeType: contentType });
+        }
     } else {
         // Resolve local path if it's relative to our storage
         let localPath = uri;
@@ -1554,7 +1577,26 @@ async function getTrackMetadata(uri) {
         }
 
         if (fs.existsSync(localPath)) {
-            metadata = await mm.parseFile(localPath);
+            if (isImage) {
+                try {
+                    const dimensions = sizeOf(localPath);
+                    const stats = fs.statSync(localPath);
+                    metadata = {
+                        common: { title: path.basename(localPath) },
+                        format: {
+                            container: dimensions.type,
+                            width: dimensions.width,
+                            height: dimensions.height,
+                            size: stats.size,
+                            isImage: true
+                        }
+                    };
+                } catch (e) {
+                    metadata = { common: {}, format: {} };
+                }
+            } else {
+                metadata = await mm.parseFile(localPath);
+            }
         } else {
             throw new Error(`File not found or invalid URI: ${uri}`);
         }
@@ -1581,7 +1623,11 @@ app.get('/api/track-metadata', async (req, res) => {
                 bitsPerSample: metadata.format.bitsPerSample,
                 numberOfChannels: metadata.format.numberOfChannels,
                 codec: metadata.format.codec,
-                container: metadata.format.container
+                container: metadata.format.container,
+                width: metadata.format.width,
+                height: metadata.format.height,
+                size: metadata.format.size,
+                isImage: metadata.format.isImage
             }
         };
 
