@@ -3326,6 +3326,11 @@ async function startSlideshow() {
 
                     setTimeout(() => {
                         img.src = data.url;
+
+                        // Modern browsers automatically handle EXIF orientation. 
+                        // Manual rotation causes "double rotation".
+                        img.style.transform = '';
+
                         if (info) {
                             // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
                             // If just Year is desired, we can parse it.
@@ -3346,7 +3351,13 @@ async function startSlideshow() {
                                     dateStr = data.date;
                                 }
                             }
-                            info.textContent = dateStr;
+
+                            // Combine Date and Location
+                            let displayHtml = `<div class="ss-date">${dateStr}</div>`;
+                            if (data.location) {
+                                displayHtml += `<div class="ss-location">${data.location}</div>`;
+                            }
+                            info.innerHTML = displayHtml;
                         }
 
                         img.onload = () => {

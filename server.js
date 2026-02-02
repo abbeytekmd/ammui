@@ -18,6 +18,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import crypto from 'crypto';
+import exifParser from 'exif-parser';
 
 
 const { Client } = ssdp;
@@ -1507,17 +1508,44 @@ app.get('/api/slideshow/random', async (req, res) => {
         if (foundImage) {
             let imgUrl = foundImage.uri || foundImage.res;
             let date = foundImage.year || foundImage.date || foundImage['dc:date'] || '';
+            let orientation = 1;
 
-            // If it's a relative path from our own server (unlikely for DLNA but possible), fix it
-            if (device.udn === SERVER_UDN && imgUrl && !imgUrl.startsWith('http')) {
-                // It might be a file path, we need to convert to URL if possible or just pass it
+            // Try to detect orientation via EXIF for better display
+            try {
+                console.log('[SCREENSAVER] Checking EXIF for:', imgUrl);
+                // Fetch first 64KB to read EXIF
+                const response = await axios({
+                    method: 'get',
+                    url: imgUrl,
+                    responseType: 'arraybuffer',
+                    headers: { 'Range': 'bytes=0-65535' },
+                    timeout: 2000
+                });
+
+                if (response.data) {
+                    const parser = exifParser.create(response.data);
+                    const result = parser.parse();
+                    if (result.tags && result.tags.Orientation) {
+                        orientation = result.tags.Orientation;
+                    }
+                    // Also try to get date from EXIF if missing
+                    if (!date && result.tags && result.tags.DateTimeOriginal) {
+                        // Date often timestamp or string
+                        date = new Date(result.tags.DateTimeOriginal * 1000).toISOString();
+                    }
+                    console.log(`[SCREENSAVER] EXIF Parsed. Orientation: ${orientation}, Date: ${date || 'None'}`);
+                }
+            } catch (e) {
+                // Ignore range request errors or timeouts, just show image as-is
+                console.warn('[SCREENSAVER] Failed to check orientation:', e.message);
             }
 
             res.json({
                 url: imgUrl,
                 title: foundImage.title,
                 date: date,
-                location: foundImage.location || ''
+                orientation: orientation,
+                location: foundImage._path || foundImage.location || ''
             });
         } else {
             res.status(404).json({ error: 'No images found' });
