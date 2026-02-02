@@ -734,6 +734,10 @@ function renderBrowser(items) {
         const isImage = (item.class && item.class.includes('imageItem')) ||
             (item.protocolInfo && item.protocolInfo.includes('image/'));
 
+        // Check if this is a video item
+        const isVideo = (item.class && item.class.includes('videoItem')) ||
+            (item.protocolInfo && item.protocolInfo.includes('video/'));
+
         const icon = isContainer ? `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -743,6 +747,13 @@ function renderBrowser(items) {
                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                 <circle cx="8.5" cy="8.5" r="1.5"></circle>
                 <path d="M21 15l-5-5L5 21"></path>
+            </svg>
+        ` : isVideo ? `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <path d="M8 21h8"></path>
+                <path d="M12 17v4"></path>
+                <path d="M10 8l5 3-5 3V8z"></path>
             </svg>
         ` : `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -760,7 +771,9 @@ function renderBrowser(items) {
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
                 isImage ?
                     `openArtModal('${esc(item.uri)}', '${esc(item.title)}')` :
-                    `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
+                    isVideo ?
+                        `openVideoModal('${esc(item.uri)}', '${esc(item.title)}')` :
+                        `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
@@ -1115,6 +1128,38 @@ function closeArtModal() {
     const modal = document.getElementById('album-art-modal');
     if (modal) {
         modal.style.display = 'none';
+    }
+}
+
+function openVideoModal(url, title = 'Video Player') {
+    if (!url) return;
+    const modal = document.getElementById('video-modal');
+    const video = document.getElementById('video-player');
+    const titleEl = document.getElementById('video-modal-title');
+
+    if (modal && video) {
+        console.log(`[VIDEO] Playing: ${url}`);
+        if (titleEl) titleEl.textContent = title;
+
+        // If it's a local AMMUI server link, it should work directly.
+        // If it's a remote DLNA link, we might need a proxy for CORS, but <video> usually handles direct links okay if servers allow it.
+        video.src = url;
+        modal.style.display = 'flex';
+        video.play().catch(err => {
+            console.warn('[VIDEO] Auto-play failed:', err);
+        });
+    }
+}
+
+function closeVideoModal() {
+    const modal = document.getElementById('video-modal');
+    const video = document.getElementById('video-player');
+    if (modal) {
+        modal.style.display = 'none';
+        if (video) {
+            video.pause();
+            video.src = "";
+        }
     }
 }
 

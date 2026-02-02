@@ -452,6 +452,21 @@
         </div>
     </div>
 
+    <!-- Video Player Modal -->
+    <div id="video-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content video-modal-content">
+            <div class="modal-header">
+                <h2 id="video-modal-title">Video Player</h2>
+                <button class="btn-close" onclick="closeVideoModal()">✕</button>
+            </div>
+            <div class="video-container">
+                <video id="video-player" controls preload="auto" playsinline>
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+        </div>
+    </div>
+
     <!-- Console Log Modal -->
     <div id="console-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content console-modal-content">
