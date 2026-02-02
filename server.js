@@ -16,10 +16,12 @@ import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
+import VirtualRenderer from './lib/virtual-renderer.js';
 
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
 const hostIp = getLocalIp();
+export const BROWSER_PLAYER_UDN = 'uuid:ammui-browser-player';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -168,6 +170,22 @@ setupLocalDlna(app, port, settings.deviceName);
     devices.set(localLocation, localServer);
     devices.set(SERVER_UDN, localServer);
     console.log(`[DEBUG] Manually injected local server at ${localLocation}`);
+
+    // Inject Browser Player
+    const browserPlayer = {
+        udn: BROWSER_PLAYER_UDN,
+        location: `http://${hostIp}:${port}/virtual/browser-player`,
+        friendlyName: 'AMMUI (Local Browser)',
+        type: 'renderer',
+        isServer: false,
+        isRenderer: true,
+        iconUrl: '/amm-icon.png',
+        lastSeen: Date.now(),
+        isVirtual: true
+    };
+    devices.set(BROWSER_PLAYER_UDN, browserPlayer);
+    devices.set(browserPlayer.location, browserPlayer);
+    console.log(`[DEBUG] Manually injected virtual browser player`);
 })();
 
 async function syncToS3() {
@@ -603,6 +621,13 @@ SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
 
 // Helper function to get or create a cached renderer
 function getRenderer(device) {
+    if (device.udn === BROWSER_PLAYER_UDN) {
+        if (!rendererCache.has(BROWSER_PLAYER_UDN)) {
+            rendererCache.set(BROWSER_PLAYER_UDN, new VirtualRenderer(device));
+        }
+        return rendererCache.get(BROWSER_PLAYER_UDN);
+    }
+
     if (!device.udn) {
         // If no UDN, create a new instance (shouldn't happen normally)
         return new Renderer(device);

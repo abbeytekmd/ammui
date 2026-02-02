@@ -54,6 +54,7 @@
 
 // Constants
 const LOCAL_SERVER_UDN = 'uuid:ammui-local-media-server';
+const BROWSER_PLAYER_UDN = 'uuid:ammui-browser-player';
 
 const deviceListElement = document.getElementById('device-list');
 const serverListElement = document.getElementById('server-list');
@@ -97,6 +98,7 @@ let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 3;
 let isRendererOffline = false;
+let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -589,6 +591,16 @@ async function playAll() {
 async function transportAction(action) {
     if (!selectedRendererUdn) return;
 
+    // Optimistic UI Update
+    lastTransportActionTime = Date.now();
+    const oldState = currentTransportState;
+    if (action === 'play') currentTransportState = 'Playing';
+    else if (action === 'pause') currentTransportState = 'Paused';
+    else if (action === 'stop') currentTransportState = 'Stopped';
+
+    updateTransportControls();
+    updateDocumentTitle();
+
     try {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/${action}`, {
             method: 'POST'
@@ -599,10 +611,14 @@ async function transportAction(action) {
             throw new Error(errData.error || `Failed to ${action}`);
         }
 
-        // Instant update of status and playlist to reflect the new state
+        // Fetch status soon after to confirm
+        setTimeout(fetchStatus, 500);
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error(`${action} error:`, err);
+        currentTransportState = oldState;
+        updateTransportControls();
+        updateDocumentTitle();
         showToast(`Playback Error: ${err.message}`);
     }
 }
@@ -610,13 +626,22 @@ async function transportAction(action) {
 async function playPlaylistItem(id) {
     if (!selectedRendererUdn) return;
 
-    try {
-        // If clicking the current track and it's paused, just resume
-        if (currentTrackId != null && id != null && currentTrackId == id && currentTransportState === 'Paused') {
-            await transportAction('play'); // transportAction now triggers a refresh
-            return;
-        }
+    // If clicking the current track and it's paused, just resume
+    if (currentTrackId != null && id != null && currentTrackId == id && currentTransportState === 'Paused') {
+        await transportAction('play'); // transportAction now triggers a refresh
+        return;
+    }
 
+    // Optimistic UI Update
+    lastTransportActionTime = Date.now();
+    const oldTrackId = currentTrackId;
+    const oldState = currentTransportState;
+    currentTrackId = id;
+    currentTransportState = 'Playing';
+    updateTransportControls();
+    updateDocumentTitle();
+
+    try {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/seek/${id}`, {
             method: 'POST'
         });
@@ -627,9 +652,14 @@ async function playPlaylistItem(id) {
         }
 
         // Force a full playlist and status refresh to show playing icon immediately
+        setTimeout(fetchStatus, 500);
         await fetchPlaylist(selectedRendererUdn);
     } catch (err) {
         console.error('Play track error:', err);
+        currentTrackId = oldTrackId;
+        currentTransportState = oldState;
+        updateTransportControls();
+        updateDocumentTitle();
         showToast(`Failed to play track: ${err.message}`);
     }
 }
@@ -772,7 +802,7 @@ function renderBrowser(items) {
                 isImage ?
                     `openArtModal('${esc(item.uri)}', '${esc(item.title)}')` :
                     isVideo ?
-                        `openVideoModal('${esc(item.uri)}', '${esc(item.title)}')` :
+                        `handleVideoClick('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', ${index})` :
                         `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
@@ -897,10 +927,13 @@ async function fetchStatus() {
 }
 
 function updateStatus(status) {
+    const now = Date.now();
+    const isLocked = (now - lastTransportActionTime) < 3000; // 3 second lockout
+
     const trackChanged = status.trackId !== currentTrackId;
     const transportChanged = status.transportState !== currentTransportState;
 
-    if (trackChanged || transportChanged) {
+    if (!isLocked && (trackChanged || transportChanged)) {
         currentTrackId = status.trackId;
         currentTransportState = status.transportState;
         renderPlaylist(currentPlaylistItems);
@@ -986,7 +1019,95 @@ function updateStatus(status) {
     }
 
     updatePositionUI();
+    syncLocalPlayback(status);
 }
+
+function syncLocalPlayback(status) {
+    if (selectedRendererUdn !== BROWSER_PLAYER_UDN) {
+        return;
+    }
+
+    const video = document.getElementById('video-player');
+    if (!video) return;
+
+    if (status.trackId == null) {
+        if (video.src && video.getAttribute('data-is-local-player') === 'true') {
+            video.pause();
+            video.src = "";
+            video.removeAttribute('data-track-id');
+            video.removeAttribute('data-is-local-player');
+        }
+        return;
+    }
+
+    const currentTrack = currentPlaylistItems.find(item => item.id == status.trackId);
+    if (!currentTrack) return;
+
+    const isVideo = (currentTrack.protocolInfo && currentTrack.protocolInfo.includes('video/')) ||
+        (currentTrack.class && currentTrack.class.includes('videoItem'));
+
+    // Check if we need to load or change track
+    if (video.getAttribute('data-track-id') != status.trackId) {
+        console.log(`[LOCAL PLAYER] Loading: ${currentTrack.title}`);
+        video.src = currentTrack.uri;
+        video.setAttribute('data-track-id', status.trackId);
+        video.setAttribute('data-is-local-player', 'true');
+
+        if (isVideo) {
+            document.getElementById('video-modal').style.display = 'flex';
+            document.getElementById('video-modal-title').textContent = currentTrack.title;
+        }
+
+        if (status.transportState === 'Playing') {
+            video.play().catch(e => console.warn("Local autoplay failed:", e));
+        }
+    }
+
+    // Sync state
+    if (status.transportState === 'Playing') {
+        if (video.paused) video.play().catch(e => console.warn("Local play failed:", e));
+
+        // Sync time if significantly off (Master-Slave logic: Server is Master for Slaves)
+        const timeDiff = Math.abs(video.currentTime - (status.relTime || 0));
+        if (timeDiff > 5) {
+            video.currentTime = status.relTime || 0;
+        }
+    } else if (status.transportState === 'Paused') {
+        if (!video.paused) video.pause();
+    } else if (status.transportState === 'Stopped') {
+        if (video.src && video.getAttribute('data-is-local-player') === 'true') {
+            video.pause();
+            video.src = "";
+            video.removeAttribute('data-track-id');
+            video.removeAttribute('data-is-local-player');
+            document.getElementById('video-modal').style.display = 'none';
+        }
+    }
+}
+
+// Local player event listeners
+document.addEventListener('DOMContentLoaded', () => {
+    const video = document.getElementById('video-player');
+    if (video) {
+        video.addEventListener('timeupdate', () => {
+            if (selectedRendererUdn === BROWSER_PLAYER_UDN && currentTransportState === 'Playing') {
+                const now = Date.now();
+                if (!window._lastLocalTimeUpdate || now - window._lastLocalTimeUpdate > 2000) {
+                    window._lastLocalTimeUpdate = now;
+                    const pos = Math.floor(video.currentTime);
+                    fetch(`/api/playlist/${encodeURIComponent(BROWSER_PLAYER_UDN)}/seek-time/${pos}`, { method: 'POST' });
+                }
+            }
+        });
+
+        video.addEventListener('ended', () => {
+            if (selectedRendererUdn === BROWSER_PLAYER_UDN) {
+                console.log("[LOCAL PLAYER] Track ended, jumping to next...");
+                transportAction('next');
+            }
+        });
+    }
+});
 
 async function updatePlayerArtwork(artist, album) {
     if (!artist && !album) return;
@@ -1138,16 +1259,61 @@ function openVideoModal(url, title = 'Video Player') {
     const titleEl = document.getElementById('video-modal-title');
 
     if (modal && video) {
-        console.log(`[VIDEO] Playing: ${url}`);
+        console.log(`[VIDEO] Playing locally: ${url}`);
         if (titleEl) titleEl.textContent = title;
 
-        // If it's a local AMMUI server link, it should work directly.
-        // If it's a remote DLNA link, we might need a proxy for CORS, but <video> usually handles direct links okay if servers allow it.
         video.src = url;
         modal.style.display = 'flex';
         video.play().catch(err => {
             console.warn('[VIDEO] Auto-play failed:', err);
         });
+    }
+}
+
+async function handleVideoClick(uri, title, artist, album, duration, protocolInfo, index) {
+    if (!selectedRendererUdn) {
+        console.log(`[VIDEO] No player selected. Playing locally.`);
+        openVideoModal(uri, title);
+        return;
+    }
+
+    try {
+        console.log(`[VIDEO] Attempting to cast to player...`);
+        // We try to play it on the remote device first.
+        // We do a manual clear + insert sequence so we can swallow errors specifically for the cast attempt
+
+        await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/clear`, { method: 'POST' });
+        const insRes = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo })
+        });
+
+        if (!insRes.ok) throw new Error('Player insertion failed');
+        const insData = await insRes.json();
+
+        // Final play command
+        const playRes = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/seek/${insData.newId}`, {
+            method: 'POST'
+        });
+
+        if (!playRes.ok) throw new Error('Player play command failed');
+
+        console.log(`[VIDEO] Cast successful.`);
+        // Optimistic UI Update
+        lastTransportActionTime = Date.now();
+        currentTrackId = insData.newId;
+        currentTransportState = 'Playing';
+        updateTransportControls();
+        updateDocumentTitle();
+
+        showToast(`Casting video: ${title}`, 'success', 3000);
+        setTimeout(fetchStatus, 800);
+        await fetchPlaylist(selectedRendererUdn);
+    } catch (err) {
+        console.warn(`[VIDEO] Casting failed or not supported by player: ${err.message}. Falling back to local playback.`);
+        // Fallback to local UI player
+        openVideoModal(uri, title);
     }
 }
 
@@ -1808,6 +1974,14 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
 
     if (device.iconUrl) {
         icon = `<img src="${device.iconUrl}" class="device-card-img" alt="">`;
+    } else if (device.udn === BROWSER_PLAYER_UDN) {
+        icon = `
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+        `;
     } else if (asServer) {
         icon = `
             <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
