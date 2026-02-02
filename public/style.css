@@ -3272,3 +3272,47 @@ input:checked+.slider:before {
     font-size: 0.75rem;
     opacity: 0.6;
 }
+
+/* Screensaver */
+.screensaver-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    z-index: 9999;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 1s ease-in-out;
+    pointer-events: none;
+}
+
+.screensaver-overlay.active {
+    display: flex;
+    opacity: 1;
+    pointer-events: auto;
+    cursor: none;
+}
+
+.screensaver-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    transition: opacity 1s ease-in-out;
+}
+
+.screensaver-info {
+    position: absolute;
+    bottom: 20px;
+    right: 30px;
+    color: rgba(255, 255, 255, 0.7);
+    font-family: 'Inter', sans-serif;
+    font-size: 18px;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+    transition: opacity 1s ease-in-out;
+    z-index: 10001;
+    /* Ensure on top of image */
+}

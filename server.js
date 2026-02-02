@@ -17,6 +17,8 @@ import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
+import crypto from 'crypto';
+
 
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
@@ -94,7 +96,12 @@ let settings = {
         bucket: '',
         enabled: false
     },
-    deviceName: 'AMMUI'
+    deviceName: 'AMMUI',
+    screensaver: {
+        serverUdn: null,
+        objectId: null,
+        pathName: 'Not Set'
+    }
 };
 
 let s3SyncStatus = {
@@ -115,7 +122,10 @@ function loadSettings() {
                 ...settings,
                 ...loaded,
                 s3: { ...settings.s3, ...(loaded.s3 || {}) },
-                deviceName: loaded.deviceName || settings.deviceName
+                ...loaded,
+                s3: { ...settings.s3, ...(loaded.s3 || {}) },
+                deviceName: loaded.deviceName || settings.deviceName,
+                screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) }
             };
             console.log('Loaded settings from storage.');
         }
@@ -1349,6 +1359,172 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         res.json({ success: true, downloadCount, failCount });
     } catch (err) {
         console.error('Folder download error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Screensaver Routes
+
+// Screensaver Cache
+let screensaverCache = {
+    udn: null,
+    objectId: null,
+    images: [],
+    status: 'idle', // idle, loading, ready
+    timestamp: 0
+};
+
+async function refreshScreensaverCache(device, objectId) {
+    if (screensaverCache.status === 'loading') return;
+
+    console.log('[SCREENSAVER] Starting background recursive scan for', objectId);
+    screensaverCache.udn = device.udn;
+    screensaverCache.objectId = objectId;
+    screensaverCache.status = 'loading';
+    screensaverCache.images = [];
+
+    try {
+        const mediaServer = new MediaServer(device);
+        // Use browseRecursive from MediaServer class
+        const allItems = await mediaServer.browseRecursive(objectId);
+
+        // Filter for images
+        const images = allItems.filter(i => i.type === 'item' && (
+            (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
+            (i.protocolInfo && i.protocolInfo.includes('image/')) ||
+            (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+        ));
+
+        screensaverCache.images = images;
+        screensaverCache.status = 'ready';
+        screensaverCache.timestamp = Date.now();
+        console.log(`[SCREENSAVER] Scan complete. Found ${images.length} images.`);
+    } catch (err) {
+        console.error('[SCREENSAVER] Scan failed:', err);
+        screensaverCache.status = 'error';
+    }
+}
+
+app.post('/api/settings/screensaver', (req, res) => {
+    const { serverUdn, objectId, pathName } = req.body;
+    settings.screensaver = { serverUdn, objectId, pathName };
+    saveSettings();
+
+    // Reset cache on new setting
+    screensaverCache = { udn: null, objectId: null, images: [], status: 'idle', timestamp: 0 };
+
+    console.log('[SCREENSAVER] Updated settings:', settings.screensaver);
+    res.json({ success: true });
+});
+
+app.get('/api/settings/screensaver', (req, res) => {
+    res.json(settings.screensaver);
+});
+
+app.get('/api/slideshow/random', async (req, res) => {
+    if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
+        return res.status(400).json({ error: 'Screensaver not configured' });
+    }
+
+    const { serverUdn, objectId } = settings.screensaver;
+
+    // Find the device
+    let device = devices.get(serverUdn);
+    if (!device) {
+        for (const d of devices.values()) {
+            if (d.udn === serverUdn) {
+                device = d;
+                break;
+            }
+        }
+    }
+
+    if (!device) {
+        return res.status(404).json({ error: 'Screensaver source device not found' });
+    }
+
+    try {
+        let foundImage = null;
+
+        // CHECK CACHE STRATEGY
+        const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
+
+        // If cache is ready and has images, use it!
+        if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
+            const index = Math.floor(Math.random() * screensaverCache.images.length);
+            foundImage = screensaverCache.images[index];
+            // console.log('[SCREENSAVER] Served from cache');
+        } else {
+            // Trigger build if needed
+            if (!cacheValid || screensaverCache.status === 'idle') {
+                refreshScreensaverCache(device, objectId); // Background, do not await
+            }
+
+            // FALLBACK: RANDOM WALK
+            // console.log('[SCREENSAVER] Cache not ready, using Random Walk fallback');
+            const mediaServer = new MediaServer(device);
+            let currentId = objectId;
+            let attempts = 0;
+            const maxAttempts = 10;
+            const maxDepth = 20; // Deep dive allowed
+
+            const randomInt = (max) => Math.floor(Math.random() * max);
+
+            while (!foundImage && attempts < maxAttempts) {
+                attempts++;
+                let depth = 0;
+                currentId = objectId;
+
+                while (depth < maxDepth) {
+                    const result = await mediaServer.browse(currentId);
+
+                    const containers = result.filter(i => i.type === 'container');
+                    const images = result.filter(i => i.type === 'item' && (
+                        (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
+                        (i.protocolInfo && i.protocolInfo.includes('image/')) ||
+                        (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+                    ));
+
+                    if (images.length > 0) {
+                        // If we are deep, or probabilistic stop
+                        if (containers.length === 0 || Math.random() > 0.4) {
+                            foundImage = images[randomInt(images.length)];
+                            break;
+                        }
+                    }
+
+                    if (containers.length > 0) {
+                        currentId = containers[randomInt(containers.length)].id;
+                        depth++;
+                    } else {
+                        break;
+                    }
+                }
+                if (foundImage) break;
+            }
+        }
+
+        if (foundImage) {
+            let imgUrl = foundImage.uri || foundImage.res;
+            let date = foundImage.year || foundImage.date || foundImage['dc:date'] || '';
+
+            // If it's a relative path from our own server (unlikely for DLNA but possible), fix it
+            if (device.udn === SERVER_UDN && imgUrl && !imgUrl.startsWith('http')) {
+                // It might be a file path, we need to convert to URL if possible or just pass it
+            }
+
+            res.json({
+                url: imgUrl,
+                title: foundImage.title,
+                date: date,
+                location: foundImage.location || ''
+            });
+        } else {
+            res.status(404).json({ error: 'No images found' });
+        }
+
+    } catch (err) {
+        console.error('[SCREENSAVER] Error ignoring photo:', err);
         res.status(500).json({ error: err.message });
     }
 });

@@ -100,6 +100,11 @@ const MAX_RENDERER_FAILURES = 3;
 let isRendererOffline = false;
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 let currentDeviceName = 'AMMUI';
+let screensaverTimeout = null;
+let screensaverInterval = null;
+let isScreensaverActive = false;
+let screensaverConfig = { serverUdn: null, objectId: null };
+const IDLE_TIMEOUT_MS = 60000; // 1 minute
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -2142,6 +2147,49 @@ function setHome() {
     updateHomeButtons();
 }
 
+async function setScreensaver() {
+    if (!selectedServerUdn) return;
+
+    // Use current folder
+    const currentFolder = browsePath[browsePath.length - 1];
+    if (!currentFolder) return;
+
+    try {
+        const response = await fetch('/api/settings/screensaver', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                serverUdn: selectedServerUdn,
+                objectId: currentFolder.id,
+                pathName: currentFolder.title
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to save settings');
+
+        screensaverConfig = { serverUdn: selectedServerUdn, objectId: currentFolder.id };
+
+        // Visual feedback
+        const btn = document.getElementById('btn-set-screensaver');
+        const originalContent = btn.innerHTML;
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            Saved!
+        `;
+        btn.style.color = '#4ade80';
+        setTimeout(() => {
+            btn.innerHTML = originalContent;
+            btn.style.color = '';
+        }, 2000);
+
+    } catch (err) {
+        console.error('Failed to set screensaver:', err);
+        showToast('Failed to set screensaver source');
+    }
+}
+
 async function goHome() {
     if (!selectedServerUdn) return;
     // Don't save current scroll here because the current folder won't be a parent of Home
@@ -2185,6 +2233,30 @@ async function goHome() {
 function updateHomeButtons() {
     const btnSetHome = document.getElementById('btn-set-home');
     const btnGoHome = document.getElementById('btn-go-home');
+    const container = document.querySelector('.browser-control-group');
+    const existingBtn = document.getElementById('btn-set-screensaver');
+
+    // Add Screensaver button if not exists
+    if (!existingBtn && container) {
+        const btn = document.createElement('button');
+        btn.id = 'btn-set-screensaver';
+        btn.className = 'btn-control ghost';
+        btn.title = 'Use this folder for Screensaver';
+        btn.onclick = setScreensaver;
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+        `;
+        // Insert before set home
+        if (btnSetHome) {
+            container.insertBefore(btn, btnSetHome);
+        } else {
+            container.appendChild(btn);
+        }
+    }
 
     if (!selectedServerUdn) return;
 
@@ -2225,6 +2297,21 @@ function updateHomeButtons() {
 async function init() {
     await fetchGeneralSettings();
     await fetchS3Settings();
+
+    // Fetch screensaver settings
+    try {
+        const res = await fetch('/api/settings/screensaver');
+        if (res.ok) {
+            screensaverConfig = await res.json();
+        }
+    } catch (e) { console.warn('Failed to fetch screensaver settings'); }
+
+    // Start idle timer
+    resetIdleTimer();
+    document.addEventListener('mousemove', resetIdleTimer);
+    document.addEventListener('keydown', resetIdleTimer);
+    document.addEventListener('touchstart', resetIdleTimer);
+    document.addEventListener('click', resetIdleTimer);
 
     // Migrate Discogs token to server if it exists locally
     const localToken = localStorage.getItem('discogsToken');
@@ -3191,6 +3278,111 @@ async function toggleDeviceDisabled(udn, role) {
     } catch (err) {
         console.error('Failed to toggle device:', err);
         showToast('Failed to update device');
+    }
+}
+
+// Screensaver Logic
+function resetIdleTimer() {
+    if (isScreensaverActive) {
+        stopSlideshow();
+    }
+
+    if (screensaverTimeout) clearTimeout(screensaverTimeout);
+
+    // Only start timer if we are NOT playing something (or if we are PAUSED/STOPPED)
+    // Actually user said "if nothing is playing for 1 minute".
+    // So if currentTransportState === 'Playing', we do NOT start screensaver?
+    // User said "if nothing is playing".
+    if (currentTransportState !== 'Playing') {
+        screensaverTimeout = setTimeout(startSlideshow, IDLE_TIMEOUT_MS);
+    }
+}
+
+async function startSlideshow() {
+    if (!screensaverConfig.serverUdn || !screensaverConfig.objectId) return;
+    if (isScreensaverActive) return;
+
+    console.log('Starting Screensaver...');
+    isScreensaverActive = true;
+    const overlay = document.getElementById('screensaver-overlay');
+    const img = document.getElementById('screensaver-img');
+    const info = document.getElementById('screensaver-info');
+
+    if (overlay) {
+        overlay.style.display = 'flex';
+        // Force reflow
+        void overlay.offsetWidth;
+        overlay.classList.add('active');
+    }
+
+    const showNextPhoto = async () => {
+        try {
+            const res = await fetch('/api/slideshow/random');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.url && img) {
+                    img.style.opacity = 0;
+                    if (info) info.style.opacity = 0;
+
+                    setTimeout(() => {
+                        img.src = data.url;
+                        if (info) {
+                            // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
+                            // If just Year is desired, we can parse it.
+                            // For now, let's show whatever valid date string or year we find.
+                            let dateStr = '<no date>';
+                            if (data.date) {
+                                // Try to normalize date string to just Year or Month Year
+                                const d = new Date(data.date);
+                                if (!isNaN(d.getTime())) {
+                                    // If strict year only is detected e.g. "2023", Date() might parse it as Jan 1st ?
+                                    // If input is just 4 digits, keep it as is.
+                                    if (/^\d{4}$/.test(data.date)) {
+                                        dateStr = data.date;
+                                    } else {
+                                        dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                                    }
+                                } else {
+                                    dateStr = data.date;
+                                }
+                            }
+                            info.textContent = dateStr;
+                        }
+
+                        img.onload = () => {
+                            img.style.opacity = 1;
+                            if (info) info.style.opacity = 1;
+                        };
+                        // Fallback in case onload doesn't fire (cached)
+                        if (img.complete) {
+                            img.style.opacity = 1;
+                            if (info) info.style.opacity = 1;
+                        }
+                    }, 500);
+                }
+            }
+        } catch (e) { console.error('Slideshow fetch failed', e); }
+    };
+
+    await showNextPhoto();
+    // Loop every 1 minute
+    screensaverInterval = setInterval(showNextPhoto, 60000);
+}
+
+function stopSlideshow() {
+    if (!isScreensaverActive) return;
+
+    console.log('Stopping Screensaver...');
+    isScreensaverActive = false;
+    if (screensaverTimeout) clearTimeout(screensaverTimeout);
+    if (screensaverInterval) clearInterval(screensaverInterval);
+
+    const overlay = document.getElementById('screensaver-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        setTimeout(() => {
+            if (!isScreensaverActive) overlay.style.display = 'none';
+        }, 1000);
     }
 }
 
