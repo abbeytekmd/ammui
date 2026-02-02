@@ -94,6 +94,9 @@ let currentArtworkQuery = '';
 let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let browseScrollPositions = {}; // Store scroll position by folder ID
+let rendererFailureCount = 0;
+const MAX_RENDERER_FAILURES = 3;
+let isRendererOffline = false;
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -203,6 +206,8 @@ async function selectDevice(udn) {
     currentArtworkUrl = '';
     failedArtworkQueries.clear(); // Clear failed queries when switching devices
     hideAllPlayerArt();
+    rendererFailureCount = 0;
+    isRendererOffline = false;
     await fetchPlaylist(udn);
     await fetchVolume();
 }
@@ -553,10 +558,13 @@ async function playAll() {
                 })
             });
 
-            if (response.ok) {
-                const data = await response.json();
-                if (i === 0) firstTrackId = data.newId;
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.error || `Failed to add track ${i + 1}`);
             }
+
+            const data = await response.json();
+            if (i === 0) firstTrackId = data.newId;
         }
 
         await fetchPlaylist(selectedRendererUdn);
@@ -571,6 +579,7 @@ async function playAll() {
         }
     } catch (err) {
         console.error('Play All error:', err);
+        showToast(`Play All failed: ${err.message}. Stopped remaining tracks.`);
     } finally {
         btn.classList.remove('disabled');
         btn.textContent = 'Play All';
@@ -836,22 +845,41 @@ async function fetchPlaylist(udn) {
             updateStatus(status);
         }
 
+        sessionStorage.setItem('lastPlaylist', JSON.stringify(playlist));
+
         renderPlaylist(playlist);
+        rendererFailureCount = 0;
+        if (isRendererOffline) {
+            isRendererOffline = false;
+            console.log(`[DEBUG] Renderer ${udn} recovered.`);
+        }
     } catch (err) {
         console.error('Playlist fetch error:', err);
-        playlistItems.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+        rendererFailureCount++;
+        if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
+            isRendererOffline = true;
+            playlistItems.innerHTML = `<div class="error">Device offline or unreachable. Polling suspended. <button class="btn-control primary" style="margin-top: 0.5rem; padding: 0.4rem 1rem;" onclick="rendererFailureCount=0; isRendererOffline=false; fetchPlaylist(selectedRendererUdn);">Retry Connection</button></div>`;
+        } else {
+            playlistItems.innerHTML = `<div class="error">Error: ${err.message}</div>`;
+        }
     }
 }
 
 async function fetchStatus() {
-    if (!selectedRendererUdn) return;
+    if (!selectedRendererUdn || isRendererOffline) return;
     try {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
         if (!response.ok) throw new Error('Failed to fetch status');
         const status = await response.json();
         updateStatus(status);
+        rendererFailureCount = 0;
     } catch (err) {
         console.error('Status fetch error:', err);
+        rendererFailureCount++;
+        if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
+            isRendererOffline = true;
+            console.warn(`[DEBUG] Suspending polling for ${selectedRendererUdn} due to repeated failures.`);
+        }
     }
 }
 
@@ -2127,7 +2155,7 @@ function adjustVolume(delta) {
 
 // Poll status and volume every 5 seconds (only when page is visible)
 setInterval(() => {
-    if (isPageVisible && selectedRendererUdn) {
+    if (isPageVisible && selectedRendererUdn && !isRendererOffline) {
         fetchStatus();
         fetchVolume();
     }
@@ -2135,7 +2163,7 @@ setInterval(() => {
 
 // Poll playlist every 15 seconds (less frequent)
 setInterval(() => {
-    if (isPageVisible && selectedRendererUdn) {
+    if (isPageVisible && selectedRendererUdn && !isRendererOffline) {
         fetchPlaylist(selectedRendererUdn);
     }
 }, 15000);
@@ -2513,7 +2541,17 @@ function renderSSDPRegistry(ssdp) {
         // Map services to friendly names for display, keep original for tooltip
         const servicesHtml = services.map(s => {
             const friendlyName = getFriendlyServiceName(s);
-            return `<span class="ssdp-service-tag" title="${s}">${friendlyName}</span>`;
+            const sLower = s.toLowerCase();
+            const isMedia = sLower.includes('contentdirectory') || sLower.includes('connectionmanager') ||
+                sLower.includes('avtransport') || sLower.includes('renderingcontrol') ||
+                sLower.includes('playlist') || sLower.includes('radio') ||
+                sLower.includes('volume') || sLower.includes('info') ||
+                sLower.includes('product') || sLower.includes('time') ||
+                sLower.includes('receiver') || sLower.includes('sender') ||
+                sLower.includes('mediarenderer') || sLower.includes('mediaserver') ||
+                sLower.includes('zoneplayer') || sLower.includes('musicservices');
+            const mediaClass = isMedia ? ' media' : '';
+            return `<span class="ssdp-service-tag${mediaClass}" title="${s}">${friendlyName}</span>`;
         }).join('');
         const tooltip = services.join('\n');
         html += `
@@ -2576,10 +2614,16 @@ function appendLogToUI(log) {
     container.scrollTop = container.scrollHeight;
 }
 
-function clearLogs() {
-    window.appLogs = [];
-    lastServerLogTimestamp = null;
-    renderLogs();
+async function clearLogs() {
+    try {
+        await fetch('/api/logs/clear', { method: 'POST' });
+        window.appLogs = [];
+        // We don't reset lastServerLogTimestamp to null here, 
+        // because we want the next fetch to only get NEW logs.
+        renderLogs();
+    } catch (err) {
+        console.error('Failed to clear server logs:', err);
+    }
 }
 
 async function openTrackInfoModal(trackData) {

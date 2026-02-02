@@ -1,4 +1,4 @@
-import { serverLogs, terminalLog } from './lib/logger-init.js';
+import { serverLogs, terminalLog, clearServerLogs } from './lib/logger-init.js';
 import express from 'express';
 import ssdp from 'node-ssdp';
 import axios from 'axios';
@@ -1659,6 +1659,11 @@ app.get('/api/logs', (req, res) => {
         };
     }
     res.json({ logs: serverLogs, ssdp: ssdpData });
+});
+
+app.post('/api/logs/clear', (req, res) => {
+    clearServerLogs();
+    res.json({ success: true });
 });
 
 // 404 Handler - MUST BE LAST
