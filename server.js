@@ -644,6 +644,35 @@ app.get('/api/browse/:udn', async (req, res) => {
     }
 });
 
+// Proxy endpoint for images from DLNA servers (to avoid CORS issues)
+app.get('/api/proxy-image', async (req, res) => {
+    const { url } = req.query;
+    if (!url) {
+        return res.status(400).send('Missing url parameter');
+    }
+
+    try {
+        console.log(`[PROXY] Fetching image from: ${url}`);
+        const response = await axios.get(url, {
+            responseType: 'arraybuffer',
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'AMMUI/1.0'
+            }
+        });
+
+        // Forward the content type
+        const contentType = response.headers['content-type'] || 'image/jpeg';
+        res.set('Content-Type', contentType);
+        res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+        res.send(response.data);
+    } catch (err) {
+        console.error(`[PROXY] Failed to fetch image from ${url}:`, err.message);
+        res.status(500).send('Failed to fetch image');
+    }
+});
+
+
 app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     const { udn } = req.params;
     const { uri, title, artist, album, duration, protocolInfo } = req.body;

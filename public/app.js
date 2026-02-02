@@ -721,9 +721,19 @@ function renderBrowser(items) {
             lastLetter = firstLetter;
         }
 
+        // Check if this is an image item (by class or MIME type)
+        const isImage = (item.class && item.class.includes('imageItem')) ||
+            (item.protocolInfo && item.protocolInfo.includes('image/'));
+
         const icon = isContainer ? `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+        ` : isImage ? `
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <path d="M21 15l-5-5L5 21"></path>
             </svg>
         ` : `
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -739,7 +749,9 @@ function renderBrowser(items) {
             <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
-                `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
+                isImage ?
+                    `openArtModal('${esc(item.uri)}', '${esc(item.title)}')` :
+                    `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">>
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
@@ -930,22 +942,6 @@ function updateStatus(status) {
         currentArtworkQuery = '';
         currentArtworkUrl = '';
         hideAllPlayerArt();
-
-        // Close album art modal when playback stops (playlist finishes)
-        const artModal = document.getElementById('album-art-modal');
-        if (artModal && artModal.style.display === 'flex') {
-            console.log('[ART] Closing modal - no track playing');
-            closeArtModal();
-        }
-    }
-
-    // Also close modal if transport state is not Playing
-    if (currentTransportState !== 'Playing' && currentTransportState !== 'TRANSITIONING') {
-        const artModal = document.getElementById('album-art-modal');
-        if (artModal && artModal.style.display === 'flex') {
-            console.log(`[ART] Closing modal - transport state is ${currentTransportState} (not Playing)`);
-            closeArtModal();
-        }
     }
 
     updatePositionUI();
@@ -1039,7 +1035,7 @@ function hideAllPlayerArt() {
     });
 }
 
-function openArtModal(url) {
+function openArtModal(url, title = '', artist = '', album = '') {
     if (!url) return;
     const modal = document.getElementById('album-art-modal');
     const img = document.getElementById('modal-art-img');
@@ -1049,24 +1045,33 @@ function openArtModal(url) {
 
     if (modal && img) {
         console.log(`[ART] Opening modal for: ${url}`);
-        img.src = ''; // Clear previous
-        img.src = url;
 
-        // Get current track info
-        if (currentTrackId != null) {
+        // Use proxy for remote images to avoid CORS issues
+        const finalUrl = (url.startsWith('http') && !url.includes(window.location.host))
+            ? `/api/proxy-image?url=${encodeURIComponent(url)}`
+            : url;
+
+        img.src = ''; // Clear previous
+        img.src = finalUrl;
+
+        // If specific metadata is passed (e.g. clicking an image in the browser)
+        if (title) {
+            if (titleEl) titleEl.textContent = title;
+            if (artistEl) artistEl.textContent = artist || '';
+            if (albumEl) albumEl.textContent = album || '';
+        } else if (currentTrackId != null) {
+            // Fallback to current track info if no metadata passed
             const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
             if (currentTrack) {
                 if (titleEl) titleEl.textContent = currentTrack.title || 'Unknown Title';
                 if (artistEl) artistEl.textContent = currentTrack.artist || 'Unknown Artist';
                 if (albumEl) albumEl.textContent = currentTrack.album || '';
             } else {
-                // Clear track info if no track found
                 if (titleEl) titleEl.textContent = '';
                 if (artistEl) artistEl.textContent = '';
                 if (albumEl) albumEl.textContent = '';
             }
         } else {
-            // Clear track info if nothing is playing
             if (titleEl) titleEl.textContent = '';
             if (artistEl) artistEl.textContent = '';
             if (albumEl) albumEl.textContent = '';
