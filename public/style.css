@@ -1786,6 +1786,9 @@ p.subtitle {
 .manage-item-info {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    margin-right: auto;
 }
 
 .manage-item-name {
@@ -2069,6 +2072,11 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
     padding: 0.25rem;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    /* Ensure SVG inherits white color */
 }
 
 .manage-item-icon-placeholder,

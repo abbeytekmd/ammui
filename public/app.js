@@ -99,6 +99,7 @@ let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 3;
 let isRendererOffline = false;
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
+let currentDeviceName = 'AMMUI';
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -1566,7 +1567,7 @@ async function deleteTrackFromPlaylist(id) {
 }
 
 function updateDocumentTitle() {
-    const defaultTitle = 'AMMUI | OpenHome Explorer';
+    const defaultTitle = `${currentDeviceName} | OpenHome Explorer`;
 
     if (!currentPlaylistItems || currentPlaylistItems.length === 0) {
         document.title = defaultTitle;
@@ -1726,9 +1727,7 @@ function renderManageDevices() {
         const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
 
         const displayName = device.customName || device.friendlyName;
-        const iconHtml = device.iconUrl
-            ? `<img src="${device.iconUrl}" class="manage-item-icon" alt="">`
-            : `<div class="manage-item-icon-placeholder">${displayName.charAt(0)}</div>`;
+        const iconHtml = `<div class="manage-item-icon">${getDeviceIcon(device, role === 'server', 24)}</div>`;
 
         return `
             <div class="manage-item ${isDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
@@ -1846,10 +1845,10 @@ async function saveRename(udn) {
     }
 
     try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/name`, {
+        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/rename`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: newName })
+            body: JSON.stringify({ customName: newName })
         });
 
         if (!response.ok) throw new Error('Failed to rename device');
@@ -1928,6 +1927,56 @@ function renderDevices() {
     updateModalDeviceLists();
 }
 
+function getDeviceIcon(device, asServer, size = 32) {
+    if (device.iconUrl) {
+        return `<img src="${device.iconUrl}" class="${size === 32 ? 'device-card' : 'modal-device'}-img" alt="" style="width: ${size}px; height: ${size}px; object-fit: contain;">`;
+    }
+
+    if (device.friendlyName === 'Direct in the Browser' && !device.udn) {
+        // Fallback if UDN missing for some reason
+        console.log('[DEBUG] Matched Browser Player by Name');
+    }
+
+    if (device.udn === BROWSER_PLAYER_UDN || device.udn?.trim() === BROWSER_PLAYER_UDN) {
+        console.log('[DEBUG] Matched Browser Player UDN:', device.udn);
+        return `
+            <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="2" y1="12" x2="22" y2="12"></line>
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+            </svg>
+        `;
+    }
+
+    if (asServer) {
+        return `
+            <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+        `;
+    }
+
+    if (device.isSonos) {
+        return `
+            <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="4"></circle>
+                <line x1="12" y1="8" x2="12" y2="8.01"></line>
+                <line x1="12" y1="16" x2="12" y2="16.01"></line>
+            </svg>
+        `;
+    }
+
+    // Default Speaker icon for other renderers
+    console.log('[DEBUG] Default icon for:', device.udn, device.friendlyName);
+    return `
+        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+        </svg>
+    `;
+}
+
 function updateModalDeviceLists() {
     const modalServerList = document.getElementById('modal-server-list');
     const modalRendererList = document.getElementById('modal-renderer-list');
@@ -1948,9 +1997,7 @@ function renderModalDeviceItem(device, asServer) {
     const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
     const displayName = device.customName || device.friendlyName;
-    const iconHtml = device.iconUrl
-        ? `<img src="${device.iconUrl}" class="modal-device-icon" alt="">`
-        : `<div class="modal-device-icon-placeholder">${displayName.charAt(0)}</div>`;
+    const iconHtml = `<div class="modal-device-icon">${getDeviceIcon(device, asServer, 24)}</div>`;
 
     return `
         <div class="modal-device-item ${isSelected ? 'selected' : ''}" 
@@ -1969,41 +2016,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
     const isSelected = forceHighlight || (asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
 
     // Different icon for servers
-    const isSonos = device.isSonos;
-    let icon = '';
-
-    if (device.iconUrl) {
-        icon = `<img src="${device.iconUrl}" class="device-card-img" alt="">`;
-    } else if (device.udn === BROWSER_PLAYER_UDN) {
-        icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-            </svg>
-        `;
-    } else if (asServer) {
-        icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-        `;
-    } else if (isSonos) {
-        icon = `
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <circle cx="12" cy="12" r="4"></circle>
-                <line x1="12" y1="8" x2="12" y2="8.01"></line>
-                <line x1="12" y1="16" x2="12" y2="16.01"></line>
-            </svg>
-        `;
-    } else {
-        icon = `
-            <svg width="52" height="52" viewBox="0 0 24 24" fill="#4ade80">
-                <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
-            </svg>
-        `;
-    }
+    const icon = getDeviceIcon(device, asServer, 32);
 
     const clickAction = isStatic ? (asServer ? 'handleServerClick()' : 'handleRendererClick()') : (asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`);
 
@@ -2210,6 +2223,9 @@ function updateHomeButtons() {
 
 // Initial fetch
 async function init() {
+    await fetchGeneralSettings();
+    await fetchS3Settings();
+
     // Migrate Discogs token to server if it exists locally
     const localToken = localStorage.getItem('discogsToken');
     if (localToken) {
@@ -3160,50 +3176,6 @@ function switchSettingsTab(tabName) {
     if (activeContent) activeContent.classList.add('active');
 }
 
-function renderManageDevices() {
-    const renderers = currentDevices.filter(d => d.isRenderer);
-    const servers = currentDevices.filter(d => d.isServer);
-    const renderItem = (device, role) => {
-        let host = 'unknown';
-        try { host = new URL(device.location).hostname; } catch (e) { host = device.location; }
-        const isDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
-        const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
-        const displayName = device.customName || device.friendlyName;
-        const iconHtml = device.iconUrl
-            ? `<img src="${device.iconUrl}" class="manage-item-icon" alt="">`
-            : `<div class="manage-item-icon-placeholder">${displayName.charAt(0)}</div>`;
-        return `
-            <div class="manage-item ${isDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
-                ${iconHtml}
-                <div class="manage-item-info">
-                    <div class="manage-item-name-row" id="name-row-${device.udn?.replace(/:/g, '-')}">
-                        <span class="manage-item-name">${displayName}</span>
-                        <button class="btn-rename" onclick="startRename('${device.udn}')" title="Rename device">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                            </svg>
-                        </button>
-                    </div>
-                    <span class="manage-item-host">${host} ${isDisabled ? '<span class="disabled-tag">(Disabled as ' + role + ')</span>' : ''}</span>
-                </div>
-                <div class="manage-item-actions">
-                    ${!isDisabled ? (isActive ? `<span class="active-badge">Active</span>` : '') : ''}
-                    <button class="btn-toggle ${isDisabled ? 'btn-enable' : 'btn-disable'}" onclick="toggleDeviceDisabled('${device.udn}', '${role}')">
-                        ${isDisabled ? 'Enable' : 'Disable'}
-                    </button>
-                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')">Forget</button>
-                </div>
-            </div>
-        `;
-    };
-    if (manageRendererList) {
-        manageRendererList.innerHTML = renderers.length ? renderers.map(d => renderItem(d, 'player')).join('') : '<div class="empty-state-mini">No players saved</div>';
-    }
-    if (manageServerList) {
-        manageServerList.innerHTML = servers.length ? servers.map(d => renderItem(d, 'server')).join('') : '<div class="empty-state-mini">No servers saved</div>';
-    }
-}
 
 // Additional missing functions for settings and device management
 

@@ -175,11 +175,10 @@ setupLocalDlna(app, port, settings.deviceName);
     const browserPlayer = {
         udn: BROWSER_PLAYER_UDN,
         location: `http://${hostIp}:${port}/virtual/browser-player`,
-        friendlyName: 'AMMUI (Local Browser)',
+        friendlyName: 'Direct in the Browser',
         type: 'renderer',
         isServer: false,
         isRenderer: true,
-        iconUrl: '/amm-icon.png',
         lastSeen: Date.now(),
         isVirtual: true
     };
@@ -1046,6 +1045,25 @@ app.delete('/api/devices/:udn', (req, res) => {
     }
 
     saveDevices();
+
+    // If we deleted the browser player, re-inject it immediately
+    // This allows users to "reset" it by forgetting, but ensures it comes back
+    if (udn === BROWSER_PLAYER_UDN) {
+        console.log('Re-injecting browser player after deletion');
+        const browserPlayer = {
+            udn: BROWSER_PLAYER_UDN,
+            location: `http://${hostIp}:${port}/virtual/browser-player`,
+            friendlyName: 'Direct in the Browser',
+            type: 'renderer',
+            isServer: false,
+            isRenderer: true,
+            lastSeen: Date.now(),
+            isVirtual: true
+        };
+        devices.set(BROWSER_PLAYER_UDN, browserPlayer);
+        devices.set(browserPlayer.location, browserPlayer);
+    }
+
     res.json({ success: true });
 });
 
