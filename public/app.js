@@ -104,7 +104,36 @@ let screensaverTimeout = null;
 let screensaverInterval = null;
 let isScreensaverActive = false;
 let screensaverConfig = { serverUdn: null, objectId: null };
+let currentScreensaverPhoto = null;
+let currentScreensaverRotation = 0;
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
+
+// Local Disabling
+let localDisabledDevices = new Set();
+try {
+    const storedLocalDisabled = localStorage.getItem('localDisabledDevices');
+    if (storedLocalDisabled) {
+        localDisabledDevices = new Set(JSON.parse(storedLocalDisabled));
+    }
+} catch (e) {
+    console.warn('Failed to load local disabled devices:', e);
+}
+
+function isLocalDisabled(udn) {
+    if (!udn) return false;
+    return localDisabledDevices.has(udn);
+}
+
+function toggleLocalDisabled(udn) {
+    if (localDisabledDevices.has(udn)) {
+        localDisabledDevices.delete(udn);
+    } else {
+        localDisabledDevices.add(udn);
+    }
+    localStorage.setItem('localDisabledDevices', JSON.stringify(Array.from(localDisabledDevices)));
+    renderManageDevices();
+    renderDevices();
+}
 
 function showToast(message, type = 'error', duration = 5000) {
     const container = document.getElementById('toast-container');
@@ -236,11 +265,21 @@ async function browse(udn, objectId) {
 
 function updateBreadcrumbs() {
     const homeIndicator = `
-        <button id="btn-go-home" class="btn-control home-breadcrumb-btn" onclick="goHome()" title="Go to home folder">
+        <button id="btn-go-music-home" class="btn-control home-breadcrumb-btn" onclick="goHome('music')" title="Go to Music home">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                <polyline points="9 22 9 12 15 12 15 22"></polyline>
+                <path d="M9 18V5l12-2v13"></path>
+                <circle cx="6" cy="18" r="3"></circle>
+                <circle cx="18" cy="16" r="3"></circle>
             </svg>
+            <span class="home-btn-label">Music</span>
+        </button>
+        <button id="btn-go-photo-home" class="btn-control home-breadcrumb-btn" onclick="goHome('photo')" title="Go to Photo home">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                <polyline points="21 15 16 10 5 21"></polyline>
+            </svg>
+            <span class="home-btn-label">Photos</span>
         </button>
         <span class="breadcrumb-separator" style="margin-right: 0.5rem"></span>
     `;
@@ -1728,14 +1767,19 @@ function renderManageDevices() {
     const renderItem = (device, role) => {
         let host = 'unknown';
         try { host = new URL(device.location).hostname; } catch (e) { host = device.location; }
-        const isDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
+        const isServerDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
+        const isLocallyDisabled = isLocalDisabled(device.udn);
         const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
 
         const displayName = device.customName || device.friendlyName;
         const iconHtml = `<div class="manage-item-icon">${getDeviceIcon(device, role === 'server', 24)}</div>`;
 
+        let statusTags = [];
+        if (isServerDisabled) statusTags.push(`<span class="disabled-tag">(Everywhere)</span>`);
+        if (isLocallyDisabled) statusTags.push(`<span class="disabled-tag">(Here)</span>`);
+
         return `
-            <div class="manage-item ${isDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
+            <div class="manage-item ${isServerDisabled || isLocallyDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
                 ${iconHtml}
                 <div class="manage-item-info">
                     <div class="manage-item-name-row" id="name-row-${device.udn?.replace(/:/g, '-')}">
@@ -1747,16 +1791,25 @@ function renderManageDevices() {
                             </svg>
                         </button>
                     </div>
-                    <span class="manage-item-host">${host} ${isDisabled ? '<span class="disabled-tag">(Disabled as ' + role + ')</span>' : ''}</span>
+                    <span class="manage-item-host">${host} ${statusTags.join(' ')}</span>
                 </div>
                 <div class="manage-item-actions">
-                    ${!isDisabled ? (isActive ? `
+                    ${!(isServerDisabled || isLocallyDisabled) ? (isActive ? `
                         <span class="active-badge">Active</span>
                     ` : '') : ''}
-                    <button class="btn-toggle ${isDisabled ? 'btn-enable' : 'btn-disable'}" onclick="toggleDeviceDisabled('${device.udn}', '${role}')">
-                        ${isDisabled ? 'Enable' : 'Disable'}
-                    </button>
-                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')">Forget</button>
+                    <div class="toggle-group" style="display: flex; gap: 0.5rem;">
+                        <button class="btn-toggle ${isServerDisabled ? 'btn-enable' : 'btn-disable'}" 
+                                onclick="toggleDeviceDisabled('${device.udn}', '${role}')"
+                                title="Disable for all users of this AMMUI server">
+                            ${isServerDisabled ? 'Enable Everywhere' : 'Disable Everywhere'}
+                        </button>
+                        <button class="btn-toggle ${isLocallyDisabled ? 'btn-enable' : 'btn-disable'}" 
+                                onclick="toggleLocalDisabled('${device.udn}')"
+                                title="Hide only on this browser/device">
+                            ${isLocallyDisabled ? 'Show Here' : 'Hide Here'}
+                        </button>
+                    </div>
+                    <button class="btn-delete" onclick="deleteDevice('${device.udn}')" title="Completely remove device">Forget</button>
                 </div>
             </div>
         `;
@@ -1869,8 +1922,8 @@ async function saveRename(udn) {
 
 function renderDevices() {
     // Filter out disabled devices for the main dashboard and modals
-    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer);
-    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer);
+    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn));
+    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer && !isLocalDisabled(d.udn));
 
     if (rendererCount) rendererCount.textContent = `${renderers.length} active`;
     if (serverCount) serverCount.textContent = `${servers.length} active`;
@@ -1986,8 +2039,8 @@ function updateModalDeviceLists() {
     const modalServerList = document.getElementById('modal-server-list');
     const modalRendererList = document.getElementById('modal-renderer-list');
 
-    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer);
-    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer);
+    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn));
+    const servers = currentDevices.filter(d => d.isServer && !d.disabledServer && !isLocalDisabled(d.udn));
 
     if (modalServerList) {
         modalServerList.innerHTML = servers.map(device => renderModalDeviceItem(device, true)).join('');
@@ -2111,95 +2164,86 @@ function switchView(view) {
     }
 }
 
-function setHome() {
+async function setHome(type = 'music') {
     if (!selectedServerUdn) return;
 
     // Get existing home locations map
     let homeLocations = {};
     try {
-        const stored = localStorage.getItem('serverHomeLocations');
-        if (stored) {
+        const stored = localStorage.getItem(`serverHomeLocations_${type}`);
+        if (!stored && type === 'music') {
+            // Migration: check for old key
+            const oldStored = localStorage.getItem('serverHomeLocations');
+            if (oldStored) homeLocations = JSON.parse(oldStored);
+        } else if (stored) {
             homeLocations = JSON.parse(stored);
         }
     } catch (e) {
         console.error('Failed to parse home locations:', e);
     }
 
-    // Store home path for this specific server
+    // Store home path for this specific server and type
     homeLocations[selectedServerUdn] = browsePath;
-    localStorage.setItem('serverHomeLocations', JSON.stringify(homeLocations));
+    localStorage.setItem(`serverHomeLocations_${type}`, JSON.stringify(homeLocations));
+
+    // If type is photo, also set screensaver
+    if (type === 'photo') {
+        const currentFolder = browsePath[browsePath.length - 1];
+        if (currentFolder) {
+            try {
+                const response = await fetch('/api/settings/screensaver', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        serverUdn: selectedServerUdn,
+                        objectId: currentFolder.id,
+                        pathName: currentFolder.title
+                    })
+                });
+                if (response.ok) {
+                    screensaverConfig = { serverUdn: selectedServerUdn, objectId: currentFolder.id };
+                    console.log('Screensaver location also updated via Photo Home');
+                }
+            } catch (e) {
+                console.warn('Failed to auto-set screensaver during photo home set:', e);
+            }
+        }
+    }
 
     // Visual feedback
-    const btn = document.getElementById('btn-set-home');
-    const originalContent = btn.innerHTML;
-    btn.innerHTML = `
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
-            <polyline points="20 6 9 17 4 12"></polyline>
-        </svg>
-        Home Set!
-    `;
-    btn.style.color = '#4ade80';
-    setTimeout(() => {
-        btn.innerHTML = originalContent;
-        btn.style.color = '';
-    }, 2000);
-
-    updateHomeButtons();
-}
-
-async function setScreensaver() {
-    if (!selectedServerUdn) return;
-
-    // Use current folder
-    const currentFolder = browsePath[browsePath.length - 1];
-    if (!currentFolder) return;
-
-    try {
-        const response = await fetch('/api/settings/screensaver', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                serverUdn: selectedServerUdn,
-                objectId: currentFolder.id,
-                pathName: currentFolder.title
-            })
-        });
-
-        if (!response.ok) throw new Error('Failed to save settings');
-
-        screensaverConfig = { serverUdn: selectedServerUdn, objectId: currentFolder.id };
-
-        // Visual feedback
-        const btn = document.getElementById('btn-set-screensaver');
+    const btnId = type === 'music' ? 'btn-set-music-home' : 'btn-set-photo-home';
+    const btn = document.getElementById(btnId);
+    if (btn) {
         const originalContent = btn.innerHTML;
         btn.innerHTML = `
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
                 <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
-            Saved!
+            ${type === 'music' ? 'Music' : 'Photo'} Set!
         `;
         btn.style.color = '#4ade80';
         setTimeout(() => {
             btn.innerHTML = originalContent;
             btn.style.color = '';
         }, 2000);
-
-    } catch (err) {
-        console.error('Failed to set screensaver:', err);
-        showToast('Failed to set screensaver source');
     }
+
+    updateHomeButtons();
 }
 
-async function goHome() {
-    if (!selectedServerUdn) return;
-    // Don't save current scroll here because the current folder won't be a parent of Home
-    // We only want to go back to Home's previously saved position if it was a parent.
 
-    // Get home path for this specific server
+
+async function goHome(type = 'music') {
+    if (!selectedServerUdn) return;
+
+    // Get home path for this specific server and type
     let homeLocations = {};
     try {
-        const stored = localStorage.getItem('serverHomeLocations');
-        if (stored) {
+        const stored = localStorage.getItem(`serverHomeLocations_${type}`);
+        if (!stored && type === 'music') {
+            const oldStored = localStorage.getItem('serverHomeLocations');
+            if (oldStored) homeLocations = JSON.parse(oldStored);
+        } else if (stored) {
             homeLocations = JSON.parse(stored);
         }
     } catch (e) {
@@ -2216,7 +2260,7 @@ async function goHome() {
             const lastFolder = browsePath[browsePath.length - 1];
             await browse(selectedServerUdn, lastFolder.id);
         } catch (e) {
-            console.error('Failed to go home:', e);
+            console.error(`Failed to go to ${type} home:`, e);
             browsePath = [{ id: '0', title: 'Root' }];
             saveLastPath();
             updateBreadcrumbs();
@@ -2231,65 +2275,64 @@ async function goHome() {
 }
 
 function updateHomeButtons() {
-    const btnSetHome = document.getElementById('btn-set-home');
-    const btnGoHome = document.getElementById('btn-go-home');
+    const btnSetMusicHome = document.getElementById('btn-set-music-home');
+    const btnSetPhotoHome = document.getElementById('btn-set-photo-home');
+    const btnGoMusicHome = document.getElementById('btn-go-music-home');
+    const btnGoPhotoHome = document.getElementById('btn-go-photo-home');
     const container = document.querySelector('.browser-control-group');
-    const existingBtn = document.getElementById('btn-set-screensaver');
 
-    // Add Screensaver button if not exists
-    if (!existingBtn && container) {
-        const btn = document.createElement('button');
-        btn.id = 'btn-set-screensaver';
-        btn.className = 'btn-control ghost';
-        btn.title = 'Use this folder for Screensaver';
-        btn.onclick = setScreensaver;
-        btn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-            </svg>
-        `;
-        // Insert before set home
-        if (btnSetHome) {
-            container.insertBefore(btn, btnSetHome);
-        } else {
-            container.appendChild(btn);
-        }
-    }
 
     if (!selectedServerUdn) return;
 
-    // Get home path for this specific server
-    let homeLocations = {};
-    try {
-        const stored = localStorage.getItem('serverHomeLocations');
-        if (stored) {
-            homeLocations = JSON.parse(stored);
+    // Helper to check home state
+    const checkHome = (type) => {
+        let homeLocations = {};
+        try {
+            const stored = localStorage.getItem(`serverHomeLocations_${type}`);
+            if (!stored && type === 'music') {
+                const oldStored = localStorage.getItem('serverHomeLocations');
+                if (oldStored) homeLocations = JSON.parse(oldStored);
+            } else if (stored) {
+                homeLocations = JSON.parse(stored);
+            }
+        } catch (e) {
+            console.error(`Failed to parse ${type} home locations:`, e);
         }
-    } catch (e) {
-        console.error('Failed to parse home locations:', e);
+        const homeBrowsePath = homeLocations[selectedServerUdn];
+        return homeBrowsePath && JSON.stringify(homeBrowsePath) === JSON.stringify(browsePath);
+    };
+
+    const isAtMusicHome = checkHome('music');
+    const isAtPhotoHome = checkHome('photo');
+
+    if (btnSetMusicHome) {
+        if (isAtMusicHome) {
+            btnSetMusicHome.classList.add('disabled');
+            btnSetMusicHome.title = "Already Music Home";
+        } else {
+            btnSetMusicHome.classList.remove('disabled');
+            btnSetMusicHome.title = "Set as Music Home";
+        }
     }
 
-    const homeBrowsePath = homeLocations[selectedServerUdn];
-    const isAtHome = homeBrowsePath && JSON.stringify(homeBrowsePath) === JSON.stringify(browsePath);
-
-    if (btnSetHome) {
-        if (isAtHome) {
-            btnSetHome.classList.add('disabled');
-            btnSetHome.title = "This folder is already your home";
+    if (btnSetPhotoHome) {
+        if (isAtPhotoHome) {
+            btnSetPhotoHome.classList.add('disabled');
+            btnSetPhotoHome.title = "Already Photo Home";
         } else {
-            btnSetHome.classList.remove('disabled');
-            btnSetHome.title = "Set current folder as home";
+            btnSetPhotoHome.classList.remove('disabled');
+            btnSetPhotoHome.title = "Set as Photo Home";
         }
     }
 
-    if (btnGoHome) {
-        if (isAtHome) {
-            btnGoHome.classList.add('disabled');
-        } else {
-            btnGoHome.classList.remove('disabled');
-        }
+    if (btnGoMusicHome) {
+        if (isAtMusicHome) btnGoMusicHome.classList.add('disabled');
+        else btnGoMusicHome.classList.remove('disabled');
+    }
+
+    if (btnGoPhotoHome) {
+        if (isAtPhotoHome) btnGoPhotoHome.classList.add('disabled');
+        else btnGoPhotoHome.classList.remove('disabled');
     }
 }
 
@@ -2308,10 +2351,6 @@ async function init() {
 
     // Start idle timer
     resetIdleTimer();
-    document.addEventListener('mousemove', resetIdleTimer);
-    document.addEventListener('keydown', resetIdleTimer);
-    document.addEventListener('touchstart', resetIdleTimer);
-    document.addEventListener('click', resetIdleTimer);
 
     // Migrate Discogs token to server if it exists locally
     const localToken = localStorage.getItem('discogsToken');
@@ -3162,9 +3201,28 @@ function showTrackInfoFromPlaylist(id) {
 let idleTimer = null;
 const IDLE_THRESHOLD = 60000; // 1 minute
 
-function resetIdleTimer() {
+function resetIdleTimer(e) {
+    // If activity is on screensaver controls, don't stop the screensaver
+    if (e && e.target && typeof e.target.closest === 'function' && e.target.closest('.screensaver-controls')) return;
+
+    const isMouseMove = e && e.type === 'mousemove';
+
+    // 1. Logic for Idle Artwork (Artwork Popup)
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(onIdle, IDLE_THRESHOLD);
+
+    // 2. Logic for Screensaver
+    // If screensaver is active, stop it ONLY on non-mousemove events
+    if (isScreensaverActive && !isMouseMove) {
+        stopSlideshow();
+    }
+
+    if (screensaverTimeout) clearTimeout(screensaverTimeout);
+
+    // Only start screensaver timer if we are NOT playing something and screensaver is not already active
+    if (currentTransportState !== 'Playing' && !isScreensaverActive) {
+        screensaverTimeout = setTimeout(startSlideshow, IDLE_TIMEOUT_MS);
+    }
 }
 
 function onIdle() {
@@ -3178,7 +3236,7 @@ function onIdle() {
 }
 
 // Activity listeners
-['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'].forEach(event => {
+['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(event => {
     window.addEventListener(event, resetIdleTimer, { passive: true });
 });
 
@@ -3281,22 +3339,6 @@ async function toggleDeviceDisabled(udn, role) {
     }
 }
 
-// Screensaver Logic
-function resetIdleTimer() {
-    if (isScreensaverActive) {
-        stopSlideshow();
-    }
-
-    if (screensaverTimeout) clearTimeout(screensaverTimeout);
-
-    // Only start timer if we are NOT playing something (or if we are PAUSED/STOPPED)
-    // Actually user said "if nothing is playing for 1 minute".
-    // So if currentTransportState === 'Playing', we do NOT start screensaver?
-    // User said "if nothing is playing".
-    if (currentTransportState !== 'Playing') {
-        screensaverTimeout = setTimeout(startSlideshow, IDLE_TIMEOUT_MS);
-    }
-}
 
 async function startSlideshow() {
     if (!screensaverConfig.serverUdn || !screensaverConfig.objectId) return;
@@ -3326,10 +3368,13 @@ async function startSlideshow() {
 
                     setTimeout(() => {
                         img.src = data.url;
+                        currentScreensaverPhoto = data.url;
+                        currentScreensaverRotation = data.manualRotation || 0;
 
                         // Modern browsers automatically handle EXIF orientation. 
                         // Manual rotation causes "double rotation".
-                        img.style.transform = '';
+                        // We apply our manual rotation ADDITIVELY.
+                        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
 
                         if (info) {
                             // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
@@ -3378,6 +3423,90 @@ async function startSlideshow() {
     await showNextPhoto();
     // Loop every 1 minute
     screensaverInterval = setInterval(showNextPhoto, 60000);
+}
+
+
+
+async function rotateSlideshow(delta) {
+    if (!currentScreensaverPhoto) return;
+
+    // 180 is special (toggle/fixed), 90/-90 are relative
+    if (delta === 180) {
+        currentScreensaverRotation = (currentScreensaverRotation + 180) % 360;
+    } else {
+        currentScreensaverRotation = (currentScreensaverRotation + delta) % 360;
+    }
+
+    // Ensure positive degrees (e.g. -90 -> 270)
+    if (currentScreensaverRotation < 0) currentScreensaverRotation += 360;
+
+    // Apply visually
+    const img = document.getElementById('screensaver-img');
+    if (img) {
+        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+    }
+
+    console.log(`Rotating photo ${currentScreensaverPhoto} to ${currentScreensaverRotation}deg`);
+
+    // Save to server
+    try {
+        await fetch('/api/slideshow/rotate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: currentScreensaverPhoto,
+                rotation: currentScreensaverRotation
+            })
+        });
+    } catch (e) {
+        console.error('Failed to save rotation:', e);
+    }
+}
+
+async function deleteCurrentPhoto() {
+    if (!currentScreensaverPhoto) return;
+
+    if (!confirm('Are you sure you want to mark this photo as deleted? It will not be shown again in the slideshow.')) {
+        return;
+    }
+
+    console.log(`Deleting photo: ${currentScreensaverPhoto}`);
+
+    try {
+        const response = await fetch('/api/slideshow/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: currentScreensaverPhoto
+            })
+        });
+
+        if (response.ok) {
+            showToast('Photo marked as deleted', 'success', 2000);
+            // Move to next photo immediately
+            if (screensaverInterval) {
+                // Clear and restart interval to skip now
+                clearInterval(screensaverInterval);
+                // The showNextPhoto function is inside startSlideshow, we might need to expose it or just call startSlideshow again
+                // But startSlideshow checks isScreensaverActive.
+                // Let's just find where showNextPhoto is defined or similar.
+                // Actually, startSlideshow is a bit complex.
+                // A simpler way: just trigger the "next" logic.
+                // Since showNextPhoto is local to startSlideshow, I should move it or repeat it.
+                // Wait, I can just call startSlideshow() if I set isScreensaverActive to false first? 
+                // No, that might cause double overlays.
+            }
+            // Let's just force a refresh of the image by calling startSlideshow again after resetting flag
+            isScreensaverActive = false;
+            startSlideshow();
+        } else {
+            const data = await response.json();
+            showToast(`Failed to delete photo: ${data.error || 'Server error'}`);
+        }
+    } catch (e) {
+        console.error('Failed to delete photo:', e);
+        showToast('Failed to delete photo');
+    }
 }
 
 function stopSlideshow() {

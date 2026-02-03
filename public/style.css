@@ -547,19 +547,30 @@ p.subtitle {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
-.play-btn {
+.play-btn,
+.queue-btn {
     opacity: 0;
     transition: all 0.2s ease;
     padding: 0.3rem 0.6rem;
     font-size: 0.7rem;
     border-radius: 0.4rem;
-    background: rgba(34, 197, 94, 0.1);
-    border: 1px solid rgba(34, 197, 94, 0.3);
-    color: #22c55e;
     flex-shrink: 0;
 }
 
-.browser-item:hover .play-btn {
+.play-btn {
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.3);
+    color: #22c55e;
+}
+
+.queue-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    color: var(--text-muted);
+}
+
+.browser-item:hover .play-btn,
+.browser-item:hover .queue-btn {
     opacity: 1;
 }
 
@@ -571,8 +582,10 @@ p.subtitle {
 }
 
 .queue-btn:hover {
-    color: #22c55e !important;
-    border-color: rgba(34, 197, 94, 0.4) !important;
+    background: var(--primary) !important;
+    color: white !important;
+    border-color: var(--primary) !important;
+    transform: scale(1.05);
 }
 
 .download-btn:hover {
@@ -1115,12 +1128,7 @@ p.subtitle {
 }
 
 
-.queue-btn:hover {
-    background: var(--primary);
-    color: white;
-    border-color: var(--primary);
-    transform: scale(1.05);
-}
+
 
 @media (max-width: 800px) {
 
@@ -1267,13 +1275,32 @@ p.subtitle {
 }
 
 .home-breadcrumb-btn {
-    padding: 0.4rem;
+    padding: 0.3rem 0.6rem;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--card-border);
     border-radius: 0.5rem;
-    margin-right: 0.25rem;
+    margin-right: 0.4rem;
     color: var(--text-muted);
     transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.home-btn-label {
+    white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+    .home-btn-label {
+        display: none;
+    }
+
+    .home-breadcrumb-btn {
+        padding: 0.4rem;
+    }
 }
 
 .home-breadcrumb-btn:hover {
@@ -3278,8 +3305,9 @@ input:checked+.slider:before {
     position: fixed;
     top: 0;
     left: 0;
-    width: 100vw;
-    height: 100vh;
+    width: 100%;
+    height: 100%;
+    height: 100dvh;
     background: #000;
     z-index: 9999;
     display: none;
@@ -3306,16 +3334,103 @@ input:checked+.slider:before {
 
 .screensaver-info {
     position: absolute;
-    bottom: 20px;
-    right: 30px;
-    color: rgba(255, 255, 255, 0.7);
+    bottom: calc(60px + env(safe-area-inset-bottom));
+    left: 40px;
+    color: rgba(255, 255, 255, 0.9);
     font-family: 'Inter', sans-serif;
-    font-size: 18px;
+    text-align: left;
     text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
     transition: opacity 1s ease-in-out;
     z-index: 10001;
-    /* Ensure on top of image */
+    max-width: 60%;
+    pointer-events: none;
 }
-.screensaver-info { text-align: right; max-width: 80%; pointer-events: none; }
-.ss-date { font-size: 24px; font-weight: 600; }
-.ss-location { font-size: 14px; font-weight: 400; opacity: 0.8; margin-top: 4px; }
+
+.ss-date {
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.ss-location {
+    font-size: 14px;
+    font-weight: 400;
+    opacity: 0.8;
+    margin-top: 4px;
+}
+
+.screensaver-controls {
+    position: absolute;
+    bottom: calc(60px + env(safe-area-inset-bottom));
+    right: 40px;
+    display: flex;
+    gap: 20px;
+    opacity: 1;
+    z-index: 10005;
+}
+
+.ss-control-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.ss-control-label {
+    color: white;
+    font-size: 13px;
+    font-weight: 600;
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 2px 8px;
+    border-radius: 6px;
+    backdrop-filter: blur(2px);
+}
+
+.btn-ss-rotate {
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    cursor: pointer;
+    backdrop-filter: blur(5px);
+    transition: all 0.2s ease;
+}
+
+.btn-ss-rotate:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.btn-ss-delete {
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    cursor: pointer;
+    backdrop-filter: blur(5px);
+    transition: all 0.2s ease;
+}
+
+.btn-ss-delete:hover {
+    background: rgba(239, 68, 68, 0.4);
+    border-color: rgba(239, 68, 68, 0.8);
+    color: #f87171;
+    transform: scale(1.1);
+}
+
+.btn-ss-rotate svg,
+.btn-ss-delete svg {
+    width: 30px;
+    height: 30px;
+}

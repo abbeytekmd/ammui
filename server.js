@@ -102,7 +102,9 @@ let settings = {
         serverUdn: null,
         objectId: null,
         pathName: 'Not Set'
-    }
+    },
+    manualRotations: {},
+    deletedPhotos: {}
 };
 
 let s3SyncStatus = {
@@ -126,7 +128,9 @@ function loadSettings() {
                 ...loaded,
                 s3: { ...settings.s3, ...(loaded.s3 || {}) },
                 deviceName: loaded.deviceName || settings.deviceName,
-                screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) }
+                screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) },
+                manualRotations: loaded.manualRotations || {},
+                deletedPhotos: loaded.deletedPhotos || {}
             };
             console.log('Loaded settings from storage.');
         }
@@ -1389,12 +1393,17 @@ async function refreshScreensaverCache(device, objectId) {
         // Use browseRecursive from MediaServer class
         const allItems = await mediaServer.browseRecursive(objectId);
 
-        // Filter for images
-        const images = allItems.filter(i => i.type === 'item' && (
-            (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
-            (i.protocolInfo && i.protocolInfo.includes('image/')) ||
-            (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
-        ));
+        // Filter for images and NOT deleted
+        const images = allItems.filter(i => {
+            const isImage = i.type === 'item' && (
+                (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
+                (i.protocolInfo && i.protocolInfo.includes('image/')) ||
+                (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+            );
+            if (!isImage) return false;
+            const url = i.uri || i.res;
+            return !settings.deletedPhotos[url];
+        });
 
         screensaverCache.images = images;
         screensaverCache.status = 'ready';
@@ -1489,8 +1498,12 @@ app.get('/api/slideshow/random', async (req, res) => {
                     if (images.length > 0) {
                         // If we are deep, or probabilistic stop
                         if (containers.length === 0 || Math.random() > 0.4) {
-                            foundImage = images[randomInt(images.length)];
-                            break;
+                            const candidate = images[randomInt(images.length)];
+                            const url = candidate.uri || candidate.res;
+                            if (!settings.deletedPhotos[url]) {
+                                foundImage = candidate;
+                                break;
+                            }
                         }
                     }
 
@@ -1545,6 +1558,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                 title: foundImage.title,
                 date: date,
                 orientation: orientation,
+                manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
                 location: foundImage._path || foundImage.location || ''
             });
         } else {
@@ -1555,6 +1569,44 @@ app.get('/api/slideshow/random', async (req, res) => {
         console.error('[SCREENSAVER] Error ignoring photo:', err);
         res.status(500).json({ error: err.message });
     }
+});
+
+app.post('/api/slideshow/rotate', (req, res) => {
+    const { url, rotation } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+
+    if (!settings.manualRotations) settings.manualRotations = {};
+
+    // rotation should be 0, 90, 180, or 270
+    settings.manualRotations[url] = Number(rotation);
+    saveSettings();
+
+    console.log(`[SCREENSAVER] Saved manual rotation for ${url}: ${rotation}`);
+    res.json({ success: true, rotation });
+});
+
+app.post('/api/slideshow/delete', (req, res) => {
+    const { url } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+
+    if (!settings.deletedPhotos) settings.deletedPhotos = {};
+    settings.deletedPhotos[url] = true;
+    saveSettings();
+
+    // Also remove from current cache if present
+    if (screensaverCache.images && screensaverCache.images.length > 0) {
+        const initialCount = screensaverCache.images.length;
+        screensaverCache.images = screensaverCache.images.filter(img => {
+            const imgUrl = img.uri || img.res;
+            return imgUrl !== url;
+        });
+        if (screensaverCache.images.length < initialCount) {
+            console.log(`[SCREENSAVER] Removed deleted photo from cache. New count: ${screensaverCache.images.length}`);
+        }
+    }
+
+    console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
+    res.json({ success: true });
 });
 
 app.get('/api/art/search', async (req, res) => {
