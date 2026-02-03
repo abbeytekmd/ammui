@@ -125,8 +125,6 @@ function loadSettings() {
                 ...settings,
                 ...loaded,
                 s3: { ...settings.s3, ...(loaded.s3 || {}) },
-                ...loaded,
-                s3: { ...settings.s3, ...(loaded.s3 || {}) },
                 deviceName: loaded.deviceName || settings.deviceName,
                 screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) },
                 manualRotations: loaded.manualRotations || {},
@@ -180,7 +178,21 @@ setupLocalDlna(app, port, settings.deviceName);
         isServer: true,
         isRenderer: false,
         iconUrl: '/amm-icon.png',
-        lastSeen: Date.now()
+        lastSeen: Date.now(),
+        services: [
+            {
+                serviceType: 'urn:schemas-upnp-org:service:ContentDirectory:1',
+                controlURL: `http://${hostIp}:${port}/dlna/ContentDirectory/control`,
+                eventSubURL: `http://${hostIp}:${port}/dlna/ContentDirectory/event`,
+                SCPDURL: `http://${hostIp}:${port}/dlna/ContentDirectory.xml`
+            },
+            {
+                serviceType: 'urn:schemas-upnp-org:service:ConnectionManager:1',
+                controlURL: `http://${hostIp}:${port}/dlna/ConnectionManager/control`,
+                eventSubURL: `http://${hostIp}:${port}/dlna/ConnectionManager/event`,
+                SCPDURL: `http://${hostIp}:${port}/dlna/ConnectionManager.xml`
+            }
+        ]
     };
     devices.set(localLocation, localServer);
     devices.set(SERVER_UDN, localServer);
@@ -436,6 +448,14 @@ async function handleSSDPMessage(headers, rinfo) {
     const serverHeader = (headers.SERVER || '').toLowerCase();
     const ip = rinfo.address;
 
+    // PREVENT SELF-OVERWRITE: If this is our own local server (match by UDN), 
+    // ignore the SSDP announcement. We handle our own server via manual injection 
+    // to ensure it's always available with the correct services list.
+    const usn = (headers.USN || '').toLowerCase();
+    if (usn.includes(SERVER_UDN.toLowerCase())) {
+        return;
+    }
+
     // Track in registry
     if (!ssdpRegistry.has(ip)) {
         ssdpRegistry.set(ip, { services: new Set(), lastSeen: Date.now() });
@@ -458,14 +478,11 @@ async function handleSSDPMessage(headers, rinfo) {
             return;
         }
 
-        // PREVENT HIJACKING: If this is our own local server discovered on a different IP/interface, 
-        // normally we'd ignore it to favor the primary hostIp. However, we allow it if the location
-        // matches our local DLNA server structure.
         const isLocalPath = location && location.includes('/dlna/description.xml');
-        if (st.includes('ammui-local-media-server') || isLocalPath) {
+        if (isLocalPath) {
             const url = new URL(location);
-            if (url.hostname !== hostIp) {
-                console.log(`[DEBUG] Local server discovered on secondary interface/IP: ${url.hostname} (Primary: ${hostIp}). Allowing.`);
+            if (url.hostname === hostIp || url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
+                return; // our own server
             }
         }
 
@@ -1204,12 +1221,13 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         const title = metadata.common.title || path.basename(req.file.originalname, path.extname(req.file.originalname));
 
         const localDir = path.join(__dirname, 'local');
+        const musicDir = path.join(localDir, 'music');
         const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
         const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
 
         const ext = path.extname(req.file.originalname);
-        const artistDir = findCaseInsensitivePath(localDir, safeArtist);
+        const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
         const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
 
         if (!fs.existsSync(targetDir)) {
@@ -1268,58 +1286,101 @@ app.post('/api/delete', express.json(), async (req, res) => {
 async function downloadFileHelper(uri, title, artist, album) {
     const localDir = path.join(__dirname, 'local');
 
-    // Sanitize components
-    const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
-    const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
-    const safeTitle = (title || 'Track').replace(/[<>:"/\\|?*]/g, '_');
-
-    // Create target directory structure: local/[Artist]/[Album]
-    const artistDir = findCaseInsensitivePath(localDir, safeArtist);
-    const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
-    if (!fs.existsSync(targetDir)) {
-        fs.mkdirSync(targetDir, { recursive: true });
-    }
-
     // Get extension from URI or default to .mp3
     let ext = '.mp3';
     try {
         const url = new URL(uri);
         const pathname = url.pathname;
-        const foundExt = path.extname(pathname);
+        const foundExt = path.extname(pathname).toLowerCase();
         if (foundExt && foundExt.length >= 3 && foundExt.length <= 5) ext = foundExt;
     } catch (e) { }
 
+    const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(ext);
+    const safeTitle = (title || (isImage ? 'Photo' : 'Track')).replace(/[<>:"/\\|?*]/g, '_');
     const filename = `${safeTitle}${ext}`;
-    const filePath = path.join(targetDir, filename);
 
-    if (fs.existsSync(filePath)) {
+    let targetDir;
+    let tempPath = null;
+
+    if (isImage) {
+        // For pictures, we download to a temp location first to extract EXIF data
+        const tempFilename = `download_${Date.now()}${ext}`;
+        tempPath = path.join(__dirname, 'uploads', tempFilename);
+        console.log(`Downloading image ${uri} to temp ${tempPath}...`);
+    } else {
+        // Music logic: local/music/[Artist]/[Album]
+        const musicDir = path.join(localDir, 'music');
+        const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
+        const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
+
+        const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
+        targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
+
+        if (!fs.existsSync(targetDir)) {
+            fs.mkdirSync(targetDir, { recursive: true });
+        }
+    }
+
+    const downloadPath = tempPath || path.join(targetDir, filename);
+
+    if (fs.existsSync(downloadPath)) {
         console.log(`Skipping download, file already exists: ${filename}`);
         return { success: true, filename, skipped: true };
     }
 
-    console.log(`Downloading ${uri} to ${filePath}...`);
+    console.log(`Downloading ${uri} to ${downloadPath}...`);
 
     const response = await axios({
         method: 'get',
         url: uri,
         responseType: 'stream',
-        timeout: 60000 // Increased timeout for larger files
+        timeout: 60000
     });
 
-    return new Promise((resolve, reject) => {
-        const writer = fs.createWriteStream(filePath);
+    await new Promise((resolve, reject) => {
+        const writer = fs.createWriteStream(downloadPath);
         response.data.pipe(writer);
-
-        writer.on('finish', () => {
-            console.log(`Download finished: ${filename}`);
-            resolve({ success: true, filename });
-        });
-
-        writer.on('error', (err) => {
-            console.error('Writer error:', err);
-            reject(new Error(`Failed to write file ${filename}`));
-        });
+        writer.on('finish', resolve);
+        writer.on('error', reject);
     });
+
+    if (isImage) {
+        // Post-process image: determine Year/Month
+        let year = new Date().getFullYear().toString();
+        let month = (new Date().getMonth() + 1).toString().padStart(2, '0');
+
+        if (ext === '.jpg' || ext === '.jpeg') {
+            try {
+                const buffer = fs.readFileSync(downloadPath);
+                const parser = exifParser.create(buffer);
+                const result = parser.parse();
+                if (result.tags && (result.tags.DateTimeOriginal || result.tags.CreateDate)) {
+                    const timestamp = result.tags.DateTimeOriginal || result.tags.CreateDate;
+                    const date = new Date(timestamp * 1000);
+                    year = date.getFullYear().toString();
+                    month = (date.getMonth() + 1).toString().padStart(2, '0');
+                }
+            } catch (e) {
+                console.log(`[DOWNLOAD] EXIF parse failed for ${filename}, using current date`);
+            }
+        }
+
+        const finalDir = path.join(localDir, 'pictures', year, month);
+        if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
+        const finalPath = path.join(finalDir, filename);
+        if (fs.existsSync(finalPath)) {
+            fs.unlinkSync(downloadPath);
+            return { success: true, filename: filename, skipped: true };
+        }
+
+        fs.renameSync(downloadPath, finalPath);
+        console.log(`Picture saved to ${finalPath}`);
+        return { success: true, filename };
+    }
+
+    console.log(`Download finished: ${filename}`);
+    return { success: true, filename };
 }
 
 app.post('/api/download', express.json(), async (req, res) => {

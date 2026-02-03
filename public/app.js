@@ -2186,30 +2186,6 @@ async function setHome(type = 'music') {
     homeLocations[selectedServerUdn] = browsePath;
     localStorage.setItem(`serverHomeLocations_${type}`, JSON.stringify(homeLocations));
 
-    // If type is photo, also set screensaver
-    if (type === 'photo') {
-        const currentFolder = browsePath[browsePath.length - 1];
-        if (currentFolder) {
-            try {
-                const response = await fetch('/api/settings/screensaver', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        serverUdn: selectedServerUdn,
-                        objectId: currentFolder.id,
-                        pathName: currentFolder.title
-                    })
-                });
-                if (response.ok) {
-                    screensaverConfig = { serverUdn: selectedServerUdn, objectId: currentFolder.id };
-                    console.log('Screensaver location also updated via Photo Home');
-                }
-            } catch (e) {
-                console.warn('Failed to auto-set screensaver during photo home set:', e);
-            }
-        }
-    }
-
     // Visual feedback
     const btnId = type === 'music' ? 'btn-set-music-home' : 'btn-set-photo-home';
     const btn = document.getElementById(btnId);
@@ -2228,6 +2204,52 @@ async function setHome(type = 'music') {
         }, 2000);
     }
 
+    updateHomeButtons();
+}
+
+async function setScreensaver() {
+    if (!selectedServerUdn) return;
+
+    // Use current folder
+    const currentFolder = browsePath[browsePath.length - 1];
+    if (!currentFolder) return;
+
+    try {
+        const response = await fetch('/api/settings/screensaver', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                serverUdn: selectedServerUdn,
+                objectId: currentFolder.id,
+                pathName: currentFolder.title
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to save settings');
+
+        screensaverConfig = { serverUdn: selectedServerUdn, objectId: currentFolder.id };
+
+        // Visual feedback
+        const btn = document.getElementById('btn-set-screensaver');
+        if (btn) {
+            const originalContent = btn.innerHTML;
+            btn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                SS Set!
+            `;
+            btn.style.color = '#4ade80';
+            setTimeout(() => {
+                btn.innerHTML = originalContent;
+                btn.style.color = '';
+            }, 2000);
+        }
+
+    } catch (err) {
+        console.error('Failed to set screensaver:', err);
+        showToast('Failed to set screensaver source');
+    }
     updateHomeButtons();
 }
 
@@ -2277,12 +2299,13 @@ async function goHome(type = 'music') {
 function updateHomeButtons() {
     const btnSetMusicHome = document.getElementById('btn-set-music-home');
     const btnSetPhotoHome = document.getElementById('btn-set-photo-home');
+    const btnSetScreensaver = document.getElementById('btn-set-screensaver');
     const btnGoMusicHome = document.getElementById('btn-go-music-home');
     const btnGoPhotoHome = document.getElementById('btn-go-photo-home');
-    const container = document.querySelector('.browser-control-group');
-
 
     if (!selectedServerUdn) return;
+
+    const currentFolder = browsePath[browsePath.length - 1];
 
     // Helper to check home state
     const checkHome = (type) => {
@@ -2304,6 +2327,9 @@ function updateHomeButtons() {
 
     const isAtMusicHome = checkHome('music');
     const isAtPhotoHome = checkHome('photo');
+    const isAtScreensaver = currentFolder && screensaverConfig &&
+        screensaverConfig.serverUdn === selectedServerUdn &&
+        screensaverConfig.objectId === currentFolder.id;
 
     if (btnSetMusicHome) {
         if (isAtMusicHome) {
@@ -2322,6 +2348,16 @@ function updateHomeButtons() {
         } else {
             btnSetPhotoHome.classList.remove('disabled');
             btnSetPhotoHome.title = "Set as Photo Home";
+        }
+    }
+
+    if (btnSetScreensaver) {
+        if (isAtScreensaver) {
+            btnSetScreensaver.classList.add('disabled');
+            btnSetScreensaver.title = "Already Screensaver Source";
+        } else {
+            btnSetScreensaver.classList.remove('disabled');
+            btnSetScreensaver.title = "Use this folder for Screensaver";
         }
     }
 
