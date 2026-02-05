@@ -107,6 +107,7 @@ let screensaverConfig = { serverUdn: null, objectId: null };
 let currentScreensaverPhoto = null;
 let currentScreensaverRotation = 0;
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
+let lastReportedTrackKey = null;
 
 // Local Disabling
 let localDisabledDevices = new Set();
@@ -867,20 +868,20 @@ function renderBrowser(items) {
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 5v14M5 12h14"></path>
                             </svg>
-                            Queue
+                            <span class="btn-label" data-mobile="">Queue</span>
                         </button>
                         ` : `
                         <button class="btn-control play-btn" onclick="event.stopPropagation(); playFolder('${esc(item.id)}', '${esc(item.title)}')" title="Play Whole Folder Recursively">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                                 <path d="M8 5v14l11-7z"></path>
                             </svg>
-                            Play
+                            <span class="btn-label" data-mobile="">Play</span>
                         </button>
                         <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M12 5v14M5 12h14"></path>
                             </svg>
-                            Queue
+                            <span class="btn-label" data-mobile="">Queue</span>
                         </button>
                         `}
                         
@@ -985,6 +986,26 @@ function updateStatus(status) {
 
         // Update modal track info if modal is open
         updateModalTrackInfo();
+
+        // Report play stats if playing a new track
+        if (currentTransportState === 'Playing' && currentTrackId != null) {
+            const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+            if (currentTrack) {
+                const trackKey = `${currentTrack.title} - ${currentTrack.artist || 'Unknown Artist'}`.trim();
+                if (trackKey !== lastReportedTrackKey) {
+                    lastReportedTrackKey = trackKey;
+                    fetch('/api/stats/track-played', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            title: currentTrack.title,
+                            artist: currentTrack.artist,
+                            album: currentTrack.album
+                        })
+                    }).catch(e => console.warn('Failed to report play stats:', e));
+                }
+            }
+        }
     }
 
     // Handle Transport Status (Errors)
@@ -1212,34 +1233,43 @@ async function saveDiscogsToken() {
 function showPlayerArt(url) {
     if (!selectedRendererUdn) return;
     const safeUdn = selectedRendererUdn.replace(/:/g, '-');
-    const container = document.getElementById(`player-art-container-${safeUdn}`);
-    const img = document.getElementById(`player-art-${safeUdn}`);
+    const containers = [
+        document.getElementById(`player-art-container-${safeUdn}`),
+        document.getElementById('global-player-art-container')
+    ];
+    const imgs = [
+        document.getElementById(`player-art-${safeUdn}`),
+        document.getElementById('global-player-art')
+    ];
 
-    if (container && img) {
-        console.log(`[ART] Loading artwork: ${url}`);
-        // Set onload before src to avoid missing cached loads
-        img.onload = () => {
-            console.log(`[ART] Loaded successfully: ${url}`);
-            container.classList.add('visible');
-        };
+    console.log(`[ART] Loading artwork: ${url}`);
+    let loadedCount = 0;
+
+    const onLoaded = (container) => {
+        loadedCount++;
+        if (container) container.classList.add('visible');
+    };
+
+    imgs.forEach((img, idx) => {
+        if (!img) return;
+        img.onload = () => onLoaded(containers[idx]);
         img.onerror = (err) => {
-            console.error(`[ART] Failed to load image: ${url}`, err);
-            // Mark this query as failed so we don't retry
-            if (currentArtworkQuery) {
-                failedArtworkQueries.add(currentArtworkQuery);
-            }
-            container.classList.remove('visible');
+            console.error(`[ART] Failed to load image element ${idx}: ${url}`);
+            if (containers[idx]) containers[idx].classList.remove('visible');
         };
         img.src = url;
-    }
+    });
 }
 
 function hideAllPlayerArt() {
     document.querySelectorAll('.player-artwork-container').forEach(el => {
         el.classList.remove('visible');
         const img = el.querySelector('img');
-        if (img) img.src = ''; // Clear src to avoid stale art in modal
+        if (img) img.src = '';
     });
+    // Explicitly hide global container too
+    const globalContainer = document.getElementById('global-player-art-container');
+    if (globalContainer) globalContainer.classList.remove('visible');
 }
 
 function openArtModal(url, title = '', artist = '', album = '') {
@@ -2135,10 +2165,6 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
                     ${transportHtml}
-                    <div id="player-art-container-${device.udn?.replace(/:/g, '-')}" class="player-artwork-container" 
-                         onclick="event.stopPropagation(); openArtModal(document.getElementById('player-art-${device.udn?.replace(/:/g, '-')}').src)">
-                        <img id="player-art-${device.udn?.replace(/:/g, '-')}" class="player-artwork" alt="">
-                    </div>
                 </div>
             ` : ''}
         </div>
@@ -3255,8 +3281,10 @@ function resetIdleTimer(e) {
 
     if (screensaverTimeout) clearTimeout(screensaverTimeout);
 
-    // Only start screensaver timer if we are NOT playing something and screensaver is not already active
-    if (currentTransportState !== 'Playing' && !isScreensaverActive) {
+    // Only start screensaver timer if we are NOT playing something (casting), 
+    // screensaver is not already active, and no local video modal is open
+    const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
+    if (currentTransportState !== 'Playing' && !isScreensaverActive && !isVideoVisible) {
         screensaverTimeout = setTimeout(startSlideshow, IDLE_TIMEOUT_MS);
     }
 }
@@ -3379,6 +3407,10 @@ async function toggleDeviceDisabled(udn, role) {
 async function startSlideshow() {
     if (!screensaverConfig.serverUdn || !screensaverConfig.objectId) return;
     if (isScreensaverActive) return;
+
+    // Don't start if local video is playing
+    const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
+    if (isVideoVisible) return;
 
     console.log('Starting Screensaver...');
     isScreensaverActive = true;
@@ -3867,5 +3899,83 @@ async function saveDiscogsToken() {
     } catch (err) {
         console.error('Failed to save Discogs token:', err);
         showToast('Failed to save token');
+    }
+}
+
+// Stats Modal logic
+async function openStatsModal() {
+    const modal = document.getElementById('stats-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        await fetchStats();
+    }
+}
+
+function closeStatsModal() {
+    const modal = document.getElementById('stats-modal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+function switchStatsTab(tab) {
+    const tracksBtn = document.getElementById('tab-stats-tracks');
+    const albumsBtn = document.getElementById('tab-stats-albums');
+    const tracksPanel = document.getElementById('stats-tracks');
+    const albumsPanel = document.getElementById('stats-albums');
+
+    if (tab === 'tracks') {
+        tracksBtn.classList.add('active');
+        albumsBtn.classList.remove('active');
+        tracksPanel.classList.add('active');
+        albumsPanel.classList.remove('active');
+    } else {
+        tracksBtn.classList.remove('active');
+        albumsBtn.classList.add('active');
+        tracksPanel.classList.remove('active');
+        albumsPanel.classList.add('active');
+    }
+}
+
+async function fetchStats() {
+    try {
+        const res = await fetch('/api/stats');
+        if (res.ok) {
+            const data = await res.json();
+            renderStats(data);
+        }
+    } catch (err) {
+        console.error('Failed to fetch stats:', err);
+    }
+}
+
+function renderStats(data) {
+    const tracksList = document.getElementById('stats-tracks-list');
+    const albumsList = document.getElementById('stats-albums-list');
+
+    if (tracksList) {
+        tracksList.innerHTML = data.tracks.map((track, index) => `
+            <div class="stats-item">
+                <div class="stats-rank">#${index + 1}</div>
+                <div class="stats-info">
+                    <div class="stats-title">${track.title}</div>
+                    <div class="stats-subtitle">${track.artist || 'Unknown Artist'}</div>
+                </div>
+                <div class="stats-count">${track.count} plays</div>
+            </div>
+        `).join('');
+    }
+
+    if (albumsList) {
+        albumsList.innerHTML = data.albums.map((album, index) => `
+            <div class="stats-item">
+                <div class="stats-rank">#${index + 1}</div>
+                <div class="stats-info">
+                    <div class="stats-title">${album.album}</div>
+                    <div class="stats-subtitle">${album.artist || 'Unknown Artist'}</div>
+                </div>
+                <div class="stats-count">${album.count} plays</div>
+            </div>
+        `).join('');
     }
 }

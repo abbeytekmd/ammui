@@ -30,6 +30,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEVICES_FILE = path.join(__dirname, 'devices.json');
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const STATS_FILE = path.join(__dirname, 'stats.json');
 
 const app = express();
 const port = 3000;
@@ -144,6 +145,31 @@ function saveSettings() {
         console.error('Failed to save settings:', err.message);
     }
 }
+
+let playStats = { tracks: {}, albums: {} };
+
+function loadStats() {
+    try {
+        if (fs.existsSync(STATS_FILE)) {
+            const data = fs.readFileSync(STATS_FILE, 'utf8');
+            playStats = JSON.parse(data);
+            if (!playStats.tracks) playStats.tracks = {};
+            if (!playStats.albums) playStats.albums = {};
+        }
+    } catch (err) {
+        console.error('Failed to load stats:', err.message);
+    }
+}
+
+function saveStats() {
+    try {
+        fs.writeFileSync(STATS_FILE, JSON.stringify(playStats, null, 2));
+    } catch (err) {
+        console.error('Failed to save stats:', err.message);
+    }
+}
+
+loadStats();
 
 function findCaseInsensitivePath(parent, name) {
     if (!fs.existsSync(parent)) return path.join(parent, name);
@@ -699,6 +725,45 @@ app.get('/api/browse/:udn', async (req, res) => {
         console.error('Failed to browse device:', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+app.get('/api/stats', (req, res) => {
+    const topTracks = Object.entries(playStats.tracks)
+        .map(([key, data]) => ({ key, ...data }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20);
+
+    const topAlbums = Object.entries(playStats.albums)
+        .map(([key, data]) => ({ key, ...data }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 20);
+
+    res.json({ tracks: topTracks, albums: topAlbums });
+});
+
+app.post('/api/stats/track-played', express.json(), (req, res) => {
+    const { title, artist, album } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title is required' });
+
+    const trackKey = `${title} - ${artist || 'Unknown Artist'}`.trim();
+    const albumKey = `${album || 'Unknown Album'} - ${artist || 'Unknown Artist'}`.trim();
+
+    // Track stats
+    if (!playStats.tracks[trackKey]) {
+        playStats.tracks[trackKey] = { title, artist, count: 0 };
+    }
+    playStats.tracks[trackKey].count++;
+
+    // Album stats
+    if (album) {
+        if (!playStats.albums[albumKey]) {
+            playStats.albums[albumKey] = { album, artist, count: 0 };
+        }
+        playStats.albums[albumKey].count++;
+    }
+
+    saveStats();
+    res.json({ success: true });
 });
 
 // Proxy endpoint for images from DLNA servers (to avoid CORS issues)
