@@ -1,0 +1,18 @@
+is it possible to have a media browser view button that chnages the view from a list to a grid of larger thumbnails
+
+show the view button for pictures and the play all / queue all button for music tracks
+
+when looking at anything apart from pictures, go to list view 
+
+remove the view button and just go into grid mode in picture folders, list mode in all other folders
+
+remove the dividers from the play all / queue all button bar apart from the one to the left of the Set buttons
+
+if we view a panorama photo, can we view it in a better way
+
+the view grid doesn't look great in mobile mode
+
+can we add a fiolder button to the slideshow that will take us to the folder where the picture was tken from in tile mode
+
+actually, don't add it as a button, just go to the folder when you click on the folder that's displayed on teh left
+

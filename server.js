@@ -1502,7 +1502,8 @@ let screensaverCache = {
     objectId: null,
     images: [],
     status: 'idle', // idle, loading, ready
-    timestamp: 0
+    timestamp: 0,
+    refreshTriggered: false
 };
 
 async function refreshScreensaverCache(device, objectId) {
@@ -1589,7 +1590,13 @@ app.get('/api/slideshow/random', async (req, res) => {
         if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
             const index = Math.floor(Math.random() * screensaverCache.images.length);
             foundImage = screensaverCache.images[index];
-            // console.log('[SCREENSAVER] Served from cache');
+
+            // HACK: If we just updated the code but the cache is old, trigger refresh
+            if (!foundImage.folderId && !screensaverCache.refreshTriggered) {
+                console.log('[SCREENSAVER] Cache is stale (missing folderId), triggering refresh');
+                screensaverCache.refreshTriggered = true;
+                refreshScreensaverCache(device, objectId);
+            }
         } else {
             // Trigger build if needed
             if (!cacheValid || screensaverCache.status === 'idle') {
@@ -1600,6 +1607,7 @@ app.get('/api/slideshow/random', async (req, res) => {
             // console.log('[SCREENSAVER] Cache not ready, using Random Walk fallback');
             const mediaServer = new MediaServer(device);
             let currentId = objectId;
+            let currentTitle = settings.screensaver.pathName || '';
             let attempts = 0;
             const maxAttempts = 10;
             const maxDepth = 20; // Deep dive allowed
@@ -1610,6 +1618,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                 attempts++;
                 let depth = 0;
                 currentId = objectId;
+                currentTitle = settings.screensaver.pathName || '';
 
                 while (depth < maxDepth) {
                     const result = await mediaServer.browse(currentId);
@@ -1628,13 +1637,17 @@ app.get('/api/slideshow/random', async (req, res) => {
                             const url = candidate.uri || candidate.res;
                             if (!settings.deletedPhotos[url]) {
                                 foundImage = candidate;
+                                foundImage.folderId = currentId;
+                                foundImage.folderTitle = currentTitle;
                                 break;
                             }
                         }
                     }
 
                     if (containers.length > 0) {
-                        currentId = containers[randomInt(containers.length)].id;
+                        const randomContainer = containers[randomInt(containers.length)];
+                        currentId = randomContainer.id;
+                        currentTitle = randomContainer.title;
                         depth++;
                     } else {
                         break;
@@ -1685,7 +1698,9 @@ app.get('/api/slideshow/random', async (req, res) => {
                 date: date,
                 orientation: orientation,
                 manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
-                location: foundImage._path || foundImage.location || ''
+                location: foundImage._path || foundImage.location || '',
+                folderId: foundImage.folderId,
+                folderTitle: foundImage.folderTitle
             });
         } else {
             res.status(404).json({ error: 'No images found' });

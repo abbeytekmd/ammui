@@ -10,3 +10,4 @@ coverage/
 .vscode/
 .idea/
 local/
+settings.json

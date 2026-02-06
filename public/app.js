@@ -105,9 +105,13 @@ let screensaverInterval = null;
 let isScreensaverActive = false;
 let screensaverConfig = { serverUdn: null, objectId: null };
 let currentScreensaverPhoto = null;
+let previousScreensaverPhoto = null; // Track the previous photo
 let currentScreensaverRotation = 0;
+let currentScreensaverFolder = null;
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
 let lastReportedTrackKey = null;
+
+let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
 
 // Local Disabling
 let localDisabledDevices = new Set();
@@ -747,34 +751,73 @@ function scrollToLetter(letter) {
     }
 }
 
+function toggleBrowserView() {
+    browserViewMode = browserViewMode === 'list' ? 'grid' : 'list';
+    localStorage.setItem('browserViewMode', browserViewMode);
+    renderBrowser(currentBrowserItems);
+}
+
+function updateBrowserControls(items) {
+    const tracks = items.filter(item => item.type === 'item' && !(item.class && item.class.includes('imageItem')) && !(item.protocolInfo && item.protocolInfo.includes('image/')));
+    const images = items.filter(item => (item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
+
+    const btnPlayAll = document.getElementById('btn-play-all');
+    const btnAddAll = document.getElementById('btn-add-all');
+    const btnToggleView = document.getElementById('btn-toggle-view');
+    const divToggleView = document.getElementById('div-toggle-view');
+
+    const showMusicControls = tracks.length > 0;
+    const showPhotoControls = images.length > 0;
+
+    if (btnPlayAll) btnPlayAll.style.display = showMusicControls ? 'flex' : 'none';
+    if (btnAddAll) btnAddAll.style.display = showMusicControls ? 'flex' : 'none';
+
+    if (btnToggleView) {
+        btnToggleView.style.display = showPhotoControls ? 'flex' : 'none';
+        const label = document.getElementById('label-view-mode');
+        const svgGrid = document.getElementById('svg-view-grid');
+        const svgList = document.getElementById('svg-view-list');
+
+        if (browserViewMode === 'grid') {
+            if (label) label.textContent = 'List';
+            if (svgGrid) svgGrid.style.display = 'none';
+            if (svgList) svgList.style.display = 'block';
+        } else {
+            if (label) label.textContent = 'Grid';
+            if (svgGrid) svgGrid.style.display = 'block';
+            if (svgList) svgList.style.display = 'none';
+        }
+    }
+    if (divToggleView) divToggleView.style.display = showPhotoControls ? 'block' : 'none';
+
+    // Enable/disable buttons based on tracks count
+    if (btnPlayAll) {
+        if (tracks.length > 0) btnPlayAll.classList.remove('disabled');
+        else btnPlayAll.classList.add('disabled');
+    }
+    if (btnAddAll) {
+        if (tracks.length > 0) btnAddAll.classList.remove('disabled');
+        else btnAddAll.classList.add('disabled');
+    }
+}
+
 function renderBrowser(items) {
     currentBrowserItems = items;
+
+    // Check if folder contains images
+    const hasImages = items.some(item =>
+        (item.class && item.class.includes('imageItem')) ||
+        (item.protocolInfo && item.protocolInfo.includes('image/'))
+    );
+
+    // Force list view if no images are present
+    const effectiveViewMode = hasImages ? browserViewMode : 'list';
 
     // Restore scroll position
     const currentId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
     const savedScrollTop = browseScrollPositions[currentId] || 0;
 
-    //    console.log(`[DEBUG] Rendering browser, restoring scroll ${savedScrollTop} for ${currentId}`);
-    const tracks = items.filter(item => item.type === 'item');
-    const addAllBtn = document.getElementById('btn-add-all');
-    const playAllBtn = document.getElementById('btn-play-all');
-
-    if (addAllBtn) {
-        if (tracks.length > 0) {
-            addAllBtn.classList.remove('disabled');
-        } else {
-            addAllBtn.classList.add('disabled');
-        }
-    }
-
-    if (playAllBtn) {
-        if (tracks.length > 0) {
-            playAllBtn.classList.remove('disabled');
-        } else {
-            playAllBtn.classList.add('disabled');
-        }
-    }
-
+    updateBrowserControls(items);
     updateHomeButtons();
 
     // Alphabet logic
@@ -786,13 +829,24 @@ function renderBrowser(items) {
             .map(i => i.title[0].toUpperCase())
         )];
 
-        alphabetScroll.classList.add('visible');
-        renderAlphabet();
+        if (effectiveViewMode === 'list') {
+            alphabetScroll.classList.add('visible');
+            renderAlphabet();
+        } else {
+            alphabetScroll.classList.remove('visible');
+        }
     }
 
     if (items.length === 0) {
         browserItems.innerHTML = '<div class="empty-state">Folder is empty</div>';
         return;
+    }
+
+    // Apply view mode class
+    if (effectiveViewMode === 'grid') {
+        browserItems.classList.add('grid-view');
+    } else {
+        browserItems.classList.remove('grid-view');
     }
 
     let lastLetter = null;
@@ -801,46 +855,55 @@ function renderBrowser(items) {
         const firstLetter = (item.title || '')[0].toUpperCase();
         let letterIdAttr = '';
 
-        if (/^[A-Z]$/.test(firstLetter) && firstLetter !== lastLetter) {
+        if (effectiveViewMode === 'list' && /^[A-Z]$/.test(firstLetter) && firstLetter !== lastLetter) {
             letterIdAttr = `id="letter-${firstLetter}"`;
             lastLetter = firstLetter;
         }
 
-        // Check if this is an image item (by class or MIME type)
         const isImage = (item.class && item.class.includes('imageItem')) ||
             (item.protocolInfo && item.protocolInfo.includes('image/'));
 
-        // Check if this is a video item
         const isVideo = (item.class && item.class.includes('videoItem')) ||
             (item.protocolInfo && item.protocolInfo.includes('video/'));
 
-        const icon = isContainer ? `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-            </svg>
-        ` : isImage ? `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                <path d="M21 15l-5-5L5 21"></path>
-            </svg>
-        ` : isVideo ? `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <path d="M8 21h8"></path>
-                <path d="M12 17v4"></path>
-                <path d="M10 8l5 3-5 3V8z"></path>
-            </svg>
-        ` : `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <path d="M10 8l6 4-6 4V8z"></path>
-            </svg>
-        `;
+        let icon = '';
+        if (effectiveViewMode === 'grid') {
+            const thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
+            if (thumbUrl) {
+                const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+                icon = `<img src="${escThumb}" loading="lazy" alt="">`;
+            }
+        }
+
+        if (!icon) {
+            icon = isContainer ? `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                </svg>
+            ` : isImage ? `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <path d="M21 15l-5-5L5 21"></path>
+                </svg>
+            ` : isVideo ? `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <path d="M8 21h8"></path>
+                    <path d="M12 17v4"></path>
+                    <path d="M10 8l5 3-5 3V8z"></path>
+                </svg>
+            ` : `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M10 8l6 4-6 4V8z"></path>
+                </svg>
+            `;
+        }
 
         const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-
         const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
+
         return `
             <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
@@ -854,7 +917,7 @@ function renderBrowser(items) {
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
                 </div>
-                ${!isLocalServer || isLocalServer || !isContainer ? `
+                ${(effectiveViewMode !== 'grid') && (!isLocalServer || isLocalServer || !isContainer) ? `
                     <div class="item-actions">
                         ${!isContainer ? `
                         <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromBrowser(${index})" title="View track metadata">
@@ -1279,6 +1342,8 @@ function openArtModal(url, title = '', artist = '', album = '') {
     const titleEl = document.getElementById('modal-track-title');
     const artistEl = document.getElementById('modal-track-artist');
     const albumEl = document.getElementById('modal-track-album');
+    const container = document.getElementById('modal-art-container');
+    const wrapper = document.getElementById('modal-art-wrapper');
 
     if (modal && img) {
         console.log(`[ART] Opening modal for: ${url}`);
@@ -1289,6 +1354,21 @@ function openArtModal(url, title = '', artist = '', album = '') {
             : url;
 
         img.src = ''; // Clear previous
+
+        img.onload = () => {
+            const ratio = img.naturalWidth / img.naturalHeight;
+            if (ratio > 2.2) {
+                // Panorama mode
+                if (container) container.style.maxWidth = '100vw';
+                if (wrapper) wrapper.classList.add('panorama-wrapper');
+                img.classList.add('panorama-img');
+            } else {
+                if (container) container.style.maxWidth = '90vw';
+                if (wrapper) wrapper.classList.remove('panorama-wrapper');
+                img.classList.remove('panorama-img');
+            }
+        };
+
         img.src = finalUrl;
 
         // If specific metadata is passed (e.g. clicking an image in the browser)
@@ -1324,6 +1404,14 @@ function closeArtModal() {
     const modal = document.getElementById('album-art-modal');
     if (modal) {
         modal.style.display = 'none';
+
+        // Reset panorama states
+        const container = document.getElementById('modal-art-container');
+        const wrapper = document.getElementById('modal-art-wrapper');
+        const img = document.getElementById('modal-art-img');
+        if (container) container.style.maxWidth = '90vw';
+        if (wrapper) wrapper.classList.remove('panorama-wrapper');
+        if (img) img.classList.remove('panorama-img');
     }
 }
 
@@ -1766,29 +1854,6 @@ function closeRendererModal() {
     rendererModal.style.display = 'none';
 }
 
-function openManageModal() {
-    manageModal.style.display = 'flex';
-    renderManageDevices();
-
-    // Load saved Discogs token status from server
-    const tokenInput = document.getElementById('discogs-token-input');
-    if (tokenInput) {
-        fetch('/api/settings/discogs')
-            .then(res => res.json())
-            .then(data => {
-                if (data.hasToken) {
-                    tokenInput.value = data.maskedToken;
-                } else {
-                    tokenInput.value = '';
-                }
-            })
-            .catch(err => console.error('Failed to fetch settings:', err));
-    }
-}
-
-function closeManageModal() {
-    manageModal.style.display = 'none';
-}
 
 function renderManageDevices() {
     const renderers = currentDevices.filter(d => d.isRenderer);
@@ -3370,38 +3435,6 @@ function openManageModal() {
     fetchS3Settings();
 }
 
-function closeManageModal() {
-    manageModal.style.display = 'none';
-}
-
-function switchSettingsTab(tabName) {
-    const tabs = document.querySelectorAll('.settings-tab');
-    const contents = document.querySelectorAll('.settings-panel');
-    tabs.forEach(t => t.classList.remove('active'));
-    contents.forEach(c => c.classList.remove('active'));
-    const activeTab = Array.from(tabs).find(t => t.textContent.toLowerCase() === tabName.toLowerCase());
-    const activeContent = document.getElementById(`settings-${tabName}`);
-    if (activeTab) activeTab.classList.add('active');
-    if (activeContent) activeContent.classList.add('active');
-}
-
-
-// Additional missing functions for settings and device management
-
-async function toggleDeviceDisabled(udn, role) {
-    try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/toggle-disabled/${role}`, {
-            method: 'POST'
-        });
-        if (!response.ok) throw new Error('Failed to toggle device state');
-        await fetchDevices();
-        renderManageDevices();
-        renderDevices();
-    } catch (err) {
-        console.error('Failed to toggle device:', err);
-        showToast('Failed to update device');
-    }
-}
 
 
 async function startSlideshow() {
@@ -3425,6 +3458,14 @@ async function startSlideshow() {
         overlay.classList.add('active');
     }
 
+    if (info) {
+        info.style.cursor = 'pointer';
+        info.onclick = (e) => {
+            e.stopPropagation();
+            goToScreensaverFolder();
+        };
+    }
+
     const showNextPhoto = async () => {
         try {
             const res = await fetch('/api/slideshow/random');
@@ -3435,6 +3476,16 @@ async function startSlideshow() {
                     if (info) info.style.opacity = 0;
 
                     setTimeout(() => {
+                        // Save current photo as previous before changing
+                        if (currentScreensaverPhoto) {
+                            previousScreensaverPhoto = {
+                                url: currentScreensaverPhoto,
+                                rotation: currentScreensaverRotation,
+                                date: info ? info.querySelector('.ss-date')?.textContent : null,
+                                location: info ? info.querySelector('.ss-location')?.textContent : null
+                            };
+                        }
+
                         img.src = data.url;
                         currentScreensaverPhoto = data.url;
                         currentScreensaverRotation = data.manualRotation || 0;
@@ -3471,16 +3522,37 @@ async function startSlideshow() {
                                 displayHtml += `<div class="ss-location">${data.location}</div>`;
                             }
                             info.innerHTML = displayHtml;
+
+                            // Store folder info for navigation
+                            currentScreensaverFolder = {
+                                id: data.folderId,
+                                title: data.folderTitle
+                            };
                         }
 
                         img.onload = () => {
                             img.style.opacity = 1;
                             if (info) info.style.opacity = 1;
+
+                            // Check for panorama format
+                            const ratio = img.naturalWidth / img.naturalHeight;
+                            if (ratio > 2.2) {
+                                img.classList.add('panorama');
+                            } else {
+                                img.classList.remove('panorama');
+                            }
                         };
                         // Fallback in case onload doesn't fire (cached)
                         if (img.complete) {
                             img.style.opacity = 1;
                             if (info) info.style.opacity = 1;
+
+                            const ratio = img.naturalWidth / img.naturalHeight;
+                            if (ratio > 2.2) {
+                                img.classList.add('panorama');
+                            } else {
+                                img.classList.remove('panorama');
+                            }
                         }
                     }, 500);
                 }
@@ -3529,6 +3601,65 @@ async function rotateSlideshow(delta) {
     } catch (e) {
         console.error('Failed to save rotation:', e);
     }
+}
+
+function previousSlideshow() {
+    if (!previousScreensaverPhoto) {
+        console.log('No previous photo available');
+        return;
+    }
+
+    const img = document.getElementById('screensaver-img');
+    const info = document.getElementById('screensaver-info');
+
+    if (!img) return;
+
+    // Fade out
+    img.style.opacity = 0;
+    if (info) info.style.opacity = 0;
+
+    setTimeout(() => {
+        // Swap current and previous
+        const temp = {
+            url: currentScreensaverPhoto,
+            rotation: currentScreensaverRotation,
+            date: info ? info.querySelector('.ss-date')?.textContent : null,
+            location: info ? info.querySelector('.ss-location')?.textContent : null
+        };
+
+        // Restore previous photo
+        img.src = previousScreensaverPhoto.url;
+        currentScreensaverPhoto = previousScreensaverPhoto.url;
+        currentScreensaverRotation = previousScreensaverPhoto.rotation || 0;
+        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+
+        // Update info
+        if (info) {
+            let displayHtml = '';
+            if (previousScreensaverPhoto.date) {
+                displayHtml += `<div class="ss-date">${previousScreensaverPhoto.date}</div>`;
+            }
+            if (previousScreensaverPhoto.location) {
+                displayHtml += `<div class="ss-location">${previousScreensaverPhoto.location}</div>`;
+            }
+            info.innerHTML = displayHtml;
+        }
+
+        // Update previous to be the old current
+        previousScreensaverPhoto = temp;
+
+        // Fade in
+        img.onload = () => {
+            img.style.opacity = 1;
+            if (info) info.style.opacity = 1;
+        };
+        if (img.complete) {
+            img.style.opacity = 1;
+            if (info) info.style.opacity = 1;
+        }
+    }, 500);
+
+    console.log('Going back to previous photo');
 }
 
 async function deleteCurrentPhoto() {
@@ -3594,69 +3725,40 @@ function stopSlideshow() {
     }
 }
 
-async function deleteDevice(udn) {
-    if (!confirm('Remove this device from saved devices?')) return;
-    try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete device');
-        await fetchDevices();
-        renderManageDevices();
-        renderDevices();
-        showToast('Device removed', 'success', 2000);
-    } catch (err) {
-        console.error('Failed to delete device:', err);
-        showToast('Failed to remove device');
+async function goToScreensaverFolder() {
+    if (!currentScreensaverFolder || !screensaverConfig.serverUdn) {
+        console.warn('[SCREENSAVER] No folder info available to navigate');
+        return;
+    }
+
+    console.log('[SCREENSAVER] Navigating to folder:', currentScreensaverFolder.title);
+    const folderId = currentScreensaverFolder.id;
+    const folderTitle = currentScreensaverFolder.title;
+
+    stopSlideshow();
+
+    // Ensure we are in grid mode
+    browserViewMode = 'grid';
+    localStorage.setItem('browserViewMode', 'grid');
+
+    // Select the server
+    selectedServerUdn = screensaverConfig.serverUdn;
+    localStorage.setItem('selectedServerUdn', selectedServerUdn);
+
+    // Reset browser path to root first to ensure clean breadcrumbs
+    browsePath = [{ id: '0', title: 'Home' }];
+
+    // Trigger navigation
+    await enterFolder(folderId, folderTitle);
+
+    // If on mobile, switch to browser tab
+    if (typeof switchView === 'function') {
+        switchView('browser');
     }
 }
 
-function startRename(udn) {
-    const device = currentDevices.find(d => d.udn === udn);
-    if (!device) return;
-    const nameRow = document.getElementById(`name-row-${udn.replace(/:/g, '-')}`);
-    if (!nameRow) return;
-    const currentName = device.customName || device.friendlyName;
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = currentName;
-    input.className = 'rename-input';
-    input.style.cssText = 'flex: 1; padding: 0.3rem 0.5rem; border: 1px solid var(--primary); border-radius: 4px; background: var(--bg-secondary); color: white;';
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = '✓';
-    saveBtn.className = 'btn-control primary';
-    saveBtn.style.cssText = 'padding: 0.3rem 0.6rem; margin-left: 0.5rem;';
-    saveBtn.onclick = () => saveRename(udn, input.value);
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = '✕';
-    cancelBtn.className = 'btn-control';
-    cancelBtn.style.cssText = 'padding: 0.3rem 0.6rem; margin-left: 0.3rem;';
-    cancelBtn.onclick = () => renderManageDevices();
-    nameRow.innerHTML = '';
-    nameRow.appendChild(input);
-    nameRow.appendChild(saveBtn);
-    nameRow.appendChild(cancelBtn);
-    input.focus();
-    input.select();
-}
 
-async function saveRename(udn, newName) {
-    try {
-        const response = await fetch(`/api/devices/${encodeURIComponent(udn)}/rename`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ customName: newName.trim() })
-        });
-        if (!response.ok) throw new Error('Failed to rename device');
-        await fetchDevices();
-        renderManageDevices();
-        renderDevices();
-        showToast('Device renamed', 'success', 2000);
-    } catch (err) {
-        console.error('Failed to rename device:', err);
-        showToast('Failed to rename device');
-    }
-}
+
 
 async function saveGeneralSettings() {
     const nameInput = document.getElementById('device-name-input');
@@ -3841,66 +3943,8 @@ async function triggerS3Sync() {
     }
 }
 
-async function triggerDiscovery(btn) {
-    const originalContent = btn ? btn.innerHTML : null;
-    if (btn) {
-        btn.classList.add('scanning');
-        btn.innerHTML = `
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-            </svg>
-            Seeking...
-        `;
-    }
-    try {
-        console.log('Triggering manual SSDP discovery...');
-        await fetch('/api/discover', { method: 'POST' });
-        await fetchDevices();
-        let count = 0;
-        const interval = setInterval(async () => {
-            count++;
-            await fetchDevices();
-            if (manageModal && manageModal.style.display !== 'none') {
-                renderManageDevices();
-            }
-            if (count >= 5) clearInterval(interval);
-        }, 1000);
-        if (btn) {
-            setTimeout(() => {
-                console.log('Manual discovery period ended.');
-                btn.classList.remove('scanning');
-                btn.innerHTML = originalContent;
-            }, 6000);
-        }
-    } catch (err) {
-        console.error('Failed to trigger discovery:', err);
-        if (btn) {
-            btn.classList.remove('scanning');
-            btn.innerHTML = originalContent;
-        }
-    }
-}
 
 
-async function saveDiscogsToken() {
-    const input = document.getElementById('discogs-token-input');
-    if (!input) return;
-    const token = input.value.trim();
-    try {
-        const response = await fetch('/api/settings/discogs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token })
-        });
-        if (response.ok) {
-            showToast('Discogs token saved', 'success', 2000);
-        }
-    } catch (err) {
-        console.error('Failed to save Discogs token:', err);
-        showToast('Failed to save token');
-    }
-}
 
 // Stats Modal logic
 async function openStatsModal() {
