@@ -177,24 +177,34 @@ body {
     /* Collapsible sections on mobile */
     #playlist-container #playlist-items,
     #playlist-container .section-header,
+    #playlist-container .position-control-wrapper,
     #browser-container #browser-items,
-    #browser-container .section-header {
+    #browser-container .section-header,
+    #browser-container .header-controls {
         display: none;
     }
 
     /* Show browser by default in mobile mode */
     #browser-container #browser-items,
-    #browser-container .section-header {
+    #browser-container .section-header,
+    #browser-container .header-controls {
         display: flex;
         flex-direction: column;
     }
 
     #playlist-container.expanded #playlist-items,
     #playlist-container.expanded .section-header,
+    #playlist-container.expanded .position-control-wrapper,
     #browser-container.expanded #browser-items,
-    #browser-container.expanded .section-header {
+    #browser-container.expanded .section-header,
+    #browser-container.expanded .header-controls {
         display: flex;
         flex-direction: column;
+    }
+
+    #playlist-container.expanded .position-control-wrapper {
+        display: flex;
+        flex-direction: row;
     }
 
     #playlist-container.expanded #playlist-items,
@@ -202,6 +212,18 @@ body {
         overflow-y: auto;
         border-top: 1px solid var(--card-border);
         margin-top: 0.5rem;
+        padding-top: 0.5rem;
+    }
+
+    #playlist-container.expanded .position-control-wrapper {
+        border-top: 1px solid var(--card-border);
+        margin-top: 0.5rem;
+        padding-top: 0.5rem;
+    }
+
+    #browser-container .header-controls {
+        border-top: 1px solid var(--card-border);
+        margin-top: 0.75rem;
         padding-top: 0.5rem;
     }
 
@@ -816,11 +838,11 @@ p.subtitle {
     display: flex;
     align-items: center;
     gap: 1rem;
-    padding: 0.5rem 0.75rem;
-    background: rgba(255, 255, 255, 0.02);
-    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 1rem;
     border: 1px solid var(--card-border);
-    margin-top: 0.25rem;
+    margin-top: 0.75rem;
     width: 100%;
 }
 
