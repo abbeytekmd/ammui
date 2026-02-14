@@ -3453,6 +3453,28 @@ window.addEventListener('mouseup', (event) => {
 });
 
 // Settings Modal Functions added by assistant
+function switchSettingsTab(tabId) {
+    // Update tabs
+    const tabs = document.querySelectorAll('.settings-tab');
+    tabs.forEach(tab => {
+        if (tab.getAttribute('onclick').includes(`'${tabId}'`)) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    });
+
+    // Update panels
+    const panels = document.querySelectorAll('.settings-panel');
+    panels.forEach(panel => {
+        if (panel.id === `settings-${tabId}`) {
+            panel.classList.add('active');
+        } else {
+            panel.classList.remove('active');
+        }
+    });
+}
+
 function openManageModal() {
     manageModal.style.display = 'flex';
     switchSettingsTab('general');
@@ -3472,6 +3494,10 @@ function openManageModal() {
             .catch(err => console.error('Failed to fetch settings:', err));
     }
     fetchS3Settings();
+}
+
+function closeManageModal() {
+    manageModal.style.display = 'none';
 }
 
 
