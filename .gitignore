@@ -10,4 +10,9 @@ coverage/
 .vscode/
 .idea/
 local/
-*.json
+
+# JSON settings and data
+devices.json
+settings.json
+stats.json
+db.json
