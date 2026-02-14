@@ -1580,6 +1580,8 @@ app.get('/api/slideshow/random', async (req, res) => {
         return res.status(404).json({ error: 'Screensaver source device not found' });
     }
 
+    const { mode } = req.query;
+
     try {
         let foundImage = null;
 
@@ -1588,8 +1590,29 @@ app.get('/api/slideshow/random', async (req, res) => {
 
         // If cache is ready and has images, use it!
         if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
-            const index = Math.floor(Math.random() * screensaverCache.images.length);
-            foundImage = screensaverCache.images[index];
+            let imagesToUse = screensaverCache.images;
+
+            if (mode === 'onThisDay') {
+                const today = new Date();
+                const month = today.getMonth() + 1;
+                const day = today.getDate();
+
+                imagesToUse = imagesToUse.filter(img => {
+                    const dateStr = img.year || img.date || img['dc:date'];
+                    if (!dateStr) return false;
+                    const d = new Date(dateStr);
+                    if (isNaN(d.getTime())) return false;
+                    return (d.getMonth() + 1) === month && d.getDate() === day;
+                });
+
+                if (imagesToUse.length === 0) {
+                    console.log(`[SCREENSAVER] No images found for "On This Day" (${month}/${day})`);
+                    return res.status(404).json({ error: 'No images found for this day' });
+                }
+            }
+
+            const index = Math.floor(Math.random() * imagesToUse.length);
+            foundImage = imagesToUse[index];
 
             // HACK: If we just updated the code but the cache is old, trigger refresh
             if (!foundImage.folderId && !screensaverCache.refreshTriggered) {
@@ -1601,6 +1624,11 @@ app.get('/api/slideshow/random', async (req, res) => {
             // Trigger build if needed
             if (!cacheValid || screensaverCache.status === 'idle') {
                 refreshScreensaverCache(device, objectId); // Background, do not await
+            }
+
+            if (mode === 'onThisDay') {
+                // On This Day requires a full scan
+                return res.status(503).json({ error: 'Preparing On This Day slideshow...' });
             }
 
             // FALLBACK: RANDOM WALK

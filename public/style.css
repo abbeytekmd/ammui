@@ -3621,6 +3621,36 @@ input:checked+.slider:before {
     height: 30px;
 }
 
+.btn-ss-mode {
+    background: rgba(0, 0, 0, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    cursor: pointer;
+    backdrop-filter: blur(5px);
+    transition: all 0.2s ease;
+    text-align: center;
+}
+
+.btn-ss-mode:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+#ss-mode-label {
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.1;
+    display: block;
+    width: 100%;
+    text-transform: uppercase;
+}
+
 /* Stats Modal Styles */
 .stats-modal-content {
     max-width: 600px;

@@ -108,10 +108,18 @@ let currentScreensaverPhoto = null;
 let previousScreensaverPhoto = null; // Track the previous photo
 let currentScreensaverRotation = 0;
 let currentScreensaverFolder = null;
+let screensaverMode = localStorage.getItem('screensaverMode') || 'all'; // 'all' or 'onThisDay'
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
 let lastReportedTrackKey = null;
 
 let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
+
+function isImageItem(item) {
+    return item && item.type === 'item' && ((item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
+}
+
+let customSlideshowItems = [];
+let customSlideshowIndex = -1;
 
 // Local Disabling
 let localDisabledDevices = new Set();
@@ -573,7 +581,14 @@ async function addAllToPlaylist() {
 }
 
 async function playAll() {
-    const tracks = currentBrowserItems.filter(item => item.type === 'item');
+    const tracks = currentBrowserItems.filter(item => item.type === 'item' && !isImageItem(item));
+    const images = currentBrowserItems.filter(item => isImageItem(item));
+
+    if (tracks.length === 0 && images.length > 0) {
+        playAllPhotos(images);
+        return;
+    }
+
     if (tracks.length === 0) return;
 
     // Sort by disc then track
@@ -589,6 +604,7 @@ async function playAll() {
 
     const btn = document.getElementById('btn-play-all');
     btn.classList.add('disabled');
+    const originalContent = btn.innerHTML;
     btn.textContent = 'Preparing...';
 
     try {
@@ -634,8 +650,14 @@ async function playAll() {
         showToast(`Play All failed: ${err.message}. Stopped remaining tracks.`);
     } finally {
         btn.classList.remove('disabled');
-        btn.textContent = 'Play All';
+        btn.innerHTML = originalContent; // Restore icon and text
     }
+}
+
+function playAllPhotos(images) {
+    customSlideshowItems = images;
+    customSlideshowIndex = -1;
+    startSlideshow();
 }
 
 async function transportAction(action) {
@@ -758,8 +780,8 @@ function toggleBrowserView() {
 }
 
 function updateBrowserControls(items) {
-    const tracks = items.filter(item => item.type === 'item' && !(item.class && item.class.includes('imageItem')) && !(item.protocolInfo && item.protocolInfo.includes('image/')));
-    const images = items.filter(item => (item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
+    const tracks = items.filter(item => item.type === 'item' && !isImageItem(item));
+    const images = items.filter(item => isImageItem(item));
 
     const btnPlayAll = document.getElementById('btn-play-all');
     const btnAddAll = document.getElementById('btn-add-all');
@@ -769,7 +791,15 @@ function updateBrowserControls(items) {
     const showMusicControls = tracks.length > 0;
     const showPhotoControls = images.length > 0;
 
-    if (btnPlayAll) btnPlayAll.style.display = showMusicControls ? 'flex' : 'none';
+    if (btnPlayAll) {
+        btnPlayAll.style.display = (showMusicControls || showPhotoControls) ? 'flex' : 'none';
+        const label = btnPlayAll.querySelector('.btn-label');
+        if (label) {
+            const btnText = showMusicControls ? 'Play All' : 'Slideshow';
+            label.textContent = btnText;
+            label.setAttribute('data-mobile', showMusicControls ? 'All' : 'SS');
+        }
+    }
     if (btnAddAll) btnAddAll.style.display = showMusicControls ? 'flex' : 'none';
 
     if (btnToggleView) {
@@ -790,13 +820,14 @@ function updateBrowserControls(items) {
     }
     if (divToggleView) divToggleView.style.display = showPhotoControls ? 'block' : 'none';
 
-    // Enable/disable buttons based on tracks count
+    // Enable/disable buttons based on tracks/images count
     if (btnPlayAll) {
-        if (tracks.length > 0) btnPlayAll.classList.remove('disabled');
+        const canPlay = showMusicControls || showPhotoControls;
+        if (canPlay) btnPlayAll.classList.remove('disabled');
         else btnPlayAll.classList.add('disabled');
     }
     if (btnAddAll) {
-        if (tracks.length > 0) btnAddAll.classList.remove('disabled');
+        if (showMusicControls) btnAddAll.classList.remove('disabled');
         else btnAddAll.classList.add('disabled');
     }
 }
@@ -2479,6 +2510,12 @@ async function init() {
     // Start idle timer
     resetIdleTimer();
 
+    // Initialize screensaver mode label
+    const ssModeLabel = document.getElementById('ss-mode-label');
+    if (ssModeLabel) {
+        ssModeLabel.textContent = (screensaverMode === 'all') ? 'All' : 'On This Day';
+    }
+
     // Migrate Discogs token to server if it exists locally
     const localToken = localStorage.getItem('discogsToken');
     if (localToken) {
@@ -3329,8 +3366,10 @@ let idleTimer = null;
 const IDLE_THRESHOLD = 60000; // 1 minute
 
 function resetIdleTimer(e) {
-    // If activity is on screensaver controls, don't stop the screensaver
-    if (e && e.target && typeof e.target.closest === 'function' && e.target.closest('.screensaver-controls')) return;
+    // If activity is on screensaver controls or the start slideshow button, don't stop the screensaver
+    if (e && e.target && typeof e.target.closest === 'function' &&
+        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-play-all'))
+    ) return;
 
     const isMouseMove = e && e.type === 'mousemove';
 
@@ -3438,7 +3477,7 @@ function openManageModal() {
 
 
 async function startSlideshow() {
-    if (!screensaverConfig.serverUdn || !screensaverConfig.objectId) return;
+    if (!customSlideshowItems.length && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) return;
     if (isScreensaverActive) return;
 
     // Don't start if local video is playing
@@ -3466,103 +3505,135 @@ async function startSlideshow() {
         };
     }
 
-    const showNextPhoto = async () => {
-        try {
-            const res = await fetch('/api/slideshow/random');
+    await showNextPhoto();
+
+    // Clear any existing interval before starting a new one
+    if (screensaverInterval) clearInterval(screensaverInterval);
+    screensaverInterval = setInterval(showNextPhoto, 60000);
+}
+
+async function showNextPhoto() {
+    const img = document.getElementById('screensaver-img');
+    const info = document.getElementById('screensaver-info');
+    if (!img) return;
+
+    try {
+        let data;
+        if (customSlideshowItems.length > 0) {
+            customSlideshowIndex = (customSlideshowIndex + 1) % customSlideshowItems.length;
+            const item = customSlideshowItems[customSlideshowIndex];
+            data = {
+                url: item.uri || item.res,
+                title: item.title,
+                date: item.year || item.date || '',
+                location: item.artist || '',
+                manualRotation: item.manualRotation || 0,
+                folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
+                folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Root')
+            };
+        } else {
+            const res = await fetch(`/api/slideshow/random?mode=${screensaverMode}`);
             if (res.ok) {
-                const data = await res.json();
-                if (data.url && img) {
-                    img.style.opacity = 0;
-                    if (info) info.style.opacity = 0;
-
-                    setTimeout(() => {
-                        // Save current photo as previous before changing
-                        if (currentScreensaverPhoto) {
-                            previousScreensaverPhoto = {
-                                url: currentScreensaverPhoto,
-                                rotation: currentScreensaverRotation,
-                                date: info ? info.querySelector('.ss-date')?.textContent : null,
-                                location: info ? info.querySelector('.ss-location')?.textContent : null
-                            };
-                        }
-
-                        img.src = data.url;
-                        currentScreensaverPhoto = data.url;
-                        currentScreensaverRotation = data.manualRotation || 0;
-
-                        // Modern browsers automatically handle EXIF orientation. 
-                        // Manual rotation causes "double rotation".
-                        // We apply our manual rotation ADDITIVELY.
-                        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
-
-                        if (info) {
-                            // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
-                            // If just Year is desired, we can parse it.
-                            // For now, let's show whatever valid date string or year we find.
-                            let dateStr = '<no date>';
-                            if (data.date) {
-                                // Try to normalize date string to just Year or Month Year
-                                const d = new Date(data.date);
-                                if (!isNaN(d.getTime())) {
-                                    // If strict year only is detected e.g. "2023", Date() might parse it as Jan 1st ?
-                                    // If input is just 4 digits, keep it as is.
-                                    if (/^\d{4}$/.test(data.date)) {
-                                        dateStr = data.date;
-                                    } else {
-                                        dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                                    }
-                                } else {
-                                    dateStr = data.date;
-                                }
-                            }
-
-                            // Combine Date and Location
-                            let displayHtml = `<div class="ss-date">${dateStr}</div>`;
-                            if (data.location) {
-                                displayHtml += `<div class="ss-location">${data.location}</div>`;
-                            }
-                            info.innerHTML = displayHtml;
-
-                            // Store folder info for navigation
-                            currentScreensaverFolder = {
-                                id: data.folderId,
-                                title: data.folderTitle
-                            };
-                        }
-
-                        img.onload = () => {
-                            img.style.opacity = 1;
-                            if (info) info.style.opacity = 1;
-
-                            // Check for panorama format
-                            const ratio = img.naturalWidth / img.naturalHeight;
-                            if (ratio > 2.2) {
-                                img.classList.add('panorama');
-                            } else {
-                                img.classList.remove('panorama');
-                            }
-                        };
-                        // Fallback in case onload doesn't fire (cached)
-                        if (img.complete) {
-                            img.style.opacity = 1;
-                            if (info) info.style.opacity = 1;
-
-                            const ratio = img.naturalWidth / img.naturalHeight;
-                            if (ratio > 2.2) {
-                                img.classList.add('panorama');
-                            } else {
-                                img.classList.remove('panorama');
-                            }
-                        }
-                    }, 500);
+                data = await res.json();
+            } else {
+                const errData = await res.json();
+                if (screensaverMode === 'onThisDay') {
+                    showToast(errData.error || 'No photos for today', 'info', 3000);
                 }
             }
-        } catch (e) { console.error('Slideshow fetch failed', e); }
-    };
+        }
 
-    await showNextPhoto();
-    // Loop every 1 minute
-    screensaverInterval = setInterval(showNextPhoto, 60000);
+        if (data && data.url && img) {
+            img.style.opacity = 0;
+            if (info) info.style.opacity = 0;
+
+            setTimeout(() => {
+                // Save current photo as previous before changing
+                if (currentScreensaverPhoto) {
+                    previousScreensaverPhoto = {
+                        url: currentScreensaverPhoto,
+                        rotation: currentScreensaverRotation,
+                        date: info ? info.querySelector('.ss-date')?.textContent : null,
+                        location: info ? info.querySelector('.ss-location')?.textContent : null
+                    };
+                }
+
+                img.src = data.url;
+                currentScreensaverPhoto = data.url;
+                currentScreensaverRotation = data.manualRotation || 0;
+
+                // Modern browsers automatically handle EXIF orientation. 
+                // Manual rotation causes "double rotation".
+                // We apply our manual rotation ADDITIVELY.
+                img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+
+                if (info) {
+                    // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
+                    let dateStr = '<no date>';
+                    if (data.date) {
+                        const d = new Date(data.date);
+                        if (!isNaN(d.getTime())) {
+                            if (/^\d{4}$/.test(data.date)) {
+                                dateStr = data.date;
+                            } else {
+                                dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                            }
+                        } else {
+                            dateStr = data.date;
+                        }
+                    }
+
+                    // Combine Date and Location
+                    let displayHtml = `<div class="ss-date">${dateStr}</div>`;
+                    if (data.location) {
+                        displayHtml += `<div class="ss-location">${data.location}</div>`;
+                    }
+                    info.innerHTML = displayHtml;
+
+                    // Store folder info for navigation
+                    currentScreensaverFolder = {
+                        id: data.folderId,
+                        title: data.folderTitle
+                    };
+                }
+
+                img.onload = () => {
+                    img.style.opacity = 1;
+                    if (info) info.style.opacity = 1;
+
+                    // Check for panorama format
+                    const ratio = img.naturalWidth / img.naturalHeight;
+                    if (ratio > 2.2) {
+                        img.classList.add('panorama');
+                    } else {
+                        img.classList.remove('panorama');
+                    }
+                };
+                // Fallback in case onload doesn't fire (cached)
+                if (img.complete) {
+                    img.onload();
+                }
+            }, 500);
+        }
+    } catch (e) {
+        console.error('Slideshow fetch failed', e);
+    }
+}
+
+function toggleSlideshowMode() {
+    screensaverMode = screensaverMode === 'all' ? 'onThisDay' : 'all';
+    localStorage.setItem('screensaverMode', screensaverMode);
+
+    // Update UI label
+    const label = document.getElementById('ss-mode-label');
+    if (label) {
+        label.textContent = screensaverMode === 'all' ? 'All' : 'On This Day';
+    }
+
+    showToast(`Slideshow Mode: ${screensaverMode === 'all' ? 'All Photos' : 'On This Day'}`, 'info', 2000);
+
+    // Immediately show a new photo in the new mode
+    showNextPhoto();
 }
 
 
@@ -3600,6 +3671,12 @@ async function rotateSlideshow(delta) {
         });
     } catch (e) {
         console.error('Failed to save rotation:', e);
+    }
+
+    // Reset interval when interacting
+    if (screensaverInterval) {
+        clearInterval(screensaverInterval);
+        screensaverInterval = setInterval(showNextPhoto, 60000);
     }
 }
 
@@ -3659,6 +3736,12 @@ function previousSlideshow() {
         }
     }, 500);
 
+    // Reset interval when interacting
+    if (screensaverInterval) {
+        clearInterval(screensaverInterval);
+        screensaverInterval = setInterval(showNextPhoto, 60000);
+    }
+
     console.log('Going back to previous photo');
 }
 
@@ -3684,20 +3767,10 @@ async function deleteCurrentPhoto() {
             showToast('Photo marked as deleted', 'success', 2000);
             // Move to next photo immediately
             if (screensaverInterval) {
-                // Clear and restart interval to skip now
                 clearInterval(screensaverInterval);
-                // The showNextPhoto function is inside startSlideshow, we might need to expose it or just call startSlideshow again
-                // But startSlideshow checks isScreensaverActive.
-                // Let's just find where showNextPhoto is defined or similar.
-                // Actually, startSlideshow is a bit complex.
-                // A simpler way: just trigger the "next" logic.
-                // Since showNextPhoto is local to startSlideshow, I should move it or repeat it.
-                // Wait, I can just call startSlideshow() if I set isScreensaverActive to false first? 
-                // No, that might cause double overlays.
+                screensaverInterval = setInterval(showNextPhoto, 60000);
             }
-            // Let's just force a refresh of the image by calling startSlideshow again after resetting flag
-            isScreensaverActive = false;
-            startSlideshow();
+            await showNextPhoto();
         } else {
             const data = await response.json();
             showToast(`Failed to delete photo: ${data.error || 'Server error'}`);
@@ -3713,6 +3786,8 @@ function stopSlideshow() {
 
     console.log('Stopping Screensaver...');
     isScreensaverActive = false;
+    customSlideshowItems = [];
+    customSlideshowIndex = -1;
     if (screensaverTimeout) clearTimeout(screensaverTimeout);
     if (screensaverInterval) clearInterval(screensaverInterval);
 

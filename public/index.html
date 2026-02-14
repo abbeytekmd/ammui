@@ -99,8 +99,9 @@
                     </div>
                     <div class="header-controls">
                         <div class="browser-control-group">
-                            <button id="btn-play-all" onclick="playAll()" class="btn-control disabled primary"
-                                style="display: none;" title="Clear and play all tracks">
+                            <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
+                                class="btn-control disabled primary" style="display: none;"
+                                title="Clear and play all tracks">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M5 3l14 9-14 9V3z"></path>
@@ -554,7 +555,9 @@
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <div class="screensaver-info" id="screensaver-info"></div>
 
-        <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()">
+        <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
+            ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
+            onmouseup="event.stopPropagation()">
             <div class="ss-control-item" onclick="previousSlideshow()"
                 ontouchstart="previousSlideshow(); event.preventDefault();">
                 <button class="btn-ss-back" title="Previous Photo">
@@ -576,6 +579,15 @@
                 </button>
                 <div class="ss-control-label">Left</div>
             </div>
+
+            <div class="ss-control-item" onclick="toggleSlideshowMode()"
+                ontouchstart="toggleSlideshowMode(); event.preventDefault();">
+                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day)">
+                    <span id="ss-mode-label">All</span>
+                </button>
+                <div class="ss-control-label">Mode</div>
+            </div>
+
             <div class="ss-control-item" onclick="deleteCurrentPhoto()"
                 ontouchstart="deleteCurrentPhoto(); event.preventDefault();">
                 <button class="btn-ss-delete" title="Mark as Delete (Don't show again)">
