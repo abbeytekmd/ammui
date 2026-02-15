@@ -148,7 +148,7 @@ body {
     }
 
     .main-layout {
-        flex-direction: column-reverse;
+        flex-direction: column;
         gap: 1rem;
         display: flex;
         height: auto;
@@ -2333,12 +2333,12 @@ p.subtitle {
 
     /* Main layout takes remaining space */
     .main-layout {
-        flex-direction: column-reverse;
-        /* Browser bottom, Player top originally, but DOM order is Browser first, then Player */
+        flex-direction: column;
+        /* Browser top, Player bottom. DOM order is Browser first, then Player */
         /* Wait, DOM order: Browser Column (Line 54), Player Column (Line 111). 
-           If column-reverse, Player is at Top, Browser is at Bottom. 
+           If column, Browser is at Top, Player is at Bottom. 
         */
-        flex-direction: column-reverse;
+        flex-direction: column;
         gap: 0.5rem;
         flex: 1;
         min-height: 0;
