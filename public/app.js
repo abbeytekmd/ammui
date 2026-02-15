@@ -3551,6 +3551,7 @@ async function startSlideshow() {
 async function showNextPhoto() {
     const img = document.getElementById('screensaver-img');
     const info = document.getElementById('screensaver-info');
+    const favBtn = document.getElementById('btn-ss-favourite');
     if (!img) return;
 
     try {
@@ -3573,8 +3574,8 @@ async function showNextPhoto() {
                 data = await res.json();
             } else {
                 const errData = await res.json();
-                if (screensaverMode === 'onThisDay') {
-                    showToast(errData.error || 'No photos for today', 'info', 3000);
+                if (screensaverMode === 'onThisDay' || screensaverMode === 'favourites') {
+                    showToast(errData.error || `No photos for ${screensaverMode}`, 'info', 3000);
                 }
             }
         }
@@ -3590,13 +3591,23 @@ async function showNextPhoto() {
                         url: currentScreensaverPhoto,
                         rotation: currentScreensaverRotation,
                         date: info ? info.querySelector('.ss-date')?.textContent : null,
-                        location: info ? info.querySelector('.ss-location')?.textContent : null
+                        location: info ? info.querySelector('.ss-location')?.textContent : null,
+                        isFavourite: favBtn && favBtn.classList.contains('is-favourite')
                     };
                 }
 
                 img.src = data.url;
                 currentScreensaverPhoto = data.url;
                 currentScreensaverRotation = data.manualRotation || 0;
+
+                // Update favourite state
+                if (favBtn) {
+                    if (data.isFavourite) {
+                        favBtn.classList.add('is-favourite');
+                    } else {
+                        favBtn.classList.remove('is-favourite');
+                    }
+                }
 
                 // Modern browsers automatically handle EXIF orientation. 
                 // Manual rotation causes "double rotation".
@@ -3657,19 +3668,71 @@ async function showNextPhoto() {
 }
 
 function toggleSlideshowMode() {
-    screensaverMode = screensaverMode === 'all' ? 'onThisDay' : 'all';
+    if (screensaverMode === 'all') screensaverMode = 'onThisDay';
+    else if (screensaverMode === 'onThisDay') screensaverMode = 'favourites';
+    else screensaverMode = 'all';
+
     localStorage.setItem('screensaverMode', screensaverMode);
 
     // Update UI label
     const label = document.getElementById('ss-mode-label');
     if (label) {
-        label.textContent = screensaverMode === 'all' ? 'All' : 'On This Day';
+        if (screensaverMode === 'all') label.textContent = 'All';
+        else if (screensaverMode === 'onThisDay') label.textContent = 'On This Day';
+        else if (screensaverMode === 'favourites') label.textContent = 'Favs';
     }
 
-    showToast(`Slideshow Mode: ${screensaverMode === 'all' ? 'All Photos' : 'On This Day'}`, 'info', 2000);
+    let modeDisplay = 'All Photos';
+    if (screensaverMode === 'onThisDay') modeDisplay = 'On This Day';
+    else if (screensaverMode === 'favourites') modeDisplay = 'Favourites';
+
+    showToast(`Slideshow Mode: ${modeDisplay}`, 'info', 2000);
 
     // Immediately show a new photo in the new mode
     showNextPhoto();
+}
+
+async function toggleFavouriteCurrentPhoto() {
+    if (!currentScreensaverPhoto) return;
+
+    const favBtn = document.getElementById('btn-ss-favourite');
+    const isCurrentlyFavourite = favBtn && favBtn.classList.contains('is-favourite');
+    const newState = !isCurrentlyFavourite;
+
+    // Optimistic UI update
+    if (favBtn) {
+        if (newState) favBtn.classList.add('is-favourite');
+        else favBtn.classList.remove('is-favourite');
+    }
+
+    try {
+        const response = await fetch('/api/slideshow/favourite', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: currentScreensaverPhoto,
+                favourite: newState
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to update favourite status');
+
+        showToast(newState ? 'Added to Favourites' : 'Removed from Favourites', 'success', 2000);
+    } catch (e) {
+        console.error('Failed to toggle favourite:', e);
+        showToast('Failed to update favourite', 'error', 2000);
+        // Rollback optimistic update
+        if (favBtn) {
+            if (!newState) favBtn.classList.add('is-favourite');
+            else favBtn.classList.remove('is-favourite');
+        }
+    }
+
+    // Reset interval when interacting
+    if (screensaverInterval) {
+        clearInterval(screensaverInterval);
+        screensaverInterval = setInterval(showNextPhoto, 60000);
+    }
 }
 
 
@@ -3756,6 +3819,19 @@ function previousSlideshow() {
                 displayHtml += `<div class="ss-location">${previousScreensaverPhoto.location}</div>`;
             }
             info.innerHTML = displayHtml;
+        }
+
+        // Update favourite state for restored previous photo
+        const favBtn = document.getElementById('btn-ss-favourite');
+        if (favBtn) {
+            // We'd need to have stored isFavourite in previousScreensaverPhoto if we wanted this to be perfect,
+            // but for now let's just assume we can't know without a fetch or if we add it to the state.
+            // Actually, let's just hide it or leave as is, OR better: add it to the state.
+            if (previousScreensaverPhoto.isFavourite) {
+                favBtn.classList.add('is-favourite');
+            } else {
+                favBtn.classList.remove('is-favourite');
+            }
         }
 
         // Update previous to be the old current

@@ -585,10 +585,23 @@
 
             <div class="ss-control-item" onclick="toggleSlideshowMode()"
                 ontouchstart="toggleSlideshowMode(); event.preventDefault();">
-                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day)">
+                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Favourites)">
                     <span id="ss-mode-label">All</span>
                 </button>
                 <div class="ss-control-label">Mode</div>
+            </div>
+
+            <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
+                ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();">
+                <button id="btn-ss-favourite" class="btn-ss-favourite" title="Favourite Photo">
+                    <svg id="svg-favourite" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path
+                            d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l8.84-8.84 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
+                        </path>
+                    </svg>
+                </button>
+                <div class="ss-control-label">Fav</div>
             </div>
 
             <div class="ss-control-item" onclick="deleteCurrentPhoto()"

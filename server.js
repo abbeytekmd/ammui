@@ -130,7 +130,8 @@ function loadSettings() {
                 deviceName: loaded.deviceName || settings.deviceName,
                 screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) },
                 manualRotations: loaded.manualRotations || {},
-                deletedPhotos: loaded.deletedPhotos || {}
+                deletedPhotos: loaded.deletedPhotos || {},
+                favouritePhotos: loaded.favouritePhotos || {}
             };
             console.log('Loaded settings from storage.');
         }
@@ -1596,6 +1597,16 @@ app.get('/api/slideshow/random', async (req, res) => {
                     console.log(`[SCREENSAVER] No images found for "On This Day" (${month}/${day})`);
                     return res.status(404).json({ error: 'No images found for this day' });
                 }
+            } else if (mode === 'favourites') {
+                imagesToUse = imagesToUse.filter(img => {
+                    const url = img.uri || img.res;
+                    return settings.favouritePhotos[url];
+                });
+
+                if (imagesToUse.length === 0) {
+                    console.log(`[SCREENSAVER] No images found for "Favourites"`);
+                    return res.status(404).json({ error: 'No favourite photos found' });
+                }
             }
 
             const index = Math.floor(Math.random() * imagesToUse.length);
@@ -1616,6 +1627,11 @@ app.get('/api/slideshow/random', async (req, res) => {
             if (mode === 'onThisDay') {
                 // On This Day requires a full scan
                 return res.status(503).json({ error: 'Preparing On This Day slideshow...' });
+            }
+
+            if (mode === 'favourites') {
+                // Favourites requires a full scan
+                return res.status(503).json({ error: 'Preparing Favourites slideshow...' });
             }
 
             // FALLBACK: RANDOM WALK
@@ -1713,6 +1729,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                 date: date,
                 orientation: orientation,
                 manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
+                isFavourite: !!(settings.favouritePhotos && settings.favouritePhotos[imgUrl]),
                 location: foundImage._path || foundImage.location || '',
                 folderId: foundImage.folderId,
                 folderTitle: foundImage.folderTitle
@@ -1763,6 +1780,22 @@ app.post('/api/slideshow/delete', (req, res) => {
 
     console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
     res.json({ success: true });
+});
+
+app.post('/api/slideshow/favourite', (req, res) => {
+    const { url, favourite } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+
+    if (!settings.favouritePhotos) settings.favouritePhotos = {};
+    if (favourite) {
+        settings.favouritePhotos[url] = true;
+    } else {
+        delete settings.favouritePhotos[url];
+    }
+    saveSettings();
+
+    console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
+    res.json({ success: true, favourite });
 });
 
 app.get('/api/art/search', async (req, res) => {
