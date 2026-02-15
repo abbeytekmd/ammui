@@ -1094,7 +1094,9 @@ function updateStatus(status) {
                         body: JSON.stringify({
                             title: currentTrack.title,
                             artist: currentTrack.artist,
-                            album: currentTrack.album
+                            album: currentTrack.album,
+                            serverUdn: selectedServerUdn,
+                            playerUdn: selectedRendererUdn
                         })
                     }).catch(e => console.warn('Failed to report play stats:', e));
                 }
@@ -1149,14 +1151,20 @@ function updateStatus(status) {
     durationSeconds = newDuration;
     //    lastStatusFetchTime = Date.now();
 
-    // Update Now Playing label and fetch artwork
+    // Update Now Playing labels and fetch artwork
     const nowPlayingLabel = document.getElementById('now-playing-label');
+    const nowPlayingAlbum = document.getElementById('now-playing-album');
+
     if (currentTrackId != null) {
         const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
         if (currentTrack) {
             if (nowPlayingLabel) {
                 nowPlayingLabel.textContent = `${currentTrack.title} - ${currentTrack.artist || 'Unknown Artist'}`;
                 nowPlayingLabel.title = nowPlayingLabel.textContent;
+            }
+            if (nowPlayingAlbum) {
+                nowPlayingAlbum.textContent = currentTrack.album || '';
+                nowPlayingAlbum.title = currentTrack.album || '';
             }
             // Fetch artwork if track changed or query differs
             const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
@@ -1168,11 +1176,13 @@ function updateStatus(status) {
             if (query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) {
                 updatePlayerArtwork(currentTrack.artist, currentTrack.album);
             }
-        } else if (nowPlayingLabel) {
-            nowPlayingLabel.textContent = `Track ${currentTrackId}`;
+        } else {
+            if (nowPlayingLabel) nowPlayingLabel.textContent = `Track ${currentTrackId}`;
+            if (nowPlayingAlbum) nowPlayingAlbum.textContent = '';
         }
-    } else if (nowPlayingLabel) {
-        nowPlayingLabel.textContent = 'Not Playing';
+    } else {
+        if (nowPlayingLabel) nowPlayingLabel.textContent = 'Not Playing';
+        if (nowPlayingAlbum) nowPlayingAlbum.textContent = '';
         currentArtworkQuery = '';
         currentArtworkUrl = '';
         hideAllPlayerArt();
@@ -3774,11 +3784,11 @@ function previousSlideshow() {
 async function deleteCurrentPhoto() {
     if (!currentScreensaverPhoto) return;
 
-    if (!confirm('Are you sure you want to mark this photo as deleted? It will not be shown again in the slideshow.')) {
+    if (!confirm('Are you sure you want to hide this photo? It will not be shown again in the slideshow.')) {
         return;
     }
 
-    console.log(`Deleting photo: ${currentScreensaverPhoto}`);
+    console.log(`Hiding photo: ${currentScreensaverPhoto}`);
 
     try {
         const response = await fetch('/api/slideshow/delete', {
@@ -3790,7 +3800,7 @@ async function deleteCurrentPhoto() {
         });
 
         if (response.ok) {
-            showToast('Photo marked as deleted', 'success', 2000);
+            showToast('Photo hidden', 'success', 2000);
             // Move to next photo immediately
             if (screensaverInterval) {
                 clearInterval(screensaverInterval);
@@ -3799,11 +3809,11 @@ async function deleteCurrentPhoto() {
             await showNextPhoto();
         } else {
             const data = await response.json();
-            showToast(`Failed to delete photo: ${data.error || 'Server error'}`);
+            showToast(`Failed to hide photo: ${data.error || 'Server error'}`);
         }
     } catch (e) {
-        console.error('Failed to delete photo:', e);
-        showToast('Failed to delete photo');
+        console.error('Failed to hide photo:', e);
+        showToast('Failed to hide photo');
     }
 }
 

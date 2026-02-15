@@ -821,17 +821,32 @@ p.subtitle {
 }
 
 /* Position Control */
+.now-playing-info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+    gap: 2px;
+}
+
 .now-playing-label {
     font-size: 0.85rem;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 300px;
-    min-width: 0;
-    flex: 1;
     text-shadow: 0 0 10px var(--primary-glow);
+}
+
+.now-playing-album {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-weight: 400;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0.8;
 }
 
 .position-control-wrapper {

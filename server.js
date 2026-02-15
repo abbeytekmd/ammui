@@ -19,6 +19,7 @@ import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import crypto from 'crypto';
 import exifParser from 'exif-parser';
+import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 
 
 const { Client } = ssdp;
@@ -146,30 +147,9 @@ function saveSettings() {
     }
 }
 
-let playStats = { tracks: {}, albums: {} };
+// stats.json migration completed to play_history.db
 
-function loadStats() {
-    try {
-        if (fs.existsSync(STATS_FILE)) {
-            const data = fs.readFileSync(STATS_FILE, 'utf8');
-            playStats = JSON.parse(data);
-            if (!playStats.tracks) playStats.tracks = {};
-            if (!playStats.albums) playStats.albums = {};
-        }
-    } catch (err) {
-        console.error('Failed to load stats:', err.message);
-    }
-}
-
-function saveStats() {
-    try {
-        fs.writeFileSync(STATS_FILE, JSON.stringify(playStats, null, 2));
-    } catch (err) {
-        console.error('Failed to save stats:', err.message);
-    }
-}
-
-loadStats();
+// loadStats(); // Migrated to DB
 
 function findCaseInsensitivePath(parent, name) {
     if (!fs.existsSync(parent)) return path.join(parent, name);
@@ -728,42 +708,49 @@ app.get('/api/browse/:udn', async (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-    const topTracks = Object.entries(playStats.tracks)
-        .map(([key, data]) => ({ key, ...data }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 20);
-
-    const topAlbums = Object.entries(playStats.albums)
-        .map(([key, data]) => ({ key, ...data }))
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 20);
-
-    res.json({ tracks: topTracks, albums: topAlbums });
+    try {
+        const topTracks = getTopTracks(20);
+        const topAlbums = getTopAlbums(20);
+        res.json({ tracks: topTracks, albums: topAlbums });
+    } catch (err) {
+        console.error('Failed to get stats:', err);
+        res.status(500).json({ error: 'Failed to retrieve statistics' });
+    }
 });
 
 app.post('/api/stats/track-played', express.json(), (req, res) => {
-    const { title, artist, album } = req.body;
+    const { title, artist, album, serverUdn, playerUdn } = req.body;
     if (!title) return res.status(400).json({ error: 'Title is required' });
 
-    const trackKey = `${title} - ${artist || 'Unknown Artist'}`.trim();
-    const albumKey = `${album || 'Unknown Album'} - ${artist || 'Unknown Artist'}`.trim();
+    // Resolve names from UDNs if possible
+    let serverName = 'Unknown Server';
+    let playerName = 'Unknown Player';
 
-    // Track stats
-    if (!playStats.tracks[trackKey]) {
-        playStats.tracks[trackKey] = { title, artist, count: 0 };
-    }
-    playStats.tracks[trackKey].count++;
-
-    // Album stats
-    if (album) {
-        if (!playStats.albums[albumKey]) {
-            playStats.albums[albumKey] = { album, artist, count: 0 };
-        }
-        playStats.albums[albumKey].count++;
+    if (serverUdn) {
+        const server = devices.get(serverUdn);
+        if (server) serverName = server.friendlyName;
     }
 
-    saveStats();
-    res.json({ success: true });
+    if (playerUdn) {
+        const player = devices.get(playerUdn);
+        if (player) playerName = player.friendlyName;
+    }
+
+    try {
+        logPlay({
+            title,
+            artist,
+            album,
+            serverUdn,
+            serverName,
+            playerUdn,
+            playerName
+        });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Failed to log play:', err);
+        res.status(500).json({ error: 'Failed to record play history' });
+    }
 });
 
 // Proxy endpoint for images from DLNA servers (to avoid CORS issues)
