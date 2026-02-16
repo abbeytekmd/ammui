@@ -81,6 +81,7 @@ let currentDevices = [];
 let selectedRendererUdn = localStorage.getItem('selectedRendererUdn');
 let selectedServerUdn = localStorage.getItem('selectedServerUdn');
 let browsePath = [{ id: '0', title: 'Root' }];
+let currentBrowserMode = localStorage.getItem('currentBrowserMode') || 'music';
 let currentBrowserItems = [];
 let currentPlaylistItems = [];
 let currentTrackId = null;
@@ -219,12 +220,18 @@ async function selectServer(udn) {
     // Prioritize last browsed path, then home location, then root
     let lastPaths = {};
     let homeLocations = {};
+    const mode = currentBrowserMode || 'music';
     try {
-        const storedLast = localStorage.getItem('serverLastPaths');
+        const storedLast = localStorage.getItem(`serverLastPaths_${mode}`);
         if (storedLast) lastPaths = JSON.parse(storedLast);
 
-        const storedHome = localStorage.getItem('serverHomeLocations');
+        const storedHome = localStorage.getItem(`serverHomeLocations_${mode}`);
         if (storedHome) homeLocations = JSON.parse(storedHome);
+        else if (mode === 'music') {
+            // Check old key for music migration
+            const oldHome = localStorage.getItem('serverHomeLocations');
+            if (oldHome) homeLocations = JSON.parse(oldHome);
+        }
     } catch (e) {
         console.error('Failed to parse paths:', e);
     }
@@ -277,22 +284,23 @@ async function browse(udn, objectId) {
 }
 
 function updateBreadcrumbs() {
+    const mode = currentBrowserMode || 'music';
     const homeIndicator = `
-        <button id="btn-go-music-home" class="btn-control home-breadcrumb-btn" onclick="goHome('music')" title="Go to Music home">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 18V5l12-2v13"></path>
-                <circle cx="6" cy="18" r="3"></circle>
-                <circle cx="18" cy="16" r="3"></circle>
-            </svg>
-            <span class="home-btn-label">Music</span>
-        </button>
-        <button id="btn-go-photo-home" class="btn-control home-breadcrumb-btn" onclick="goHome('photo')" title="Go to Photo home">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                <polyline points="21 15 16 10 5 21"></polyline>
-            </svg>
-            <span class="home-btn-label">Photos</span>
+        <button id="btn-go-${mode}-home" class="btn-control home-breadcrumb-btn" onclick="goHome('${mode}')" title="Go to ${mode} home">
+            ${mode === 'music' ? `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 18V5l12-2v13"></path>
+                    <circle cx="6" cy="18" r="3"></circle>
+                    <circle cx="18" cy="16" r="3"></circle>
+                </svg>
+            ` : `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                    <polyline points="21 15 16 10 5 21"></polyline>
+                </svg>
+            `}
+            <span class="home-btn-label">Home</span>
         </button>
         <span class="breadcrumb-separator" style="margin-right: 0.5rem"></span>
     `;
@@ -304,13 +312,14 @@ function updateBreadcrumbs() {
 
 function saveLastPath() {
     if (!selectedServerUdn) return;
+    const mode = currentBrowserMode || 'music';
     let lastPaths = {};
     try {
-        const stored = localStorage.getItem('serverLastPaths');
+        const stored = localStorage.getItem(`serverLastPaths_${mode}`);
         if (stored) lastPaths = JSON.parse(stored);
     } catch (e) { }
     lastPaths[selectedServerUdn] = browsePath;
-    localStorage.setItem('serverLastPaths', JSON.stringify(lastPaths));
+    localStorage.setItem(`serverLastPaths_${mode}`, JSON.stringify(lastPaths));
 }
 
 async function navigateToPath(index) {
@@ -786,7 +795,6 @@ function updateBrowserControls(items) {
     const btnPlayAll = document.getElementById('btn-play-all');
     const btnAddAll = document.getElementById('btn-add-all');
     const btnToggleView = document.getElementById('btn-toggle-view');
-    const divToggleView = document.getElementById('div-toggle-view');
 
     const showMusicControls = tracks.length > 0;
     const showPhotoControls = images.length > 0;
@@ -818,7 +826,6 @@ function updateBrowserControls(items) {
             if (svgList) svgList.style.display = 'none';
         }
     }
-    if (divToggleView) divToggleView.style.display = showPhotoControls ? 'block' : 'none';
 
     // Enable/disable buttons based on tracks/images count
     if (btnPlayAll) {
@@ -829,6 +836,45 @@ function updateBrowserControls(items) {
     if (btnAddAll) {
         if (showMusicControls) btnAddAll.classList.remove('disabled');
         else btnAddAll.classList.add('disabled');
+    }
+
+    // Filter Set Home buttons based on current mode
+    const btnSetMusic = document.getElementById('btn-set-music-home');
+    const btnSetPhoto = document.getElementById('btn-set-photo-home');
+    const divSetMusic = null;
+    const divSetPhoto = null;
+
+    if (btnSetMusic) btnSetMusic.style.display = (currentBrowserMode === 'music') ? 'flex' : 'none';
+    if (btnSetPhoto) btnSetPhoto.style.display = (currentBrowserMode === 'photo') ? 'flex' : 'none';
+
+    // Filter Screensaver button (only for photos)
+    const btnSetSS = document.getElementById('btn-set-screensaver');
+    const divSetSS = null;
+
+    if (btnSetSS) btnSetSS.style.display = (currentBrowserMode === 'photo') ? 'flex' : 'none';
+
+    // Show/hide the entire menu button if no actions available
+    const menuBtn = document.getElementById('btn-browser-menu');
+    if (menuBtn) {
+        const hasActions = (currentBrowserMode === 'music' || currentBrowserMode === 'photo');
+        menuBtn.style.display = hasActions ? 'flex' : 'none';
+    }
+
+    // Hide empty control groups to avoid "empty box" look
+    const controlGroup = document.querySelector('.browser-control-group');
+    if (controlGroup) {
+        const visibleButtons = Array.from(controlGroup.children).filter(child =>
+            child.tagName === 'BUTTON' && child.style.display !== 'none'
+        );
+        controlGroup.style.display = visibleButtons.length > 0 ? 'flex' : 'none';
+    }
+
+    const headerControls = document.querySelector('.header-controls');
+    if (headerControls) {
+        const anyVisible = Array.from(headerControls.children).some(child =>
+            child.style.display !== 'none' && (child.offsetHeight > 0 || child.tagName === 'DIV' && Array.from(child.children).some(c => c.style.display !== 'none'))
+        );
+        headerControls.style.display = anyVisible ? 'flex' : 'none';
     }
 }
 
@@ -2361,7 +2407,7 @@ async function setHome(type = 'music') {
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4ade80" stroke-width="2">
                 <polyline points="20 6 9 17 4 12"></polyline>
             </svg>
-            ${type === 'music' ? 'Music' : 'Photo'} Set!
+            Home Set!
         `;
         btn.style.color = '#4ade80';
         setTimeout(() => {
@@ -2420,6 +2466,44 @@ async function setScreensaver() {
 }
 
 
+async function switchBrowserMode(mode) {
+    if (selectedServerUdn) {
+        saveLastPath(); // Save current path for old mode
+    }
+
+    currentBrowserMode = mode;
+    localStorage.setItem('currentBrowserMode', mode);
+
+    // Update Tab UI
+    document.querySelectorAll('.browser-tab').forEach(btn => {
+        btn.classList.remove('active');
+    });
+
+    const activeTabId = mode === 'music' ? 'tab-browser-music' : 'tab-browser-photo';
+    const activeTab = document.getElementById(activeTabId);
+    if (activeTab) activeTab.classList.add('active');
+
+    if (selectedServerUdn) {
+        // Load path for new mode
+        let lastPaths = {};
+        try {
+            const stored = localStorage.getItem(`serverLastPaths_${mode}`);
+            if (stored) lastPaths = JSON.parse(stored);
+        } catch (e) { }
+
+        const pathToRestore = lastPaths[selectedServerUdn];
+
+        if (pathToRestore && Array.isArray(pathToRestore)) {
+            browsePath = pathToRestore;
+            updateBreadcrumbs();
+            const lastFolder = browsePath[browsePath.length - 1];
+            await browse(selectedServerUdn, lastFolder.id);
+        } else {
+            // If no path saved for this mode yet, go to home
+            await goHome(mode);
+        }
+    }
+}
 
 async function goHome(type = 'music') {
     if (!selectedServerUdn) return;
@@ -2593,15 +2677,27 @@ async function init() {
     if (selectedServerUdn) {
         const server = currentDevices.find(d => d.udn === selectedServerUdn && d.isServer);
         if (server) {
+            // Set initial mode UI
+            const mode = localStorage.getItem('currentBrowserMode') || 'music';
+            currentBrowserMode = mode;
+            document.querySelectorAll('.browser-tab').forEach(btn => btn.classList.remove('active'));
+            const activeTabId = mode === 'music' ? 'tab-browser-music' : 'tab-browser-photo';
+            const activeTab = document.getElementById(activeTabId);
+            if (activeTab) activeTab.classList.add('active');
+
             // Prioritize last browsed path, then home location, then root
             let lastPaths = {};
             let homeLocations = {};
             try {
-                const storedLast = localStorage.getItem('serverLastPaths');
+                const storedLast = localStorage.getItem(`serverLastPaths_${mode}`);
                 if (storedLast) lastPaths = JSON.parse(storedLast);
 
-                const storedHome = localStorage.getItem('serverHomeLocations');
+                const storedHome = localStorage.getItem(`serverHomeLocations_${mode}`);
                 if (storedHome) homeLocations = JSON.parse(storedHome);
+                else if (mode === 'music') {
+                    const oldHome = localStorage.getItem('serverHomeLocations');
+                    if (oldHome) homeLocations = JSON.parse(oldHome);
+                }
             } catch (e) {
                 console.error('Failed to parse paths:', e);
             }
@@ -2640,6 +2736,21 @@ async function init() {
                 togglePlaylist();
             }
         }
+    }
+
+    // Global click listener to close dropdowns
+    window.addEventListener('click', (e) => {
+        if (!e.target.closest('.menu-container')) {
+            document.querySelectorAll('.dropdown-menu').forEach(d => d.classList.remove('active'));
+        }
+    });
+}
+
+function toggleBrowserMenu(event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById('browser-menu-dropdown');
+    if (dropdown) {
+        dropdown.classList.toggle('active');
     }
 }
 

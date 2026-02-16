@@ -553,9 +553,9 @@ p.subtitle {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 0.5rem;
+    margin-top: 0;
     margin-bottom: 0.5rem;
-    padding-top: 0.5rem;
+    padding-top: 0.25rem;
     flex: 0 0 auto;
     width: 100%;
 }
@@ -597,6 +597,66 @@ p.subtitle {
     width: 1px;
     height: 1.5rem;
     background: var(--card-border);
+}
+
+.breadcrumb-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+}
+
+.menu-container {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    background: var(--card-bg);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    padding: 0.5rem;
+    min-width: 180px;
+    z-index: 1000;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.dropdown-menu.active {
+    display: flex;
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 0.75rem;
+    width: 100%;
+    text-align: left;
+    transition: all 0.2s;
+}
+
+.dropdown-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.dropdown-item svg {
+    color: var(--primary);
+    flex-shrink: 0;
 }
 
 .btn-control {
@@ -1322,6 +1382,52 @@ p.subtitle {
     }
 }
 
+/* Browser Tabs */
+.browser-tabs {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 0.25rem;
+    border-bottom: 1px solid var(--card-border);
+    padding: 0 0.75rem;
+}
+
+.browser-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0 0.5rem 0;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    margin-bottom: -1px;
+}
+
+.browser-tab:hover {
+    color: var(--text);
+}
+
+.browser-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+.browser-tab svg {
+    width: 14px;
+    height: 14px;
+    opacity: 0.7;
+}
+
+.browser-tab.active svg {
+    opacity: 1;
+}
+
 .browser-item {
     padding: 0.35rem 0.5rem;
     gap: 1rem;
@@ -1403,7 +1509,6 @@ p.subtitle {
     text-overflow: ellipsis;
     flex-shrink: 0;
 }
-
 
 .loading,
 .error {

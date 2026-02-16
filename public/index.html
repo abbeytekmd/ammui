@@ -84,10 +84,75 @@
                 </section>
 
                 <div id="browser-container" class="playlist-container">
+                    <div class="browser-tabs">
+                        <button id="tab-browser-music" onclick="switchBrowserMode('music')" class="browser-tab active">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M9 18V5l12-2v13"></path>
+                                <circle cx="6" cy="18" r="3"></circle>
+                                <circle cx="18" cy="16" r="3"></circle>
+                            </svg>
+                            Music
+                        </button>
+                        <button id="tab-browser-photo" onclick="switchBrowserMode('photo')" class="browser-tab">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <polyline points="21 15 16 10 5 21"></polyline>
+                            </svg>
+                            Photos
+                        </button>
+                    </div>
                     <div class="section-header">
                         <div class="header-group">
-                            <div id="browser-breadcrumbs" class="breadcrumbs">
-                                <!-- Breadcrumbs will go here -->
+                            <div class="breadcrumb-header">
+                                <div id="browser-breadcrumbs" class="breadcrumbs">
+                                    <!-- Breadcrumbs will go here -->
+                                </div>
+                                <div class="menu-container">
+                                    <button id="btn-browser-menu" class="btn-control" onclick="toggleBrowserMenu(event)"
+                                        title="More Library Actions">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                                        </svg>
+                                    </button>
+                                    <div id="browser-menu-dropdown" class="dropdown-menu">
+                                        <button id="btn-set-music-home" onclick="setHome('music')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <path d="M9 18V5l12-2v13"></path>
+                                                <circle cx="6" cy="18" r="3"></circle>
+                                                <circle cx="18" cy="16" r="3"></circle>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-photo-home" onclick="setHome('photo')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                                <polyline points="21 15 16 10 5 21"></polyline>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-screensaver" onclick="setScreensaver()"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                                            </svg>
+                                            Set Screensaver
+                                        </button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -136,39 +201,7 @@
                                 </svg>
                                 <span id="label-view-mode" class="btn-label" data-mobile="View">Grid</span>
                             </button>
-                            <span id="div-toggle-view" class="divider" style="display: none;"></span>
-                            <button id="btn-set-music-home" onclick="setHome('music')" class="btn-control"
-                                title="Set current folder as Music Home">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M9 18V5l12-2v13"></path>
-                                    <circle cx="6" cy="18" r="3"></circle>
-                                    <circle cx="18" cy="16" r="3"></circle>
-                                </svg>
-                                <span class="btn-label" data-mobile="Set">Set</span>
-                            </button>
-                            <span class="divider"></span>
-                            <button id="btn-set-photo-home" onclick="setHome('photo')" class="btn-control"
-                                title="Set current folder as Photo Home">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                    <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                    <polyline points="21 15 16 10 5 21"></polyline>
-                                </svg>
-                                <span class="btn-label" data-mobile="Set">Set</span>
-                            </button>
-                            <span class="divider"></span>
-                            <button id="btn-set-screensaver" onclick="setScreensaver()" class="btn-control"
-                                title="Use current folder for Screensaver">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                                    <line x1="8" y1="21" x2="16" y2="21"></line>
-                                    <line x1="12" y1="17" x2="12" y2="21"></line>
-                                </svg>
-                                <span class="btn-label" data-mobile="SS">Set SS</span>
-                            </button>
+
                             <span class="divider local-only" style="display: none;"></span>
                             <button id="btn-upload" onclick="triggerUpload()" class="btn-control local-only"
                                 style="display: none;" title="Upload to local server">
