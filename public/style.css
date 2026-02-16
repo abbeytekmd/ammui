@@ -3577,10 +3577,10 @@ input:checked+.slider:before {
 
 .screensaver-controls {
     position: absolute;
-    bottom: calc(60px + env(safe-area-inset-bottom));
+    bottom: calc(40px + env(safe-area-inset-bottom));
     right: 40px;
     display: flex;
-    gap: 20px;
+    gap: 15px;
     opacity: 1;
     z-index: 10005;
 }
@@ -3599,9 +3599,10 @@ input:checked+.slider:before {
     font-weight: 600;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
     background: rgba(0, 0, 0, 0.3);
-    padding: 2px 8px;
-    border-radius: 6px;
+    padding: 2px 6px;
+    border-radius: 4px;
     backdrop-filter: blur(2px);
+    font-size: 11px;
 }
 
 .btn-ss-rotate,
@@ -3609,8 +3610,8 @@ input:checked+.slider:before {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3630,8 +3631,8 @@ input:checked+.slider:before {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3651,16 +3652,16 @@ input:checked+.slider:before {
 .btn-ss-rotate svg,
 .btn-ss-back svg,
 .btn-ss-delete svg {
-    width: 30px;
-    height: 30px;
+    width: 22px;
+    height: 22px;
 }
 
 .btn-ss-mode {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3689,8 +3690,8 @@ input:checked+.slider:before {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3716,8 +3717,8 @@ input:checked+.slider:before {
 }
 
 .btn-ss-favourite svg {
-    width: 30px;
-    height: 30px;
+    width: 22px;
+    height: 22px;
 }
 
 /* Stats Modal Styles */
