@@ -986,7 +986,7 @@ function renderBrowser(items) {
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
                 isImage ?
-                    `openArtModal('${esc(item.uri)}', '${esc(item.title)}')` :
+                    `event.stopPropagation(); startPhotoSlideshow('${esc(item.uri)}', '${esc(item.title)}')` :
                     isVideo ?
                         `handleVideoClick('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', ${index})` :
                         `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
@@ -1124,8 +1124,10 @@ function updateStatus(status) {
         currentTransportState = status.transportState;
         renderPlaylist(currentPlaylistItems);
 
-        // Update modal track info if modal is open
-        updateModalTrackInfo();
+        // Update screensaver if in Music mode
+        if (isScreensaverActive && screensaverMode === 'nowPlaying') {
+            showNextPhoto();
+        }
 
         // Report play stats if playing a new track
         if (currentTransportState === 'Playing' && currentTrackId != null) {
@@ -1411,85 +1413,7 @@ function hideAllPlayerArt() {
     updateCardNowPlaying();
 }
 
-function openArtModal(url, title = '', artist = '', album = '') {
-    if (!url) return;
-    const modal = document.getElementById('album-art-modal');
-    const img = document.getElementById('modal-art-img');
-    const titleEl = document.getElementById('modal-track-title');
-    const artistEl = document.getElementById('modal-track-artist');
-    const albumEl = document.getElementById('modal-track-album');
-    const container = document.getElementById('modal-art-container');
-    const wrapper = document.getElementById('modal-art-wrapper');
-
-    if (modal && img) {
-        console.log(`[ART] Opening modal for: ${url}`);
-
-        // Use proxy for remote images to avoid CORS issues
-        const finalUrl = (url.startsWith('http') && !url.includes(window.location.host))
-            ? `/api/proxy-image?url=${encodeURIComponent(url)}`
-            : url;
-
-        img.src = ''; // Clear previous
-
-        img.onload = () => {
-            const ratio = img.naturalWidth / img.naturalHeight;
-            if (ratio > 2.2) {
-                // Panorama mode
-                if (container) container.style.maxWidth = '100vw';
-                if (wrapper) wrapper.classList.add('panorama-wrapper');
-                img.classList.add('panorama-img');
-            } else {
-                if (container) container.style.maxWidth = '90vw';
-                if (wrapper) wrapper.classList.remove('panorama-wrapper');
-                img.classList.remove('panorama-img');
-            }
-        };
-
-        img.src = finalUrl;
-
-        // If specific metadata is passed (e.g. clicking an image in the browser)
-        if (title) {
-            if (titleEl) titleEl.textContent = title;
-            if (artistEl) artistEl.textContent = artist || '';
-            if (albumEl) albumEl.textContent = album || '';
-        } else if (currentTrackId != null) {
-            // Fallback to current track info if no metadata passed
-            const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
-            if (currentTrack) {
-                if (titleEl) titleEl.textContent = currentTrack.title || 'Unknown Title';
-                if (artistEl) artistEl.textContent = currentTrack.artist || 'Unknown Artist';
-                if (albumEl) albumEl.textContent = currentTrack.album || '';
-            } else {
-                if (titleEl) titleEl.textContent = '';
-                if (artistEl) artistEl.textContent = '';
-                if (albumEl) albumEl.textContent = '';
-            }
-        } else {
-            if (titleEl) titleEl.textContent = '';
-            if (artistEl) artistEl.textContent = '';
-            if (albumEl) albumEl.textContent = '';
-        }
-
-        modal.style.display = 'flex';
-        modal.style.alignItems = 'center';
-        modal.style.justifyContent = 'center';
-    }
-}
-
-function closeArtModal() {
-    const modal = document.getElementById('album-art-modal');
-    if (modal) {
-        modal.style.display = 'none';
-
-        // Reset panorama states
-        const container = document.getElementById('modal-art-container');
-        const wrapper = document.getElementById('modal-art-wrapper');
-        const img = document.getElementById('modal-art-img');
-        if (container) container.style.maxWidth = '90vw';
-        if (wrapper) wrapper.classList.remove('panorama-wrapper');
-        if (img) img.classList.remove('panorama-img');
-    }
-}
+// Custom artwork modal removed in favor of Screensaver Music Mode
 
 function openVideoModal(url, title = 'Video Player') {
     if (!url) return;
@@ -1568,35 +1492,7 @@ function closeVideoModal() {
     }
 }
 
-function updateModalTrackInfo() {
-    const modal = document.getElementById('album-art-modal');
-    // Only update if modal is currently visible
-    if (!modal || modal.style.display !== 'flex') return;
-
-    const titleEl = document.getElementById('modal-track-title');
-    const artistEl = document.getElementById('modal-track-artist');
-    const albumEl = document.getElementById('modal-track-album');
-
-    // Get current track info
-    if (currentTrackId != null) {
-        const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
-        if (currentTrack) {
-            if (titleEl) titleEl.textContent = currentTrack.title || 'Unknown Title';
-            if (artistEl) artistEl.textContent = currentTrack.artist || 'Unknown Artist';
-            if (albumEl) albumEl.textContent = currentTrack.album || '';
-        } else {
-            // Clear track info if no track found
-            if (titleEl) titleEl.textContent = '';
-            if (artistEl) artistEl.textContent = '';
-            if (albumEl) albumEl.textContent = '';
-        }
-    } else {
-        // Clear track info if nothing is playing
-        if (titleEl) titleEl.textContent = '';
-        if (artistEl) artistEl.textContent = '';
-        if (albumEl) albumEl.textContent = '';
-    }
-}
+// updateModalTrackInfo removed
 
 
 // Helper to convert HH:MM:SS to seconds on the client side
@@ -2316,11 +2212,11 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
     ` : '';
 
     return `
-        <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
+        <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''} ${isStatic ? 'is-static' : ''}" 
              onclick="${clickAction}"
              id="device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
             <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}" style="${(device.iconUrl) ? 'background: none; box-shadow: none;' : ''}">
-                ${isStatic && !asServer ? `<img id="card-album-art" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" alt="">` : ''}
+                ${isStatic && !asServer ? `<img id="card-album-art" onclick="event.stopPropagation(); startMusicSlideshow()" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; cursor: pointer;" alt="">` : ''}
                 <div id="${isStatic ? (asServer ? 'card-server-icon' : 'card-default-icon') : ''}" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
                     ${device.iconUrl ?
             `<img src="${device.iconUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 2px;" alt="">` :
@@ -2641,7 +2537,10 @@ async function init() {
     // Initialize screensaver mode label
     const ssModeLabel = document.getElementById('ss-mode-label');
     if (ssModeLabel) {
-        ssModeLabel.textContent = (screensaverMode === 'all') ? 'All' : 'On This Day';
+        if (screensaverMode === 'all') ssModeLabel.textContent = 'All';
+        else if (screensaverMode === 'onThisDay') ssModeLabel.textContent = 'Day';
+        else if (screensaverMode === 'favourites') ssModeLabel.textContent = 'Favs';
+        else if (screensaverMode === 'nowPlaying') ssModeLabel.textContent = 'Music';
     }
 
     // Migrate Discogs token to server if it exists locally
@@ -3516,46 +3415,41 @@ function showTrackInfoFromPlaylist(id) {
     }
 }
 
-// Idle Artwork Popup Logic
+// Idle Screensaver Logic
 let idleTimer = null;
 const IDLE_THRESHOLD = 60000; // 1 minute
 
 function resetIdleTimer(e) {
-    // If activity is on screensaver controls or the start slideshow button, don't stop the screensaver
+    // If activity is on screensaver controls, the start slideshow button, or a browser item (which might trigger the SS), don't stop the screensaver
     if (e && e.target && typeof e.target.closest === 'function' &&
-        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-play-all'))
+        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-play-all') || e.target.closest('.playlist-item'))
     ) return;
 
     const isMouseMove = e && e.type === 'mousemove';
 
-    // 1. Logic for Idle Artwork (Artwork Popup)
     if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(onIdle, IDLE_THRESHOLD);
 
-    // 2. Logic for Screensaver
     // If screensaver is active, stop it ONLY on non-mousemove events
     if (isScreensaverActive && !isMouseMove) {
         stopSlideshow();
     }
 
-    if (screensaverTimeout) clearTimeout(screensaverTimeout);
-
-    // Only start screensaver timer if we are NOT playing something (casting), 
-    // screensaver is not already active, and no local video modal is open
     const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
-    if (currentTransportState !== 'Playing' && !isScreensaverActive && !isVideoVisible) {
-        screensaverTimeout = setTimeout(startSlideshow, IDLE_TIMEOUT_MS);
+    if (!isScreensaverActive && !isVideoVisible) {
+        idleTimer = setTimeout(onIdle, IDLE_THRESHOLD);
     }
 }
 
 function onIdle() {
-    const artModal = document.getElementById('album-art-modal');
-    const isShowingArt = artModal && artModal.style.display === 'flex';
-
-    if (!isShowingArt && currentTransportState === 'Playing' && currentArtworkUrl) {
-        console.log('[IDLE] User inactive for 30s and music playing. Showing artwork.');
-        openArtModal(currentArtworkUrl);
+    // If music is playing, default to Music mode for the screensaver
+    if (currentTransportState === 'Playing' && currentArtworkUrl) {
+        console.log('[IDLE] User inactive and music playing. Starting music slideshow.');
+        screensaverMode = 'nowPlaying';
+        localStorage.setItem('screensaverMode', 'nowPlaying');
+        const label = document.getElementById('ss-mode-label');
+        if (label) label.textContent = 'Music';
     }
+    startSlideshow();
 }
 
 // Activity listeners
@@ -3602,10 +3496,28 @@ window.addEventListener('mouseup', (event) => {
         if (event.target === aboutModal) closeAboutModal();
         if (event.target === document.getElementById('track-info-modal')) document.getElementById('track-info-modal').style.display = 'none';
         if (event.target === document.getElementById('sonos-eq-modal')) closeSonosEqModal();
-        if (event.target === document.getElementById('album-art-modal')) closeArtModal();
     }
     mouseDownTarget = null;
 });
+
+function startMusicSlideshow() {
+    if (currentArtworkUrl) {
+        screensaverMode = 'nowPlaying';
+        localStorage.setItem('screensaverMode', 'nowPlaying');
+        const label = document.getElementById('ss-mode-label');
+        if (label) label.textContent = 'Music';
+        startSlideshow();
+    } else {
+        showToast('No artwork available', 'info', 2000);
+    }
+}
+
+function startPhotoSlideshow(url, title) {
+    console.log('[SCREENSAVER] Starting custom photo slideshow:', url);
+    customSlideshowItems = [{ uri: url, title: title }];
+    customSlideshowIndex = -1;
+    startSlideshow();
+}
 
 // Settings Modal Functions added by assistant
 function switchSettingsTab(tabId) {
@@ -3658,7 +3570,7 @@ function closeManageModal() {
 
 
 async function startSlideshow() {
-    if (!customSlideshowItems.length && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) return;
+    if (!customSlideshowItems.length && screensaverMode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) return;
     if (isScreensaverActive) return;
 
     // Don't start if local video is playing
@@ -3712,6 +3624,40 @@ async function showNextPhoto() {
                 folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                 folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Root')
             };
+
+            // Use proxy for remote images if needed
+            if (data.url) {
+                const finalUrl = (data.url.startsWith('http') && !data.url.includes(window.location.host))
+                    ? `/api/proxy-image?url=${encodeURIComponent(data.url)}`
+                    : data.url;
+                data.url = finalUrl;
+            }
+        } else if (screensaverMode === 'nowPlaying') {
+            if (currentArtworkUrl) {
+                const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+                data = {
+                    url: currentArtworkUrl,
+                    title: currentTrack ? (currentTrack.album || 'No Album') : 'No Album',
+                    date: currentTrack ? currentTrack.title : 'No Track Playing',
+                    location: currentTrack ? (currentTrack.artist || 'Unknown Artist') : '',
+                    manualRotation: 0,
+                    isFavourite: false, // Not applicable here
+                    folderId: '0',
+                    folderTitle: 'Now Playing'
+                };
+
+                // If same as current, don't flicker unless forced
+                if (data.url === currentScreensaverPhoto && img.style.opacity == 1) {
+                    return;
+                }
+            } else {
+                // No artwork? Fallback to 'all' or show message
+                screensaverMode = 'all';
+                localStorage.setItem('screensaverMode', 'all');
+                const label = document.getElementById('ss-mode-label');
+                if (label) label.textContent = 'All';
+                return showNextPhoto();
+            }
         } else {
             const res = await fetch(`/api/slideshow/random?mode=${screensaverMode}`);
             if (res.ok) {
@@ -3814,6 +3760,7 @@ async function showNextPhoto() {
 function toggleSlideshowMode() {
     if (screensaverMode === 'all') screensaverMode = 'onThisDay';
     else if (screensaverMode === 'onThisDay') screensaverMode = 'favourites';
+    else if (screensaverMode === 'favourites') screensaverMode = 'nowPlaying';
     else screensaverMode = 'all';
 
     localStorage.setItem('screensaverMode', screensaverMode);
@@ -3822,13 +3769,15 @@ function toggleSlideshowMode() {
     const label = document.getElementById('ss-mode-label');
     if (label) {
         if (screensaverMode === 'all') label.textContent = 'All';
-        else if (screensaverMode === 'onThisDay') label.textContent = 'On This Day';
+        else if (screensaverMode === 'onThisDay') label.textContent = 'Day';
         else if (screensaverMode === 'favourites') label.textContent = 'Favs';
+        else if (screensaverMode === 'nowPlaying') label.textContent = 'Music';
     }
 
     let modeDisplay = 'All Photos';
     if (screensaverMode === 'onThisDay') modeDisplay = 'On This Day';
     else if (screensaverMode === 'favourites') modeDisplay = 'Favourites';
+    else if (screensaverMode === 'nowPlaying') modeDisplay = 'Now Playing Music';
 
     showToast(`Slideshow Mode: ${modeDisplay}`, 'info', 2000);
 

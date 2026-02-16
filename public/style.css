@@ -345,6 +345,44 @@ p.subtitle {
     transition: all 0.3s ease;
 }
 
+.device-card.is-static {
+    padding: 0 1.5rem 0 0;
+    align-items: stretch;
+    min-height: 130px;
+}
+
+.device-card.is-static .device-icon {
+    width: 130px;
+    height: auto;
+    border-radius: 0;
+    margin: 0;
+}
+
+.device-card.is-static .device-info {
+    padding: 1.25rem 0 1.25rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.device-card.is-static .card-transport-wrapper {
+    display: flex;
+    align-items: center;
+    padding-right: 0.5rem;
+}
+
+.device-card.is-static.server-card {
+    min-height: 70px;
+}
+
+.device-card.is-static.server-card .device-icon {
+    width: 70px;
+}
+
+.device-card.is-static.server-card .device-info {
+    padding: 0.5rem 0 0.5rem 1.25rem;
+}
+
 .player-icon {
     background: linear-gradient(135deg, #22c55e, #10b981);
     box-shadow: 0 8px 16px rgba(34, 197, 94, 0.3);
@@ -438,6 +476,18 @@ p.subtitle {
 
     .card-track-artist-album {
         font-size: 0.7rem;
+    }
+
+    .device-card.is-static {
+        min-height: 100px;
+    }
+
+    .device-card.is-static .device-icon {
+        width: 100px;
+    }
+
+    .device-card.is-static .device-info {
+        padding: 0.75rem 0 0.75rem 0.75rem;
     }
 }
 
@@ -3711,7 +3761,8 @@ input:checked+.slider:before {
 }
 
 .btn-ss-rotate,
-.btn-ss-back {
+.btn-ss-back,
+.btn-ss-switch {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
@@ -3729,6 +3780,12 @@ input:checked+.slider:before {
 .btn-ss-rotate:hover,
 .btn-ss-back:hover {
     background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.btn-ss-switch:hover {
+    background: var(--primary);
+    border-color: var(--primary-glow);
     transform: scale(1.1);
 }
 
@@ -3756,7 +3813,8 @@ input:checked+.slider:before {
 
 .btn-ss-rotate svg,
 .btn-ss-back svg,
-.btn-ss-delete svg {
+.btn-ss-delete svg,
+.btn-ss-switch svg {
     width: 22px;
     height: 22px;
 }
@@ -4026,6 +4084,18 @@ input:checked+.slider:before {
     overflow: hidden;
     border: 1px solid var(--card-border);
     background: rgba(0, 0, 0, 0.2);
+}
+
+.modal-art-controls {
+    margin-top: 1rem;
+    display: flex;
+    justify-content: center;
+    opacity: 0.4;
+    transition: opacity 0.3s;
+}
+
+.modal-art-controls:hover {
+    opacity: 1;
 }
 
 @media (max-width: 600px) {
