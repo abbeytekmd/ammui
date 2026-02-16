@@ -1152,20 +1152,10 @@ function updateStatus(status) {
     //    lastStatusFetchTime = Date.now();
 
     // Update Now Playing labels and fetch artwork
-    const nowPlayingLabel = document.getElementById('now-playing-label');
-    const nowPlayingAlbum = document.getElementById('now-playing-album');
-
     if (currentTrackId != null) {
         const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
         if (currentTrack) {
-            if (nowPlayingLabel) {
-                nowPlayingLabel.textContent = `${currentTrack.title} - ${currentTrack.artist || 'Unknown Artist'}`;
-                nowPlayingLabel.title = nowPlayingLabel.textContent;
-            }
-            if (nowPlayingAlbum) {
-                nowPlayingAlbum.textContent = currentTrack.album || '';
-                nowPlayingAlbum.title = currentTrack.album || '';
-            }
+            updateCardNowPlaying();
             // Fetch artwork if track changed or query differs
             const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
             const safeUdn = selectedRendererUdn ? selectedRendererUdn.replace(/:/g, '-') : '';
@@ -1177,12 +1167,10 @@ function updateStatus(status) {
                 updatePlayerArtwork(currentTrack.artist, currentTrack.album);
             }
         } else {
-            if (nowPlayingLabel) nowPlayingLabel.textContent = `Track ${currentTrackId}`;
-            if (nowPlayingAlbum) nowPlayingAlbum.textContent = '';
+            updateCardNowPlaying();
         }
     } else {
-        if (nowPlayingLabel) nowPlayingLabel.textContent = 'Not Playing';
-        if (nowPlayingAlbum) nowPlayingAlbum.textContent = '';
+        updateCardNowPlaying();
         currentArtworkQuery = '';
         currentArtworkUrl = '';
         hideAllPlayerArt();
@@ -1338,12 +1326,10 @@ function showPlayerArt(url) {
     if (!selectedRendererUdn) return;
     const safeUdn = selectedRendererUdn.replace(/:/g, '-');
     const containers = [
-        document.getElementById(`player-art-container-${safeUdn}`),
-        document.getElementById('global-player-art-container')
+        document.getElementById(`player-art-container-${safeUdn}`)
     ];
     const imgs = [
-        document.getElementById(`player-art-${safeUdn}`),
-        document.getElementById('global-player-art')
+        document.getElementById(`player-art-${safeUdn}`)
     ];
 
     console.log(`[ART] Loading artwork: ${url}`);
@@ -1352,6 +1338,7 @@ function showPlayerArt(url) {
     const onLoaded = (container) => {
         loadedCount++;
         if (container) container.classList.add('visible');
+        updateCardNowPlaying();
     };
 
     imgs.forEach((img, idx) => {
@@ -1374,6 +1361,8 @@ function hideAllPlayerArt() {
     // Explicitly hide global container too
     const globalContainer = document.getElementById('global-player-art-container');
     if (globalContainer) globalContainer.classList.remove('visible');
+    currentArtworkUrl = '';
+    updateCardNowPlaying();
 }
 
 function openArtModal(url, title = '', artist = '', album = '') {
@@ -1927,7 +1916,7 @@ function renderManageDevices() {
                             </svg>
                         </button>
                     </div>
-                    <span class="manage-item-host">${host} ${statusTags.join(' ')}</span>
+                    <span class="manage-item-host">${statusTags.join(' ')}</span>
                 </div>
                 <div class="manage-item-actions">
                     ${!(isServerDisabled || isLocallyDisabled) ? (isActive ? `
@@ -2056,6 +2045,48 @@ async function saveRename(udn) {
     }
 }
 
+function updateCardNowPlaying() {
+    const cardTrackTitle = document.querySelector('.card-track-title');
+    const cardTrackArtistAlbum = document.querySelector('.card-track-artist-album');
+    const cardNowPlaying = document.getElementById('card-now-playing');
+    const cardAlbumArt = document.getElementById('card-album-art');
+    const cardDefaultIcon = document.getElementById('card-default-icon');
+
+    if (currentTrackId != null && currentPlaylistItems.length > 0) {
+        const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+        if (currentTrack) {
+            if (cardTrackTitle) cardTrackTitle.textContent = currentTrack.title;
+            if (cardTrackArtistAlbum) {
+                const artist = currentTrack.artist || 'Unknown Artist';
+                const album = currentTrack.album ? ` • ${currentTrack.album}` : '';
+                cardTrackArtistAlbum.textContent = `${artist}${album}`;
+            }
+            if (cardNowPlaying) cardNowPlaying.classList.add('visible');
+
+            if (cardAlbumArt && currentArtworkUrl) {
+                cardAlbumArt.src = currentArtworkUrl;
+                cardAlbumArt.style.display = 'block';
+                if (cardDefaultIcon) cardDefaultIcon.style.display = 'none';
+                const parent = cardAlbumArt.parentElement;
+                if (parent) parent.style.background = 'none';
+            } else if (cardAlbumArt) {
+                cardAlbumArt.style.display = 'none';
+                if (cardDefaultIcon) cardDefaultIcon.style.display = 'block';
+                const parent = cardAlbumArt.parentElement;
+                if (parent) parent.style.background = '';
+            }
+            return;
+        }
+    }
+    if (cardNowPlaying) cardNowPlaying.classList.remove('visible');
+    if (cardAlbumArt) {
+        cardAlbumArt.style.display = 'none';
+        const parent = cardAlbumArt.parentElement;
+        if (parent) parent.style.background = '';
+    }
+    if (cardDefaultIcon) cardDefaultIcon.style.display = 'block';
+}
+
 function renderDevices() {
     // Filter out disabled devices for the main dashboard and modals
     const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn));
@@ -2087,6 +2118,7 @@ function renderDevices() {
             }
 
             deviceListElement.innerHTML = renderDeviceCard(activeRenderer, true, false, true);
+            updateCardNowPlaying();
 
             // Show/hide and enable/disable Sonos EQ button
             const eqBtn = document.getElementById('id-sonos-eq');
@@ -2241,31 +2273,33 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
         <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''}" 
              onclick="${clickAction}"
              id="device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
-            <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}">
-                ${asServer ? `
-                    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                ` : `
-                    <svg viewBox="0 0 24 24" fill="white">
-                        <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
-                    </svg>
-                `}
+            <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}" style="${(device.iconUrl) ? 'background: none; box-shadow: none;' : ''}">
+                ${isStatic && !asServer ? `<img id="card-album-art" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: inherit;" alt="">` : ''}
+                <div id="${isStatic ? (asServer ? 'card-server-icon' : 'card-default-icon') : ''}" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                    ${device.iconUrl ?
+            `<img src="${device.iconUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 2px;" alt="">` :
+            (asServer ? `
+                            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                            </svg>
+                        ` : `
+                            <svg viewBox="0 0 24 24" fill="white">
+                                <path d="M6 9h5l7-7v20l-7-7H6V9z"></path>
+                            </svg>
+                        `)
+        }
+                </div>
             </div>
             <div class="device-info">
                 <div class="device-name-container">
                     <div class="device-name">${device.customName || device.friendlyName}</div>
-                    ${device.iconUrl ? `<img src="${device.iconUrl}" class="device-brand-icon" alt="">` : ''}
                 </div>
-                <div class="device-meta">
-                    <span style="font-family: monospace; opacity: 0.7;">${(() => {
-            try {
-                return new URL(device.location).hostname;
-            } catch (e) {
-                return device.location || 'unknown';
-            }
-        })()}</span>
-                </div>
+                ${(!asServer && isStatic) ? `
+                    <div class="device-now-playing" id="card-now-playing">
+                        <div class="card-track-title"></div>
+                        <div class="card-track-artist-album"></div>
+                    </div>
+                ` : ''}
             </div>
             ${asServer ? `<div class="media-library-label">Media Library</div>` : ''}
             ${transportHtml ? `
@@ -3523,7 +3557,6 @@ async function startSlideshow() {
     console.log('Starting Screensaver...');
     isScreensaverActive = true;
     const overlay = document.getElementById('screensaver-overlay');
-    const img = document.getElementById('screensaver-img');
     const info = document.getElementById('screensaver-info');
 
     if (overlay) {
