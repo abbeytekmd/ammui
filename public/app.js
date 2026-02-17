@@ -1769,6 +1769,27 @@ function updateTransportControls() {
     } else {
         btnClear.classList.remove('disabled');
     }
+
+    // Update Screensaver Play/Pause Button
+    const ssPlayPauseBar = document.getElementById('btn-ss-playpause-bar');
+    const ssSvgPlayBar = document.getElementById('svg-ss-play-bar');
+    const ssSvgPauseBar = document.getElementById('svg-ss-pause-bar');
+    const ssMusicBar = document.getElementById('ss-music-bar');
+
+    if (ssMusicBar) {
+        if (!selectedRendererUdn || isPlaylistEmpty) {
+            ssMusicBar.style.display = 'none';
+        } else {
+            ssMusicBar.style.display = 'flex';
+            if (isPlaying) {
+                if (ssSvgPlayBar) ssSvgPlayBar.style.display = 'none';
+                if (ssSvgPauseBar) ssSvgPauseBar.style.display = 'block';
+            } else {
+                if (ssSvgPlayBar) ssSvgPlayBar.style.display = 'block';
+                if (ssSvgPauseBar) ssSvgPauseBar.style.display = 'none';
+            }
+        }
+    }
 }
 
 async function triggerDiscovery(btn) {
@@ -2696,11 +2717,11 @@ async function fetchVolume() {
         if (response.ok) {
             const data = await response.json();
             const slider = document.getElementById('volume-slider');
+            const ssSlider = document.getElementById('ss-volume-slider');
             const valueSpan = document.getElementById('volume-value');
-            if (slider && valueSpan) {
-                slider.value = data.volume;
-                valueSpan.textContent = `${data.volume}%`;
-            }
+            if (slider) slider.value = data.volume;
+            if (ssSlider) ssSlider.value = data.volume;
+            if (valueSpan) valueSpan.textContent = `${data.volume}%`;
         }
     } catch (err) {
         console.error('Failed to fetch volume:', err);
@@ -2708,7 +2729,11 @@ async function fetchVolume() {
 }
 
 async function updateVolume(value) {
+    const slider = document.getElementById('volume-slider');
+    const ssSlider = document.getElementById('ss-volume-slider');
     const valueSpan = document.getElementById('volume-value');
+    if (slider) slider.value = value;
+    if (ssSlider) ssSlider.value = value;
     if (valueSpan) valueSpan.textContent = `${value}%`;
 
     // Debounce volume updates to avoid flooding the network
@@ -3427,7 +3452,13 @@ const IDLE_THRESHOLD = 60000; // 1 minute
 function resetIdleTimer(e) {
     // If activity is on screensaver controls, the start slideshow button, or a browser item (which might trigger the SS), don't stop the screensaver
     if (e && e.target && typeof e.target.closest === 'function' &&
-        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-start-slideshow') || e.target.closest('#btn-play-all') || e.target.closest('.playlist-item'))
+        (e.target.closest('.screensaver-controls') ||
+            e.target.closest('.screensaver-music-bar') ||
+            e.target.closest('.ss-volume-popover') ||
+            e.target.closest('.screensaver-info') ||
+            e.target.closest('#btn-start-slideshow') ||
+            e.target.closest('#btn-play-all') ||
+            e.target.closest('.playlist-item'))
     ) return;
 
     const isMouseMove = e && e.type === 'mousemove';
@@ -3742,6 +3773,15 @@ async function showNextPhoto() {
                     };
                 }
 
+                const bg = document.getElementById('screensaver-bg');
+                if (bg) {
+                    bg.style.opacity = 0;
+                    setTimeout(() => {
+                        bg.style.backgroundImage = `url("${data.url}")`;
+                        bg.style.opacity = 1;
+                    }, 500);
+                }
+
                 img.src = data.url;
                 currentScreensaverPhoto = data.url;
                 currentScreensaverRotation = data.manualRotation || 0;
@@ -3758,7 +3798,13 @@ async function showNextPhoto() {
                 // Modern browsers automatically handle EXIF orientation. 
                 // Manual rotation causes "double rotation".
                 // We apply our manual rotation ADDITIVELY.
-                img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+                // Use CSS variable for rotation to not clash with animation
+                img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
+
+                // Restart animation
+                img.style.animation = 'none';
+                void img.offsetWidth; // trigger reflow
+                img.style.animation = '';
 
                 // Update text info and folder reference
                 updateScreensaverInfo(data);
@@ -3857,7 +3903,34 @@ async function toggleFavouriteCurrentPhoto() {
     }
 }
 
+async function toggleSlideshowPlayback(e) {
+    if (e) {
+        e.stopPropagation();
+        if (e.preventDefault && (e.type === 'touchend' || e.type === 'click')) {
+            // Be careful with preventDefault on elements that need basic behavior
+        }
+    }
 
+    if (!selectedRendererUdn) return;
+
+    // Close volume popover if it's open
+    const popover = document.getElementById('ss-volume-popover');
+    if (popover) popover.classList.remove('active');
+
+    const action = (currentTransportState === 'Playing') ? 'pause' : 'play';
+    console.log(`[SCREENSAVER] Toggling playback: ${action}`);
+    await transportAction(action);
+}
+
+function toggleSSVolumeSlider(e) {
+    if (e) {
+        e.stopPropagation();
+    }
+    const popover = document.getElementById('ss-volume-popover');
+    if (popover) {
+        popover.classList.toggle('active');
+    }
+}
 
 async function rotateSlideshow(delta) {
     if (!currentScreensaverPhoto) return;
@@ -3875,7 +3948,7 @@ async function rotateSlideshow(delta) {
     // Apply visually
     const img = document.getElementById('screensaver-img');
     if (img) {
-        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+        img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
     }
 
     console.log(`Rotating photo ${currentScreensaverPhoto} to ${currentScreensaverRotation}deg`);
@@ -3914,6 +3987,8 @@ function previousSlideshow() {
 
     // Fade out
     img.style.opacity = 0;
+    const bg = document.getElementById('screensaver-bg');
+    if (bg) bg.style.opacity = 0;
     if (info) info.style.opacity = 0;
 
     setTimeout(() => {
@@ -3927,9 +4002,15 @@ function previousSlideshow() {
 
         // Restore previous photo
         img.src = previousScreensaverPhoto.url;
+        if (bg) bg.style.backgroundImage = `url("${previousScreensaverPhoto.url}")`;
         currentScreensaverPhoto = previousScreensaverPhoto.url;
         currentScreensaverRotation = previousScreensaverPhoto.rotation || 0;
-        img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
+        img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
+
+        // Restart animation
+        img.style.animation = 'none';
+        void img.offsetWidth;
+        img.style.animation = '';
 
         // Update info
         if (info) {
@@ -4026,6 +4107,9 @@ function stopSlideshow() {
     if (screensaverInterval) clearInterval(screensaverInterval);
 
     const overlay = document.getElementById('screensaver-overlay');
+    const popover = document.getElementById('ss-volume-popover');
+    if (popover) popover.classList.remove('active');
+
     if (overlay) {
         overlay.classList.remove('active');
         setTimeout(() => {

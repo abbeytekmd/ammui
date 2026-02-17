@@ -3634,11 +3634,40 @@ input:checked+.slider:before {
     cursor: pointer;
 }
 
+.screensaver-bg {
+    position: absolute;
+    top: -5%;
+    left: -5%;
+    width: 110%;
+    height: 110%;
+    background-size: cover;
+    background-position: center;
+    filter: blur(50px) brightness(0.4);
+    transition: opacity 1.5s ease-in-out;
+    z-index: 10000;
+}
+
 .screensaver-img {
-    max-width: 100%;
-    max-height: 100%;
+    width: 100%;
+    height: 100%;
     object-fit: contain;
-    transition: opacity 1s ease-in-out, transform 0.5s ease;
+    transition: opacity 1s ease-in-out;
+    --ss-rotation: 0deg;
+    transform: rotate(var(--ss-rotation)) scale(1);
+    animation: ken-burns 40s ease-in-out infinite alternate;
+    z-index: 10001;
+    position: relative;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes ken-burns {
+    0% {
+        transform: rotate(var(--ss-rotation)) scale(1) translate(0, 0);
+    }
+
+    100% {
+        transform: rotate(var(--ss-rotation)) scale(1.1) translate(1%, 1%);
+    }
 }
 
 .screensaver-img.panorama {
@@ -3693,7 +3722,7 @@ input:checked+.slider:before {
 
 .screensaver-info {
     position: absolute;
-    bottom: calc(60px + env(safe-area-inset-bottom));
+    bottom: calc(50px + env(safe-area-inset-bottom));
     left: 40px;
     color: rgba(255, 255, 255, 0.9);
     font-family: 'Inter', sans-serif;
@@ -3787,6 +3816,100 @@ input:checked+.slider:before {
     background: var(--primary);
     border-color: var(--primary-glow);
     transform: scale(1.1);
+}
+
+.screensaver-music-bar {
+    position: absolute;
+    top: calc(40px + env(safe-area-inset-top));
+    right: 40px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    background: rgba(0, 0, 0, 0.4);
+    backdrop-filter: blur(15px);
+    padding: 12px 20px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 10010;
+    transition: all 0.3s ease;
+}
+
+.screensaver-music-bar:hover {
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.btn-ss-music {
+    background: transparent;
+    border: none;
+    color: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    border-radius: 50%;
+    transition: all 0.2s ease;
+}
+
+.btn-ss-music:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(1.1);
+}
+
+.ss-volume-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.ss-volume-popover {
+    position: absolute;
+    top: 60px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-10px);
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(10px);
+    padding: 15px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    opacity: 0;
+    pointer-events: none;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.ss-volume-popover.active {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0);
+}
+
+.ss-volume-slider-vertical {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 6px;
+    height: 120px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+    outline: none;
+    cursor: pointer;
+    writing-mode: bt-lr;
+    /* Bottom to top */
+    -webkit-appearance: slider-vertical;
+}
+
+.ss-volume-slider-vertical::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+    border: 2px solid white;
 }
 
 .btn-ss-delete {

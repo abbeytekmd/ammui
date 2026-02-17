@@ -573,8 +573,37 @@
     <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;"
         onclick="stopSlideshow(); event.stopPropagation();"
         ontouchend="stopSlideshow(); event.preventDefault(); event.stopPropagation();">
+        <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <div class="screensaver-info" id="screensaver-info"></div>
+
+        <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
+            ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
+            onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
+            <button id="btn-ss-playpause-bar" class="btn-ss-music" onclick="toggleSlideshowPlayback(event)"
+                ontouchend="toggleSlideshowPlayback(event)" title="Play/Pause Music">
+                <svg id="svg-ss-play-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M8 5v14l11-7z"></path>
+                </svg>
+                <svg id="svg-ss-pause-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"
+                    style="display: none;">
+                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+                </svg>
+            </button>
+            <div class="ss-volume-container">
+                <button class="btn-ss-music" onclick="toggleSSVolumeSlider(event)"
+                    ontouchend="toggleSSVolumeSlider(event)" title="Volume">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                </button>
+                <div id="ss-volume-popover" class="ss-volume-popover">
+                    <input type="range" id="ss-volume-slider" min="0" max="100" step="1"
+                        oninput="updateVolume(this.value)" class="ss-volume-slider-vertical">
+                </div>
+            </div>
+        </div>
 
         <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
             ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
@@ -609,8 +638,6 @@
                 <div class="ss-control-label">Mode</div>
             </div>
 
-
-
             <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
                 ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();">
                 <button id="btn-ss-favourite" class="btn-ss-favourite" title="Favourite Photo">
@@ -639,6 +666,7 @@
                 <div class="ss-control-label">Delete</div>
             </div>
         </div>
+    </div>
     </div>
     <div id="about-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content about-modal-content">
