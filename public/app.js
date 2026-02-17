@@ -1326,6 +1326,11 @@ async function updatePlayerArtwork(artist, album) {
             const data = await res.json();
             currentArtworkUrl = data.url;
             showPlayerArt(data.url);
+
+            // Trigger screensaver update if in music mode
+            if (isScreensaverActive && screensaverMode === 'nowPlaying') {
+                showNextPhoto();
+            }
         } else {
             console.warn('[ART] No artwork found, will not retry this query');
             failedArtworkQueries.add(query);
@@ -3422,7 +3427,7 @@ const IDLE_THRESHOLD = 60000; // 1 minute
 function resetIdleTimer(e) {
     // If activity is on screensaver controls, the start slideshow button, or a browser item (which might trigger the SS), don't stop the screensaver
     if (e && e.target && typeof e.target.closest === 'function' &&
-        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-play-all') || e.target.closest('.playlist-item'))
+        (e.target.closest('.screensaver-controls') || e.target.closest('#btn-start-slideshow') || e.target.closest('#btn-play-all') || e.target.closest('.playlist-item'))
     ) return;
 
     const isMouseMove = e && e.type === 'mousemove';
@@ -3569,6 +3574,14 @@ function closeManageModal() {
 
 
 
+function manualStartSlideshow() {
+    if (!customSlideshowItems.length && screensaverMode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) {
+        showToast('Screensaver source not configured. Use the browser menu to "Set Screensaver" on a photo folder.', 'info', 5000);
+        return;
+    }
+    startSlideshow();
+}
+
 async function startSlideshow() {
     if (!customSlideshowItems.length && screensaverMode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) return;
     if (isScreensaverActive) return;
@@ -3602,6 +3615,42 @@ async function startSlideshow() {
     // Clear any existing interval before starting a new one
     if (screensaverInterval) clearInterval(screensaverInterval);
     screensaverInterval = setInterval(showNextPhoto, 60000);
+}
+
+function updateScreensaverInfo(data) {
+    const info = document.getElementById('screensaver-info');
+    if (!info) return;
+
+    let dateStr = '';
+    if (data.date) {
+        const d = new Date(data.date);
+        // If it's a valid date but NOT just a 4-digit year, and contains separators, format it nicely
+        if (!isNaN(d.getTime()) && !/^\d{4}$/.test(String(data.date)) && (String(data.date).includes('-') || String(data.date).includes('/'))) {
+            dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        } else {
+            dateStr = data.date;
+        }
+    }
+
+    let displayHtml = `<div class="ss-date">${dateStr || ''}</div>`;
+    let details = data.location || '';
+
+    // Add album if in music mode
+    if (screensaverMode === 'nowPlaying' && data.title && data.title !== 'No Album') {
+        if (details) details += ' — ';
+        details += data.title;
+    }
+
+    if (details) {
+        displayHtml += `<div class="ss-location">${details}</div>`;
+    }
+    info.innerHTML = displayHtml;
+
+    // Store folder info for navigation
+    currentScreensaverFolder = {
+        id: data.folderId,
+        title: data.folderTitle
+    };
 }
 
 async function showNextPhoto() {
@@ -3646,10 +3695,7 @@ async function showNextPhoto() {
                     folderTitle: 'Now Playing'
                 };
 
-                // If same as current, don't flicker unless forced
-                if (data.url === currentScreensaverPhoto && img.style.opacity == 1) {
-                    return;
-                }
+                // (Early return removed to allow updateScreensaverInfo call below)
             } else {
                 // No artwork? Fallback to 'all' or show message
                 screensaverMode = 'all';
@@ -3671,6 +3717,16 @@ async function showNextPhoto() {
         }
 
         if (data && data.url && img) {
+            const isSamePhoto = (data.url === currentScreensaverPhoto && img.style.opacity == 1);
+
+            if (isSamePhoto) {
+                if (screensaverMode === 'nowPlaying') {
+                    // Update the text info even if the image is the same
+                    updateScreensaverInfo(data);
+                }
+                return;
+            }
+
             img.style.opacity = 0;
             if (info) info.style.opacity = 0;
 
@@ -3704,35 +3760,8 @@ async function showNextPhoto() {
                 // We apply our manual rotation ADDITIVELY.
                 img.style.transform = `rotate(${currentScreensaverRotation}deg)`;
 
-                if (info) {
-                    // Extract year/date if possible. Often date is YYYY-MM-DD or similar.
-                    let dateStr = '<no date>';
-                    if (data.date) {
-                        const d = new Date(data.date);
-                        if (!isNaN(d.getTime())) {
-                            if (/^\d{4}$/.test(data.date)) {
-                                dateStr = data.date;
-                            } else {
-                                dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                            }
-                        } else {
-                            dateStr = data.date;
-                        }
-                    }
-
-                    // Combine Date and Location
-                    let displayHtml = `<div class="ss-date">${dateStr}</div>`;
-                    if (data.location) {
-                        displayHtml += `<div class="ss-location">${data.location}</div>`;
-                    }
-                    info.innerHTML = displayHtml;
-
-                    // Store folder info for navigation
-                    currentScreensaverFolder = {
-                        id: data.folderId,
-                        title: data.folderTitle
-                    };
-                }
+                // Update text info and folder reference
+                updateScreensaverInfo(data);
 
                 img.onload = () => {
                     img.style.opacity = 1;
