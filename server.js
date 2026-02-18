@@ -1973,7 +1973,7 @@ app.get('/api/art/search', async (req, res) => {
                     const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
                     const discogsRes = await axios.get(discogsUrl, {
                         timeout: 5000,
-                        headers: { 'User-Agent': 'AMCUI/1.0' }
+                        headers: { 'User-Agent': 'AMMUI/1.0' }
                     });
 
                     if (discogsRes.data.results && discogsRes.data.results.length > 0) {
@@ -2061,7 +2061,7 @@ app.get('/api/art/proxy', async (req, res) => {
             responseType: 'stream',
             timeout: 10000,
             headers: {
-                'User-Agent': 'AMCUI/1.0',
+                'User-Agent': 'AMMUI/1.0',
                 'Accept': 'image/*'
             }
         });
@@ -2087,7 +2087,7 @@ app.listen(port, () => {
 });
 
 process.on('SIGINT', () => {
-    console.log('Shutting down AMCUI...');
+    console.log('Shutting down AMMUI...');
     ssdpClient.stop();
     // Give local DLNA server a chance to stop if it registered its own listener,
     // but force exit here as well to be sure.
