@@ -1701,14 +1701,29 @@ p.subtitle {
 }
 
 .item-icon {
-    width: 24px;
-    height: 24px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--primary);
     flex-shrink: 0;
+    position: relative;
+    border-radius: 6px;
+    overflow: hidden;
 }
+
+.item-icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.3s ease;
+}
+
+.browser-item:hover .item-icon img {
+    transform: scale(1.1);
+}
+
 
 .browser-item.file .item-icon {
     color: var(--accent);
@@ -3745,6 +3760,54 @@ input:checked+.slider:before {
     cursor: grabbing;
 }
 
+/* Slideshow mini-map */
+.ss-map-window {
+    position: absolute;
+    top: calc(20px + env(safe-area-inset-top));
+    left: 20px;
+    width: 220px;
+    height: 160px;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+    z-index: 10010;
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+    transition: opacity 0.5s ease, transform 0.5s ease, width 0.4s cubic-bezier(0.4, 0, 0.2, 1), height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: auto;
+    cursor: pointer;
+}
+
+.ss-map-window.visible {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.ss-map-window.expanded {
+    width: 400px;
+    height: 300px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.ss-map {
+    width: 100%;
+    height: 100%;
+}
+
+/* Dim the Leaflet attribution in the slideshow map */
+.ss-map .leaflet-control-attribution {
+    font-size: 8px;
+    opacity: 0.5;
+    background: rgba(0, 0, 0, 0.4);
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.ss-map .leaflet-control-zoom {
+    display: none;
+}
+
 .screensaver-info {
     position: absolute;
     bottom: calc(50px + env(safe-area-inset-bottom));
@@ -3782,6 +3845,14 @@ input:checked+.slider:before {
     font-weight: 400;
     opacity: 0.8;
     margin-top: 4px;
+}
+
+.ss-camera {
+    font-size: 12px;
+    font-weight: 400;
+    opacity: 0.55;
+    margin-top: 3px;
+    letter-spacing: 0.02em;
 }
 
 .screensaver-controls {
@@ -4343,4 +4414,39 @@ input:checked+.slider:before {
     opacity: 0;
     transform: translateY(20px);
     transition: all 0.3s ease-out;
+}
+
+.info-modal-content {
+    max-width: 850px !important;
+}
+
+.leaflet-container {
+    background: var(--bg) !important;
+}
+
+.leaflet-tile {
+    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
+
+.leaflet-control-attribution {
+    background: rgba(0, 0, 0, 0.5) !important;
+    color: var(--text-muted) !important;
+}
+
+.leaflet-control-zoom-in,
+.leaflet-control-zoom-out {
+    background: var(--card-bg) !important;
+    color: white !important;
+    border: 1px solid var(--card-border) !important;
+}
+
+/* Seek Bar Scanning Animation */
+@keyframes rotate {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
 }

@@ -807,6 +807,26 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     }
 });
 
+app.get('/api/browse-recursive/:udn', async (req, res) => {
+    const { udn } = req.params;
+    const { objectId = '0' } = req.query;
+
+    const device = Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+
+    try {
+        const server = new MediaServer(device);
+        const items = await server.browseRecursive(objectId);
+        res.json({ objectId, items });
+    } catch (err) {
+        console.error('Failed to browse recursively:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
     const { udn } = req.params;
     const { serverUdn, objectId } = req.body;
@@ -1758,7 +1778,14 @@ app.get('/api/slideshow/random', async (req, res) => {
                             foundImage.lat = exifData.latitude;
                             foundImage.lon = exifData.longitude;
                         }
-                        console.log(`[SCREENSAVER] exifr Parsed. Orientation: ${orientation}, Date: ${date || 'None'}, GPS: ${foundImage.lat},${foundImage.lon}`);
+                        // Camera make/model
+                        const make = (exifData.Make || '').trim();
+                        const model = (exifData.Model || '').trim();
+                        if (model) {
+                            // Avoid duplicating the make if it's already in the model string
+                            foundImage.camera = model.toLowerCase().startsWith(make.toLowerCase()) ? model : `${make} ${model}`.trim();
+                        }
+                        console.log(`[SCREENSAVER] exifr Parsed. Orientation: ${orientation}, Date: ${date || 'None'}, GPS: ${foundImage.lat},${foundImage.lon}, Camera: ${foundImage.camera || 'None'}`);
                     }
                 }
             } catch (e) {
@@ -1774,8 +1801,11 @@ app.get('/api/slideshow/random', async (req, res) => {
                 manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
                 isFavourite: !!(settings.favouritePhotos && settings.favouritePhotos[imgUrl]),
                 location: foundImage._path || foundImage.location || '',
+                latitude: foundImage.lat,
+                longitude: foundImage.lon,
                 folderId: foundImage.folderId,
-                folderTitle: foundImage.folderTitle
+                folderTitle: foundImage.folderTitle,
+                camera: foundImage.camera || ''
             });
         } else {
             res.status(404).json({ error: 'No images found' });

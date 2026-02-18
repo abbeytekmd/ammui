@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css?v=11">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 
 <body>
@@ -576,6 +578,12 @@
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <div class="screensaver-info" id="screensaver-info"></div>
+        <div id="ss-map-window" class="ss-map-window" style="display:none;"
+            onclick="event.stopPropagation(); if(slideshow) slideshow.toggleMapSize()"
+            ontouchend="event.stopPropagation(); event.preventDefault(); if(slideshow) slideshow.toggleMapSize()"
+            ontouchstart="event.stopPropagation()">
+            <div id="ss-map" class="ss-map"></div>
+        </div>
 
         <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
             ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"

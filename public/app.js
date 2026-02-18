@@ -101,26 +101,18 @@ const MAX_RENDERER_FAILURES = 3;
 let isRendererOffline = false;
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 let currentDeviceName = 'AMMUI';
-let screensaverTimeout = null;
-let screensaverInterval = null;
-let isScreensaverActive = false;
+let slideshow;
 let screensaverConfig = { serverUdn: null, objectId: null };
-let currentScreensaverPhoto = null;
-let previousScreensaverPhoto = null; // Track the previous photo
-let currentScreensaverRotation = 0;
-let currentScreensaverFolder = null;
-let screensaverMode = localStorage.getItem('screensaverMode') || 'all'; // 'all' or 'onThisDay'
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
 let lastReportedTrackKey = null;
+
+let manualRotations = {}; // Client-side cache of saved photo rotations
 
 let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
 
 function isImageItem(item) {
     return item && item.type === 'item' && ((item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
 }
-
-let customSlideshowItems = [];
-let customSlideshowIndex = -1;
 
 // Local Disabling
 let localDisabledDevices = new Set();
@@ -444,6 +436,25 @@ async function playFolder(objectId, title) {
     }
 }
 
+async function playFolderSlideshow(objectId, title) {
+    if (!selectedServerUdn) return;
+    showToast(`Loading slideshow from: ${title}...`, 'info', 3000);
+    try {
+        const response = await fetch(`/api/browse-recursive/${encodeURIComponent(selectedServerUdn)}?objectId=${encodeURIComponent(objectId)}`);
+        if (!response.ok) throw new Error('Failed to fetch folder items');
+        const data = await response.json();
+        const images = (data.items || []).filter(item => isImageItem(item));
+        if (images.length === 0) {
+            showToast('No photos found in this folder.', 'info', 3000);
+            return;
+        }
+        if (slideshow) slideshow.start(images, -1);
+    } catch (err) {
+        console.error('Folder slideshow error:', err);
+        showToast(`Failed to start slideshow: ${err.message}`);
+    }
+}
+
 
 async function downloadTrack(uri, title, artist, album) {
     showToast(`Downloading: ${title}...`, 'info', 3000);
@@ -592,6 +603,16 @@ async function addAllToPlaylist() {
 async function playAll() {
     const tracks = currentBrowserItems.filter(item => item.type === 'item' && !isImageItem(item));
     const images = currentBrowserItems.filter(item => isImageItem(item));
+    const containers = currentBrowserItems.filter(item => item.type === 'container');
+
+    // If we are in photo mode and have no images but have containers, do a recursive slideshow
+    if (currentBrowserMode === 'photo' && images.length === 0 && containers.length > 0) {
+        const currentFolder = browsePath[browsePath.length - 1];
+        if (currentFolder && currentFolder.id !== '0') {
+            playFolderSlideshow(currentFolder.id, currentFolder.title);
+            return;
+        }
+    }
 
     if (tracks.length === 0 && images.length > 0) {
         playAllPhotos(images);
@@ -664,9 +685,7 @@ async function playAll() {
 }
 
 function playAllPhotos(images) {
-    customSlideshowItems = images;
-    customSlideshowIndex = -1;
-    startSlideshow();
+    if (slideshow) slideshow.start(images, -1);
 }
 
 async function transportAction(action) {
@@ -797,7 +816,8 @@ function updateBrowserControls(items) {
     const btnToggleView = document.getElementById('btn-toggle-view');
 
     const showMusicControls = tracks.length > 0;
-    const showPhotoControls = images.length > 0;
+    const hasContainers = items.some(item => item.type === 'container');
+    const showPhotoControls = images.length > 0 || (currentBrowserMode === 'photo' && hasContainers);
 
     if (btnPlayAll) {
         btnPlayAll.style.display = (showMusicControls || showPhotoControls) ? 'flex' : 'none';
@@ -926,6 +946,8 @@ function renderBrowser(items) {
         browserItems.classList.remove('grid-view');
     }
 
+    const pathStr = browsePath.map(p => p.title).filter(t => t !== 'Root').join(' / ');
+
     let lastLetter = null;
     browserItems.innerHTML = items.map((item, index) => {
         const isContainer = item.type === 'container';
@@ -938,40 +960,40 @@ function renderBrowser(items) {
         }
 
         const isImage = (item.class && item.class.includes('imageItem')) ||
-            (item.protocolInfo && item.protocolInfo.includes('image/'));
+            (item.protocolInfo && item.protocolInfo.includes('image/')) ||
+            (item.type === 'item' && ['jpg', 'jpeg', 'png', 'webp'].some(ext => (item.uri || '').toLowerCase().endsWith(ext)));
 
         const isVideo = (item.class && item.class.includes('videoItem')) ||
             (item.protocolInfo && item.protocolInfo.includes('video/'));
 
         let icon = '';
-        if (effectiveViewMode === 'grid') {
-            const thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
-            if (thumbUrl) {
-                const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                icon = `<img src="${escThumb}" loading="lazy" alt="">`;
-            }
+        const thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
+        if (thumbUrl) {
+            const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            icon = `<img src="${escThumb}" loading="lazy" alt="" data-thumb-url="${escThumb}">`;
         }
+
 
         if (!icon) {
             icon = isContainer ? `
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
                 </svg>
             ` : isImage ? `
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                     <circle cx="8.5" cy="8.5" r="1.5"></circle>
                     <path d="M21 15l-5-5L5 21"></path>
                 </svg>
             ` : isVideo ? `
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
                     <path d="M8 21h8"></path>
                     <path d="M12 17v4"></path>
                     <path d="M10 8l5 3-5 3V8z"></path>
                 </svg>
             ` : `
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"></circle>
                     <path d="M10 8l6 4-6 4V8z"></path>
                 </svg>
@@ -986,7 +1008,7 @@ function renderBrowser(items) {
                  onclick="${isContainer ?
                 `enterFolder('${item.id}', '${esc(item.title)}')` :
                 isImage ?
-                    `event.stopPropagation(); startPhotoSlideshow('${esc(item.uri)}', '${esc(item.title)}')` :
+                    `event.stopPropagation(); startPhotoSlideshow('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.date)}', '${esc(item.artist)}', '${esc(item.parentID)}', '${esc(pathStr)}')` :
                     isVideo ?
                         `handleVideoClick('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', ${index})` :
                         `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
@@ -1010,11 +1032,13 @@ function renderBrowser(items) {
                         <span class="btn-label" data-mobile="">Queue</span>
                     </button>
                     ` : `
-                    <button class="btn-control play-btn" onclick="event.stopPropagation(); playFolder('${esc(item.id)}', '${esc(item.title)}')" title="Play Whole Folder Recursively">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M8 5v14l11-7z"></path>
+                    <button class="btn-control play-btn" onclick="event.stopPropagation(); ${currentBrowserMode === 'photo' ? `playFolderSlideshow('${esc(item.id)}', '${esc(item.title)}')` : `playFolder('${esc(item.id)}', '${esc(item.title)}')`}" title="${currentBrowserMode === 'photo' ? 'Start slideshow of this folder' : 'Play Whole Folder Recursively'}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="${currentBrowserMode === 'photo' ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="2">
+                            ${currentBrowserMode === 'photo' ?
+                '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>' :
+                '<path d="M8 5v14l11-7z"></path>'}
                         </svg>
-                        <span class="btn-label" data-mobile="">Play</span>
+                        <span class="btn-label" data-mobile="">${currentBrowserMode === 'photo' ? 'Slideshow' : 'Play'}</span>
                     </button>
                     <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1053,6 +1077,7 @@ function renderBrowser(items) {
     } else {
         browserItems.scrollTop = 0;
     }
+
 }
 
 async function fetchPlaylist(udn) {
@@ -1123,8 +1148,8 @@ function updateStatus(status) {
         renderPlaylist(currentPlaylistItems);
 
         // Update screensaver if in Music mode
-        if (isScreensaverActive && screensaverMode === 'nowPlaying') {
-            showNextPhoto();
+        if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
+            slideshow.next();
         }
 
         // Report play stats if playing a new track
@@ -1326,8 +1351,8 @@ async function updatePlayerArtwork(artist, album) {
             showPlayerArt(data.url);
 
             // Trigger screensaver update if in music mode
-            if (isScreensaverActive && screensaverMode === 'nowPlaying') {
-                showNextPhoto();
+            if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
+                slideshow.next();
             }
         } else {
             console.warn('[ART] No artwork found, will not retry this query');
@@ -2560,11 +2585,11 @@ async function init() {
 
     // Initialize screensaver mode label
     const ssModeLabel = document.getElementById('ss-mode-label');
-    if (ssModeLabel) {
-        if (screensaverMode === 'all') ssModeLabel.textContent = 'All';
-        else if (screensaverMode === 'onThisDay') ssModeLabel.textContent = 'Day';
-        else if (screensaverMode === 'favourites') ssModeLabel.textContent = 'Favs';
-        else if (screensaverMode === 'nowPlaying') ssModeLabel.textContent = 'Music';
+    if (ssModeLabel && slideshow) {
+        if (slideshow.mode === 'all') ssModeLabel.textContent = 'All';
+        else if (slideshow.mode === 'onThisDay') ssModeLabel.textContent = 'Day';
+        else if (slideshow.mode === 'favourites') ssModeLabel.textContent = 'Favs';
+        else if (slideshow.mode === 'nowPlaying') ssModeLabel.textContent = 'Music';
     }
 
     // Migrate Discogs token to server if it exists locally
@@ -3447,8 +3472,8 @@ async function openTrackInfoModal(trackData) {
             </div>
         `;
     }
-}
 
+}
 
 function closeTrackInfoModal() {
     const modal = document.getElementById('track-info-modal');
@@ -3471,726 +3496,617 @@ function showTrackInfoFromPlaylist(id) {
     }
 }
 
-// Idle Screensaver Logic
-let idleTimer = null;
-const IDLE_THRESHOLD = 60000; // 1 minute
+// Idle Screensaver Logic - Now handled by Slideshow class
+let currentScreensaverFolder = null; // Used for folder navigation
 
-function resetIdleTimer(e) {
-    // If activity is on screensaver controls, the start slideshow button, or a browser item (which might trigger the SS), don't stop the screensaver
-    if (e && e.target && typeof e.target.closest === 'function' &&
-        (e.target.closest('.screensaver-controls') ||
-            e.target.closest('.screensaver-music-bar') ||
-            e.target.closest('.ss-volume-popover') ||
-            e.target.closest('.screensaver-info') ||
-            e.target.closest('#btn-start-slideshow') ||
-            e.target.closest('#btn-play-all') ||
-            e.target.closest('.playlist-item'))
-    ) return;
+class Slideshow {
+    constructor() {
+        this.items = [];
+        this.index = -1;
+        this.isActive = false;
+        this.interval = null;
+        this.timer = null;
+        this.currentPhoto = null;
+        this.currentPhotoData = null;
+        this.previousPhoto = null;
+        this.rotation = 0;
+        this.mode = localStorage.getItem('screensaverMode') || 'all';
+        this.duration = 60000;
+        this.idleTimeout = 60000;
 
-    const isMouseMove = e && e.type === 'mousemove';
-
-    if (idleTimer) clearTimeout(idleTimer);
-
-    // If screensaver is active, stop it ONLY on non-mousemove events
-    if (isScreensaverActive && !isMouseMove) {
-        stopSlideshow();
+        // UI binds
+        this.overlay = document.getElementById('screensaver-overlay');
+        this.img = document.getElementById('screensaver-img');
+        this.bg = document.getElementById('screensaver-bg');
+        this.info = document.getElementById('screensaver-info');
+        this.favBtn = document.getElementById('btn-ss-favourite');
+        this.modeLabel = document.getElementById('ss-mode-label');
+        this.mapWindow = document.getElementById('ss-map-window');
+        this.leafletMap = null;
+        this.leafletMarker = null;
     }
 
-    const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
-    if (!isScreensaverActive && !isVideoVisible) {
-        idleTimer = setTimeout(onIdle, IDLE_THRESHOLD);
+    init() {
+        // Activity listeners for idle timer
+        ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(name => {
+            window.addEventListener(name, (e) => this.resetIdleTimer(e), { passive: true });
+        });
+        this.resetIdleTimer();
+        this.updateModeUI();
+    }
+
+    resetIdleTimer(e) {
+        // Don't stop if it's just mouse move, but DO reset the timer
+        const isMouseMove = e && e.type === 'mousemove';
+
+        if (this.isActive && !isMouseMove) {
+            // Stop if user interacts (clicks/keys) while active
+            // BUT ignore if interacting with screensaver controls or triggers
+            if (e && e.target && e.target.closest && (
+                e.target.closest('.screensaver-controls') ||
+                e.target.closest('.screensaver-music-bar') ||
+                e.target.closest('.ss-volume-popover') ||
+                e.target.closest('.screensaver-info') ||
+                e.target.closest('.ss-map-window') ||
+                e.target.closest('#btn-start-slideshow') ||
+                e.target.closest('#btn-play-all') ||
+                e.target.closest('.playlist-item')
+            )) {
+                return;
+            }
+            this.stop();
+        }
+
+        clearTimeout(this.timer);
+        if (!this.isActive) {
+            const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
+            if (!isVideoVisible) {
+                this.timer = setTimeout(() => {
+                    // Start in music mode if music is playing
+                    if (currentTransportState === 'Playing' && currentArtworkUrl) {
+                        this.mode = 'nowPlaying';
+                        this.updateModeUI();
+                    }
+                    this.start();
+                }, this.idleTimeout);
+            }
+        }
+    }
+
+    async start(items = null, index = -1) {
+        if (this.isActive) {
+            if (items) {
+                this.items = items;
+                this.index = index;
+                await this.next();
+                this.resetInterval();
+            }
+            return;
+        }
+
+        // Config check
+        if (!items && this.mode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) {
+            // Only show toast if it was a manual start attempt without items
+            if (items === null) showToast('Screensaver source not configured.', 'info', 5000);
+            return;
+        }
+
+        console.log('[SLIDESHOW] Starting...');
+        this.isActive = true;
+        this.items = items || [];
+        this.index = index;
+
+        if (this.overlay) {
+            this.overlay.style.display = 'flex';
+            setTimeout(() => this.overlay.classList.add('active'), 0);
+        }
+
+        if (this.info) {
+            this.info.style.cursor = 'pointer';
+            this.info.onclick = (e) => {
+                e.stopPropagation();
+                this.gotoFolder();
+            };
+        }
+
+        await this.next();
+        this.resetInterval();
+    }
+
+    stop() {
+        if (!this.isActive) return;
+        console.log('[SLIDESHOW] Stopping...');
+        this.isActive = false;
+        this.items = [];
+        this.index = -1;
+
+        if (this.interval) clearInterval(this.interval);
+
+        if (this.overlay) {
+            this.overlay.classList.remove('active');
+            const popover = document.getElementById('ss-volume-popover');
+            if (popover) popover.classList.remove('active');
+            setTimeout(() => {
+                if (!this.isActive) this.overlay.style.display = 'none';
+            }, 500);
+        }
+        this.resetIdleTimer();
+    }
+
+    resetInterval() {
+        if (this.interval) clearInterval(this.interval);
+        if (this.isActive) {
+            this.interval = setInterval(() => this.next(), this.duration);
+        }
+    }
+
+    async next() {
+        try {
+            let data;
+            if (this.items.length > 0) {
+                this.index = (this.index + 1) % this.items.length;
+                const item = this.items[this.index];
+                data = {
+                    url: item.uri || item.res,
+                    title: item.title,
+                    date: item.year || item.date || item['dc:date'] || '',
+                    location: item.artist || item.creator || '',
+                    latitude: item.latitude,
+                    longitude: item.longitude,
+                    camera: item.camera || '',
+                    manualRotation: manualRotations[item.uri || item.res] || 0,
+                    folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
+                    folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
+                };
+
+                // Proxy if remote
+                if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+                    data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
+                }
+            } else if (this.mode === 'nowPlaying') {
+                if (currentArtworkUrl) {
+                    const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+                    data = {
+                        url: currentArtworkUrl,
+                        title: currentTrack ? (currentTrack.album || 'No Album') : 'No Album',
+                        date: currentTrack ? currentTrack.title : 'No Track Playing',
+                        location: currentTrack ? (currentTrack.artist || 'Unknown Artist') : '',
+                        manualRotation: 0,
+                        folderId: '0',
+                        folderTitle: 'Now Playing'
+                    };
+                } else {
+                    this.mode = 'all';
+                    this.updateModeUI();
+                    return this.next();
+                }
+            } else {
+                const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
+                if (res.ok) {
+                    data = await res.json();
+                } else {
+                    const err = await res.json();
+                    if (this.mode === 'onThisDay' || this.mode === 'favourites') {
+                        showToast(err.error || `No photos for ${this.mode}`, 'info', 3000);
+                        this.mode = 'all';
+                        this.updateModeUI();
+                        return this.next();
+                    }
+                }
+            }
+
+            if (data && data.url) this.renderPhoto(data);
+        } catch (e) {
+            console.error('[SLIDESHOW] Next failed:', e);
+        }
+    }
+
+    async previous() {
+        if (!this.previousPhoto) return;
+
+        // Save current to swap back later
+        const temp = {
+            url: this.currentPhoto,
+            rotation: this.rotation,
+            data: this.currentPhotoData
+        };
+
+        // Render previous
+        this.renderPhoto({
+            ...this.previousPhoto.data,
+            url: this.previousPhoto.url,
+            manualRotation: this.previousPhoto.rotation
+        });
+
+        this.previousPhoto = temp;
+        this.resetInterval();
+    }
+
+    renderPhoto(data) {
+        if (data.url === this.currentPhoto && this.img.style.opacity == 1) {
+            if (this.mode === 'nowPlaying') this.updateInfoUI(data);
+            return;
+        }
+
+        this.img.style.opacity = 0;
+        if (this.info) this.info.style.opacity = 0;
+
+        setTimeout(() => {
+            if (this.currentPhoto) {
+                this.previousPhoto = {
+                    url: this.currentPhoto,
+                    rotation: this.rotation,
+                    data: this.currentPhotoData
+                };
+            }
+
+            if (this.bg) {
+                this.bg.style.opacity = 0;
+                setTimeout(() => {
+                    this.bg.style.backgroundImage = `url("${data.url.replace(/"/g, '%22')}")`;
+                    this.bg.style.opacity = 1;
+                }, 500);
+            }
+
+            this.img.src = data.url;
+            this.currentPhoto = data.url;
+            this.currentPhotoData = data;
+            this.rotation = data.manualRotation || 0;
+
+            if (this.favBtn) {
+                this.favBtn.classList.toggle('is-favourite', !!data.isFavourite);
+            }
+
+            this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
+            this.img.style.animation = 'none';
+            void this.img.offsetWidth;
+            this.img.style.animation = '';
+
+            this.updateInfoUI(data);
+
+            this.img.onload = () => {
+                this.img.style.opacity = 1;
+                if (this.info) this.info.style.opacity = 1;
+                const ratio = this.img.naturalWidth / this.img.naturalHeight;
+                this.img.classList.toggle('panorama', ratio > 2.2);
+            };
+            if (this.img.complete) this.img.onload();
+        }, 500);
+    }
+
+    updateInfoUI(data) {
+        if (!this.info) return;
+        let dateStr = '';
+        if (data.date) {
+            let d = new Date(data.date);
+            if (!isNaN(d.getTime()) && !/^\d{4}$/.test(String(data.date))) {
+                dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+            } else {
+                dateStr = String(data.date).split('T')[0];
+            }
+        }
+
+        const isCamera = (val) => {
+            if (!val) return false;
+            const v = String(val).toLowerCase();
+            return ['iphone', 'samsung', 'pixel', 'apple', 'canon', 'nikon', 'sony'].some(kw => v.includes(kw));
+        };
+
+        let path = data.folderTitle || data.location || '';
+        if (isCamera(path)) path = '';
+
+        const cameraStr = data.camera || '';
+
+        this.info.innerHTML = `
+            <div class="ss-date">${dateStr || ''}</div>
+            <div class="ss-location">
+                <span class="ss-folder-link" onclick="event.stopPropagation(); slideshow.stop(); browse(selectedServerUdn, '${data.folderId}')">
+                    ${path || 'Library'}
+                </span>
+            </div>
+            <div class="ss-camera">${cameraStr}</div>`;
+
+        currentScreensaverFolder = { id: data.folderId, title: data.folderTitle };
+
+        // Always fetch full metadata to get camera info (and GPS fallback).
+        // The server's 64KB range-fetch often misses EXIF data deeper in the file.
+        this.fetchMetadataFallback(data);
+    }
+
+    fetchMetadataFallback(data) {
+        const rawUrl = this.currentPhoto;
+        if (!rawUrl) {
+            this.hideMap();
+            return;
+        }
+        const fetchUrl = rawUrl.startsWith('/api/proxy-image')
+            ? new URLSearchParams(rawUrl.split('?')[1]).get('url')
+            : rawUrl;
+        if (!fetchUrl) {
+            this.hideMap();
+            return;
+        }
+
+        fetch(`/api/track-metadata?uri=${encodeURIComponent(fetchUrl)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(meta => {
+                if (!meta) { this.hideMap(); return; }
+
+                // Update camera label if we got make/model
+                const make = (meta.common && meta.common.make) || '';
+                const model = (meta.common && meta.common.model) || '';
+                if (model) {
+                    const camera = model.toLowerCase().startsWith(make.toLowerCase()) ? model : `${make} ${model}`.trim();
+                    const el = this.info && this.info.querySelector('.ss-camera');
+                    if (el) el.textContent = camera;
+                }
+
+                // Update map if GPS available
+                if (meta.format && meta.format.latitude != null) {
+                    this.updateMapUI({ latitude: meta.format.latitude, longitude: meta.format.longitude });
+                } else if (!data.latitude) {
+                    this.hideMap();
+                }
+            })
+            .catch(() => this.hideMap());
+    }
+
+    updateMapUI(data) {
+        if (!this.mapWindow) return;
+
+        const lat = parseFloat(data.latitude);
+        const lng = parseFloat(data.longitude);
+        const hasGps = !isNaN(lat) && !isNaN(lng);
+
+        if (!hasGps) {
+            this.hideMap();
+            return;
+        }
+
+        // Show the map window
+        this.mapWindow.style.display = 'block';
+        requestAnimationFrame(() => this.mapWindow.classList.add('visible'));
+
+        if (!this.leafletMap) {
+            this.leafletMap = L.map('ss-map', {
+                zoomControl: false,
+                attributionControl: true,
+                dragging: false,
+                scrollWheelZoom: false,
+                doubleClickZoom: false,
+                boxZoom: false,
+                keyboard: false,
+                touchZoom: false
+            }).setView([lat, lng], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap',
+                maxZoom: 18
+            }).addTo(this.leafletMap);
+            this.leafletMarker = L.circleMarker([lat, lng], {
+                radius: 7,
+                fillColor: '#6366f1',
+                color: '#fff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.95
+            }).addTo(this.leafletMap);
+        } else {
+            this.leafletMap.setView([lat, lng], 13);
+            this.leafletMarker.setLatLng([lat, lng]);
+        }
+
+        // Force Leaflet to recalculate size after display:block
+        setTimeout(() => { if (this.leafletMap) this.leafletMap.invalidateSize(); }, 50);
+    }
+
+    hideMap() {
+        if (!this.mapWindow) return;
+        this.mapWindow.classList.remove('visible');
+        setTimeout(() => {
+            if (!this.mapWindow.classList.contains('visible')) {
+                this.mapWindow.style.display = 'none';
+            }
+        }, 500);
+    }
+
+    toggleMapSize() {
+        if (!this.mapWindow) return;
+        const isExpanding = !this.mapWindow.classList.contains('expanded');
+        this.mapWindow.classList.toggle('expanded');
+        // After CSS transition, resize Leaflet and adjust zoom
+        setTimeout(() => {
+            if (this.leafletMap) {
+                this.leafletMap.invalidateSize();
+                const currentZoom = this.leafletMap.getZoom();
+                this.leafletMap.setZoom(isExpanding ? currentZoom - 3 : currentZoom + 3);
+            }
+        }, 420);
+    }
+
+    toggleMode() {
+        const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
+        this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
+        localStorage.setItem('screensaverMode', this.mode);
+        this.updateModeUI();
+        showToast(`Mode: ${this.mode}`, 'info', 2000);
+        this.next();
+    }
+
+    updateModeUI() {
+        if (this.modeLabel) {
+            const labels = { all: 'All', onThisDay: 'Day', favourites: 'Favs', nowPlaying: 'Music' };
+            this.modeLabel.textContent = labels[this.mode] || 'All';
+        }
+    }
+
+    async rotate(delta) {
+        if (!this.currentPhoto) return;
+        this.rotation = (this.rotation + delta) % 360;
+        if (this.rotation < 0) this.rotation += 360;
+        this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
+
+        try {
+            await fetch('/api/slideshow/rotate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: this.currentPhoto, rotation: this.rotation })
+            });
+            // Update client-side cache
+            manualRotations[this.currentPhoto] = this.rotation;
+        } catch (e) {
+            console.error('Rotate save failed:', e);
+        }
+        this.resetInterval();
+    }
+
+    async toggleFavourite() {
+        if (!this.currentPhoto) return;
+        const newState = !this.favBtn.classList.contains('is-favourite');
+        this.favBtn.classList.toggle('is-favourite', newState);
+
+        try {
+            const res = await fetch('/api/slideshow/favourite', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: this.currentPhoto, favourite: newState })
+            });
+            if (res.ok) showToast(newState ? 'Added to Favourites' : 'Removed', 'success', 2000);
+        } catch (e) {
+            console.error('Fav toggle failed:', e);
+            this.favBtn.classList.toggle('is-favourite', !newState);
+        }
+        this.resetInterval();
+    }
+
+    async delete() {
+        if (!this.currentPhoto || !confirm('Hide this photo forever?')) return;
+        try {
+            const res = await fetch('/api/slideshow/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: this.currentPhoto })
+            });
+            if (res.ok) {
+                showToast('Photo hidden', 'success', 2000);
+                this.next();
+            }
+        } catch (e) {
+            console.error('Delete failed:', e);
+        }
+    }
+
+    async gotoFolder() {
+        const data = this.currentPhotoData;
+        if (!data || !data.folderId || !selectedServerUdn) {
+            console.warn('[SLIDESHOW] No folder info available to navigate');
+            return;
+        }
+
+        console.log('[SLIDESHOW] Navigating to folder:', data.folderTitle);
+        this.stop();
+
+        // Ensure we are in grid mode
+        browserViewMode = 'grid';
+        localStorage.setItem('browserViewMode', 'grid');
+
+        // Select the server (use the one from screensaver config or current)
+        if (screensaverConfig && screensaverConfig.serverUdn) {
+            selectedServerUdn = screensaverConfig.serverUdn;
+            localStorage.setItem('selectedServerUdn', selectedServerUdn);
+        }
+
+        // Reset browser path to root first to ensure clean breadcrumbs
+        browsePath = [{ id: '0', title: 'Home' }];
+
+        // Trigger navigation
+        if (typeof enterFolder === 'function') {
+            await enterFolder(data.folderId, data.folderTitle);
+        } else {
+            await browse(selectedServerUdn, data.folderId);
+        }
+
+        // If on mobile, switch to browser tab
+        if (typeof switchView === 'function') {
+            switchView('browser');
+        }
+    }
+
+    async startPhoto(url, title, date, location, folderId, folderTitle) {
+        console.log('[SLIDESHOW] Starting single photo view:', url);
+
+        // Fetch background meta for coordinates
+        let latitude, longitude;
+        try {
+            const res = await fetch(`/api/track-metadata?uri=${encodeURIComponent(url)}`);
+            if (res.ok) {
+                const meta = await res.json();
+                latitude = meta.format?.latitude;
+                longitude = meta.format?.longitude;
+            }
+        } catch (e) { }
+
+        const item = {
+            uri: url,
+            title,
+            date,
+            artist: location,
+            latitude,
+            longitude,
+            folderId,
+            folderTitle
+        };
+        this.start([item], 0);
     }
 }
 
-function onIdle() {
-    // If music is playing, default to Music mode for the screensaver
-    if (currentTransportState === 'Playing' && currentArtworkUrl) {
-        console.log('[IDLE] User inactive and music playing. Starting music slideshow.');
-        screensaverMode = 'nowPlaying';
-        localStorage.setItem('screensaverMode', 'nowPlaying');
-        const label = document.getElementById('ss-mode-label');
-        if (label) label.textContent = 'Music';
-    }
-    startSlideshow();
+// Global instance
+slideshow = new Slideshow();
+slideshow.init();
+
+// Compatibility wrappers for existing HTML/Logic
+function resetIdleTimer(e) { if (slideshow) slideshow.resetIdleTimer(e); }
+function startSlideshow() { if (slideshow) slideshow.start(); }
+function stopSlideshow() { if (slideshow) slideshow.stop(); }
+function showNextPhoto() { if (slideshow) slideshow.next(); }
+function previousSlideshow() { if (slideshow) slideshow.previous(); }
+function rotateSlideshow(delta) { if (slideshow) slideshow.rotate(delta); }
+function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
+function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
+function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
+function manualStartSlideshow() {
+    if (slideshow) slideshow.start();
 }
 
-// Activity listeners
-['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'].forEach(event => {
-    window.addEventListener(event, resetIdleTimer, { passive: true });
-});
-
-// Initial start
-resetIdleTimer();
-
-
-// About Modal Functions
-function openAboutModal() {
-    console.log('[DEBUG] About modal clicked');
-    const modal = aboutModal || document.getElementById('about-modal');
-    console.log('[DEBUG] Modal element:', modal);
-    if (modal) {
-        modal.style.display = 'flex';
-        console.log('[DEBUG] Modal display set to flex');
-    } else {
-        console.error('[DEBUG] About modal not found!');
+async function startPhotoSlideshow(u, t, d, l, fid, ft) {
+    if (slideshow) {
+        // Find current images to allow navigation
+        const images = currentBrowserItems.filter(item => isImageItem(item));
+        if (images.length > 0) {
+            const index = images.findIndex(img => img.uri === u);
+            if (index !== -1) {
+                // slideshow.start calls slideshow.next() which increments the index.
+                // To start at index, we must pass index - 1.
+                slideshow.start(images, index - 1);
+                return;
+            }
+        }
+        await slideshow.startPhoto(u, t, d, l, fid, ft);
     }
 }
-
-function closeAboutModal() {
-    const modal = aboutModal || document.getElementById('about-modal');
-    if (modal) modal.style.display = 'none';
-}
-
-// Global modal click-outside-to-close handler
-// Track where mousedown occurred to prevent accidental closes
-let mouseDownTarget = null;
-
-window.addEventListener('mousedown', (event) => {
-    mouseDownTarget = event.target;
-});
-
-window.addEventListener('mouseup', (event) => {
-    // Only close if both mousedown and mouseup happened on the same modal overlay
-    if (mouseDownTarget === event.target) {
-        if (event.target === serverModal) closeServerModal();
-        if (event.target === rendererModal) closeRendererModal();
-        // Settings modal (manageModal) removed - only closes via close button
-        if (event.target === aboutModal) closeAboutModal();
-        if (event.target === document.getElementById('track-info-modal')) document.getElementById('track-info-modal').style.display = 'none';
-        if (event.target === document.getElementById('sonos-eq-modal')) closeSonosEqModal();
-    }
-    mouseDownTarget = null;
-});
 
 function startMusicSlideshow() {
-    if (currentArtworkUrl) {
-        screensaverMode = 'nowPlaying';
+    if (currentArtworkUrl && slideshow) {
+        slideshow.mode = 'nowPlaying';
         localStorage.setItem('screensaverMode', 'nowPlaying');
-        const label = document.getElementById('ss-mode-label');
-        if (label) label.textContent = 'Music';
-        startSlideshow();
+        slideshow.updateModeUI();
+        slideshow.start();
     } else {
         showToast('No artwork available', 'info', 2000);
     }
 }
 
-function startPhotoSlideshow(url, title) {
-    console.log('[SCREENSAVER] Starting custom photo slideshow:', url);
-    customSlideshowItems = [{ uri: url, title: title }];
-    customSlideshowIndex = -1;
-    startSlideshow();
-}
-
-// Settings Modal Functions added by assistant
-function switchSettingsTab(tabId) {
-    // Update tabs
-    const tabs = document.querySelectorAll('.settings-tab');
-    tabs.forEach(tab => {
-        if (tab.getAttribute('onclick').includes(`'${tabId}'`)) {
-            tab.classList.add('active');
-        } else {
-            tab.classList.remove('active');
-        }
-    });
-
-    // Update panels
-    const panels = document.querySelectorAll('.settings-panel');
-    panels.forEach(panel => {
-        if (panel.id === `settings-${tabId}`) {
-            panel.classList.add('active');
-        } else {
-            panel.classList.remove('active');
-        }
-    });
-}
-
-function openManageModal() {
-    manageModal.style.display = 'flex';
-    switchSettingsTab('general');
-    renderManageDevices();
-    fetchGeneralSettings();
-    const tokenInput = document.getElementById('discogs-token-input');
-    if (tokenInput) {
-        fetch('/api/settings/discogs')
-            .then(res => res.json())
-            .then(data => {
-                if (data.hasToken) {
-                    tokenInput.value = data.maskedToken;
-                } else {
-                    tokenInput.value = '';
-                }
-            })
-            .catch(err => console.error('Failed to fetch settings:', err));
-    }
-    fetchS3Settings();
-}
-
-function closeManageModal() {
-    manageModal.style.display = 'none';
-}
-
-
-
-function manualStartSlideshow() {
-    if (!customSlideshowItems.length && screensaverMode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) {
-        showToast('Screensaver source not configured. Use the browser menu to "Set Screensaver" on a photo folder.', 'info', 5000);
-        return;
-    }
-    startSlideshow();
-}
-
-async function startSlideshow() {
-    if (!customSlideshowItems.length && screensaverMode !== 'nowPlaying' && (!screensaverConfig.serverUdn || !screensaverConfig.objectId)) return;
-    if (isScreensaverActive) return;
-
-    // Don't start if local video is playing
-    const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
-    if (isVideoVisible) return;
-
-    console.log('Starting Screensaver...');
-    isScreensaverActive = true;
-    const overlay = document.getElementById('screensaver-overlay');
-    const info = document.getElementById('screensaver-info');
-
-    if (overlay) {
-        overlay.style.display = 'flex';
-        // Force reflow
-        void overlay.offsetWidth;
-        overlay.classList.add('active');
-    }
-
-    if (info) {
-        info.style.cursor = 'pointer';
-        info.onclick = (e) => {
-            e.stopPropagation();
-            goToScreensaverFolder();
-        };
-    }
-
-    await showNextPhoto();
-
-    // Clear any existing interval before starting a new one
-    if (screensaverInterval) clearInterval(screensaverInterval);
-    screensaverInterval = setInterval(showNextPhoto, 60000);
-}
-
-function updateScreensaverInfo(data) {
-    const info = document.getElementById('screensaver-info');
-    if (!info) return;
-
-    let dateStr = '';
-    if (data.date) {
-        const d = new Date(data.date);
-        // If it's a valid date but NOT just a 4-digit year, and contains separators, format it nicely
-        if (!isNaN(d.getTime()) && !/^\d{4}$/.test(String(data.date)) && (String(data.date).includes('-') || String(data.date).includes('/'))) {
-            dateStr = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-        } else {
-            dateStr = data.date;
-        }
-    }
-
-    let displayHtml = `<div class="ss-date">${dateStr || ''}</div>`;
-    let details = data.location || '';
-
-    // Helper to identify "robotic" titles we shouldn't show (like timestamps or raw filenames)
-    const isRobotic = (val) => {
-        if (!val) return true;
-        const v = String(val).trim();
-        if (/^\d{2,4}[-/_.]\d{2}[-/_.]\d{2,4}/.test(v)) return true;
-        if (/^\d{8,14}/.test(v)) return true;
-        if (/^IMG_\d+/i.test(v)) return true;
-        if (/^PXL_\d+/i.test(v)) return true;
-        if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/i.test(v)) return true;
-        if ((v.match(/[-_]/g) || []).length > 2 && (v.match(/\d/g) || []).length > 6) return true;
-        return false;
-    };
-
-    let finalDetails = details;
-    if (screensaverMode === 'nowPlaying' && data.title && data.title !== 'No Album') {
-        finalDetails = finalDetails ? `${finalDetails} — ${data.title}` : data.title;
-    } else if (!finalDetails && data.title && data.title !== 'No Album' && !isRobotic(data.title)) {
-        finalDetails = data.title;
-    }
-
-    if (finalDetails) {
-        displayHtml += `<div class="ss-location">${finalDetails}</div>`;
-    }
-    info.innerHTML = displayHtml;
-
-    // Store folder info for navigation
-    currentScreensaverFolder = {
-        id: data.folderId,
-        title: data.folderTitle
-    };
-}
-
-async function showNextPhoto() {
-    const img = document.getElementById('screensaver-img');
-    const info = document.getElementById('screensaver-info');
-    const favBtn = document.getElementById('btn-ss-favourite');
-    if (!img) return;
-
-    try {
-        let data;
-        if (customSlideshowItems.length > 0) {
-            customSlideshowIndex = (customSlideshowIndex + 1) % customSlideshowItems.length;
-            const item = customSlideshowItems[customSlideshowIndex];
-            data = {
-                url: item.uri || item.res,
-                title: item.title,
-                date: item.year || item.date || '',
-                location: item.artist || '',
-                manualRotation: item.manualRotation || 0,
-                folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
-                folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Root')
-            };
-
-            // Use proxy for remote images if needed
-            if (data.url) {
-                const finalUrl = (data.url.startsWith('http') && !data.url.includes(window.location.host))
-                    ? `/api/proxy-image?url=${encodeURIComponent(data.url)}`
-                    : data.url;
-                data.url = finalUrl;
-            }
-        } else if (screensaverMode === 'nowPlaying') {
-            if (currentArtworkUrl) {
-                const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
-                data = {
-                    url: currentArtworkUrl,
-                    title: currentTrack ? (currentTrack.album || 'No Album') : 'No Album',
-                    date: currentTrack ? currentTrack.title : 'No Track Playing',
-                    location: currentTrack ? (currentTrack.artist || 'Unknown Artist') : '',
-                    manualRotation: 0,
-                    isFavourite: false, // Not applicable here
-                    folderId: '0',
-                    folderTitle: 'Now Playing'
-                };
-
-                // (Early return removed to allow updateScreensaverInfo call below)
-            } else {
-                // No artwork? Fallback to 'all' or show message
-                screensaverMode = 'all';
-                localStorage.setItem('screensaverMode', 'all');
-                const label = document.getElementById('ss-mode-label');
-                if (label) label.textContent = 'All';
-                return showNextPhoto();
-            }
-        } else {
-            const res = await fetch(`/api/slideshow/random?mode=${screensaverMode}`);
-            if (res.ok) {
-                data = await res.json();
-            } else {
-                const errData = await res.json();
-                if (screensaverMode === 'onThisDay' || screensaverMode === 'favourites') {
-                    showToast(errData.error || `No photos for ${screensaverMode}`, 'info', 3000);
-                }
-            }
-        }
-
-        if (data && data.url && img) {
-            const isSamePhoto = (data.url === currentScreensaverPhoto && img.style.opacity == 1);
-
-            if (isSamePhoto) {
-                if (screensaverMode === 'nowPlaying') {
-                    // Update the text info even if the image is the same
-                    updateScreensaverInfo(data);
-                }
-                return;
-            }
-
-            img.style.opacity = 0;
-            if (info) info.style.opacity = 0;
-
-            setTimeout(() => {
-                // Save current photo as previous before changing
-                if (currentScreensaverPhoto) {
-                    previousScreensaverPhoto = {
-                        url: currentScreensaverPhoto,
-                        rotation: currentScreensaverRotation,
-                        date: info ? info.querySelector('.ss-date')?.textContent : null,
-                        location: info ? info.querySelector('.ss-location')?.textContent : null,
-                        isFavourite: favBtn && favBtn.classList.contains('is-favourite')
-                    };
-                }
-
-                const bg = document.getElementById('screensaver-bg');
-                if (bg) {
-                    bg.style.opacity = 0;
-                    setTimeout(() => {
-                        bg.style.backgroundImage = `url("${data.url}")`;
-                        bg.style.opacity = 1;
-                    }, 500);
-                }
-
-                img.src = data.url;
-                currentScreensaverPhoto = data.url;
-                currentScreensaverRotation = data.manualRotation || 0;
-
-                // Update favourite state
-                if (favBtn) {
-                    if (data.isFavourite) {
-                        favBtn.classList.add('is-favourite');
-                    } else {
-                        favBtn.classList.remove('is-favourite');
-                    }
-                }
-
-                // Modern browsers automatically handle EXIF orientation. 
-                // Manual rotation causes "double rotation".
-                // We apply our manual rotation ADDITIVELY.
-                // Use CSS variable for rotation to not clash with animation
-                img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
-
-                // Restart animation
-                img.style.animation = 'none';
-                void img.offsetWidth; // trigger reflow
-                img.style.animation = '';
-
-                // Update text info and folder reference
-                updateScreensaverInfo(data);
-
-                img.onload = () => {
-                    img.style.opacity = 1;
-                    if (info) info.style.opacity = 1;
-
-                    // Check for panorama format
-                    const ratio = img.naturalWidth / img.naturalHeight;
-                    if (ratio > 2.2) {
-                        img.classList.add('panorama');
-                    } else {
-                        img.classList.remove('panorama');
-                    }
-                };
-                // Fallback in case onload doesn't fire (cached)
-                if (img.complete) {
-                    img.onload();
-                }
-            }, 500);
-        }
-    } catch (e) {
-        console.error('Slideshow fetch failed', e);
-    }
-}
-
-function toggleSlideshowMode() {
-    if (screensaverMode === 'all') screensaverMode = 'onThisDay';
-    else if (screensaverMode === 'onThisDay') screensaverMode = 'favourites';
-    else if (screensaverMode === 'favourites') screensaverMode = 'nowPlaying';
-    else screensaverMode = 'all';
-
-    localStorage.setItem('screensaverMode', screensaverMode);
-
-    // Update UI label
-    const label = document.getElementById('ss-mode-label');
-    if (label) {
-        if (screensaverMode === 'all') label.textContent = 'All';
-        else if (screensaverMode === 'onThisDay') label.textContent = 'Day';
-        else if (screensaverMode === 'favourites') label.textContent = 'Favs';
-        else if (screensaverMode === 'nowPlaying') label.textContent = 'Music';
-    }
-
-    let modeDisplay = 'All Photos';
-    if (screensaverMode === 'onThisDay') modeDisplay = 'On This Day';
-    else if (screensaverMode === 'favourites') modeDisplay = 'Favourites';
-    else if (screensaverMode === 'nowPlaying') modeDisplay = 'Now Playing Music';
-
-    showToast(`Slideshow Mode: ${modeDisplay}`, 'info', 2000);
-
-    // Immediately show a new photo in the new mode
-    showNextPhoto();
-}
-
-async function toggleFavouriteCurrentPhoto() {
-    if (!currentScreensaverPhoto) return;
-
-    const favBtn = document.getElementById('btn-ss-favourite');
-    const isCurrentlyFavourite = favBtn && favBtn.classList.contains('is-favourite');
-    const newState = !isCurrentlyFavourite;
-
-    // Optimistic UI update
-    if (favBtn) {
-        if (newState) favBtn.classList.add('is-favourite');
-        else favBtn.classList.remove('is-favourite');
-    }
-
-    try {
-        const response = await fetch('/api/slideshow/favourite', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: currentScreensaverPhoto,
-                favourite: newState
-            })
-        });
-
-        if (!response.ok) throw new Error('Failed to update favourite status');
-
-        showToast(newState ? 'Added to Favourites' : 'Removed from Favourites', 'success', 2000);
-    } catch (e) {
-        console.error('Failed to toggle favourite:', e);
-        showToast('Failed to update favourite', 'error', 2000);
-        // Rollback optimistic update
-        if (favBtn) {
-            if (!newState) favBtn.classList.add('is-favourite');
-            else favBtn.classList.remove('is-favourite');
-        }
-    }
-
-    // Reset interval when interacting
-    if (screensaverInterval) {
-        clearInterval(screensaverInterval);
-        screensaverInterval = setInterval(showNextPhoto, 60000);
-    }
-}
-
-async function toggleSlideshowPlayback(e) {
-    if (e) {
-        e.stopPropagation();
-        if (e.type === 'touchend') {
-            e.preventDefault();
-        }
-    }
-
-    if (!selectedRendererUdn) return;
-
-    // Close volume popover if it's open
-    const popover = document.getElementById('ss-volume-popover');
-    if (popover) popover.classList.remove('active');
-
-    const action = (currentTransportState === 'Playing') ? 'pause' : 'play';
-    console.log(`[SCREENSAVER] Toggling playback: ${action}`);
-    await transportAction(action);
-}
-
-function toggleSSVolumeSlider(e) {
-    if (e) {
-        e.stopPropagation();
-        if (e.type === 'touchend') {
-            e.preventDefault();
-        }
-    }
-    const popover = document.getElementById('ss-volume-popover');
-    if (popover) {
-        popover.classList.toggle('active');
-    }
-}
-
-async function rotateSlideshow(delta) {
-    if (!currentScreensaverPhoto) return;
-
-    // 180 is special (toggle/fixed), 90/-90 are relative
-    if (delta === 180) {
-        currentScreensaverRotation = (currentScreensaverRotation + 180) % 360;
-    } else {
-        currentScreensaverRotation = (currentScreensaverRotation + delta) % 360;
-    }
-
-    // Ensure positive degrees (e.g. -90 -> 270)
-    if (currentScreensaverRotation < 0) currentScreensaverRotation += 360;
-
-    // Apply visually
-    const img = document.getElementById('screensaver-img');
-    if (img) {
-        img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
-    }
-
-    console.log(`Rotating photo ${currentScreensaverPhoto} to ${currentScreensaverRotation}deg`);
-
-    // Save to server
-    try {
-        await fetch('/api/slideshow/rotate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: currentScreensaverPhoto,
-                rotation: currentScreensaverRotation
-            })
-        });
-    } catch (e) {
-        console.error('Failed to save rotation:', e);
-    }
-
-    // Reset interval when interacting
-    if (screensaverInterval) {
-        clearInterval(screensaverInterval);
-        screensaverInterval = setInterval(showNextPhoto, 60000);
-    }
-}
-
-function previousSlideshow() {
-    if (!previousScreensaverPhoto) {
-        console.log('No previous photo available');
-        return;
-    }
-
-    const img = document.getElementById('screensaver-img');
-    const info = document.getElementById('screensaver-info');
-
-    if (!img) return;
-
-    // Fade out
-    img.style.opacity = 0;
-    const bg = document.getElementById('screensaver-bg');
-    if (bg) bg.style.opacity = 0;
-    if (info) info.style.opacity = 0;
-
-    setTimeout(() => {
-        // Swap current and previous
-        const temp = {
-            url: currentScreensaverPhoto,
-            rotation: currentScreensaverRotation,
-            date: info ? info.querySelector('.ss-date')?.textContent : null,
-            location: info ? info.querySelector('.ss-location')?.textContent : null
-        };
-
-        // Restore previous photo
-        img.src = previousScreensaverPhoto.url;
-        if (bg) bg.style.backgroundImage = `url("${previousScreensaverPhoto.url}")`;
-        currentScreensaverPhoto = previousScreensaverPhoto.url;
-        currentScreensaverRotation = previousScreensaverPhoto.rotation || 0;
-        img.style.setProperty('--ss-rotation', `${currentScreensaverRotation}deg`);
-
-        // Restart animation
-        img.style.animation = 'none';
-        void img.offsetWidth;
-        img.style.animation = '';
-
-        // Update info
-        if (info) {
-            let displayHtml = '';
-            if (previousScreensaverPhoto.date) {
-                displayHtml += `<div class="ss-date">${previousScreensaverPhoto.date}</div>`;
-            }
-            if (previousScreensaverPhoto.location) {
-                displayHtml += `<div class="ss-location">${previousScreensaverPhoto.location}</div>`;
-            }
-            info.innerHTML = displayHtml;
-        }
-
-        // Update favourite state for restored previous photo
-        const favBtn = document.getElementById('btn-ss-favourite');
-        if (favBtn) {
-            // We'd need to have stored isFavourite in previousScreensaverPhoto if we wanted this to be perfect,
-            // but for now let's just assume we can't know without a fetch or if we add it to the state.
-            // Actually, let's just hide it or leave as is, OR better: add it to the state.
-            if (previousScreensaverPhoto.isFavourite) {
-                favBtn.classList.add('is-favourite');
-            } else {
-                favBtn.classList.remove('is-favourite');
-            }
-        }
-
-        // Update previous to be the old current
-        previousScreensaverPhoto = temp;
-
-        // Fade in
-        img.onload = () => {
-            img.style.opacity = 1;
-            if (info) info.style.opacity = 1;
-        };
-        if (img.complete) {
-            img.style.opacity = 1;
-            if (info) info.style.opacity = 1;
-        }
-    }, 500);
-
-    // Reset interval when interacting
-    if (screensaverInterval) {
-        clearInterval(screensaverInterval);
-        screensaverInterval = setInterval(showNextPhoto, 60000);
-    }
-
-    console.log('Going back to previous photo');
-}
-
-async function deleteCurrentPhoto() {
-    if (!currentScreensaverPhoto) return;
-
-    if (!confirm('Are you sure you want to hide this photo? It will not be shown again in the slideshow.')) {
-        return;
-    }
-
-    console.log(`Hiding photo: ${currentScreensaverPhoto}`);
-
-    try {
-        const response = await fetch('/api/slideshow/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                url: currentScreensaverPhoto
-            })
-        });
-
-        if (response.ok) {
-            showToast('Photo hidden', 'success', 2000);
-            // Move to next photo immediately
-            if (screensaverInterval) {
-                clearInterval(screensaverInterval);
-                screensaverInterval = setInterval(showNextPhoto, 60000);
-            }
-            await showNextPhoto();
-        } else {
-            const data = await response.json();
-            showToast(`Failed to hide photo: ${data.error || 'Server error'}`);
-        }
-    } catch (e) {
-        console.error('Failed to hide photo:', e);
-        showToast('Failed to hide photo');
-    }
-}
-
-function stopSlideshow() {
-    if (!isScreensaverActive) return;
-
-    console.log('Stopping Screensaver...');
-    isScreensaverActive = false;
-    customSlideshowItems = [];
-    customSlideshowIndex = -1;
-    if (screensaverTimeout) clearTimeout(screensaverTimeout);
-    if (screensaverInterval) clearInterval(screensaverInterval);
-
-    const overlay = document.getElementById('screensaver-overlay');
-    const popover = document.getElementById('ss-volume-popover');
-    if (popover) popover.classList.remove('active');
-
-    if (overlay) {
-        overlay.classList.remove('active');
-        setTimeout(() => {
-            if (!isScreensaverActive) overlay.style.display = 'none';
-        }, 1000);
-    }
-}
-
 async function goToScreensaverFolder() {
-    if (!currentScreensaverFolder || !screensaverConfig.serverUdn) {
-        console.warn('[SCREENSAVER] No folder info available to navigate');
-        return;
-    }
-
-    console.log('[SCREENSAVER] Navigating to folder:', currentScreensaverFolder.title);
-    const folderId = currentScreensaverFolder.id;
-    const folderTitle = currentScreensaverFolder.title;
-
-    stopSlideshow();
-
-    // Ensure we are in grid mode
-    browserViewMode = 'grid';
-    localStorage.setItem('browserViewMode', 'grid');
-
-    // Select the server
-    selectedServerUdn = screensaverConfig.serverUdn;
-    localStorage.setItem('selectedServerUdn', selectedServerUdn);
-
-    // Reset browser path to root first to ensure clean breadcrumbs
-    browsePath = [{ id: '0', title: 'Home' }];
-
-    // Trigger navigation
-    await enterFolder(folderId, folderTitle);
-
-    // If on mobile, switch to browser tab
-    if (typeof switchView === 'function') {
-        switchView('browser');
-    }
+    if (slideshow) await slideshow.gotoFolder();
 }
 
 
