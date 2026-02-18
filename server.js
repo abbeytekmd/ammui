@@ -22,6 +22,7 @@ import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 
 
+
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
 const hostIp = getLocalIp();
@@ -627,6 +628,7 @@ try {
 } catch (err) {
     console.error('Failed to start Sonos discovery:', err.message);
 }
+
 
 app.post('/api/discover', async (_req, res) => {
     console.log('Manual discovery triggered - Searching for specific targets...');

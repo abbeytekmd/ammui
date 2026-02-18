@@ -297,9 +297,50 @@ function updateBreadcrumbs() {
         <span class="breadcrumb-separator" style="margin-right: 0.5rem"></span>
     `;
 
+    const separator = '<span class="breadcrumb-separator">/</span>';
+    const ellipsis = '<span class="breadcrumb-separator" style="opacity:0.5; margin:0 0.3rem">...</span>';
+
+    // 1. Try rendering full path
     browserBreadcrumbs.innerHTML = homeIndicator + browsePath.map((item, index) => `
         <span class="breadcrumb-item" onclick="navigateToPath(${index})">${item.title}</span>
-    `).join('<span class="breadcrumb-separator">/</span>');
+    `).join(separator);
+
+    // 2. Check for overflow
+    if (browserBreadcrumbs.scrollWidth <= browserBreadcrumbs.clientWidth) return;
+
+    // 3. Truncate if overflowing
+    // Keep Root (index 0) and try to fit as many from the end as possible
+    if (browsePath.length >= 2) {
+        // Start by trying to keep (length-2) items at the end (so [Root] ... [2nd item] ... [Last item])
+        // Iterate reducing k (number of items to keep at end)
+        for (let k = browsePath.length - 2; k >= 1; k--) {
+            const lastK = browsePath.slice(browsePath.length - k);
+
+            const truncatedHtml = homeIndicator +
+                `<span class="breadcrumb-item" onclick="navigateToPath(0)">${browsePath[0].title}</span>` +
+                separator +
+                ellipsis +
+                separator +
+                lastK.map((item, i) => {
+                    // Correct index mapping: start from (length - k)
+                    const originalIndex = browsePath.length - k + i;
+                    return `<span class="breadcrumb-item" onclick="navigateToPath(${originalIndex})">${item.title}</span>`;
+                }).join(separator);
+
+            browserBreadcrumbs.innerHTML = truncatedHtml;
+
+            if (browserBreadcrumbs.scrollWidth <= browserBreadcrumbs.clientWidth) return;
+        }
+    }
+
+    // Fallback: Just Home > ... > Current
+    // Or even just Home > Current if really tight
+    const minimalHtml = homeIndicator +
+        ellipsis +
+        separator +
+        `<span class="breadcrumb-item" onclick="navigateToPath(${browsePath.length - 1})">${browsePath[browsePath.length - 1].title}</span>`;
+
+    browserBreadcrumbs.innerHTML = minimalHtml;
 }
 
 function saveLastPath() {
@@ -313,6 +354,14 @@ function saveLastPath() {
     lastPaths[selectedServerUdn] = browsePath;
     localStorage.setItem(`serverLastPaths_${mode}`, JSON.stringify(lastPaths));
 }
+
+let breadcrumbResizeTimeout;
+window.addEventListener('resize', () => {
+    clearTimeout(breadcrumbResizeTimeout);
+    breadcrumbResizeTimeout = setTimeout(() => {
+        updateBreadcrumbs();
+    }, 100);
+});
 
 async function navigateToPath(index) {
     browsePath = browsePath.slice(0, index + 1);
@@ -1875,6 +1924,27 @@ function closeRendererModal() {
     rendererModal.style.display = 'none';
 }
 
+function openManageModal() {
+    if (manageModal) {
+        renderManageDevices();
+        manageModal.style.display = 'flex';
+    }
+}
+
+function closeManageModal() {
+    if (manageModal) manageModal.style.display = 'none';
+}
+
+function switchSettingsTab(tab) {
+    // Update tab buttons
+    document.querySelectorAll('.settings-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.textContent.trim().toLowerCase() === tab.toLowerCase());
+    });
+    // Update panels
+    document.querySelectorAll('.settings-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `settings-${tab}`);
+    });
+}
 
 function renderManageDevices() {
     const renderers = currentDevices.filter(d => d.isRenderer);
@@ -2184,6 +2254,7 @@ function getDeviceIcon(device, asServer, size = 32) {
         `;
     }
 
+
     // Default Speaker icon for other renderers
     console.log('[DEBUG] Default icon for:', device.udn, device.friendlyName);
     return `
@@ -2284,6 +2355,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             <div class="device-info">
                 <div class="device-name-container">
                     <div class="device-name">${device.customName || device.friendlyName}</div>
+
                 </div>
                 ${(!asServer && isStatic) ? `
                     <div class="device-now-playing" id="card-now-playing">
@@ -3695,9 +3767,10 @@ class Slideshow {
                     const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
                     data = {
                         url: currentArtworkUrl,
-                        title: currentTrack ? (currentTrack.album || 'No Album') : 'No Album',
-                        date: currentTrack ? currentTrack.title : 'No Track Playing',
-                        location: currentTrack ? (currentTrack.artist || 'Unknown Artist') : '',
+                        trackTitle: currentTrack ? currentTrack.title : '',
+                        title: currentTrack ? (currentTrack.album || '') : '',
+                        date: '',
+                        location: currentTrack ? (currentTrack.artist || '') : '',
                         manualRotation: 0,
                         folderId: '0',
                         folderTitle: 'Now Playing'
@@ -3803,6 +3876,10 @@ class Slideshow {
 
     updateInfoUI(data) {
         if (!this.info) return;
+
+        // trackTitle is used in nowPlaying mode — render it raw, never date-parse it
+        const trackTitle = data.trackTitle || '';
+
         let dateStr = '';
         if (data.date) {
             let d = new Date(data.date);
@@ -3825,7 +3902,8 @@ class Slideshow {
         const cameraStr = data.camera || '';
 
         this.info.innerHTML = `
-            <div class="ss-date">${dateStr || ''}</div>
+            ${trackTitle ? `<div class="ss-track-title">${trackTitle}</div>` : ''}
+            <div class="ss-date">${dateStr || data.title || ''}</div>
             <div class="ss-location">
                 <span class="ss-folder-link" onclick="event.stopPropagation(); slideshow.stop(); browse(selectedServerUdn, '${data.folderId}')">
                     ${path || 'Library'}

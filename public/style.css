@@ -369,6 +369,7 @@ p.subtitle {
     display: flex;
     align-items: center;
     padding-right: 0.5rem;
+    flex-shrink: 0;
 }
 
 .device-card.is-static.server-card {
@@ -401,6 +402,8 @@ p.subtitle {
 
 .device-info {
     flex-grow: 1;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .device-name-container {
@@ -413,6 +416,9 @@ p.subtitle {
 .device-name {
     font-size: 1.25rem;
     font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .device-brand-icon {
@@ -1662,11 +1668,17 @@ p.subtitle {
     gap: 0.5rem;
     font-size: 0.875rem;
     color: var(--text-muted);
+    overflow: hidden;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
 }
 
 .breadcrumb-item {
     cursor: pointer;
     transition: color 0.2s;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .breadcrumb-item:hover {
@@ -3865,10 +3877,20 @@ input:checked+.slider:before {
     transform: translateY(0);
 }
 
+.ss-track-title {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 4px;
+    white-space: normal;
+    word-break: break-word;
+}
+
 .ss-date {
     font-size: 24px;
     font-weight: 600;
 }
+
 
 .ss-location {
     font-size: 14px;
