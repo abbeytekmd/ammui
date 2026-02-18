@@ -3295,6 +3295,16 @@ async function openTrackInfoModal(trackData) {
 
     function formatValue(key, value) {
         if (value === undefined || value === null || value === '') return '-';
+
+        if (key === 'format.latitude' && value !== undefined) {
+            const lat = parseFloat(value);
+            const lon = embeddedMeta?.format?.longitude;
+            if (lon !== undefined) {
+                return `${lat.toFixed(4)}, ${parseFloat(lon).toFixed(4)}`;
+            }
+            return lat.toFixed(4);
+        }
+
         if (key.includes('bitrate') && typeof value === 'number' && value > 0) {
             return (value / 1000).toFixed(0) + ' kbps';
         }
@@ -3313,6 +3323,14 @@ async function openTrackInfoModal(trackData) {
         }
         if ((key === 'format.width' || key === 'format.height' || key === 'width' || key === 'height') && (typeof value === 'number' || (typeof value === 'string' && value !== ''))) {
             return value + ' px';
+        }
+        if (key === 'common.date' && value) {
+            try {
+                const d = new Date(value);
+                if (!isNaN(d.getTime())) {
+                    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                }
+            } catch (e) { }
         }
         return value;
     }
@@ -3335,10 +3353,20 @@ async function openTrackInfoModal(trackData) {
             title: 'Image Information',
             fields: [
                 { label: 'Name', sKey: 'title', eKey: 'common.title' },
+                { label: 'Created', sKey: 'date', eKey: 'common.date' },
                 { label: 'Width', sKey: 'width', eKey: 'format.width' },
                 { label: 'Height', sKey: 'height', eKey: 'format.height' },
                 { label: 'Format', sKey: '', eKey: 'format.container' },
-                { label: 'File Size', sKey: 'size', eKey: 'format.size' }
+                { label: 'File Size', sKey: 'size', eKey: 'format.size' },
+                { label: 'Location', sKey: '', eKey: 'format.latitude' }
+            ]
+        },
+        {
+            title: 'Camera Info',
+            fields: [
+                { label: 'Make', sKey: '', eKey: 'common.make' },
+                { label: 'Model', sKey: '', eKey: 'common.model' },
+                { label: 'Software', sKey: '', eKey: 'common.software' }
             ]
         }
     ] : [
@@ -3666,14 +3694,28 @@ function updateScreensaverInfo(data) {
     let displayHtml = `<div class="ss-date">${dateStr || ''}</div>`;
     let details = data.location || '';
 
-    // Add album if in music mode
+    // Helper to identify "robotic" titles we shouldn't show (like timestamps or raw filenames)
+    const isRobotic = (val) => {
+        if (!val) return true;
+        const v = String(val).trim();
+        if (/^\d{2,4}[-/_.]\d{2}[-/_.]\d{2,4}/.test(v)) return true;
+        if (/^\d{8,14}/.test(v)) return true;
+        if (/^IMG_\d+/i.test(v)) return true;
+        if (/^PXL_\d+/i.test(v)) return true;
+        if (/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/i.test(v)) return true;
+        if ((v.match(/[-_]/g) || []).length > 2 && (v.match(/\d/g) || []).length > 6) return true;
+        return false;
+    };
+
+    let finalDetails = details;
     if (screensaverMode === 'nowPlaying' && data.title && data.title !== 'No Album') {
-        if (details) details += ' — ';
-        details += data.title;
+        finalDetails = finalDetails ? `${finalDetails} — ${data.title}` : data.title;
+    } else if (!finalDetails && data.title && data.title !== 'No Album' && !isRobotic(data.title)) {
+        finalDetails = data.title;
     }
 
-    if (details) {
-        displayHtml += `<div class="ss-location">${details}</div>`;
+    if (finalDetails) {
+        displayHtml += `<div class="ss-location">${finalDetails}</div>`;
     }
     info.innerHTML = displayHtml;
 
@@ -3906,8 +3948,8 @@ async function toggleFavouriteCurrentPhoto() {
 async function toggleSlideshowPlayback(e) {
     if (e) {
         e.stopPropagation();
-        if (e.preventDefault && (e.type === 'touchend' || e.type === 'click')) {
-            // Be careful with preventDefault on elements that need basic behavior
+        if (e.type === 'touchend') {
+            e.preventDefault();
         }
     }
 
@@ -3925,6 +3967,9 @@ async function toggleSlideshowPlayback(e) {
 function toggleSSVolumeSlider(e) {
     if (e) {
         e.stopPropagation();
+        if (e.type === 'touchend') {
+            e.preventDefault();
+        }
     }
     const popover = document.getElementById('ss-volume-popover');
     if (popover) {

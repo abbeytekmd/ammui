@@ -18,7 +18,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import crypto from 'crypto';
-import exifParser from 'exif-parser';
+import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 
 
@@ -1268,19 +1268,59 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
     try {
         console.log(`Processing upload: ${req.file.originalname}`);
-        const metadata = await mm.parseFile(req.file.path);
-        const artist = metadata.common.artist || 'Unknown Artist';
-        const album = metadata.common.album || 'Unknown Album';
-        const title = metadata.common.title || path.basename(req.file.originalname, path.extname(req.file.originalname));
+        const ext = path.extname(req.file.originalname).toLowerCase();
+        const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.heic', '.webp'];
+        const isImage = imageExtensions.includes(ext);
+
+        let artist = 'Unknown Artist';
+        let album = 'Unknown Album';
+        let title = path.basename(req.file.originalname, ext);
+        let targetSubDir = 'music';
+
+        if (isImage) {
+            targetSubDir = 'photos';
+            try {
+                const exifData = await exifr.parse(req.file.path, {
+                    gps: true,
+                    ifd0: true
+                });
+                if (exifData) {
+                    if (exifData.Model) artist = exifData.Model;
+                    if (exifData.DateTimeOriginal) {
+                        const date = new Date(exifData.DateTimeOriginal);
+                        album = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    }
+                    // For photos, we can put GPS in 'location' if available
+                    if (exifData.latitude !== undefined && exifData.longitude !== undefined) {
+                        // We'll store it as metadata if we had a database, for now just for pathing
+                    }
+                }
+            } catch (exifErr) {
+                console.warn(`[UPLOAD] exifr failed for ${req.file.originalname}:`, exifErr.message);
+            }
+        } else {
+            try {
+                const metadata = await mm.parseFile(req.file.path);
+                artist = metadata.common.artist || 'Unknown Artist';
+                album = metadata.common.album || 'Unknown Album';
+                title = metadata.common.title || title;
+            } catch (mmErr) {
+                console.warn(`[UPLOAD] music-metadata failed for ${req.file.originalname}:`, mmErr.message);
+            }
+        }
 
         const localDir = path.join(__dirname, 'local');
-        const musicDir = path.join(localDir, 'music');
+        const baseDir = path.join(localDir, targetSubDir);
+
+        if (!fs.existsSync(baseDir)) {
+            fs.mkdirSync(baseDir, { recursive: true });
+        }
+
         const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
         const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
         const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
 
-        const ext = path.extname(req.file.originalname);
-        const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
+        const artistDir = findCaseInsensitivePath(baseDir, safeArtist);
         const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
 
         if (!fs.existsSync(targetDir)) {
@@ -1289,15 +1329,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 
         const targetPath = path.join(targetDir, `${safeTitle}${ext}`);
 
-        // Move the file from temp to target (using copy + unlink because rename cross-device may fail)
+        // Move the file from temp to target
         fs.copyFileSync(req.file.path, targetPath);
         fs.unlinkSync(req.file.path);
 
         console.log(`Uploaded and saved: ${targetPath}`);
-        res.json({ success: true, path: targetPath, artist, album, title });
+        res.json({ success: true, path: targetPath, artist, album, title, type: isImage ? 'photo' : 'music' });
     } catch (err) {
         console.error('Upload processing error:', err);
-        // Clean up temp file if it exists
         if (req.file && fs.existsSync(req.file.path)) {
             try { fs.unlinkSync(req.file.path); } catch (e) { }
         }
@@ -1706,17 +1745,21 @@ app.get('/api/slideshow/random', async (req, res) => {
                 });
 
                 if (response.data) {
-                    const parser = exifParser.create(response.data);
-                    const result = parser.parse();
-                    if (result.tags && result.tags.Orientation) {
-                        orientation = result.tags.Orientation;
+                    const exifData = await exifr.parse(response.data, {
+                        gps: true,
+                        ifd0: true
+                    });
+                    if (exifData) {
+                        if (exifData.Orientation) orientation = exifData.Orientation;
+                        if (!date && exifData.DateTimeOriginal) {
+                            date = exifData.DateTimeOriginal.toISOString();
+                        }
+                        if (exifData.latitude !== undefined && exifData.longitude !== undefined) {
+                            foundImage.lat = exifData.latitude;
+                            foundImage.lon = exifData.longitude;
+                        }
+                        console.log(`[SCREENSAVER] exifr Parsed. Orientation: ${orientation}, Date: ${date || 'None'}, GPS: ${foundImage.lat},${foundImage.lon}`);
                     }
-                    // Also try to get date from EXIF if missing
-                    if (!date && result.tags && result.tags.DateTimeOriginal) {
-                        // Date often timestamp or string
-                        date = new Date(result.tags.DateTimeOriginal * 1000).toISOString();
-                    }
-                    console.log(`[SCREENSAVER] EXIF Parsed. Orientation: ${orientation}, Date: ${date || 'None'}`);
                 }
             } catch (e) {
                 // Ignore range request errors or timeouts, just show image as-is
@@ -2047,6 +2090,25 @@ async function getTrackMetadata(uri) {
                         isImage: true
                     }
                 };
+
+                // Try to get EXIF data
+                try {
+                    const exif = await exifr.parse(buffer, {
+                        gps: true,
+                        translateKeys: true,
+                        translateValues: true
+                    });
+                    if (exif) {
+                        if (exif.DateTimeOriginal) metadata.common.date = exif.DateTimeOriginal;
+                        if (exif.latitude !== undefined) metadata.format.latitude = exif.latitude;
+                        if (exif.longitude !== undefined) metadata.format.longitude = exif.longitude;
+                        if (exif.Make) metadata.common.make = exif.Make;
+                        if (exif.Model) metadata.common.model = exif.Model;
+                        if (exif.Software) metadata.common.software = exif.Software;
+                    }
+                } catch (e) {
+                    console.warn(`[METADATA] EXIF parse failed for ${uri}: ${e.message}`);
+                }
             } catch (e) {
                 console.warn(`[METADATA] Failed to get image dimensions for ${uri}: ${e.message}`);
                 metadata = { common: {}, format: {} };
@@ -2079,6 +2141,25 @@ async function getTrackMetadata(uri) {
                             isImage: true
                         }
                     };
+
+                    // Try to get EXIF data from local file
+                    try {
+                        const exif = await exifr.parse(localPath, {
+                            gps: true,
+                            translateKeys: true,
+                            translateValues: true
+                        });
+                        if (exif) {
+                            if (exif.DateTimeOriginal) metadata.common.date = exif.DateTimeOriginal;
+                            if (exif.latitude !== undefined) metadata.format.latitude = exif.latitude;
+                            if (exif.longitude !== undefined) metadata.format.longitude = exif.longitude;
+                            if (exif.Make) metadata.common.make = exif.Make;
+                            if (exif.Model) metadata.common.model = exif.Model;
+                            if (exif.Software) metadata.common.software = exif.Software;
+                        }
+                    } catch (e) {
+                        console.warn(`[METADATA] EXIF parse failed for ${localPath}: ${e.message}`);
+                    }
                 } catch (e) {
                     metadata = { common: {}, format: {} };
                 }
@@ -2103,7 +2184,11 @@ app.get('/api/track-metadata', async (req, res) => {
 
         // Flatten and simplify metadata for the client
         const result = {
-            common: metadata.common,
+            common: {
+                ...metadata.common,
+                // Ensure date is included if it was found in EXIF
+                date: metadata.common.date || metadata.common.year
+            },
             format: {
                 duration: metadata.format.duration,
                 bitrate: metadata.format.bitrate,
@@ -2115,7 +2200,9 @@ app.get('/api/track-metadata', async (req, res) => {
                 width: metadata.format.width,
                 height: metadata.format.height,
                 size: metadata.format.size,
-                isImage: metadata.format.isImage
+                isImage: metadata.format.isImage,
+                latitude: metadata.format.latitude,
+                longitude: metadata.format.longitude
             }
         };
 
