@@ -994,55 +994,53 @@ function renderBrowser(items) {
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
                 </div>
-                ${(effectiveViewMode !== 'grid') && (!isLocalServer || isLocalServer || !isContainer) ? `
-                    <div class="item-actions">
-                        ${!isContainer ? `
-                        <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromBrowser(${index})" title="View track metadata">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <path d="M12 16v-4"></path>
-                                <path d="M12 8h.01"></path>
-                            </svg>
-                        </button>
-                        <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 5v14M5 12h14"></path>
-                            </svg>
-                            <span class="btn-label" data-mobile="">Queue</span>
-                        </button>
-                        ` : `
-                        <button class="btn-control play-btn" onclick="event.stopPropagation(); playFolder('${esc(item.id)}', '${esc(item.title)}')" title="Play Whole Folder Recursively">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-                                <path d="M8 5v14l11-7z"></path>
-                            </svg>
-                            <span class="btn-label" data-mobile="">Play</span>
-                        </button>
-                        <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M12 5v14M5 12h14"></path>
-                            </svg>
-                            <span class="btn-label" data-mobile="">Queue</span>
-                        </button>
-                        `}
-                        
-                        ${isLocalServer ? `
-                        <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrack('${esc(item.id)}', '${esc(item.title)}')" title="Delete from local folder">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
-                            </svg>
-                            Delete
-                        </button>
-                        ` : `
-                        <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local media library">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                <polyline points="7 10 12 15 17 10"></polyline>
-                                <line x1="12" y1="15" x2="12" y2="3"></line>
-                            </svg>
-                        </button>
-                        `}
-                    </div>
-                ` : ''}
+                <div class="item-actions">
+                    ${!isContainer ? `
+                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromBrowser(${index})" title="View track metadata">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M12 16v-4"></path>
+                            <path d="M12 8h.01"></path>
+                        </svg>
+                    </button>
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14M5 12h14"></path>
+                        </svg>
+                        <span class="btn-label" data-mobile="">Queue</span>
+                    </button>
+                    ` : `
+                    <button class="btn-control play-btn" onclick="event.stopPropagation(); playFolder('${esc(item.id)}', '${esc(item.title)}')" title="Play Whole Folder Recursively">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M8 5v14l11-7z"></path>
+                        </svg>
+                        <span class="btn-label" data-mobile="">Play</span>
+                    </button>
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 5v14M5 12h14"></path>
+                        </svg>
+                        <span class="btn-label" data-mobile="">Queue</span>
+                    </button>
+                    `}
+                    
+                    ${isLocalServer ? `
+                    <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrack('${esc(item.id)}', '${esc(item.title)}')" title="Delete from local folder">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
+                        </svg>
+                        Delete
+                    </button>
+                    ` : `
+                    <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local media library">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                    </button>
+                    `}
+                </div>
             </div>
         `;
     }).join('');
