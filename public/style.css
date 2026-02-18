@@ -3392,11 +3392,41 @@ p.subtitle {
     white-space: nowrap;
 }
 
+.ssdp-device-row {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.ssdp-device-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.ssdp-expand-cell {
+    text-align: center;
+    padding: 0.3rem 0.25rem !important;
+    color: var(--text-muted);
+}
+
+.ssdp-chevron {
+    font-size: 0.6rem;
+    display: inline-block;
+    transition: transform 0.2s;
+    user-select: none;
+}
+
+.ssdp-services-row td {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.ssdp-services-cell {
+    padding: 0.5rem 0.75rem 0.6rem 2rem !important;
+    background: rgba(0, 0, 0, 0.2);
+}
+
 .ssdp-services-list {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 0.4rem;
-    overflow: hidden;
 }
 
 .ssdp-service-tag {

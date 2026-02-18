@@ -3154,23 +3154,33 @@ function renderSSDPRegistry(ssdp) {
         return;
     }
 
+    // Snapshot which IPs are currently expanded so we can restore after re-render
+    const openIps = new Set();
+    ips.forEach((ip, i) => {
+        const existingRow = document.getElementById(`ssdp-row-${i}`);
+        if (existingRow && existingRow.style.display !== 'none') {
+            openIps.add(ip);
+        }
+    });
+
     let html = `
         <table class="ssdp-table">
             <thead>
                 <tr>
+                    <th style="width: 24px;"></th>
                     <th style="width: 110px;">IP Address</th>
                     <th style="width: 160px;">Device</th>
                     <th style="width: 100px;">Last Seen</th>
-                    <th>Advertised Services</th>
                 </tr>
             </thead>
             <tbody>
     `;
 
-    ips.forEach(ip => {
+    ips.forEach((ip, i) => {
         const entry = ssdp[ip];
         const services = entry.services || [];
-        // Map services to friendly names for display, keep original for tooltip
+        const rowId = `ssdp-row-${i}`;
+        const isOpen = openIps.has(ip);
         const servicesHtml = services.map(s => {
             const friendlyName = getFriendlyServiceName(s);
             const sLower = s.toLowerCase();
@@ -3185,19 +3195,36 @@ function renderSSDPRegistry(ssdp) {
             const mediaClass = isMedia ? ' media' : '';
             return `<span class="ssdp-service-tag${mediaClass}" title="${s}">${friendlyName}</span>`;
         }).join('');
-        const tooltip = services.join('\n');
+
         html += `
-            <tr>
+            <tr class="ssdp-device-row" onclick="toggleSSDPRow('${rowId}')">
+                <td class="ssdp-expand-cell">
+                    <span class="ssdp-chevron" id="${rowId}-chevron">${isOpen ? '&#9660;' : '&#9654;'}</span>
+                </td>
                 <td class="ssdp-ip">${ip}</td>
                 <td class="ssdp-name" style="font-weight: 600; color: var(--primary);">${entry.name || 'Unknown'}</td>
                 <td class="ssdp-time">${entry.lastSeen}</td>
-                <td title="${tooltip}"><div class="ssdp-services-list">${servicesHtml}</div></td>
+            </tr>
+            <tr class="ssdp-services-row" id="${rowId}" style="display: ${isOpen ? 'table-row' : 'none'};">
+                <td colspan="4" class="ssdp-services-cell">
+                    <div class="ssdp-services-list">${servicesHtml || '<span style="color:var(--text-muted);font-size:0.75rem;">No services advertised</span>'}</div>
+                </td>
             </tr>
         `;
     });
 
     html += '</tbody></table>';
     container.innerHTML = html;
+}
+
+
+function toggleSSDPRow(rowId) {
+    const row = document.getElementById(rowId);
+    const chevron = document.getElementById(`${rowId}-chevron`);
+    if (!row) return;
+    const isOpen = row.style.display !== 'none';
+    row.style.display = isOpen ? 'none' : 'table-row';
+    if (chevron) chevron.textContent = isOpen ? '\u25BA' : '\u25BC';
 }
 
 function openConsoleModal() {
