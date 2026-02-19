@@ -4,18 +4,16 @@ A web based media manager for a home network. Plays music and views family photo
 
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Send to local players (Sonos and DLNA players)
-* Includes a local DLNA server where you can download music/photos to.
 * Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (currently playing album art)
 * Set home folders for Music Browsing, Photo Browsing and Slideshow.
 * Album art retrieved from discogs. (Api key required)
+* Includes a local DLNA server where you can download music/photos to.
 
 <img src="images/ammui-desktop-mode.png" />
 
-I'm running this on a linux box, and we have a 10" tablet running the UI in Chrome. The server is also running minidlna.
+This UI forms part of a standalone product, the Abbeytek Media Machine, which is basically an embedded device with an Audio HAT and speakers and DLNA player software onboard. Adding this UI makes it an all in one server/player you can just drop on your network.
 
-As a standalone product, the Abbeytek Media Machine is basically a Raspberry Pi with an Audio HAT and speakers and gmrender-resurrect/mpd/upmpdcli onboard. Adding this UI makes it an all in one server/player you can just drop on your network.
-
-For this project, I've chosen to concentrate on iterating on the product design and used AI to do the boilerplate.
+As we have a linux box on our network, we're running this on it, and we have a 10" tablet running the UI in Chrome. The same box is also running minidlna.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
@@ -83,7 +81,8 @@ For this project, I've chosen to concentrate on iterating on the product design 
 * Linux upmpdcli
 * ReadyDLNA/MiniDLNA
 * Subsonic
-* JRiver Media Center
+* JRiver Media Center (Windows)
+* Windows Media Player
 
 ## 📄 License
 
