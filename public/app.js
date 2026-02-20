@@ -1458,10 +1458,10 @@ function showPlayerArt(url) {
     ];
 
     console.log(`[ART] Loading artwork: ${url}`);
-    let loadedCount = 0;
+    let legacyHandled = false;
 
     const onLoaded = (container) => {
-        loadedCount++;
+        legacyHandled = true;
         if (container) container.classList.add('visible');
         updateCardNowPlaying();
     };
@@ -1475,6 +1475,20 @@ function showPlayerArt(url) {
         };
         img.src = url;
     });
+
+    // Also update the card album art element directly (primary path now that
+    // legacy player-art-* containers are no longer in the DOM)
+    const cardAlbumArt = document.getElementById('card-album-art');
+    if (cardAlbumArt) {
+        cardAlbumArt.onload = () => updateCardNowPlaying();
+        cardAlbumArt.src = url;
+    }
+
+    // If no legacy containers exist at all, still call updateCardNowPlaying
+    // immediately so the card reflects currentArtworkUrl
+    if (imgs.every(img => !img)) {
+        updateCardNowPlaying();
+    }
 }
 
 function hideAllPlayerArt() {
@@ -4178,6 +4192,28 @@ function rotateSlideshow(delta) { if (slideshow) slideshow.rotate(delta); }
 function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
 function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
 function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
+
+// Slideshow music bar: play/pause toggle
+function toggleSlideshowPlayback(event) {
+    if (event) { event.stopPropagation(); event.preventDefault(); }
+    if (currentTransportState === 'Playing') {
+        transportAction('pause');
+    } else {
+        transportAction('play');
+    }
+}
+
+// Slideshow music bar: show/hide volume popover
+function toggleSSVolumeSlider(event) {
+    if (event) { event.stopPropagation(); event.preventDefault(); }
+    const popover = document.getElementById('ss-volume-popover');
+    if (!popover) return;
+    // Sync value from main slider before showing
+    const mainSlider = document.getElementById('volume-slider');
+    const ssSlider = document.getElementById('ss-volume-slider');
+    if (mainSlider && ssSlider) ssSlider.value = mainSlider.value;
+    popover.classList.toggle('active');
+}
 function manualStartSlideshow() {
     if (slideshow) slideshow.start();
 }
