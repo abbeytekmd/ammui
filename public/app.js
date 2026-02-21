@@ -97,7 +97,7 @@ let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
-const MAX_RENDERER_FAILURES = 3;
+const MAX_RENDERER_FAILURES = 1;
 let isRendererOffline = false;
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 let currentDeviceName = 'AMMUI';
@@ -247,16 +247,20 @@ async function selectDevice(udn) {
     selectedRendererUdn = udn;
     localStorage.setItem('selectedRendererUdn', udn);
     closeRendererModal();
+
+    // Reset offline state BEFORE rendering so the new card doesn't inherit the old player's offline appearance
+    rendererFailureCount = 0;
+    isRendererOffline = false;
+
     renderDevices();
+    updateTransportControls();
 
     playlistItems.innerHTML = '<div class="loading">Loading playlist...</div>';
 
     currentArtworkQuery = '';
     currentArtworkUrl = '';
-    failedArtworkQueries.clear(); // Clear failed queries when switching devices
+    failedArtworkQueries.clear();
     hideAllPlayerArt();
-    rendererFailureCount = 0;
-    isRendererOffline = false;
     await fetchPlaylist(udn);
     await fetchVolume();
 }
@@ -739,6 +743,7 @@ function playAllPhotos(images) {
 
 async function transportAction(action) {
     if (!selectedRendererUdn) return;
+    if (isRendererOffline) return; // Silently ignore when offline
 
     // Optimistic UI Update
     lastTransportActionTime = Date.now();
@@ -774,6 +779,7 @@ async function transportAction(action) {
 
 async function playPlaylistItem(id) {
     if (!selectedRendererUdn) return;
+    if (isRendererOffline) return; // Silently ignore when offline
 
     // If clicking the current track and it's paused, just resume
     if (currentTrackId != null && id != null && currentTrackId == id && currentTransportState === 'Paused') {
@@ -1153,13 +1159,20 @@ async function fetchPlaylist(udn) {
         if (isRendererOffline) {
             isRendererOffline = false;
             console.log(`[DEBUG] Renderer ${udn} recovered.`);
+            renderDevices();
+            updateTransportControls();
         }
     } catch (err) {
         console.error('Playlist fetch error:', err);
         rendererFailureCount++;
         if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
+            const wasOnline = !isRendererOffline;
             isRendererOffline = true;
-            playlistItems.innerHTML = `<div class="error">Device offline or unreachable. Polling suspended. <button class="btn-control primary" style="margin-top: 0.5rem; padding: 0.4rem 1rem;" onclick="rendererFailureCount=0; isRendererOffline=false; fetchPlaylist(selectedRendererUdn);">Retry Connection</button></div>`;
+            playlistItems.innerHTML = `<div class="error">Device offline or unreachable. <button class="btn-control primary" style="margin-top: 0.5rem; padding: 0.4rem 1rem;" onclick="rendererFailureCount=0; isRendererOffline=false; fetchPlaylist(selectedRendererUdn);">Retry</button></div>`;
+            if (wasOnline) {
+                renderDevices();
+                updateTransportControls();
+            }
         } else {
             playlistItems.innerHTML = `<div class="error">Error: ${err.message}</div>`;
         }
@@ -1178,8 +1191,13 @@ async function fetchStatus() {
         console.error('Status fetch error:', err);
         rendererFailureCount++;
         if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
+            const wasOnline = !isRendererOffline;
             isRendererOffline = true;
             console.warn(`[DEBUG] Suspending polling for ${selectedRendererUdn} due to repeated failures.`);
+            if (wasOnline) {
+                renderDevices();
+                updateTransportControls();
+            }
         }
     }
 }
@@ -1828,6 +1846,29 @@ function updateTransportControls() {
     const isPlaying = currentTransportState === 'Playing';
     const isPaused = currentTransportState === 'Paused';
 
+    // When renderer is offline, disable all transport AND volume controls
+    if (isRendererOffline) {
+        btnPlay.classList.add('disabled');
+        btnPause.classList.add('disabled');
+        btnStop.classList.add('disabled');
+        btnClear.classList.add('disabled');
+
+        const volumeSlider = document.getElementById('volume-slider');
+        if (volumeSlider) volumeSlider.disabled = true;
+        document.querySelectorAll('.btn-volume-step').forEach(b => b.disabled = true);
+        const eqBtn = document.getElementById('id-sonos-eq');
+        if (eqBtn) eqBtn.disabled = true;
+
+        const ssMusicBar = document.getElementById('ss-music-bar');
+        if (ssMusicBar) ssMusicBar.style.display = 'none';
+        return;
+    }
+
+    // Re-enable volume controls (in case recovering from offline)
+    const volumeSlider = document.getElementById('volume-slider');
+    if (volumeSlider) volumeSlider.disabled = false;
+    document.querySelectorAll('.btn-volume-step').forEach(b => b.disabled = false);
+
     // Play: enabled if not empty and not already playing
     if (isPlaylistEmpty || isPlaying) {
         btnPlay.classList.add('disabled');
@@ -1877,6 +1918,8 @@ function updateTransportControls() {
         }
     }
 }
+
+
 
 async function triggerDiscovery(btn) {
     const originalContent = btn ? btn.innerHTML : null;
@@ -2316,6 +2359,7 @@ function renderModalDeviceItem(device, asServer) {
 
 function renderDeviceCard(device, forceHighlight = false, asServer = false, isStatic = false) {
     const isSelected = forceHighlight || (asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn));
+    const isOffline = !asServer && isSelected && isRendererOffline;
 
     // Different icon for servers
     const icon = getDeviceIcon(device, asServer, 32);
@@ -2346,9 +2390,22 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
     ` : '';
 
     return `
-        <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''} ${isStatic ? 'is-static' : ''}" 
+        <div class="device-card ${isSelected ? 'selected' : ''} ${asServer ? 'server-card' : ''} ${isStatic ? 'is-static' : ''} ${isOffline ? 'renderer-offline' : ''}" 
              onclick="${clickAction}"
              id="device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
+            ${isOffline ? `
+            <div class="offline-badge">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                    <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                    <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                    <path d="M10.71 5.05A16 16 0 0 1 22.56 9"></path>
+                    <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                </svg>
+                Offline
+            </div>` : ''}
             <div class="device-icon ${asServer ? 'server-icon' : 'player-icon'}" style="${(device.iconUrl) ? 'background: none; box-shadow: none;' : ''}">
                 ${isStatic && !asServer ? `<img id="card-album-art" onclick="event.stopPropagation(); startMusicSlideshow()" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; cursor: pointer;" alt="">` : ''}
                 <div id="${isStatic ? (asServer ? 'card-server-icon' : 'card-default-icon') : ''}" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
@@ -2838,6 +2895,7 @@ async function fetchVolume() {
 }
 
 async function updateVolume(value) {
+    if (isRendererOffline) return; // Silently ignore when offline
     const slider = document.getElementById('volume-slider');
     const ssSlider = document.getElementById('ss-volume-slider');
     const valueSpan = document.getElementById('volume-value');
@@ -2861,7 +2919,10 @@ async function updateVolume(value) {
     }, 100);
 }
 
+
+
 function adjustVolume(delta) {
+    if (isRendererOffline) return; // Silently ignore when offline
     const slider = document.getElementById('volume-slider');
     if (!slider) return;
     let newValue = parseInt(slider.value, 10) + delta;

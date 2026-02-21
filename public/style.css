@@ -596,6 +596,65 @@ p.subtitle {
     color: white;
 }
 
+/* === Offline Player State === */
+.device-card.renderer-offline {
+    border-color: rgba(251, 146, 60, 0.5) !important;
+    box-shadow:
+        0 0 20px rgba(251, 146, 60, 0.15),
+        inset 0 0 20px rgba(251, 146, 60, 0.04) !important;
+    cursor: default;
+}
+
+.device-card.renderer-offline::before {
+    background: linear-gradient(135deg, rgba(251, 146, 60, 0.07), transparent) !important;
+}
+
+.device-card.renderer-offline .device-icon {
+    opacity: 0.45;
+    filter: grayscale(60%);
+}
+
+.device-card.renderer-offline .device-info {
+    opacity: 0.55;
+}
+
+.device-card.renderer-offline .card-transport-wrapper {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.offline-badge {
+    position: absolute;
+    top: 0.75rem;
+    right: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: rgba(251, 146, 60, 0.18);
+    border: 1px solid rgba(251, 146, 60, 0.45);
+    color: #fb923c;
+    padding: 0.2rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    animation: offline-pulse 2.5s ease-in-out infinite;
+    z-index: 2;
+}
+
+@keyframes offline-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
+}
+
 /* Playlist Section */
 .playlist-container {
     flex: 1;
