@@ -99,6 +99,7 @@ let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 1;
 let isRendererOffline = false;
+let stopAfterTrack = false; // When true, stop playback after current track ends
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 let currentDeviceName = 'AMMUI';
 let slideshow;
@@ -251,6 +252,7 @@ async function selectDevice(udn) {
     // Reset offline state BEFORE rendering so the new card doesn't inherit the old player's offline appearance
     rendererFailureCount = 0;
     isRendererOffline = false;
+    stopAfterTrack = false; // Disarm on player switch
 
     renderDevices();
     updateTransportControls();
@@ -752,6 +754,12 @@ async function transportAction(action) {
     else if (action === 'pause') currentTransportState = 'Paused';
     else if (action === 'stop') currentTransportState = 'Stopped';
 
+    // Stopping manually disarms stop-after-track
+    if (action === 'stop') {
+        stopAfterTrack = false;
+        updateStopAfterTrackButton();
+    }
+
     updateTransportControls();
     updateDocumentTitle();
 
@@ -775,6 +783,26 @@ async function transportAction(action) {
         updateDocumentTitle();
         showToast(`Playback Error: ${err.message}`);
     }
+}
+
+function toggleStopAfterTrack() {
+    if (isRendererOffline) return;
+    stopAfterTrack = !stopAfterTrack;
+    updateStopAfterTrackButton();
+}
+
+function updateStopAfterTrackButton() {
+    const label = stopAfterTrack ? 'Stop after track: ON — click to cancel' : 'Stop after current track';
+    ['btn-stop-after', 'btn-ss-stop-after'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        btn.title = label;
+        if (stopAfterTrack) {
+            btn.classList.add('armed');
+        } else {
+            btn.classList.remove('armed');
+        }
+    });
 }
 
 async function playPlaylistItem(id) {
@@ -1208,6 +1236,14 @@ function updateStatus(status) {
 
     const trackChanged = status.trackId !== currentTrackId;
     const transportChanged = status.transportState !== currentTransportState;
+
+    // Stop After Track: if a track change is detected while armed, stop immediately
+    if (stopAfterTrack && trackChanged && status.trackId != null && currentTrackId != null) {
+        stopAfterTrack = false;
+        updateStopAfterTrackButton();
+        transportAction('stop');
+        return;
+    }
 
     if (!isLocked && (trackChanged || transportChanged)) {
         currentTrackId = status.trackId;
@@ -1917,6 +1953,9 @@ function updateTransportControls() {
             }
         }
     }
+
+    // Sync stop-after-track armed state on the freshly rendered button
+    updateStopAfterTrackButton();
 }
 
 
@@ -2384,6 +2423,14 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
                 class="btn-control btn-transport-stop" title="Stop">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 6h12v12H6z"></path>
+                </svg>
+            </button>
+            <button id="btn-stop-after" onclick="event.stopPropagation(); toggleStopAfterTrack()"
+                class="btn-control btn-stop-after" title="Stop after current track">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path d="M6 6h12v12H6z" fill="currentColor" stroke="none"/>
+                    <line x1="4" y1="22" x2="20" y2="22"/>
+                    <line x1="12" y1="17" x2="12" y2="22"/>
                 </svg>
             </button>
         </div>

@@ -655,6 +655,35 @@ p.subtitle {
     }
 }
 
+/* Stop After Track button */
+.btn-stop-after {
+    opacity: 0.45;
+    transition: opacity 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.btn-stop-after:hover {
+    opacity: 0.85;
+}
+
+.btn-stop-after.armed {
+    opacity: 1;
+    color: #fb923c;
+    box-shadow: 0 0 10px rgba(251, 146, 60, 0.4);
+    animation: stop-after-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes stop-after-pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 8px rgba(251, 146, 60, 0.4);
+    }
+
+    50% {
+        box-shadow: 0 0 18px rgba(251, 146, 60, 0.75);
+    }
+}
+
 /* Playlist Section */
 .playlist-container {
     flex: 1;

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=12">
+    <link rel="stylesheet" href="style.css?v=16">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -598,6 +598,15 @@
                     <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
                 </svg>
             </button>
+            <button id="btn-ss-stop-after" class="btn-ss-music btn-stop-after" onclick="toggleStopAfterTrack()"
+                ontouchend="toggleStopAfterTrack(); event.preventDefault();" title="Stop after current track">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round">
+                    <path d="M6 6h12v12H6z" fill="currentColor" stroke="none" />
+                    <line x1="4" y1="22" x2="20" y2="22" />
+                    <line x1="12" y1="17" x2="12" y2="22" />
+                </svg>
+            </button>
             <div class="ss-volume-container">
                 <button class="btn-ss-music" onclick="toggleSSVolumeSlider(event)"
                     ontouchend="toggleSSVolumeSlider(event); event.preventDefault();" title="Volume">
@@ -612,6 +621,7 @@
                 </div>
             </div>
         </div>
+
 
         <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
             ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
@@ -719,7 +729,7 @@
         </div>
     </div>
     <div id="toast-container" class="toast-container"></div>
-    <script src="app.js?v=15"></script>
+    <script src="app.js?v=17"></script>
 </body>
 
 </html>
