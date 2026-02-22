@@ -97,8 +97,53 @@ let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
-const MAX_RENDERER_FAILURES = 1;
+const MAX_RENDERER_FAILURES = 2;
 let isRendererOffline = false;
+
+function setRendererOffline(state, caller = 'unknown') {
+    if (isRendererOffline === state) return;
+    isRendererOffline = state;
+    console.log(`[OFFLINE-SYNC] Renderer offline state changed to: ${state} for ${selectedRendererUdn} (triggered by ${caller})`);
+
+    if (state) {
+        console.warn(`[OFFLINE-SYNC] Device ${selectedRendererUdn} is now OFFLINE. (Source: ${caller})`);
+        // When going offline, also update UI immediately
+        const playlistItems = document.getElementById('playlist-items');
+        if (playlistItems) {
+            playlistItems.innerHTML = `<div class="error">Device offline or unreachable. <button class="btn-control primary" style="margin-top: 0.5rem; padding: 0.4rem 1rem;" onclick="handleRetry()">Retry</button></div>`;
+        }
+    } else {
+        console.log(`[OFFLINE-SYNC] Device ${selectedRendererUdn} is now ONLINE. (Source: ${caller})`);
+    }
+
+    renderDevices();
+    updateTransportControls();
+}
+
+async function handleRetry() {
+    if (!selectedRendererUdn) return;
+    console.log(`[OFFLINE-SYNC] Manual retry initiated for ${selectedRendererUdn}`);
+
+    // Clear failure count
+    rendererFailureCount = 0;
+
+    // Instead of immediately turning green, we try to fetch status first.
+    // If it succeeds, THEN we turn green.
+    try {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
+        if (response.ok) {
+            setRendererOffline(false, 'HandleRetrySuccess');
+            fetchPlaylist(selectedRendererUdn);
+            fetchVolume();
+        } else {
+            console.warn(`[OFFLINE-SYNC] Retry failed: Status endpoint returned ${response.status}`);
+            showToast('Device still unreachable', 'error', 2000);
+        }
+    } catch (err) {
+        console.error(`[OFFLINE-SYNC] Retry failed: ${err.message}`);
+        showToast('Device still unreachable', 'error', 2000);
+    }
+}
 let stopAfterTrack = false; // When true, stop playback after current track ends
 let lastTransportActionTime = 0; // Timestamp to prevent stale status overrides
 let currentDeviceName = 'AMMUI';
@@ -249,10 +294,10 @@ async function selectDevice(udn) {
     localStorage.setItem('selectedRendererUdn', udn);
     closeRendererModal();
 
-    // Reset offline state BEFORE rendering so the new card doesn't inherit the old player's offline appearance
+    // Reset offline state BEFORE rendering
     rendererFailureCount = 0;
-    isRendererOffline = false;
-    stopAfterTrack = false; // Disarm on player switch
+    setRendererOffline(false, 'selectDevice');
+    stopAfterTrack = false;
 
     renderDevices();
     updateTransportControls();
@@ -1164,6 +1209,7 @@ function renderBrowser(items) {
 }
 
 async function fetchPlaylist(udn) {
+    if (isRendererOffline) return; // Silently ignore when offline
     try {
         const response = await fetch(`/api/playlist/${encodeURIComponent(udn)}`);
         if (!response.ok) throw new Error('Failed to fetch playlist');
@@ -1181,29 +1227,12 @@ async function fetchPlaylist(udn) {
         }
 
         sessionStorage.setItem('lastPlaylist', JSON.stringify(playlist));
-
         renderPlaylist(playlist);
         rendererFailureCount = 0;
-        if (isRendererOffline) {
-            isRendererOffline = false;
-            console.log(`[DEBUG] Renderer ${udn} recovered.`);
-            renderDevices();
-            updateTransportControls();
-        }
+        // setRendererOffline(false, 'fetchPlaylist'); // Only fetchStatus should turn it online
     } catch (err) {
-        console.error('Playlist fetch error:', err);
-        rendererFailureCount++;
-        if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
-            const wasOnline = !isRendererOffline;
-            isRendererOffline = true;
-            playlistItems.innerHTML = `<div class="error">Device offline or unreachable. <button class="btn-control primary" style="margin-top: 0.5rem; padding: 0.4rem 1rem;" onclick="rendererFailureCount=0; isRendererOffline=false; fetchPlaylist(selectedRendererUdn);">Retry</button></div>`;
-            if (wasOnline) {
-                renderDevices();
-                updateTransportControls();
-            }
-        } else {
-            playlistItems.innerHTML = `<div class="error">Error: ${err.message}</div>`;
-        }
+        console.error(`Playlist fetch error for ${udn}:`, err);
+        setRendererOffline(true, 'fetchPlaylist');
     }
 }
 
@@ -1215,18 +1244,10 @@ async function fetchStatus() {
         const status = await response.json();
         updateStatus(status);
         rendererFailureCount = 0;
+        setRendererOffline(false, 'fetchStatus');
     } catch (err) {
-        console.error('Status fetch error:', err);
-        rendererFailureCount++;
-        if (rendererFailureCount >= MAX_RENDERER_FAILURES) {
-            const wasOnline = !isRendererOffline;
-            isRendererOffline = true;
-            console.warn(`[DEBUG] Suspending polling for ${selectedRendererUdn} due to repeated failures.`);
-            if (wasOnline) {
-                renderDevices();
-                updateTransportControls();
-            }
-        }
+        console.error(`Status fetch error for ${selectedRendererUdn}:`, err);
+        setRendererOffline(true, 'fetchStatus');
     }
 }
 
@@ -1293,10 +1314,12 @@ function updateStatus(status) {
         }
     }
 
-    // If status itself has an error message
+    /* 
+    // Suppressed technical error messages per user request
     if (status.error) {
-        showToast(`Renderer Error: ${status.error}`);
+        console.warn(`[DEBUG] Suppressed Renderer Error Toast: ${status.error}`);
     }
+    */
 
     // Update position only if it differs by more than 2 second, or track/transport changed
     if (status.relTime !== undefined) {
@@ -2904,7 +2927,7 @@ document.addEventListener('visibilitychange', () => {
     if (isPageVisible) {
         window.scrollTo(0, 0);
         fetchDevices();
-        if (selectedRendererUdn) {
+        if (selectedRendererUdn && !isRendererOffline) {
             fetchStatus();
             fetchPlaylist(selectedRendererUdn);
         }
@@ -2924,20 +2947,22 @@ setInterval(() => {
 let volumeDebounceTimeout = null;
 
 async function fetchVolume() {
-    if (!selectedRendererUdn) return;
+    if (!selectedRendererUdn || isRendererOffline) return;
     try {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/volume`);
-        if (response.ok) {
-            const data = await response.json();
-            const slider = document.getElementById('volume-slider');
-            const ssSlider = document.getElementById('ss-volume-slider');
-            const valueSpan = document.getElementById('volume-value');
-            if (slider) slider.value = data.volume;
-            if (ssSlider) ssSlider.value = data.volume;
-            if (valueSpan) valueSpan.textContent = `${data.volume}%`;
-        }
+        if (!response.ok) throw new Error('Failed to fetch volume');
+        const data = await response.json();
+        const slider = document.getElementById('volume-slider');
+        const ssSlider = document.getElementById('ss-volume-slider');
+        const valueSpan = document.getElementById('volume-value');
+        if (slider) slider.value = data.volume;
+        if (ssSlider) ssSlider.value = data.volume;
+        if (valueSpan) valueSpan.textContent = `${data.volume}%`;
+        rendererFailureCount = 0;
+        // setRendererOffline(false, 'fetchVolume'); // Only fetchStatus should turn it online
     } catch (err) {
         console.error('Failed to fetch volume:', err);
+        setRendererOffline(true, 'fetchVolume');
     }
 }
 
@@ -3065,7 +3090,7 @@ function closeSonosEqModal() {
 }
 
 async function fetchEq() {
-    if (!selectedRendererUdn) return;
+    if (!selectedRendererUdn || isRendererOffline) return;
     try {
         console.log('[DEBUG] Fetching EQ for:', selectedRendererUdn);
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/eq`);
@@ -3082,8 +3107,12 @@ async function fetchEq() {
         if (bassValue) bassValue.textContent = eq.bass;
         if (trebleSlider) trebleSlider.value = eq.treble;
         if (trebleValue) trebleValue.textContent = eq.treble;
+
+        rendererFailureCount = 0;
+        // setRendererOffline(false, 'fetchEq'); // Only fetchStatus should turn it online
     } catch (err) {
         console.error('EQ fetch error:', err);
+        setRendererOffline(true, 'fetchEq');
     }
 }
 
