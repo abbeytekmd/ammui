@@ -3829,7 +3829,6 @@ class Slideshow {
                 this.items = items;
                 this.index = index;
                 await this.next();
-                this.resetInterval();
             }
             return;
         }
@@ -3860,7 +3859,6 @@ class Slideshow {
         }
 
         await this.next();
-        this.resetInterval();
     }
 
     stop() {
@@ -3947,6 +3945,7 @@ class Slideshow {
             }
 
             if (data && data.url) this.renderPhoto(data);
+            this.resetInterval();
         } catch (e) {
             console.error('[SLIDESHOW] Next failed:', e);
         }
@@ -4244,6 +4243,11 @@ class Slideshow {
             });
             if (res.ok) {
                 showToast('Photo hidden', 'success', 2000);
+                // Remove from local items if present to prevent it reappearing in this session
+                if (this.items && this.items.length > 0 && this.index >= 0) {
+                    this.items.splice(this.index, 1);
+                    this.index--; // Back up so next() advances to the new item at this index
+                }
                 this.next();
             }
         } catch (e) {
