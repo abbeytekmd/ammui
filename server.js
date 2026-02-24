@@ -2077,8 +2077,8 @@ app.get('/api/art/proxy', async (req, res) => {
 
         response.data.pipe(res);
     } catch (err) {
-        console.error('[PROXY] Error:', err.message);
-        res.status(500).json({ error: 'Failed to proxy image' });
+        console.error(`[PROXY] Error fetching ${url}:`, err.message);
+        res.status(500).json({ error: 'Failed to proxy image', details: err.message, url: url });
     }
 });
 

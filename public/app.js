@@ -1211,16 +1211,16 @@ function renderBrowser(items) {
 async function fetchPlaylist(udn) {
     if (isRendererOffline) return; // Silently ignore when offline
     try {
-        const response = await fetch(`/api/playlist/${encodeURIComponent(udn)}`);
-        if (!response.ok) throw new Error('Failed to fetch playlist');
-        const playlist = await response.json();
+        // Fetch playlist and status in parallel
+        const [playlistRes, statusRes] = await Promise.all([
+            fetch(`/api/playlist/${encodeURIComponent(udn)}`),
+            fetch(`/api/playlist/${encodeURIComponent(udn)}/status`)
+        ]);
 
-        // Update the global state immediately before status is updated
-        // so that metadata lookups in updateStatus use the fresh playlist.
+        if (!playlistRes.ok) throw new Error('Failed to fetch playlist');
+        const playlist = await playlistRes.json();
         currentPlaylistItems = playlist;
 
-        // Update status and track info before rendering
-        const statusRes = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
         if (statusRes.ok) {
             const status = await statusRes.json();
             updateStatus(status);
@@ -1229,7 +1229,6 @@ async function fetchPlaylist(udn) {
         sessionStorage.setItem('lastPlaylist', JSON.stringify(playlist));
         renderPlaylist(playlist);
         rendererFailureCount = 0;
-        // setRendererOffline(false, 'fetchPlaylist'); // Only fetchStatus should turn it online
     } catch (err) {
         console.error(`Playlist fetch error for ${udn}:`, err);
         setRendererOffline(true, 'fetchPlaylist');
@@ -1553,19 +1552,8 @@ function showPlayerArt(url) {
         img.src = url;
     });
 
-    // Also update the card album art element directly (primary path now that
-    // legacy player-art-* containers are no longer in the DOM)
-    const cardAlbumArt = document.getElementById('card-album-art');
-    if (cardAlbumArt) {
-        cardAlbumArt.onload = () => updateCardNowPlaying();
-        cardAlbumArt.src = url;
-    }
-
-    // If no legacy containers exist at all, still call updateCardNowPlaying
-    // immediately so the card reflects currentArtworkUrl
-    if (imgs.every(img => !img)) {
-        updateCardNowPlaying();
-    }
+    // Directly sync the card UI
+    updateCardNowPlaying();
 }
 
 function hideAllPlayerArt() {
@@ -2244,12 +2232,20 @@ function updateCardNowPlaying() {
             if (cardNowPlaying) cardNowPlaying.classList.add('visible');
 
             if (cardAlbumArt && currentArtworkUrl) {
-                cardAlbumArt.src = currentArtworkUrl;
+                // Only update src if it's actually different to avoid reload loops
+                // Note: comparison with .src might fail if currentArtworkUrl is relative, 
+                // but for our proxy URLs it's usually stable enough.
+                const currentSrc = cardAlbumArt.getAttribute('src');
+                if (currentSrc !== currentArtworkUrl) {
+                    console.log(`[ART-SYNC] Updating card art src to: ${currentArtworkUrl}`);
+                    cardAlbumArt.src = currentArtworkUrl;
+                }
                 cardAlbumArt.style.display = 'block';
                 if (cardDefaultIcon) cardDefaultIcon.style.display = 'none';
                 const parent = cardAlbumArt.parentElement;
                 if (parent) parent.style.background = 'none';
             } else if (cardAlbumArt) {
+                cardAlbumArt.removeAttribute('src');
                 cardAlbumArt.style.display = 'none';
                 if (cardDefaultIcon) cardDefaultIcon.style.display = 'block';
                 const parent = cardAlbumArt.parentElement;
@@ -2828,9 +2824,11 @@ async function init() {
     if (selectedRendererUdn) {
         const renderer = currentDevices.find(d => d.udn === selectedRendererUdn && d.isRenderer);
         if (renderer) {
-            await fetchStatus();
-            await fetchPlaylist(selectedRendererUdn);
-            await fetchVolume();
+            // Do not await these; let them run in background so init() can finish and the 
+            // browser "loading" symbol can stop.
+            fetchStatus();
+            fetchPlaylist(selectedRendererUdn);
+            fetchVolume();
         }
     }
 
