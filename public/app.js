@@ -253,6 +253,10 @@ async function selectServer(udn) {
     renderDevices();
     updateLocalOnlyUI();
 
+    if (window.innerWidth <= 1100) {
+        switchView('browser');
+    }
+
     browserContainer.style.display = 'flex';
 
     // Prioritize last browsed path, then home location, then root
@@ -301,6 +305,10 @@ async function selectDevice(udn) {
 
     renderDevices();
     updateTransportControls();
+
+    if (window.innerWidth <= 1100) {
+        switchView('playlist');
+    }
 
     playlistItems.innerHTML = '<div class="loading">Loading playlist...</div>';
 
@@ -470,7 +478,7 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
         await fetchPlaylist(selectedRendererUdn);
 
         // On mobile, switch to playlist view after adding if requested
-        if (autoSwitch && window.innerWidth <= 800) {
+        if (autoSwitch && window.innerWidth <= 1100) {
             switchView('playlist');
         }
     } catch (err) {
@@ -1819,6 +1827,12 @@ function renderPlaylist(items) {
 }
 
 function scrollToCurrentTrack() {
+    // On mobile, only scroll if the player column is currently active
+    if (window.innerWidth <= 800) {
+        const playerCol = document.querySelector('.player-column');
+        if (!playerCol || !playerCol.classList.contains('active')) return;
+    }
+
     // Find the currently playing item
     const playingItem = playlistItems.querySelector('.playlist-item.playing');
     if (playingItem) {
@@ -2025,6 +2039,22 @@ function closeServerModal() {
 
 function openRendererModal() {
     rendererModal.style.display = 'flex';
+}
+
+function handleServerClick() {
+    console.log('[DEBUG] Server card clicked');
+    if (window.innerWidth <= 1100) {
+        switchView('browser');
+    }
+    openServerModal();
+}
+
+function handleRendererClick() {
+    console.log('[DEBUG] Renderer card clicked');
+    if (window.innerWidth <= 1100) {
+        switchView('playlist');
+    }
+    openRendererModal();
 }
 
 function closeRendererModal() {
@@ -2514,20 +2544,64 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
 function switchView(view) {
     const playerCol = document.querySelector('.player-column');
     const browserCol = document.querySelector('.browser-column');
-    const tabPlaylist = document.getElementById('tab-playlist');
-    const tabBrowser = document.getElementById('tab-browser');
+    const layout = document.querySelector('.main-layout');
+    const floatingBtn = document.getElementById('floating-nav-btn');
 
     if (view === 'playlist') {
-        playerCol.classList.add('active');
-        browserCol.classList.remove('active');
-        tabPlaylist ? tabPlaylist.classList.add('active') : null;
-        tabBrowser ? tabBrowser.classList.remove('active') : null;
+        playerCol ? playerCol.classList.add('active') : null;
+        browserCol ? browserCol.classList.remove('active') : null;
+        if (layout) layout.classList.add('show-playlist');
+        if (floatingBtn) floatingBtn.classList.add('on-left');
     } else {
-        playerCol.classList.remove('active');
-        browserCol.classList.add('active');
-        tabPlaylist ? tabPlaylist.classList.remove('active') : null;
-        tabBrowser ? tabBrowser.classList.add('active') : null;
+        playerCol ? playerCol.classList.remove('active') : null;
+        browserCol ? browserCol.classList.add('active') : null;
+        if (layout) layout.classList.remove('show-playlist');
+        if (floatingBtn) floatingBtn.classList.remove('on-left');
     }
+    localStorage.setItem('currentView', view);
+}
+
+function toggleMobileView() {
+    const layout = document.querySelector('.main-layout');
+    if (layout) {
+        if (layout.classList.contains('show-playlist')) {
+            switchView('browser');
+        } else {
+            switchView('playlist');
+        }
+    }
+}
+
+let touchStartX = 0;
+let touchStartY = 0;
+function initSwipeHandling() {
+    const layout = document.querySelector('.main-layout');
+    if (!layout) return;
+
+    layout.addEventListener('touchstart', e => {
+        touchStartX = e.changedTouches[0].clientX;
+        touchStartY = e.changedTouches[0].clientY;
+    }, { passive: true });
+
+    layout.addEventListener('touchend', e => {
+        // Only allow swipe switching if we are in the single-column layout
+        if (window.innerWidth > 1100) return;
+        const touchEndX = e.changedTouches[0].clientX;
+        const touchEndY = e.changedTouches[0].clientY;
+        const dx = touchEndX - touchStartX;
+        const dy = touchEndY - touchStartY;
+
+        // Ensure it's mostly a horizontal swipe and exceeds threshold
+        if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
+            if (dx < -60) {
+                // Swipe Left (finger moves left) -> "get back" as per user request
+                switchView('browser');
+            } else if (dx > 60) {
+                // Swipe Right (finger moves right) -> "get to the other" as per user request
+                switchView('playlist');
+            }
+        }
+    }, { passive: true });
 }
 
 async function setHome(type = 'music') {
@@ -2874,27 +2948,14 @@ async function init() {
                 updateBreadcrumbs();
                 await browse(selectedServerUdn, '0');
             }
-
-            // On mobile, auto-expand if browser is the active tab
-            if (window.innerWidth <= 800) {
-                const tabBrowser = document.getElementById('tab-browser');
-                if (tabBrowser && tabBrowser.classList.contains('active')) {
-                    if (browserItems && !browserItems.classList.contains('expanded')) {
-                        toggleBrowser();
-                    }
-                }
-            }
         }
     }
 
-    // Also handle renderer auto-expansion if that tab is active
-    if (window.innerWidth <= 800 && selectedRendererUdn) {
-        const tabPlaylist = document.getElementById('tab-playlist');
-        if (tabPlaylist && tabPlaylist.classList.contains('active')) {
-            if (playlistItems && !playlistItems.classList.contains('expanded')) {
-                togglePlaylist();
-            }
-        }
+    // Initialize swipe handling and sync slider position on mobile
+    initSwipeHandling();
+    if (window.innerWidth <= 1100) {
+        const savedView = localStorage.getItem('currentView') || 'browser';
+        switchView(savedView);
     }
 
     // Global click listener to close dropdowns
@@ -3039,35 +3100,6 @@ function toggleBrowser() {
     if (container) {
         container.classList.toggle('expanded');
     }
-}
-
-function handleRendererClick() {
-    if (window.innerWidth <= 800) {
-        if (playlistItems && playlistItems.classList.contains('expanded')) {
-            openRendererModal();
-            return;
-        }
-        if (browserItems && browserItems.classList.contains('expanded')) toggleBrowser();
-        if (playlistItems && !playlistItems.classList.contains('expanded')) togglePlaylist();
-        return;
-    }
-    openRendererModal();
-}
-
-function handleServerClick() {
-    // On desktop, always open the modal immediately
-    if (window.innerWidth > 800) {
-        openServerModal();
-        return;
-    }
-
-    // On mobile, check expansion state
-    if (browserItems && browserItems.classList.contains('expanded')) {
-        openServerModal();
-        return;
-    }
-    if (playlistItems && playlistItems.classList.contains('expanded')) togglePlaylist();
-    if (browserItems && !browserItems.classList.contains('expanded')) toggleBrowser();
 }
 
 // Sonos EQ Modal logic
