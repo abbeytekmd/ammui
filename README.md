@@ -86,4 +86,4 @@ As we have a linux box on our network, we're running this on it, and we have a 1
 
 ## 📄 License
 
-This project is licensed under the ISC License.
+This project is licensed under the MIT License.
