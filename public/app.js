@@ -2594,11 +2594,11 @@ function initSwipeHandling() {
         // Ensure it's mostly a horizontal swipe and exceeds threshold
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
             if (dx < -60) {
-                // Swipe Left (finger moves left) -> "get back" as per user request
-                switchView('browser');
-            } else if (dx > 60) {
-                // Swipe Right (finger moves right) -> "get to the other" as per user request
+                // Swipe Left (finger moves left) -> Playlist
                 switchView('playlist');
+            } else if (dx > 60) {
+                // Swipe Right (finger moves right) -> Browser
+                switchView('browser');
             }
         }
     }, { passive: true });
