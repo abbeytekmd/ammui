@@ -107,7 +107,8 @@ let settings = {
         pathName: 'Not Set'
     },
     manualRotations: {},
-    deletedPhotos: {}
+    deletedPhotos: {},
+    fileTags: {}
 };
 
 let s3SyncStatus = {
@@ -132,8 +133,28 @@ function loadSettings() {
                 screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) },
                 manualRotations: loaded.manualRotations || {},
                 deletedPhotos: loaded.deletedPhotos || {},
-                favouritePhotos: loaded.favouritePhotos || {}
+                fileTags: loaded.fileTags || {}
             };
+
+            // Migrate legacy favourites to tags
+            if (Object.keys(settings.favouritePhotos || {}).length > 0) {
+                let migrated = 0;
+                for (const url in settings.favouritePhotos) {
+                    if (settings.favouritePhotos[url]) {
+                        if (!settings.fileTags[url]) settings.fileTags[url] = [];
+                        if (!settings.fileTags[url].includes('fav')) {
+                            settings.fileTags[url].push('fav');
+                            migrated++;
+                        }
+                    }
+                }
+                if (migrated > 0) {
+                    console.log(`[MIGRATION] Migrated ${migrated} legacy favorites to tags.`);
+                    saveSettings();
+                }
+                delete settings.favouritePhotos;
+            }
+
             console.log('Loaded settings from storage.');
         }
     } catch (err) {
@@ -1567,7 +1588,7 @@ async function refreshScreensaverCache(device, objectId) {
     try {
         const mediaServer = new MediaServer(device);
         // Use browseRecursive from MediaServer class
-        const allItems = await mediaServer.browseRecursive(objectId);
+        const allItems = await mediaServer.browseRecursive(objectId, settings.screensaver.pathName || 'Home');
 
         // Filter for images and NOT deleted
         const images = allItems.filter(i => {
@@ -1661,7 +1682,7 @@ app.get('/api/slideshow/random', async (req, res) => {
             } else if (mode === 'favourites') {
                 imagesToUse = imagesToUse.filter(img => {
                     const url = img.uri || img.res;
-                    return settings.favouritePhotos[url];
+                    return settings.fileTags?.[url]?.includes('fav');
                 });
 
                 if (imagesToUse.length === 0) {
@@ -1674,8 +1695,9 @@ app.get('/api/slideshow/random', async (req, res) => {
             foundImage = imagesToUse[index];
 
             // HACK: If we just updated the code but the cache is old, trigger refresh
-            if (!foundImage.folderId && !screensaverCache.refreshTriggered) {
-                console.log('[SCREENSAVER] Cache is stale (missing folderId), triggering refresh');
+            const isLegacyPath = typeof foundImage._path === 'string' && foundImage._path && !foundImage._path.startsWith('[');
+            if ((!foundImage.folderId || isLegacyPath) && !screensaverCache.refreshTriggered) {
+                console.log('[SCREENSAVER] Cache is stale (missing folderId or structured path), triggering refresh');
                 screensaverCache.refreshTriggered = true;
                 refreshScreensaverCache(device, objectId);
             }
@@ -1801,7 +1823,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                 date: date,
                 orientation: orientation,
                 manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
-                isFavourite: !!(settings.favouritePhotos && settings.favouritePhotos[imgUrl]),
+                tags: settings.fileTags?.[imgUrl] || [],
                 location: foundImage._path || foundImage.location || '',
                 latitude: foundImage.lat,
                 longitude: foundImage.lon,
@@ -1861,11 +1883,13 @@ app.post('/api/slideshow/favourite', (req, res) => {
     const { url, favourite } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
 
-    if (!settings.favouritePhotos) settings.favouritePhotos = {};
+    if (!settings.fileTags) settings.fileTags = {};
+    if (!settings.fileTags[url]) settings.fileTags[url] = [];
+
     if (favourite) {
-        settings.favouritePhotos[url] = true;
+        if (!settings.fileTags[url].includes('fav')) settings.fileTags[url].push('fav');
     } else {
-        delete settings.favouritePhotos[url];
+        settings.fileTags[url] = settings.fileTags[url].filter(t => t !== 'fav');
     }
     saveSettings();
 
@@ -2235,7 +2259,8 @@ app.get('/api/track-metadata', async (req, res) => {
                 isImage: metadata.format.isImage,
                 latitude: metadata.format.latitude,
                 longitude: metadata.format.longitude
-            }
+            },
+            tags: settings.fileTags?.[uri] || []
         };
 
         res.json(result);
@@ -2243,6 +2268,17 @@ app.get('/api/track-metadata', async (req, res) => {
         terminalLog(`[METADATA] ERROR: ${err.message}`);
         res.status(500).json({ error: err.message });
     }
+});
+
+app.post('/api/file-tags', (req, res) => {
+    const { uri, tags } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+    if (!Array.isArray(tags)) return res.status(400).json({ error: 'Tags must be an array' });
+
+    settings.fileTags[uri] = tags;
+    saveSettings();
+    terminalLog(`[TAGS] Updated tags for ${uri}: ${tags.join(', ')}`);
+    res.json({ success: true });
 });
 
 app.get('/api/logs', (req, res) => {

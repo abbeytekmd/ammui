@@ -98,6 +98,8 @@ let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid r
 let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 2;
+let currentInfoUri = null;
+let currentFileTags = [];
 let isRendererOffline = false;
 
 function setRendererOffline(state, caller = 'unknown') {
@@ -1154,7 +1156,7 @@ function renderBrowser(items) {
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
-                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromBrowser(${index})" title="View track metadata">
+                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showFileInfoFromBrowser(${index})" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M12 16v-4"></path>
@@ -1802,7 +1804,7 @@ function renderPlaylist(items) {
                     <div class="item-artist">${esc(item.artist) || ''}</div>
                 </div>
                 <div class="item-actions">
-                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showTrackInfoFromPlaylist('${esc(item.id)}')" title="View track metadata">
+                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showFileInfoFromPlaylist('${esc(item.id)}')" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M12 16v-4"></path>
@@ -3538,10 +3540,15 @@ async function clearLogs() {
     }
 }
 
-async function openTrackInfoModal(trackData) {
+async function openFileInfoModal(trackData) {
     const modal = document.getElementById('track-info-modal');
     const container = document.getElementById('track-metadata-list');
     if (!modal || !container) return;
+
+    currentInfoUri = trackData.uri;
+    currentFileTags = [];
+    updateFileFavUI();
+    renderFileTags();
 
     modal.style.display = 'flex';
     container.innerHTML = `
@@ -3569,6 +3576,11 @@ async function openTrackInfoModal(trackData) {
             const response = await fetch(`/api/track-metadata?uri=${encodeURIComponent(trackData.uri)}`);
             if (response.ok) {
                 embeddedMeta = await response.json();
+                if (embeddedMeta.tags) {
+                    currentFileTags = embeddedMeta.tags;
+                    updateFileFavUI();
+                    renderFileTags();
+                }
             } else {
                 fetchError = "Deep scan failed";
             }
@@ -3755,24 +3767,99 @@ async function openTrackInfoModal(trackData) {
 
 }
 
-function closeTrackInfoModal() {
+function closeFileInfoModal() {
     const modal = document.getElementById('track-info-modal');
     if (modal) {
         modal.style.display = 'none';
     }
 }
 
-function showTrackInfoFromBrowser(index) {
-    const item = currentBrowserItems[index];
-    if (item) {
-        openTrackInfoModal(item);
+async function addFileTag() {
+    const input = document.getElementById('new-tag-input');
+    const tag = input.value.trim();
+    if (!tag || !currentInfoUri) return;
+
+    if (currentFileTags.includes(tag)) {
+        input.value = '';
+        return;
+    }
+
+    currentFileTags.push(tag);
+    input.value = '';
+    updateFileFavUI();
+    renderFileTags();
+    await saveFileTags();
+}
+
+async function removeFileTag(tag) {
+    currentFileTags = currentFileTags.filter(t => t !== tag);
+    updateFileFavUI();
+    renderFileTags();
+    await saveFileTags();
+}
+
+function renderFileTags() {
+    const container = document.getElementById('file-tags-container');
+    if (!container) return;
+
+    container.innerHTML = currentFileTags.map(tag => `
+        <div class="tag-badge">
+            ${tag}
+            <span class="tag-remove" onclick="removeFileTag('${tag.replace(/'/g, "\\'")}')">✕</span>
+        </div>
+    `).join('');
+}
+
+function updateFileFavUI() {
+    const btn = document.getElementById('file-fav-btn');
+    if (!btn) return;
+    const isFav = currentFileTags.includes('fav');
+    if (isFav) {
+        btn.classList.add('active');
+    } else {
+        btn.classList.remove('active');
     }
 }
 
-function showTrackInfoFromPlaylist(id) {
+async function toggleFileFav() {
+    if (!currentInfoUri) return;
+
+    const index = currentFileTags.indexOf('fav');
+    if (index === -1) {
+        currentFileTags.push('fav');
+    } else {
+        currentFileTags.splice(index, 1);
+    }
+
+    updateFileFavUI();
+    renderFileTags();
+    await saveFileTags();
+}
+
+async function saveFileTags() {
+    if (!currentInfoUri) return;
+    try {
+        await fetch('/api/file-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: currentInfoUri, tags: currentFileTags })
+        });
+    } catch (err) {
+        console.error('Failed to save tags:', err);
+    }
+}
+
+function showFileInfoFromBrowser(index) {
+    const item = currentBrowserItems[index];
+    if (item) {
+        openFileInfoModal(item);
+    }
+}
+
+function showFileInfoFromPlaylist(id) {
     const item = currentPlaylistItems.find(i => i.id == id);
     if (item) {
-        openTrackInfoModal(item);
+        openFileInfoModal(item);
     }
 }
 
@@ -4034,7 +4121,8 @@ class Slideshow {
             this.rotation = data.manualRotation || 0;
 
             if (this.favBtn) {
-                this.favBtn.classList.toggle('is-favourite', !!data.isFavourite);
+                const isFav = data.tags && data.tags.includes('fav');
+                this.favBtn.classList.toggle('is-favourite', !!isFav);
             }
 
             this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
@@ -4305,15 +4393,33 @@ class Slideshow {
             localStorage.setItem('selectedServerUdn', selectedServerUdn);
         }
 
-        // Reset browser path to root first to ensure clean breadcrumbs
+        // Reset browser path
         browsePath = [{ id: '0', title: 'Home' }];
 
-        // Trigger navigation
-        if (typeof enterFolder === 'function') {
-            await enterFolder(data.folderId, data.folderTitle);
-        } else {
-            await browse(selectedServerUdn, data.folderId);
+        // Reconstruct path from location metadata (JSON string of path array)
+        if (data.location && data.location.startsWith('[')) {
+            try {
+                const parts = JSON.parse(data.location);
+                // Parts are [{id, title}, ...]
+                parts.forEach(p => {
+                    if (p.id !== '0') {
+                        browsePath.push(p);
+                    }
+                });
+            } catch (e) {
+                console.warn('[SLIDESHOW] Failed to parse path location:', e);
+                if (data.folderId && data.folderId !== '0') {
+                    browsePath.push({ id: data.folderId, title: data.folderTitle });
+                }
+            }
+        } else if (data.folderId && data.folderId !== '0') {
+            // Fallback for older cache entries
+            browsePath.push({ id: data.folderId, title: data.folderTitle });
         }
+
+        saveLastPath();
+        updateBreadcrumbs();
+        await browse(selectedServerUdn, data.folderId);
 
         // If on mobile, switch to browser tab
         if (typeof switchView === 'function') {

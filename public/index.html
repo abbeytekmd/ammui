@@ -510,11 +510,30 @@
     <div id="track-info-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content info-modal-content">
             <div class="modal-header">
-                <h2>Track Information</h2>
-                <button class="btn-close" onclick="closeTrackInfoModal()">✕</button>
+                <h2>File Information</h2>
+                <button class="btn-close" onclick="closeFileInfoModal()">✕</button>
             </div>
             <div id="track-metadata-list" class="metadata-list">
                 <!-- Metadata items will be injected here -->
+            </div>
+            <div class="tags-section">
+                <div class="tags-header">
+                    <h3>Tags</h3>
+                    <button id="file-fav-btn" class="btn-fav-toggle" onclick="toggleFileFav()" title="Toggle Favourite">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path
+                                d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l8.84-8.84 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
+                            </path>
+                        </svg>
+                    </button>
+                </div>
+                <div id="file-tags-container" class="tags-container"></div>
+                <div class="tag-input-wrapper">
+                    <input type="text" id="new-tag-input" placeholder="Add tag..."
+                        onkeyup="if(event.key==='Enter') addFileTag()">
+                    <button class="btn-control ghost btn-small" onclick="addFileTag()">Add</button>
+                </div>
             </div>
         </div>
     </div>
