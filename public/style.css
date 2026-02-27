@@ -4347,7 +4347,8 @@ input:checked+.slider:before {
     }
 
     #btn-play-all .btn-label[data-mobile],
-    #btn-add-all .btn-label[data-mobile] {
+    #btn-add-all .btn-label[data-mobile],
+    #btn-play-tag .btn-label[data-mobile] {
         display: inline !important;
         font-size: 0.85rem !important;
     }
@@ -4358,7 +4359,8 @@ input:checked+.slider:before {
     }
 
     #btn-play-all .btn-label[data-mobile]::after,
-    #btn-add-all .btn-label[data-mobile]::after {
+    #btn-add-all .btn-label[data-mobile]::after,
+    #btn-play-tag .btn-label[data-mobile]::after {
         display: none !important;
     }
 
@@ -4577,6 +4579,41 @@ input:checked+.slider:before {
     border: 1px solid var(--card-border) !important;
 }
 
+.tag-selection-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 0.75rem;
+    padding: 1.5rem;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.tag-selection-item {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    padding: 0.75rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
+.tag-selection-item:hover {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: var(--primary);
+    color: white;
+    transform: translateY(-2px);
+}
+
+.tag-selection-item.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
 /* Seek Bar Scanning Animation */
 @keyframes rotate {
     from {
@@ -4644,7 +4681,8 @@ input:checked+.slider:before {
     }
 
     #btn-play-all .btn-label,
-    #btn-add-all .btn-label {
+    #btn-add-all .btn-label,
+    #btn-play-tag .btn-label {
         display: inline;
         margin-left: 0.25rem;
     }

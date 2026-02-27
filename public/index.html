@@ -177,6 +177,17 @@
                                 </svg>
                                 <span class="btn-label" data-mobile="All">Queue All</span>
                             </button>
+                            <button id="btn-play-tag" onclick="openPlayTagModal()" class="btn-control"
+                                title="Play items by tag">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path
+                                        d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z">
+                                    </path>
+                                    <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="Tag">Play Tag</span>
+                            </button>
                             <button id="btn-toggle-view" onclick="toggleBrowserView()" class="btn-control"
                                 style="display: none;" title="Toggle between List and Grid view">
                                 <svg id="svg-view-grid" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -333,6 +344,21 @@
             </div>
             <div id="modal-renderer-list" class="device-list">
                 <!-- Renderers will be listed here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="play-tag-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Play Tag</h2>
+                    <p class="modal-subtitle">Select a tag to queue all matching tracks</p>
+                </div>
+                <button class="btn-close" onclick="closePlayTagModal()">✕</button>
+            </div>
+            <div id="tag-selection-list" class="tag-selection-list">
+                <!-- Tags will be listed here -->
             </div>
         </div>
     </div>

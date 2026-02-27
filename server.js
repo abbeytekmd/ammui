@@ -2281,6 +2281,90 @@ app.post('/api/file-tags', (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/tags', (req, res) => {
+    const tagsSet = new Set();
+    Object.values(settings.fileTags).forEach(tags => {
+        if (Array.isArray(tags)) {
+            tags.forEach(t => tagsSet.add(t));
+        }
+    });
+    const tags = Array.from(tagsSet).sort();
+    res.json({ tags });
+});
+
+app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
+    const { udn } = req.params;
+    const { tag } = req.body;
+
+    if (!tag) return res.status(400).json({ error: 'Tag is required' });
+
+    const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!rendererDevice || rendererDevice.loading) return res.status(404).json({ error: 'Renderer not found or still discovering' });
+
+    const uris = Object.keys(settings.fileTags).filter(uri => {
+        if (!Array.isArray(settings.fileTags[uri]) || !settings.fileTags[uri].includes(tag)) return false;
+        // Only include music/audio files
+        return uri.match(/\.(mp3|flac|wav|aac|m4a|ogg|wma|aiff|alac)$/i);
+    });
+
+    if (uris.length === 0) {
+        return res.json({ success: true, count: 0 });
+    }
+
+    try {
+        const renderer = getRenderer(rendererDevice);
+
+        // Clear playlist and start fresh like play-folder
+        await renderer.clearPlaylist();
+
+        let lastId = 0;
+
+        for (const uri of uris) {
+            let title = 'Unknown Item';
+            let artist = '';
+            let album = '';
+
+            try {
+                // Try grabbing metadata for correct track name and artist presentation
+                const metadata = await getTrackMetadata(uri);
+                if (metadata && metadata.common) {
+                    if (metadata.common.title) title = metadata.common.title;
+                    if (metadata.common.artist) artist = metadata.common.artist;
+                    if (metadata.common.album) album = metadata.common.album;
+                }
+            } catch (e) {
+                // Fallback to extraction from URI
+                const filenameRegex = /[^\/\\]+$/;
+                const match = uri.match(filenameRegex);
+                if (match) title = decodeURIComponent(match[0].split('?')[0]);
+            }
+
+            const track = {
+                uri,
+                title,
+                artist,
+                album,
+                class: title.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'object.item.imageItem.photo'
+                    : title.match(/\.(mp4|mkv|avi|mov)$/i) ? 'object.item.videoItem'
+                        : 'object.item.audioItem.musicTrack'
+            };
+            lastId = await renderer.insertTrack(track, lastId);
+        }
+
+        // Play the first track added
+        let ids = await renderer.getIdArray();
+        if (ids.length > 0) {
+            await renderer.seekId(ids[0]);
+            await renderer.play();
+        }
+
+        res.json({ success: true, count: uris.length });
+    } catch (err) {
+        console.error('Queue tag failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/api/logs', (req, res) => {
     const ssdpData = {};
     for (const [ip, data] of ssdpRegistry.entries()) {

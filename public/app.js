@@ -2074,6 +2074,70 @@ function closeManageModal() {
     if (manageModal) manageModal.style.display = 'none';
 }
 
+const playTagModal = document.getElementById('play-tag-modal');
+const tagSelectionList = document.getElementById('tag-selection-list');
+
+async function openPlayTagModal() {
+    if (!playTagModal) return;
+    tagSelectionList.innerHTML = '<div class="loading">Loading tags...</div>';
+    playTagModal.style.display = 'flex';
+
+    try {
+        const response = await fetch('/api/tags');
+        if (!response.ok) throw new Error('Failed to load tags');
+        const data = await response.json();
+
+        if (!data.tags || data.tags.length === 0) {
+            tagSelectionList.innerHTML = '<div class="empty-state">No tags found in the library.</div>';
+            return;
+        }
+
+        tagSelectionList.innerHTML = data.tags.map(tag => `
+            <div class="tag-selection-item" onclick="playTag('${tag.replace(/'/g, "\\'")}')">
+                ${tag}
+            </div>
+        `).join('');
+    } catch (err) {
+        console.error('Error fetching tags:', err);
+        tagSelectionList.innerHTML = `<div class="error">Failed to load tags: ${err.message}</div>`;
+    }
+}
+
+function closePlayTagModal() {
+    if (playTagModal) playTagModal.style.display = 'none';
+}
+
+async function playTag(tagName) {
+    if (!selectedRendererUdn) {
+        showToast('Please select a player first.', 'error');
+        return;
+    }
+
+    closePlayTagModal();
+    showToast(`Playing tracks tagged with "${tagName}"...`, 'info', 3000);
+
+    try {
+        const res = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/queue-tag`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tag: tagName })
+        });
+
+        if (!res.ok) throw new Error('Failed to play tag');
+        const data = await res.json();
+
+        showToast(`Playing ${data.count} tracks for "${tagName}"`, 'success', 3000);
+        await fetchPlaylist(selectedRendererUdn);
+
+        if (window.innerWidth <= 1100 && typeof switchView === 'function') {
+            switchView('playlist');
+        }
+    } catch (err) {
+        console.error('Error playing tag:', err);
+        showToast(`Failed to play tag: ${err.message}`, 'error');
+    }
+}
+
 function switchSettingsTab(tab) {
     // Update tab buttons
     document.querySelectorAll('.settings-tab').forEach(btn => {
