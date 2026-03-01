@@ -1022,11 +1022,39 @@ app.post('/api/playlist/:udn/seek-time/:seconds', async (req, res) => {
 
 app.get('/api/playlist/:udn/status', async (req, res) => {
     const { udn } = req.params;
+    const includePlaylist = req.query.includePlaylist === 'true';
     const device = Array.from(devices.values()).find(d => d.udn === udn);
     if (!device || device.loading) return res.status(404).json({ error: 'Device not found' });
     try {
         const renderer = getRenderer(device);
-        const status = await renderer.getCurrentStatus();
+
+        const tasks = [
+            renderer.getCurrentStatus().catch(e => { throw e; }),
+            renderer.getVolume().catch(e => {
+                console.warn(`[DEBUG] Failed to fetch volume during status poll for ${device.friendlyName}: ${e.message}`);
+                return null;
+            })
+        ];
+
+        if (includePlaylist) {
+            tasks.push(renderer.getPlaylist().catch(e => {
+                console.warn(`[DEBUG] Failed to fetch playlist during status poll for ${device.friendlyName}: ${e.message}`);
+                return null;
+            }));
+        }
+
+        const results = await Promise.all(tasks);
+        const status = results[0];
+        const volume = results[1];
+
+        if (volume !== null) {
+            status.volume = volume;
+        }
+
+        if (includePlaylist && results[2] !== null) {
+            status.playlist = results[2];
+        }
+
         res.json(status);
     } catch (err) {
         res.status(500).json({ error: err.message });

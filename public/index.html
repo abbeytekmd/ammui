@@ -23,6 +23,16 @@
                         <img src="/amm-icon.png" alt="AMM Logo" class="header-logo">
                         <h1>AMMUI</h1>
                     </div>
+                    <button id="btn-start-slideshow" onclick="manualStartSlideshow()" class="btn-control ghost"
+                        title="Start photo slideshow">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                            <line x1="8" y1="21" x2="16" y2="21"></line>
+                            <line x1="12" y1="17" x2="12" y2="21"></line>
+                        </svg>
+                        <span class="btn-label">Slideshow</span>
+                    </button>
                     <button id="btn-show-stats" onclick="openStatsModal()" class="btn-control ghost"
                         title="Show playback statistics">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -40,16 +50,6 @@
                             <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                         </svg>
                         <span class="btn-label">Settings</span>
-                    </button>
-                    <button id="btn-start-slideshow" onclick="manualStartSlideshow()" class="btn-control ghost"
-                        title="Start photo slideshow">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                            <line x1="8" y1="21" x2="16" y2="21"></line>
-                            <line x1="12" y1="17" x2="12" y2="21"></line>
-                        </svg>
-                        <span class="btn-label">Slideshow</span>
                     </button>
                     <button id="btn-show-console" onclick="openConsoleModal()" class="btn-control ghost"
                         title="Show application logs">
@@ -71,7 +71,7 @@
             <div class="column browser-column">
                 <section class="device-section">
                     <div class="section-header">
-                        <h2>Servers</h2>
+                        <h2>Libraries</h2>
                         <span id="server-count" class="badge">0 active</span>
                     </div>
                     <div id="server-list" class="device-list">

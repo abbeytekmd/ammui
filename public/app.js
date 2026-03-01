@@ -1245,12 +1245,20 @@ async function fetchPlaylist(udn) {
     }
 }
 
-async function fetchStatus() {
+async function fetchStatus(includePlaylist = false) {
     if (!selectedRendererUdn || isRendererOffline) return;
     try {
-        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
+        const url = `/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status${includePlaylist ? '?includePlaylist=true' : ''}`;
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch status');
         const status = await response.json();
+
+        if (includePlaylist && status.playlist) {
+            currentPlaylistItems = status.playlist;
+            sessionStorage.setItem('lastPlaylist', JSON.stringify(status.playlist));
+            renderPlaylist(currentPlaylistItems);
+        }
+
         updateStatus(status);
         rendererFailureCount = 0;
         setRendererOffline(false, 'fetchStatus');
@@ -1264,7 +1272,9 @@ function updateStatus(status) {
     const now = Date.now();
     const isLocked = (now - lastTransportActionTime) < 3000; // 3 second lockout
 
-    const trackChanged = status.trackId !== currentTrackId;
+    const trackChanged = (status.trackId != null && currentTrackId != null) ?
+        String(status.trackId) !== String(currentTrackId) :
+        status.trackId !== currentTrackId;
     const transportChanged = status.transportState !== currentTransportState;
 
     // Stop After Track: if a track change is detected while armed, stop immediately
@@ -1384,6 +1394,16 @@ function updateStatus(status) {
 
     updatePositionUI();
     syncLocalPlayback(status);
+
+    // Update volume UI from status poll to save requests
+    if (status.volume !== undefined && status.volume !== null) {
+        const slider = document.getElementById('volume-slider');
+        const ssSlider = document.getElementById('ss-volume-slider');
+        const valueSpan = document.getElementById('volume-value');
+        if (slider && document.activeElement !== slider) slider.value = status.volume;
+        if (ssSlider && document.activeElement !== ssSlider) ssSlider.value = status.volume;
+        if (valueSpan) valueSpan.textContent = `${status.volume}%`;
+    }
 }
 
 function syncLocalPlayback(status) {
@@ -1747,6 +1767,16 @@ setInterval(() => {
             const elapsed = (now - lastStatusFetchTime) / 1000;
             let currentPos = lastStatusPositionSeconds + elapsed;
 
+            // If stopAfterTrack is armed, aggressively poll the device status near the end
+            // of the track. This lets the hardware naturally finish the current track,
+            // and allows us to catch the transition and stop it within 500ms.
+            if (stopAfterTrack && durationSeconds > 0 && (durationSeconds - currentPos <= 10)) {
+                if (!window.lastAggressivePoll || Date.now() - window.lastAggressivePoll > 500) {
+                    window.lastAggressivePoll = Date.now();
+                    fetchStatus();
+                }
+            }
+
             if (durationSeconds > 0 && currentPos > durationSeconds) {
                 currentPos = durationSeconds;
             }
@@ -1757,7 +1787,7 @@ setInterval(() => {
         }
         updatePositionUI();
     }
-}, 1000);
+}, 250);
 
 function renderPlaylist(items) {
     currentPlaylistItems = items;
@@ -2067,11 +2097,16 @@ function openManageModal() {
     if (manageModal) {
         renderManageDevices();
         manageModal.style.display = 'flex';
+        const s3Enabled = document.getElementById('s3-enabled')?.checked;
+        if (s3Enabled) startS3StatusPolling();
     }
 }
 
 function closeManageModal() {
-    if (manageModal) manageModal.style.display = 'none';
+    if (manageModal) {
+        manageModal.style.display = 'none';
+        stopS3StatusPolling();
+    }
 }
 
 const playTagModal = document.getElementById('play-tag-modal');
@@ -3129,20 +3164,15 @@ function adjustVolume(delta) {
     updateVolume(newValue);
 }
 
-// Poll status and volume every 5 seconds (only when page is visible)
+let pollCounter = 0;
+// Poll status (which now includes volume), and conditionally playlist every 3rd poll (15s) (only when page is visible)
 setInterval(() => {
     if (isPageVisible && selectedRendererUdn && !isRendererOffline) {
-        fetchStatus();
-        fetchVolume();
+        pollCounter++;
+        const includePlaylist = (pollCounter % 3 === 0);
+        fetchStatus(includePlaylist);
     }
 }, 5000);
-
-// Poll playlist every 15 seconds (less frequent)
-setInterval(() => {
-    if (isPageVisible && selectedRendererUdn && !isRendererOffline) {
-        fetchPlaylist(selectedRendererUdn);
-    }
-}, 15000);
 
 function togglePlaylist() {
     const items = document.getElementById('playlist-items');
@@ -4659,9 +4689,9 @@ async function fetchS3Settings() {
             statusContainer.style.display = data.enabled ? 'block' : 'none';
         }
         if (data.enabled) {
-            startS3StatusPolling();
+            updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
         } else {
-            stopS3StatusPolling();
+            stopS3StatusPolling(); // Safety measure
         }
     } catch (err) {
         console.error('Failed to fetch S3 settings:', err);

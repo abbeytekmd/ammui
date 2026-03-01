@@ -1897,7 +1897,7 @@ p.subtitle {
 
     .section-header .badge#renderer-count,
     .section-header .badge#server-count {
-        display: none;
+        display: inline-block;
     }
 }
 
@@ -2510,9 +2510,9 @@ p.subtitle {
 
 @media (max-width: 1100px) {
 
-    /* Hide Players/Media Library headers */
+    /* Show Players/Media Library headers on mobile */
     .device-section .section-header {
-        display: none;
+        display: flex;
     }
 
     /* Keep container fixed, do not scroll */
@@ -4671,7 +4671,7 @@ input:checked+.slider:before {
 
     .header-main .btn-control {
         padding: 0.4rem;
-        gap: 0;
+        gap: 0.25rem;
         min-width: 36px;
         justify-content: center;
     }
@@ -4680,6 +4680,7 @@ input:checked+.slider:before {
         display: none;
     }
 
+    .header-main .btn-label,
     #btn-play-all .btn-label,
     #btn-add-all .btn-label,
     #btn-play-tag .btn-label {
