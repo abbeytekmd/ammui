@@ -4286,7 +4286,7 @@ class Slideshow {
             this.hideMap();
             return;
         }
-        const fetchUrl = rawUrl.startsWith('/api/proxy-image')
+        const fetchUrl = (rawUrl.startsWith('/api/proxy-image') || rawUrl.startsWith('/api/art/proxy'))
             ? new URLSearchParams(rawUrl.split('?')[1]).get('url')
             : rawUrl;
         if (!fetchUrl) {
