@@ -636,19 +636,21 @@
                     <line x1="12" y1="17" x2="12" y2="22" />
                 </svg>
             </button>
-            <div class="ss-volume-container">
-                <button class="btn-ss-music" onclick="toggleSSVolumeSlider(event)"
-                    ontouchend="toggleSSVolumeSlider(event); event.preventDefault();" title="Volume">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                    </svg>
-                </button>
-                <div id="ss-volume-popover" class="ss-volume-popover">
-                    <input type="range" id="ss-volume-slider" min="0" max="100" step="1"
-                        oninput="updateVolume(this.value)" class="ss-volume-slider-vertical">
-                </div>
-            </div>
+            <button class="btn-ss-music" onclick="adjustVolume(-5)"
+                ontouchend="adjustVolume(-5); event.preventDefault();" title="Volume Down">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="15" y1="12" x2="21" y2="12"></line>
+                </svg>
+            </button>
+            <button class="btn-ss-music" onclick="adjustVolume(5)" ontouchend="adjustVolume(5); event.preventDefault();"
+                title="Volume Up">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="15" y1="12" x2="21" y2="12"></line>
+                    <line x1="18" y1="9" x2="18" y2="15"></line>
+                </svg>
+            </button>
         </div>
 
 

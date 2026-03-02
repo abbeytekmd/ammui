@@ -4574,17 +4574,7 @@ function toggleSlideshowPlayback(event) {
     }
 }
 
-// Slideshow music bar: show/hide volume popover
-function toggleSSVolumeSlider(event) {
-    if (event) { event.stopPropagation(); event.preventDefault(); }
-    const popover = document.getElementById('ss-volume-popover');
-    if (!popover) return;
-    // Sync value from main slider before showing
-    const mainSlider = document.getElementById('volume-slider');
-    const ssSlider = document.getElementById('ss-volume-slider');
-    if (mainSlider && ssSlider) ssSlider.value = mainSlider.value;
-    popover.classList.toggle('active');
-}
+
 function manualStartSlideshow() {
     if (slideshow) slideshow.start();
 }
