@@ -4013,6 +4013,7 @@ input:checked+.slider:before {
 
 .btn-ss-rotate,
 .btn-ss-back,
+.btn-ss-stop,
 .btn-ss-switch {
     background: rgba(0, 0, 0, 0.5);
     border: 1px solid rgba(255, 255, 255, 0.2);
@@ -4029,7 +4030,8 @@ input:checked+.slider:before {
 }
 
 .btn-ss-rotate:hover,
-.btn-ss-back:hover {
+.btn-ss-back:hover,
+.btn-ss-stop:hover {
     background: rgba(255, 255, 255, 0.2);
     transform: scale(1.1);
 }
@@ -4158,6 +4160,7 @@ input:checked+.slider:before {
 
 .btn-ss-rotate svg,
 .btn-ss-back svg,
+.btn-ss-stop svg,
 .btn-ss-delete svg,
 .btn-ss-switch svg {
     width: 22px;

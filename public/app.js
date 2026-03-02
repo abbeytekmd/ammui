@@ -458,7 +458,7 @@ function saveCurrentScrollPosition() {
     }
 }
 
-async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, autoSwitch = true) {
+async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, albumArtUrl, autoSwitch = true) {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -468,7 +468,7 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl })
         });
 
         if (!response.ok) {
@@ -636,7 +636,7 @@ async function deleteTrack(id, title) {
     }
 }
 
-async function playTrack(uri, title, artist, album, duration, protocolInfo) {
+async function playTrack(uri, title, artist, album, duration, protocolInfo, albumArtUrl) {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -647,7 +647,7 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl })
         });
 
         if (!response.ok) {
@@ -762,7 +762,8 @@ async function playAll() {
                     artist: track.artist,
                     album: track.album,
                     duration: track.duration,
-                    protocolInfo: track.protocolInfo
+                    protocolInfo: track.protocolInfo,
+                    albumArtUrl: track.albumArtUrl
                 })
             });
 
@@ -1149,7 +1150,7 @@ function renderBrowser(items) {
                     `event.stopPropagation(); startPhotoSlideshow('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.date)}', '${esc(item.artist)}', '${esc(item.parentID)}', '${esc(pathStr)}')` :
                     isVideo ?
                         `handleVideoClick('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', ${index})` :
-                        `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}')`}">
+                        `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', '${esc(item.albumArtUrl)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
@@ -1163,7 +1164,7 @@ function renderBrowser(items) {
                             <path d="M12 8h.01"></path>
                         </svg>
                     </button>
-                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', false)" title="Add to queue">
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', '${esc(item.albumArtUrl)}', false)" title="Add to queue">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
                         </svg>
@@ -1378,9 +1379,9 @@ function updateStatus(status) {
             const artContainer = safeUdn ? document.getElementById(`player-art-container-${safeUdn}`) : null;
             const isArtVisible = artContainer && artContainer.classList.contains('visible');
 
-            // Only fetch if query changed and hasn't failed before
-            if (query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) {
-                updatePlayerArtwork(currentTrack.artist, currentTrack.album);
+            // Only fetch if (query changed and hasn't failed before) OR we have a direct url
+            if ((query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) || (currentTrack.albumArtUrl && currentTrack.albumArtUrl !== currentArtworkUrl)) {
+                updatePlayerArtwork(currentTrack.artist, currentTrack.album, currentTrack.albumArtUrl);
             }
         } else {
             updateCardNowPlaying();
@@ -1493,10 +1494,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-async function updatePlayerArtwork(artist, album) {
-    if (!artist && !album) return;
+async function updatePlayerArtwork(artist, album, albumArtUrl) {
+    if (!artist && !album && !albumArtUrl) return;
     const query = `${artist || ''} ${album || ''}`.trim();
     currentArtworkQuery = query;
+
+    if (albumArtUrl) {
+        currentArtworkUrl = albumArtUrl;
+        showPlayerArt(albumArtUrl);
+        if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
+            slideshow.next();
+        }
+        return;
+    }
 
     try {
         const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`);
@@ -4000,21 +4010,7 @@ class Slideshow {
         // Don't stop if it's just mouse move, but DO reset the timer
         const isMouseMove = e && e.type === 'mousemove';
 
-        if (this.isActive && !isMouseMove) {
-            // Stop if user interacts (clicks/keys) while active
-            // BUT ignore if interacting with screensaver controls or triggers
-            if (e && e.target && e.target.closest && (
-                e.target.closest('.screensaver-controls') ||
-                e.target.closest('.screensaver-music-bar') ||
-                e.target.closest('.ss-volume-popover') ||
-                e.target.closest('.screensaver-info') ||
-                e.target.closest('.ss-map-window') ||
-                e.target.closest('#btn-start-slideshow') ||
-                e.target.closest('#btn-play-all') ||
-                e.target.closest('.playlist-item')
-            )) {
-                return;
-            }
+        if (this.isActive && e && e.key === 'Escape') {
             this.stop();
         }
 
@@ -4350,12 +4346,12 @@ class Slideshow {
                 maxZoom: 18
             }).addTo(this.leafletMap);
             this.leafletMarker = L.circleMarker([lat, lng], {
-                radius: 7,
+                radius: 8,
                 fillColor: '#6366f1',
-                color: '#fff',
-                weight: 2,
-                opacity: 1,
-                fillOpacity: 0.95
+                color: '#6366f1',
+                weight: 2.5,
+                opacity: 0.9,
+                fillOpacity: 0.15
             }).addTo(this.leafletMap);
         } else {
             this.leafletMap.setView([lat, lng], 13);

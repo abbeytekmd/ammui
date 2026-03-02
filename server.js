@@ -808,7 +808,7 @@ app.get('/api/proxy-image', async (req, res) => {
 
 app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     const { udn } = req.params;
-    const { uri, title, artist, album, duration, protocolInfo } = req.body;
+    const { uri, title, artist, album, duration, protocolInfo, albumArtUrl } = req.body;
     console.log(`[DEBUG] API Insert for ${udn}: uri="${uri}", title="${title}"`);
 
     const device = Array.from(devices.values())
@@ -822,7 +822,7 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
         const ids = await renderer.getIdArray();
         const afterId = ids.length > 0 ? ids[ids.length - 1] : 0;
 
-        const newId = await renderer.insertTrack({ uri, title, artist, album, duration, protocolInfo }, afterId);
+        const newId = await renderer.insertTrack({ uri, title, artist, album, duration, protocolInfo, albumArtUrl }, afterId);
         res.json({ success: true, newId });
     } catch (err) {
         console.error('Insert failed:', err.message);
@@ -882,7 +882,6 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
         let ids = await renderer.getIdArray();
         if (ids.length > 0) {
             await renderer.seekId(ids[0]);
-            await renderer.play();
         }
 
         res.json({ success: true, count: tracks.length });
@@ -2372,6 +2371,7 @@ app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
                 title,
                 artist,
                 album,
+                albumArtUrl: `/api/art/local?uri=${encodeURIComponent(uri)}`,
                 class: title.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'object.item.imageItem.photo'
                     : title.match(/\.(mp4|mkv|avi|mov)$/i) ? 'object.item.videoItem'
                         : 'object.item.audioItem.musicTrack'
@@ -2383,7 +2383,6 @@ app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
         let ids = await renderer.getIdArray();
         if (ids.length > 0) {
             await renderer.seekId(ids[0]);
-            await renderer.play();
         }
 
         res.json({ success: true, count: uris.length });

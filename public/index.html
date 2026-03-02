@@ -601,9 +601,7 @@
     </div>
 
     <div id="toast-container" class="toast-container"></div>
-    <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;"
-        onclick="stopSlideshow(); event.stopPropagation();"
-        ontouchend="stopSlideshow(); event.preventDefault(); event.stopPropagation();">
+    <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;">
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <div class="screensaver-info" id="screensaver-info"></div>
@@ -713,6 +711,17 @@
                     </svg>
                 </button>
                 <div class="ss-control-label">Delete</div>
+            </div>
+            <div class="ss-control-item" onclick="stopSlideshow()"
+                ontouchstart="stopSlideshow(); event.preventDefault();">
+                <button class="btn-ss-stop" title="Exit Slideshow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+                <div class="ss-control-label">Exit</div>
             </div>
         </div>
     </div>
