@@ -4334,13 +4334,17 @@ class Slideshow {
             this.leafletMap = L.map('ss-map', {
                 zoomControl: false,
                 attributionControl: true,
-                dragging: false,
-                scrollWheelZoom: false,
-                doubleClickZoom: false,
-                boxZoom: false,
-                keyboard: false,
-                touchZoom: false
+                dragging: true,
+                scrollWheelZoom: true,
+                doubleClickZoom: true,
+                boxZoom: true,
+                keyboard: true,
+                touchZoom: true
             }).setView([lat, lng], 13);
+
+            // Toggle size only on click (Leaflet won't trigger this if dragged)
+            this.leafletMap.on('click', () => this.toggleMapSize());
+
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© OpenStreetMap',
                 maxZoom: 18
@@ -4373,15 +4377,17 @@ class Slideshow {
     }
 
     toggleMapSize() {
-        if (!this.mapWindow) return;
+        if (!this.mapWindow || !this.leafletMarker) return;
         const isExpanding = !this.mapWindow.classList.contains('expanded');
         this.mapWindow.classList.toggle('expanded');
-        // After CSS transition, resize Leaflet and adjust zoom
+
+        // After CSS transition, resize Leaflet and snap back to marker
         setTimeout(() => {
             if (this.leafletMap) {
                 this.leafletMap.invalidateSize();
+                const pos = this.leafletMarker.getLatLng();
                 const currentZoom = this.leafletMap.getZoom();
-                this.leafletMap.setZoom(isExpanding ? currentZoom - 3 : currentZoom + 3);
+                this.leafletMap.setView(pos, isExpanding ? currentZoom - 3 : currentZoom + 3, { animate: true });
             }
         }, 420);
     }

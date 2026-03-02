@@ -3893,7 +3893,6 @@ input:checked+.slider:before {
     transform: translateY(-8px) scale(0.96);
     transition: opacity 0.5s ease, transform 0.5s ease, width 0.4s cubic-bezier(0.4, 0, 0.2, 1), height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     pointer-events: auto;
-    cursor: pointer;
 }
 
 .ss-map-window.visible {
