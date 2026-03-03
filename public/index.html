@@ -188,6 +188,18 @@
                                 </svg>
                                 <span class="btn-label" data-mobile="Tag">Play Tag</span>
                             </button>
+                            <button id="btn-browser-find" onclick="toggleBrowserFind()" class="btn-control"
+                                title="Find in list">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="Find">Find</span>
+                            </button>
+                            <input type="text" id="input-browser-find" placeholder="Find..."
+                                style="display: none; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: inherit; width: 120px; outline: none; margin-left: 0.2rem; font-family: inherit; font-size: 0.9rem;"
+                                onkeydown="if(event.key==='Enter') executeBrowserFind()">
                             <button id="btn-toggle-view" onclick="toggleBrowserView()" class="btn-control"
                                 style="display: none;" title="Toggle between List and Grid view">
                                 <svg id="svg-view-grid" width="16" height="16" viewBox="0 0 24 24" fill="none"

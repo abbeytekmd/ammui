@@ -666,7 +666,7 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo, albu
         await fetchPlaylist(selectedRendererUdn);
 
         if (newId) {
-            await playPlaylistItem(newId);
+            await playPlaylistItem(newId, false, true);
         }
 
         if (window.innerWidth <= 800) {
@@ -789,7 +789,7 @@ async function playAll() {
         await fetchPlaylist(selectedRendererUdn);
 
         if (firstTrackId) {
-            await playPlaylistItem(firstTrackId);
+            await playPlaylistItem(firstTrackId, false, true);
         }
 
         // On mobile, switch to playlist view
@@ -872,7 +872,7 @@ function updateStopAfterTrackButton() {
     });
 }
 
-async function playPlaylistItem(id, forceRestart = false) {
+async function playPlaylistItem(id, forceRestart = false, skipLock = false) {
     if (!selectedRendererUdn) return;
     if (isRendererOffline) return; // Silently ignore when offline
 
@@ -888,8 +888,10 @@ async function playPlaylistItem(id, forceRestart = false) {
     }
 
     // Lock to prevent multiple simultaneous play actions
-    if (window._isProcessingPlayAction) return;
-    window._isProcessingPlayAction = true;
+    if (!skipLock) {
+        if (window._isProcessingPlayAction) return;
+        window._isProcessingPlayAction = true;
+    }
 
     // Optimistic UI Update
     lastTransportActionTime = Date.now();
@@ -921,7 +923,9 @@ async function playPlaylistItem(id, forceRestart = false) {
         updateDocumentTitle();
         showToast(`Failed to play track: ${err.message}`);
     } finally {
-        window._isProcessingPlayAction = false;
+        if (!skipLock) {
+            window._isProcessingPlayAction = false;
+        }
     }
 }
 
@@ -966,6 +970,64 @@ function toggleBrowserView() {
     browserViewMode = browserViewMode === 'list' ? 'grid' : 'list';
     localStorage.setItem('browserViewMode', browserViewMode);
     renderBrowser(currentBrowserItems);
+}
+
+let currentBrowserFindText = '';
+let currentBrowserRecursiveItems = null;
+let currentBrowserRecursiveFolderId = null;
+
+function toggleBrowserFind() {
+    const input = document.getElementById('input-browser-find');
+    if (input.style.display === 'none' || input.style.display === '') {
+        input.style.display = 'inline-block';
+        input.focus();
+    } else {
+        input.style.display = 'none';
+        input.value = '';
+        executeBrowserFind();
+    }
+}
+
+async function executeBrowserFind() {
+    const input = document.getElementById('input-browser-find');
+    currentBrowserFindText = (input.value || '').toLowerCase();
+    const currentFolderId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
+
+    if (!currentBrowserFindText || input.style.display === 'none') {
+        currentBrowserRecursiveItems = null;
+        currentBrowserRecursiveFolderId = null;
+        await browse(selectedServerUdn, currentFolderId);
+        return;
+    }
+
+    if (currentBrowserRecursiveFolderId !== currentFolderId || !currentBrowserRecursiveItems) {
+        browserItems.innerHTML = '<div class="loading">Searching recursively... This may take a moment.</div>';
+        try {
+            const res = await fetch(`/api/browse-recursive/${encodeURIComponent(selectedServerUdn)}?objectId=${encodeURIComponent(currentFolderId)}`);
+            if (res.ok) {
+                const data = await res.json();
+                currentBrowserRecursiveItems = data.items || [];
+                currentBrowserRecursiveFolderId = currentFolderId;
+            } else {
+                throw new Error('Failed to fetch recursive items');
+            }
+        } catch (e) {
+            console.error('Recursive search error:', e);
+            browserItems.innerHTML = `<div class="error">Search failed: ${e.message}</div>`;
+            return;
+        }
+    }
+
+    const filtered = currentBrowserRecursiveItems.filter(item => {
+        const title = (item.title || '').toLowerCase();
+        return title.includes(currentBrowserFindText);
+    });
+
+    renderBrowser(filtered);
+
+    if (filtered.length === 0) {
+        browserItems.innerHTML = '<div class="empty-state">No matches found in this folder or subfolders</div>';
+    }
 }
 
 function updateBrowserControls(items) {
@@ -1087,7 +1149,7 @@ function renderBrowser(items) {
             .map(i => i.title[0].toUpperCase())
         )];
 
-        if (effectiveViewMode === 'list') {
+        if (effectiveViewMode === 'list' && !currentBrowserFindText) {
             alphabetScroll.classList.add('visible');
             renderAlphabet();
         } else {
@@ -1239,6 +1301,14 @@ function renderBrowser(items) {
         browserItems.scrollTop = 0;
     }
 
+    // Re-apply find filter if input has text
+    const findInput = document.getElementById('input-browser-find');
+    if (findInput && findInput.value) {
+        const currentFolderId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
+        if (currentBrowserRecursiveFolderId !== currentFolderId) {
+            setTimeout(executeBrowserFind, 10);
+        }
+    }
 }
 
 async function fetchPlaylist(udn) {
