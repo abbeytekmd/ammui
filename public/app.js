@@ -4134,6 +4134,7 @@ class Slideshow {
         this.mode = localStorage.getItem('screensaverMode') || 'all';
         this.duration = 60000;
         this.idleTimeout = 60000;
+        this.lastStartTime = 0;
 
         // UI binds
         this.overlay = document.getElementById('screensaver-overlay');
@@ -4157,17 +4158,6 @@ class Slideshow {
     }
 
     resetIdleTimer(e) {
-        if (this.isActive && e) {
-            const isMouseMove = e.type === 'mousemove';
-            const isScroll = e.type === 'scroll';
-
-            // Stop screensaver on interaction besides mousemove/scroll
-            // Note: Screensaver buttons use stopPropagation to avoid this hitting window.
-            if (!isMouseMove && !isScroll) {
-                this.stop();
-            }
-        }
-
         clearTimeout(this.timer);
         if (!this.isActive) {
             const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
@@ -4203,6 +4193,7 @@ class Slideshow {
 
         console.log('[SLIDESHOW] Starting...');
         this.isActive = true;
+        this.lastStartTime = Date.now();
         this.items = items || [];
         this.index = index;
 
