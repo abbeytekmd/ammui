@@ -1,6 +1,6 @@
 # UI for an Abbeytek Media Machine (AMMUI)
 
-A web based media manager for a home network. Plays music and views family photos.
+A web based home hub. Plays music and views family photos.
 
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Send to local players (Sonos and DLNA players)
