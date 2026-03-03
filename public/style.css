@@ -209,6 +209,12 @@ p.subtitle {
     cursor: pointer;
 }
 
+.device-card:active {
+    transform: scale(0.98);
+    background: rgba(99, 102, 241, 0.1) !important;
+    transition: none;
+}
+
 .device-icon {
     width: 64px;
     height: 64px;
@@ -702,6 +708,12 @@ p.subtitle {
     border-color: rgba(255, 255, 255, 0.2);
 }
 
+.btn-control:active {
+    transform: scale(0.94);
+    background: rgba(255, 255, 255, 0.15) !important;
+    transition: none;
+}
+
 .play-btn,
 .queue-btn {
     opacity: 0;
@@ -1166,6 +1178,12 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.playlist-item:active {
+    background: rgba(99, 102, 241, 0.35) !important;
+    transform: scale(0.985);
+    transition: none;
+}
+
 
 
 .playlist-item.playing {
@@ -1220,6 +1238,12 @@ p.subtitle {
     transform: translateY(-4px);
     border-color: var(--primary);
     box-shadow: 0 8px 16px rgba(0, 0, 0, 0.4);
+}
+
+.playlist-items.grid-view .browser-item:active {
+    transform: translateY(0) scale(0.96);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    transition: none;
 }
 
 .playlist-items.grid-view .item-icon {
@@ -3388,6 +3412,44 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.tag-suggestions {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Hide scrollbar for suggestions */
+.tag-suggestions::-webkit-scrollbar {
+    height: 4px;
+}
+
+.tag-suggestions::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+}
+
+.tag-suggestion {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    color: var(--text-muted);
+    padding: 0.2rem 0.6rem;
+    border-radius: 2rem;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.tag-suggestion:hover {
+    background: rgba(99, 102, 241, 0.1);
+    border-color: rgba(99, 102, 241, 0.3);
+    color: var(--text);
+}
+
 .mismatch {
     background: rgba(239, 68, 68, 0.1) !important;
     color: #f87171 !important;
@@ -4608,6 +4670,12 @@ input:checked+.slider:before {
     border-color: var(--primary);
     color: white;
     transform: translateY(-2px);
+}
+
+.tag-selection-item:active {
+    transform: translateY(0) scale(0.96);
+    background: var(--primary) !important;
+    transition: none;
 }
 
 .tag-selection-item.active {

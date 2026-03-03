@@ -100,6 +100,7 @@ let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 2;
 let currentInfoUri = null;
 let currentFileTags = [];
+let allLibraryTags = [];
 let isRendererOffline = false;
 
 function setRendererOffline(state, caller = 'unknown') {
@@ -642,6 +643,9 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo, albu
         return;
     }
 
+    if (window._isProcessingPlayAction) return;
+    window._isProcessingPlayAction = true;
+
     try {
         await clearPlaylist();
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
@@ -670,6 +674,9 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo, albu
         }
     } catch (err) {
         console.error('Play track from browser error:', err);
+        showToast(`Error: ${err.message}`);
+    } finally {
+        window._isProcessingPlayAction = false;
     }
 }
 
@@ -742,6 +749,9 @@ async function playAll() {
         return;
     }
 
+    if (window._isProcessingPlayAction) return;
+    window._isProcessingPlayAction = true;
+
     const btn = document.getElementById('btn-play-all');
     btn.classList.add('disabled');
     const originalContent = btn.innerHTML;
@@ -792,6 +802,7 @@ async function playAll() {
     } finally {
         btn.classList.remove('disabled');
         btn.innerHTML = originalContent; // Restore icon and text
+        window._isProcessingPlayAction = false;
     }
 }
 
@@ -861,15 +872,24 @@ function updateStopAfterTrackButton() {
     });
 }
 
-async function playPlaylistItem(id) {
+async function playPlaylistItem(id, forceRestart = false) {
     if (!selectedRendererUdn) return;
     if (isRendererOffline) return; // Silently ignore when offline
 
-    // If clicking the current track and it's paused, just resume
-    if (currentTrackId != null && id != null && currentTrackId == id && currentTransportState === 'Paused') {
-        await transportAction('play'); // transportAction now triggers a refresh
-        return;
+    // If clicking the current track:
+    if (currentTrackId != null && id != null && currentTrackId == id) {
+        if (currentTransportState === 'Paused') {
+            await transportAction('play');
+            return;
+        } else if (currentTransportState === 'Playing' && !forceRestart) {
+            // Already playing this track, skip redundant play command to avoid "double start" glitch
+            return;
+        }
     }
+
+    // Lock to prevent multiple simultaneous play actions
+    if (window._isProcessingPlayAction) return;
+    window._isProcessingPlayAction = true;
 
     // Optimistic UI Update
     lastTransportActionTime = Date.now();
@@ -900,6 +920,8 @@ async function playPlaylistItem(id) {
         updateTransportControls();
         updateDocumentTitle();
         showToast(`Failed to play track: ${err.message}`);
+    } finally {
+        window._isProcessingPlayAction = false;
     }
 }
 
@@ -3654,6 +3676,25 @@ async function openFileInfoModal(trackData) {
     updateFileFavUI();
     renderFileTags();
 
+    // Reset and hide suggestions
+    const suggestionsContainer = document.getElementById('tag-suggestions');
+    if (suggestionsContainer) {
+        suggestionsContainer.innerHTML = '';
+        suggestionsContainer.style.display = 'none';
+    }
+
+    // Fetch all library tags for auto-complete
+    try {
+        const tagRes = await fetch('/api/tags');
+        if (tagRes.ok) {
+            const tagData = await tagRes.json();
+            allLibraryTags = tagData.tags || [];
+            updateTagSuggestions();
+        }
+    } catch (e) {
+        console.warn('Failed to fetch all library tags:', e);
+    }
+
     modal.style.display = 'flex';
     container.innerHTML = `
         <div class="metadata-grid">
@@ -3878,13 +3919,50 @@ function closeFileInfoModal() {
     }
 }
 
+function updateTagSuggestions() {
+    const input = document.getElementById('new-tag-input');
+    const container = document.getElementById('tag-suggestions');
+    if (!input || !container) return;
+
+    const val = input.value.trim().toLowerCase();
+
+    // Filter all library tags that match input AND aren't already on this file
+    // If val is empty, we just show all tags not already on this file
+    const matches = allLibraryTags.filter(tag => {
+        const notApplied = !currentFileTags.includes(tag);
+        if (!val) return notApplied;
+        return notApplied && tag.toLowerCase().includes(val);
+    }).slice(0, 20); // Show more when browsing (up to 20)
+
+    if (matches.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+
+    container.style.display = 'flex';
+    container.innerHTML = matches.map(tag => `
+        <div class="tag-suggestion" onclick="addSuggestion('${tag.replace(/'/g, "\\'")}')">
+            ${tag}
+        </div>
+    `).join('');
+}
+
+async function addSuggestion(tag) {
+    const input = document.getElementById('new-tag-input');
+    if (input) input.value = tag;
+    await addFileTag();
+}
+
 async function addFileTag() {
     const input = document.getElementById('new-tag-input');
+    if (!input) return;
     const tag = input.value.trim();
     if (!tag || !currentInfoUri) return;
 
     if (currentFileTags.includes(tag)) {
         input.value = '';
+        updateTagSuggestions();
         return;
     }
 
@@ -3892,6 +3970,7 @@ async function addFileTag() {
     input.value = '';
     updateFileFavUI();
     renderFileTags();
+    updateTagSuggestions();
     await saveFileTags();
 }
 
@@ -3899,6 +3978,7 @@ async function removeFileTag(tag) {
     currentFileTags = currentFileTags.filter(t => t !== tag);
     updateFileFavUI();
     renderFileTags();
+    updateTagSuggestions();
     await saveFileTags();
 }
 
@@ -4007,11 +4087,15 @@ class Slideshow {
     }
 
     resetIdleTimer(e) {
-        // Don't stop if it's just mouse move, but DO reset the timer
-        const isMouseMove = e && e.type === 'mousemove';
+        if (this.isActive && e) {
+            const isMouseMove = e.type === 'mousemove';
+            const isScroll = e.type === 'scroll';
 
-        if (this.isActive && e && e.key === 'Escape') {
-            this.stop();
+            // Stop screensaver on interaction besides mousemove/scroll
+            // Note: Screensaver buttons use stopPropagation to avoid this hitting window.
+            if (!isMouseMove && !isScroll) {
+                this.stop();
+            }
         }
 
         clearTimeout(this.timer);
@@ -4096,6 +4180,11 @@ class Slideshow {
     }
 
     async next() {
+        if (!this.isActive || (typeof document !== 'undefined' && document.hidden)) {
+            this.resetInterval();
+            return;
+        }
+
         try {
             let data;
             if (this.items.length > 0) {

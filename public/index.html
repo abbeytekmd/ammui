@@ -555,9 +555,11 @@
                     </button>
                 </div>
                 <div id="file-tags-container" class="tags-container"></div>
+                <div id="tag-suggestions" class="tag-suggestions"></div>
                 <div class="tag-input-wrapper">
                     <input type="text" id="new-tag-input" placeholder="Add tag..."
-                        onkeyup="if(event.key==='Enter') addFileTag()">
+                        onkeyup="if(event.key==='Enter') addFileTag()" oninput="updateTagSuggestions()"
+                        onfocus="updateTagSuggestions()" onclick="updateTagSuggestions()">
                     <button class="btn-control ghost btn-small" onclick="addFileTag()">Add</button>
                 </div>
             </div>
