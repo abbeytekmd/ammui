@@ -637,6 +637,8 @@ p.subtitle {
 .menu-container {
     position: relative;
     flex-shrink: 0;
+    display: flex;
+    align-items: center;
 }
 
 .dropdown-menu {
@@ -651,8 +653,9 @@ p.subtitle {
     border-radius: 1rem;
     padding: 0.5rem;
     min-width: 180px;
-    z-index: 1000;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 2000;
+    pointer-events: auto;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
     flex-direction: column;
     gap: 0.25rem;
 }
@@ -737,7 +740,17 @@ p.subtitle {
 }
 
 .browser-item:hover .play-btn,
-.browser-item:hover .queue-btn {
+.browser-item:hover .queue-btn,
+.browser-item:hover .burger-btn {
+    opacity: 1;
+}
+
+.burger-btn {
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.menu-container:has(.dropdown-menu.active) .burger-btn {
     opacity: 1;
 }
 
@@ -1172,6 +1185,7 @@ p.subtitle {
     gap: 1rem;
     transition: all 0.1s ease;
     cursor: pointer;
+    position: relative;
 }
 
 .playlist-item:hover {

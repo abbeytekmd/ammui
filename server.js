@@ -12,6 +12,7 @@ import fs from 'fs';
 import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
+import NodeID3 from 'node-id3';
 import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -805,10 +806,33 @@ app.get('/api/proxy-image', async (req, res) => {
     }
 });
 
+const uriPathCache = new Map();
+const MAX_URI_CACHE = 10000;
+
+function normalizeUriForCache(uri) {
+    if (!uri) return '';
+    try {
+        const u = new URL(uri);
+        return u.pathname + u.search;
+    } catch (e) {
+        return uri.replace(/^[a-zA-Z0-9+-]+:\/\/[^\/]+/, '');
+    }
+}
+
+function cacheUriPath(uri, pathStr) {
+    if (!uri || !pathStr) return;
+    if (uriPathCache.size >= MAX_URI_CACHE) {
+        const firstKey = uriPathCache.keys().next().value;
+        uriPathCache.delete(firstKey);
+    }
+    uriPathCache.set(normalizeUriForCache(uri), pathStr);
+}
 
 app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     const { udn } = req.params;
-    const { uri, title, artist, album, duration, protocolInfo, albumArtUrl } = req.body;
+    const { uri, title, artist, album, duration, protocolInfo, albumArtUrl, pathStr } = req.body;
+
+    cacheUriPath(uri, pathStr);
     console.log(`[DEBUG] API Insert for ${udn}: uri="${uri}", title="${title}"`);
 
     const device = Array.from(devices.values())
@@ -852,7 +876,7 @@ app.get('/api/browse-recursive/:udn', async (req, res) => {
 
 app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
     const { udn } = req.params;
-    const { serverUdn, objectId } = req.body;
+    const { serverUdn, objectId, title, pathStr } = req.body;
 
     const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
     const serverDevice = Array.from(devices.values()).find(d => d.udn === serverUdn);
@@ -862,7 +886,7 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
 
     try {
         const server = new MediaServer(serverDevice);
-        const tracks = await server.browseRecursive(objectId);
+        const tracks = await server.browseRecursive(objectId, title);
 
         if (tracks.length === 0) {
             return res.json({ success: true, count: 0 });
@@ -875,6 +899,17 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
 
         let lastId = 0;
         for (const track of tracks) {
+            try {
+                if (track._path) {
+                    const parsedPath = JSON.parse(track._path);
+                    const fullPathStr = (pathStr ? pathStr + ' / ' : '') + parsedPath.map(p => p.title).join(' / ');
+                    cacheUriPath(track.uri, fullPathStr);
+                } else {
+                    cacheUriPath(track.uri, pathStr);
+                }
+            } catch (e) {
+                cacheUriPath(track.uri, pathStr);
+            }
             lastId = await renderer.insertTrack(track, lastId);
         }
 
@@ -893,7 +928,7 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
 
 app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => {
     const { udn } = req.params;
-    const { serverUdn, objectId } = req.body;
+    const { serverUdn, objectId, title, pathStr } = req.body;
 
     const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
     const serverDevice = Array.from(devices.values()).find(d => d.udn === serverUdn);
@@ -903,7 +938,7 @@ app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => 
 
     try {
         const server = new MediaServer(serverDevice);
-        const tracks = await server.browseRecursive(objectId);
+        const tracks = await server.browseRecursive(objectId, title);
 
         if (tracks.length === 0) {
             return res.json({ success: true, count: 0 });
@@ -914,6 +949,17 @@ app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => 
         let lastId = ids.length > 0 ? ids[ids.length - 1] : 0;
 
         for (const track of tracks) {
+            try {
+                if (track._path) {
+                    const parsedPath = JSON.parse(track._path);
+                    const fullPathStr = (pathStr ? pathStr + ' / ' : '') + parsedPath.map(p => p.title).join(' / ');
+                    cacheUriPath(track.uri, fullPathStr);
+                } else {
+                    cacheUriPath(track.uri, pathStr);
+                }
+            } catch (e) {
+                cacheUriPath(track.uri, pathStr);
+            }
             lastId = await renderer.insertTrack(track, lastId);
         }
 
@@ -1051,7 +1097,7 @@ app.get('/api/playlist/:udn/status', async (req, res) => {
         }
 
         if (includePlaylist && results[2] !== null) {
-            status.playlist = results[2];
+            status.playlist = await enrichPlaylistMetadata(results[2]);
         }
 
         res.json(status);
@@ -1059,6 +1105,47 @@ app.get('/api/playlist/:udn/status', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+async function enrichPlaylistMetadata(playlist) {
+    if (!Array.isArray(playlist)) return playlist;
+
+    const enriched = [];
+    for (const track of playlist) {
+        // Only enrich local tracks that are missing artist or album
+        if (track.uri && track.uri.includes('/local-files/') && (!track.artist || track.artist === 'Unknown Artist')) {
+            try {
+                const url = new URL(track.uri);
+                const localPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+                const fullPath = path.join(__dirname, 'local', localPath);
+
+                if (fs.existsSync(fullPath)) {
+                    // Try to read actual tags first
+                    const tags = await mm.parseFile(fullPath);
+                    if (tags.common && tags.common.artist) {
+                        track.artist = tags.common.artist;
+                        if (tags.common.album) track.album = tags.common.album;
+                    } else {
+                        // Fallback to path derivation: Artist/Album/Song
+                        const pathParts = localPath.split(/[/\\]/).filter(p => p);
+                        if (pathParts.length >= 3) {
+                            const folderArtist = pathParts[pathParts.length - 3];
+                            const folderAlbum = pathParts[pathParts.length - 2];
+                            if (folderArtist !== 'local' && folderArtist !== '.') {
+                                track.artist = folderArtist;
+                                if (!track.album || track.album === 'Unknown Album') track.album = folderAlbum;
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn(`[ENRICH] Failed to enrich metadata for ${track.uri}:`, err.message);
+            }
+        }
+        enriched.push(track);
+    }
+    return enriched;
+}
+
 
 app.get('/api/playlist/:udn/volume', async (req, res) => {
     const { udn } = req.params;
@@ -2035,6 +2122,56 @@ async function findDiscogsArtUrl(artist, album) {
             }
             console.warn(errorMsg);
         }
+
+        // Fallback: search just by album name if Artist+Album failed
+        if (artist && searchAlbum) {
+            try {
+                console.log(`[ART] Discogs attempt ${attempt + 1} fallback (Album Only): "${searchAlbum}"...`);
+                const fallbackUrl = `https://api.discogs.com/database/search?release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+                const fallbackRes = await axios.get(fallbackUrl, {
+                    timeout: 5000,
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept': 'application/json'
+                    }
+                });
+
+                if (fallbackRes.data.results && fallbackRes.data.results.length > 0) {
+                    const scoredFallbackResults = fallbackRes.data.results.map(item => {
+                        let score = 0;
+                        const titleParts = item.title.split(' - ');
+                        const itemAlbum = titleParts[titleParts.length - 1];
+
+                        // For an album-only fallback search, we are much more lenient on artist matching, but we still heavily weigh exact album matches.
+                        const albumMatch = isFuzzyMatch(itemAlbum, album) ||
+                            isFuzzyMatch(itemAlbum, searchAlbum) ||
+                            isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
+
+                        if (!albumMatch) return { item, score: -1 };
+
+                        if (normalize(itemAlbum) === normalize(album) ||
+                            normalize(itemAlbum) === normalize(searchAlbum) ||
+                            normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album))) {
+                            score += 20;
+                        }
+
+                        if (item.type === 'master') score += 50;
+                        const format = (item.format || []).join(' ').toLowerCase();
+                        if (format.includes('album')) score += 15;
+                        if (format.includes('lp') || format.includes('vinyl')) score += 10;
+                        if (format.includes('cd')) score += 8;
+                        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+                        return { item, score };
+                    }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
+
+                    if (scoredFallbackResults.length > 0) {
+                        return scoredFallbackResults[0].item.cover_image;
+                    }
+                }
+            } catch (e) {
+                console.warn(`[ART] Discogs fallback attempt (Album Only) failed: ${e.message}`);
+            }
+        }
     }
     return null;
 }
@@ -2052,13 +2189,45 @@ app.get('/api/art/search', async (req, res) => {
         } catch (e) { }
     }
 
-    if (!artist && !album) return res.status(400).json({ error: 'Artist or Album is required' });
+    if (!artist && !album && (!uri || uri.startsWith('http'))) return res.status(400).json({ error: 'Artist or Album is required' });
 
     try {
-        const coverUrl = await findDiscogsArtUrl(artist, album);
+        let coverUrl = null;
+        if (artist || album) {
+            coverUrl = await findDiscogsArtUrl(artist, album);
+        }
+
+        if (!coverUrl && uri && !uri.startsWith('http://') && !uri.startsWith('https://')) {
+            const parts = uri.split(/[/\\]+/).filter(Boolean);
+            if (parts.length >= 3) {
+                const folderArtist = parts[parts.length - 3].trim();
+                const folderAlbum = parts[parts.length - 2].trim();
+                const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (folderArtist && normalize(folderArtist) !== normalize(artist)) {
+                    console.log(`[ART] Search falling back to local folder artist: "${folderArtist}" for album "${album || folderAlbum}"`);
+                    coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum);
+                }
+            }
+        }
+
+        if (!coverUrl && uri) {
+            const cachedPath = uriPathCache.get(normalizeUriForCache(uri));
+            if (cachedPath) {
+                const parts = cachedPath.split(' / ').filter(Boolean);
+                if (parts.length >= 2) {
+                    const folderArtist = parts[parts.length - 2].trim();
+                    const folderAlbum = parts[parts.length - 1].trim();
+                    const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (folderArtist && folderArtist.length > 0 && normalize(folderArtist) !== normalize(artist)) {
+                        console.log(`[ART] Search falling back to UI path string artist: "${folderArtist}" for album "${album || folderAlbum}"`);
+                        coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum);
+                    }
+                }
+            }
+        }
+
         if (coverUrl) {
-            const proxyUrl = `/api/art/proxy?url=${encodeURIComponent(coverUrl)}`;
-            return res.json({ url: proxyUrl, source: 'discogs' });
+            return res.json({ url: coverUrl, source: 'discogs' });
         }
         res.status(404).json({ error: 'No artwork found' });
     } catch (err) {
@@ -2076,7 +2245,7 @@ app.get('/api/art/proxy', async (req, res) => {
             responseType: 'stream',
             timeout: 10000,
             headers: {
-                'User-Agent': 'AMMUI/1.0',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'image/*'
             }
         });
@@ -2162,15 +2331,50 @@ app.get('/api/art/local', async (req, res) => {
             }
 
             // 4. Final Fallback: Search Discogs using extracted tags
-            if (artist || album) {
-                console.log(`[ART] No embedded art. Attempting Discogs search for: "${artist}" - "${album}"`);
-                const coverUrl = await findDiscogsArtUrl(artist, album);
-                if (coverUrl) {
-                    console.log(`[ART] Success: Found Discogs art for ${uri}`);
-                    return res.redirect(`/api/art/proxy?url=${encodeURIComponent(coverUrl)}`);
+            let searchArtist = artist;
+            let searchAlbum = album;
+            let coverUrl = null;
+
+            if (searchArtist || searchAlbum) {
+                console.log(`[ART] No embedded art. Attempting Discogs search for: "${searchArtist}" - "${searchAlbum}"`);
+                coverUrl = await findDiscogsArtUrl(searchArtist, searchAlbum);
+            }
+
+            if (!coverUrl && uri && !uri.startsWith('http://') && !uri.startsWith('https://')) {
+                const parts = uri.split(/[/\\]+/).filter(Boolean);
+                if (parts.length >= 3) {
+                    const folderArtist = parts[parts.length - 3].trim();
+                    const folderAlbum = parts[parts.length - 2].trim();
+                    const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+
+                    if (folderArtist && (!searchArtist || normalize(folderArtist) !== normalize(searchArtist))) {
+                        console.log(`[ART] Local attempting Discogs search with folder artist: "${folderArtist}" and album "${searchAlbum || folderAlbum}"`);
+                        coverUrl = await findDiscogsArtUrl(folderArtist, searchAlbum || folderAlbum);
+                    }
                 }
+            }
+
+            if (!coverUrl && uri) {
+                const cachedPath = uriPathCache.get(normalizeUriForCache(uri));
+                if (cachedPath) {
+                    const parts = cachedPath.split(' / ').filter(Boolean);
+                    if (parts.length >= 2) {
+                        const folderArtist = parts[parts.length - 2].trim();
+                        const folderAlbum = parts[parts.length - 1].trim();
+                        const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
+                        if (folderArtist && folderArtist.length > 0 && (!searchArtist || normalize(folderArtist) !== normalize(searchArtist))) {
+                            console.log(`[ART] Local proxy falling back to UI path string artist: "${folderArtist}" for album "${searchAlbum || folderAlbum}"`);
+                            coverUrl = await findDiscogsArtUrl(folderArtist, searchAlbum || folderAlbum);
+                        }
+                    }
+                }
+            }
+
+            if (coverUrl) {
+                console.log(`[ART] Success: Found Discogs art for ${uri}`);
+                return res.redirect(coverUrl);
             } else {
-                console.log(`[ART] Skipping Discogs: No artist or album tags found in file.`);
+                console.log(`[ART] Skipping Discogs or no result found for ${uri}`);
             }
         }
 
@@ -2367,6 +2571,250 @@ app.get('/api/tags', (req, res) => {
     const tags = Array.from(tagsSet).sort();
     res.json({ tags });
 });
+
+app.get('/api/local/va-candidates', async (req, res) => {
+    const { albumTitle } = req.query;
+    if (!albumTitle) return res.status(400).json({ error: 'Album title required' });
+
+    const localDir = path.join(__dirname, 'local');
+    const results = [];
+
+    async function scan(dir, artistFolder) {
+        try {
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    if (entry.name.toLowerCase() === albumTitle.toLowerCase()) {
+                        // Found an album folder, get its tracks
+                        try {
+                            const trackEntries = await fs.promises.readdir(fullPath, { withFileTypes: true });
+                            for (const t of trackEntries) {
+                                if (t.isFile() && t.name.match(/\.(mp3|flac|wav|m4a|aac|ogg|alac)$/i)) {
+                                    results.push({
+                                        title: t.name,
+                                        artistFolder: artistFolder,
+                                        folderId: fullPath.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '')
+                                    });
+                                }
+                            }
+                        } catch (e) {
+                            console.warn(`[VA Candidates] Error reading album folder ${fullPath}: ${e.message}`);
+                        }
+                    } else {
+                        // Keep searching deeper
+                        await scan(fullPath, entry.name);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn(`[VA Candidates] Error reading dir ${dir}: ${e.message}`);
+        }
+    }
+
+    try {
+        await scan(localDir, 'Root');
+        res.json({ tracks: results });
+    } catch (e) {
+        console.error('[VA Candidates] Scan error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/move-va', async (req, res) => {
+    const { albumTitle, artistName, files, targetBaseFolder } = req.body;
+    if (!albumTitle || !Array.isArray(files) || files.length === 0) {
+        return res.status(400).json({ error: 'Album title and a non-empty files list are required' });
+    }
+
+    const localDir = path.join(__dirname, 'local');
+
+    // Default to root 'local' if no targetBaseFolder or if it's unsafe
+    let baseDir = localDir;
+    if (targetBaseFolder) {
+        const safeBase = path.normalize(targetBaseFolder).replace(/^(\.\.(\/|\\|$))+/, '');
+        baseDir = path.join(localDir, safeBase);
+    }
+
+    const effectiveArtist = (artistName || 'Various Artists').trim();
+    const artistDir = path.join(baseDir, effectiveArtist);
+    const targetAlbumDir = path.join(artistDir, albumTitle);
+
+    try {
+        if (!fs.existsSync(artistDir)) await fs.promises.mkdir(artistDir, { recursive: true });
+        if (!fs.existsSync(targetAlbumDir)) await fs.promises.mkdir(targetAlbumDir, { recursive: true });
+
+        let movedCount = 0;
+        const parentDirsToCheck = new Set();
+
+        for (const file of files) {
+            // Keep it safe: prevent directory traversal attacks
+            const safeFile = path.normalize(file).replace(/^(\.\.(\/|\\|$))+/, '');
+            const sourcePath = path.join(localDir, safeFile);
+            const targetPath = path.join(targetAlbumDir, path.basename(safeFile));
+
+            if (fs.existsSync(sourcePath)) {
+                await fs.promises.rename(sourcePath, targetPath);
+                movedCount++;
+                parentDirsToCheck.add(path.dirname(sourcePath));
+            }
+        }
+
+        // Clean up empty directories that an album might have left behind (and their parents)
+        for (const startDir of parentDirsToCheck) {
+            let currentDir = startDir;
+            // Don't accidentally wipe out the local root or the base music home
+            while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
+                try {
+                    const remaining = await fs.promises.readdir(currentDir);
+                    if (remaining.length === 0) {
+                        await fs.promises.rmdir(currentDir);
+                        currentDir = path.dirname(currentDir); // Go up one level (e.g., to the Artist folder)
+                    } else {
+                        break; // Not empty, stop climbing
+                    }
+                } catch (e) {
+                    break; // Ignore errors and stop climbing
+                }
+            }
+        }
+
+        const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
+        res.json({ success: true, movedCount, targetFolderId });
+    } catch (e) {
+        console.error('[Move to VA] Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/rename-folder', express.json(), async (req, res) => {
+    const { oldId, newTitle, merge } = req.body;
+    if (!oldId || !newTitle) return res.status(400).json({ error: 'oldId and newTitle are required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeOldId = path.normalize(oldId).replace(/^(\.\.(\/|\\|$))+/, '');
+        const oldDirPath = path.join(localDir, safeOldId);
+
+        if (!fs.existsSync(oldDirPath)) {
+            return res.status(404).json({ error: 'Source folder not found' });
+        }
+
+        const parentDir = path.dirname(oldDirPath);
+        const newDirPath = path.join(parentDir, newTitle);
+
+        console.log(`[RENAME] Request: ${oldDirPath} -> ${newDirPath} (merge: ${merge})`);
+
+        if (fs.existsSync(newDirPath)) {
+            if (!merge) {
+                // Return 409 Conflict so the frontend can ask about merging
+                return res.status(409).json({ error: 'Folder already exists' });
+            }
+
+            // Perform Merge
+            const items = await fs.promises.readdir(oldDirPath);
+            for (const item of items) {
+                const src = path.join(oldDirPath, item);
+                const dest = path.join(newDirPath, item);
+
+                if (fs.existsSync(dest)) {
+                    // If target file exists, check if it's the same or if we should skip/overwrite
+                    // For simplicity, we'll rename the incoming file if there's a collision
+                    const ext = path.extname(item);
+                    const base = path.basename(item, ext);
+                    const timestamp = Date.now();
+                    const newDest = path.join(newDirPath, `${base}_${timestamp}${ext}`);
+                    await fs.promises.rename(src, newDest);
+                } else {
+                    await fs.promises.rename(src, dest);
+                }
+            }
+
+            // Remove the now empty old directory
+            await fs.promises.rmdir(oldDirPath);
+            console.log(`[RENAME] Merge complete: ${oldDirPath} removed`);
+        } else {
+            // Simple rename
+            await fs.promises.rename(oldDirPath, newDirPath);
+            console.log(`[RENAME] Simple rename complete`);
+        }
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[RENAME] Server error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/local/update-tags', express.json(), async (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        const targetPath = path.join(localDir, safeId);
+
+        if (!fs.existsSync(targetPath)) {
+            return res.status(404).json({ error: 'Target not found' });
+        }
+
+        const stats = fs.statSync(targetPath);
+        if (stats.isDirectory()) {
+            console.log(`[TAGS] Recursively syncing tags for folder: ${targetPath}`);
+            const count = await processDirectory(targetPath);
+            res.json({ success: true, count });
+        } else {
+            console.log(`[TAGS] Syncing tags for file: ${targetPath}`);
+            const result = await syncSingleFile(targetPath);
+            res.json({ success: true, ...result });
+        }
+    } catch (err) {
+        console.error('[TAGS] Server error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+async function syncSingleFile(filePath) {
+    const albumDir = path.dirname(filePath);
+    const artistDir = path.dirname(albumDir);
+
+    const album = path.basename(albumDir);
+    const artist = path.basename(artistDir);
+
+    if (artist === 'local' || artist === '.') {
+        throw new Error('Could not determine artist/album from path structure. Expected: Artist/Album/File.mp3');
+    }
+
+    const tags = { artist, album };
+    const success = NodeID3.update(tags, filePath);
+    if (success !== true) throw new Error('Failed to update tags in file');
+    return { artist, album };
+}
+
+async function processDirectory(dirPath) {
+    let count = 0;
+    const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
+
+    for (const item of items) {
+        const fullPath = path.join(dirPath, item.name);
+        if (item.isDirectory()) {
+            count += await processDirectory(fullPath);
+        } else if (item.isFile()) {
+            const ext = path.extname(item.name).toLowerCase();
+            if (['.mp3', '.flac', '.m4a', '.aac', '.wav'].includes(ext)) {
+                try {
+                    await syncSingleFile(fullPath);
+                    count++;
+                } catch (e) {
+                    console.warn(`[TAGS] Skipping file ${item.name}: ${e.message}`);
+                }
+            }
+        }
+    }
+    return count;
+}
+
 
 app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
     const { udn } = req.params;

@@ -433,6 +433,13 @@ async function navigateToPath(index) {
     await browse(selectedServerUdn, item.id);
 }
 
+async function goUpFolder() {
+    if (browsePath.length > 1) {
+        // Go to the second to last item in the path (parent)
+        await navigateToPath(browsePath.length - 2);
+    }
+}
+
 async function enterFolder(id, title) {
     saveCurrentScrollPosition();
     browsePath.push({ id, title });
@@ -459,7 +466,7 @@ function saveCurrentScrollPosition() {
     }
 }
 
-async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, albumArtUrl, autoSwitch = true) {
+async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, albumArtUrl, autoSwitch = true, pathStr = '') {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -469,7 +476,7 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl, pathStr })
         });
 
         if (!response.ok) {
@@ -491,7 +498,7 @@ async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, 
     }
 }
 
-async function queueFolder(objectId, title) {
+async function queueFolder(objectId, title, pathStr = '') {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -502,7 +509,7 @@ async function queueFolder(objectId, title) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/queue-folder`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId })
+            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId, title, pathStr })
         });
 
         if (!response.ok) {
@@ -519,7 +526,7 @@ async function queueFolder(objectId, title) {
     }
 }
 
-async function playFolder(objectId, title) {
+async function playFolder(objectId, title, pathStr = '') {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -530,7 +537,7 @@ async function playFolder(objectId, title) {
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/play-folder`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId })
+            body: JSON.stringify({ serverUdn: selectedServerUdn, objectId, title, pathStr })
         });
 
         if (!response.ok) {
@@ -612,8 +619,335 @@ async function downloadFolder(udn, objectId, title, artist, album) {
     }
 }
 
-async function deleteTrack(id, title) {
-    if (!confirm(`Are you sure you want to delete "${title}"?`)) return;
+function toggleFolderMenu(event) {
+    if (event) event.stopPropagation();
+
+    const btn = event.currentTarget;
+    const container = btn.closest('.menu-container');
+    const dropdown = container ? container.querySelector('.dropdown-menu') : null;
+    const row = btn.closest('.playlist-item');
+
+    if (!dropdown) {
+        console.warn('[MENU] Could not find dropdown menu from button');
+        return;
+    }
+
+    const wasActive = dropdown.classList.contains('active');
+
+    // Close all other dropdowns and reset row z-indices
+    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
+    document.querySelectorAll('.playlist-item').forEach(r => r.style.zIndex = '');
+
+    if (!wasActive) {
+        dropdown.classList.add('active');
+        if (row) {
+            row.style.zIndex = '3000';
+            console.log(`[MENU] Opened menu and lifted row to front`);
+        }
+    } else {
+        console.log(`[MENU] Closed menu`);
+    }
+}
+
+async function renameFolder(index, event) {
+    if (event) event.stopPropagation();
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    const oldName = item.title;
+    const newName = prompt(`Enter new name for "${oldName}":`, oldName);
+
+    if (!newName || newName === oldName) return;
+
+    console.log(`[RENAME] Attempting to rename "${oldName}" to "${newName}"`);
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    try {
+        let response = await fetch('/api/local/rename-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ oldId: item.id, newTitle: newName })
+        });
+
+        if (response.status === 409) {
+            // Conflict - folder exists
+            if (confirm(`A folder named "${newName}" already exists. Do you want to merge "${oldName}" into it?`)) {
+                response = await fetch('/api/local/rename-folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ oldId: item.id, newTitle: newName, merge: true })
+                });
+            } else {
+                return;
+            }
+        }
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Rename failed');
+        }
+
+        showToast(`Renamed to ${newName}`, 'success', 2000);
+
+        // Refresh the browser view
+        const lastFolder = browsePath[browsePath.length - 1];
+        if (lastFolder) {
+            await browse(selectedServerUdn, lastFolder.id);
+        }
+    } catch (err) {
+        console.error('[RENAME] Error:', err);
+        showToast(`Rename failed: ${err.message}`);
+    }
+}
+
+async function syncFileTags(index, event) {
+    if (event) event.stopPropagation();
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    const isContainer = item.isContainer === true || item.isContainer === 'true' || item.type === 'container';
+    const typeLabel = isContainer ? 'folder' : 'file';
+    console.log(`[TAGS] Requesting tag sync for ${typeLabel}: ${item.title} (${item.id})`);
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    try {
+        const response = await fetch('/api/local/update-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.id })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Tag sync failed');
+        }
+
+        const data = await response.json();
+        if (isContainer) {
+            showToast(`Synced tags for ${data.count || 0} files in "${item.title}"`, 'success', 3000);
+        } else {
+            showToast(`Synced tags: Artist="${data.artist}", Album="${data.album}"`, 'success', 3000);
+        }
+    } catch (err) {
+        console.error('[TAGS] Error:', err);
+        showToast(`Tag sync failed: ${err.message}`);
+    }
+}
+
+let currentVATargetAlbum = null;
+
+function closeVAModal() {
+    const modal = document.getElementById('va-modal');
+    if (modal) modal.style.display = 'none';
+    currentVATargetAlbum = null;
+    const sel = document.getElementById('va-album-name-select');
+    if (sel) sel.innerHTML = '';
+    const nameInput = document.getElementById('va-album-name-input');
+    if (nameInput) { nameInput.value = ''; nameInput.style.display = 'none'; }
+}
+
+/** Returns the currently chosen artist name from select or custom input */
+function getVAAlbumArtist() {
+    const sel = document.getElementById('va-album-name-select');
+    if (sel && sel.value === '__custom__') {
+        return (document.getElementById('va-album-name-input')?.value || '').trim();
+    }
+    return sel ? sel.value.trim() : '';
+}
+
+/** Called when the select changes */
+function onVAAlbumSelectChange() {
+    const sel = document.getElementById('va-album-name-select');
+    const nameInput = document.getElementById('va-album-name-input');
+    if (!sel || !nameInput) return;
+    if (sel.value === '__custom__') {
+        nameInput.style.display = 'block';
+        nameInput.focus();
+    } else {
+        nameInput.style.display = 'none';
+    }
+    updateVAMoveButton();
+}
+
+function updateVAMoveButton() {
+    const btn = document.getElementById('btn-move-va');
+    const checked = document.querySelectorAll('.va-track-checkbox:checked');
+    const artistName = getVAAlbumArtist();
+    if (btn) {
+        btn.disabled = checked.length === 0 || !artistName;
+        btn.textContent = `Move Selected (${checked.length})`;
+    }
+}
+
+async function moveToVAAlbum(index, event) {
+    if (event) event.stopPropagation();
+    const item = currentBrowserItems[index];
+    if (!item) return;
+    const { id, title } = item;
+
+    console.log(`Build Album clicked for folder: ${title} (${id})`);
+    currentVATargetAlbum = title;
+
+    // Pre-populate the album name input
+    const nameInput = document.getElementById('va-album-name-input');
+    if (nameInput) nameInput.value = title || 'Various Artists';
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const modal = document.getElementById('va-modal');
+    const list = document.getElementById('va-tracks-list');
+
+    if (list) list.innerHTML = '<div class="empty-state">Scanning local folders...</div>';
+    if (modal) modal.style.display = 'flex';
+
+    try {
+        const response = await fetch(`/api/local/va-candidates?albumTitle=${encodeURIComponent(title)}`);
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to fetch VA candidates');
+        }
+
+        const data = await response.json();
+        const tracks = data.tracks || [];
+
+        // Populate the select with unique artist folders + Various Artists + Custom option
+        const artistFolders = [...new Set(tracks.map(t => t.artistFolder).filter(a => a && a !== 'Root'))];
+        const suggestions = ['Various Artists', ...artistFolders.filter(a => a !== 'Various Artists')];
+        const sel = document.getElementById('va-album-name-select');
+        if (sel) {
+            sel.innerHTML = suggestions.map(s =>
+                `<option value="${s.replace(/"/g, '&quot;')}">${s}</option>`
+            ).join('') + '<option value="__custom__">✏️ Enter custom name...</option>';
+            // Pre-select the folder title if it matches an option, else pick Various Artists
+            const matchingOption = suggestions.find(s => s.toLowerCase() === (title || '').toLowerCase());
+            sel.value = matchingOption || 'Various Artists';
+            onVAAlbumSelectChange();
+        }
+
+        if (tracks.length === 0) {
+            list.innerHTML = `<div class="empty-state">No matching tracks found for "${title}"</div>`;
+        } else {
+            list.innerHTML = tracks.map((track, i) => {
+                const escAttr = (s) => (s || '').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+                const checkboxId = `va-track-${i}`;
+                return `
+                <div class="browser-item file" style="padding-left: 0.5rem; cursor: pointer; margin-bottom: 0.2rem; border-radius: 0.4rem; background: rgba(255, 255, 255, 0.02);" onclick="const cb = document.getElementById('${checkboxId}'); cb.checked = !cb.checked; updateVAMoveButton();">
+                    <input type="checkbox" id="${checkboxId}" class="va-track-checkbox" style="margin-right: 0.75rem;" value="${escAttr(track.folderId + '/' + track.title)}" checked onclick="event.stopPropagation(); updateVAMoveButton();">
+                    <div class="item-info">
+                        <div class="item-title">${escAttr(track.title)}</div>
+                        <div class="item-artist" style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem;">Folder: ${escAttr(track.artistFolder)}</div>
+                    </div>
+                </div>
+                `;
+            }).join('');
+            updateVAMoveButton();
+        }
+    } catch (err) {
+        if (list) list.innerHTML = `<div class="empty-state" style="color: var(--accent);">Error: ${err.message}</div>`;
+        showToast(`Failed to load candidates: ${err.message}`);
+    }
+}
+
+async function submitVAMove() {
+    if (!currentVATargetAlbum) return;
+
+    const checkedBoxes = Array.from(document.querySelectorAll('.va-track-checkbox:checked'));
+    if (checkedBoxes.length === 0) return;
+
+    const filePaths = checkedBoxes.map(cb => cb.value);
+
+    try {
+        const btn = document.getElementById('btn-move-va');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Moving...';
+        }
+
+        let targetBaseFolder = '';
+        try {
+            const stored = localStorage.getItem('serverHomeLocations_music');
+            if (stored) {
+                const homeLocs = JSON.parse(stored);
+                if (homeLocs[LOCAL_SERVER_UDN] && Array.isArray(homeLocs[LOCAL_SERVER_UDN])) {
+                    const homePath = homeLocs[LOCAL_SERVER_UDN];
+                    if (homePath.length > 0) {
+                        targetBaseFolder = homePath[homePath.length - 1].id;
+                        if (targetBaseFolder === '0') targetBaseFolder = '';
+                    }
+                }
+            }
+        } catch (e) { }
+
+        const response = await fetch('/api/local/move-va', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                albumTitle: currentVATargetAlbum,
+                artistName: getVAAlbumArtist() || 'Various Artists',
+                files: filePaths,
+                targetBaseFolder: targetBaseFolder
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Failed to move files');
+        }
+
+        const result = await response.json();
+        showToast(`Successfully moved ${result.movedCount} files to VA folder.`, 'success', 3000);
+        closeVAModal();
+
+        // Navigate to the newly created folder
+        if (result.targetFolderId) {
+            const parts = result.targetFolderId.split('/');
+            // Reset and build the new path for breadcrumbs
+            browsePath = [{ id: '0', title: 'Root' }];
+            let buildId = '';
+            for (const part of parts) {
+                if (!part) continue;
+                buildId += (buildId ? '/' : '') + part;
+                browsePath.push({ id: buildId, title: part });
+            }
+            saveLastPath();
+            updateBreadcrumbs();
+            await browse(selectedServerUdn, result.targetFolderId);
+        } else {
+            // Fallback refresh view
+            if (browsePath.length > 0) {
+                const lastFolder = browsePath[browsePath.length - 1];
+                await browse(selectedServerUdn, lastFolder.id);
+            }
+        }
+
+    } catch (err) {
+        showToast(`Move error: ${err.message}`);
+        const btn = document.getElementById('btn-move-va');
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Move Selected';
+        }
+    }
+}
+
+async function deleteTrack(index, event) {
+    if (event) event.stopPropagation();
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+    const { id, title } = item;
+
+    console.log(`[DELETE] Requested deletion of: ${title} (index: ${index}, id: ${id})`);
+
+    if (!confirm(`Are you sure you want to delete "${title}"?`)) {
+        console.log(`[DELETE] User cancelled deletion of: ${title}`);
+        return;
+    }
 
     try {
         const response = await fetch('/api/delete', {
@@ -627,17 +961,24 @@ async function deleteTrack(id, title) {
             throw new Error(errData.error || 'Delete failed');
         }
 
+        console.log(`[DELETE] Successfully deleted: ${title}`);
         showToast(`Deleted: ${title}`, 'success', 2000);
+
         // Refresh the browser view
         const lastFolder = browsePath[browsePath.length - 1];
-        await browse(selectedServerUdn, lastFolder.id);
+        if (lastFolder) {
+            await browse(selectedServerUdn, lastFolder.id);
+        }
     } catch (err) {
-        console.error('Delete error:', err);
+        console.error('[DELETE] Error:', err);
         showToast(`Delete failed: ${err.message}`);
+    } finally {
+        // Close any open menus
+        document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
     }
 }
 
-async function playTrack(uri, title, artist, album, duration, protocolInfo, albumArtUrl) {
+async function playTrack(uri, title, artist, album, duration, protocolInfo, albumArtUrl, pathStr = '') {
     if (!selectedRendererUdn) {
         alert('Please select a Renderer on the left first!');
         return;
@@ -651,7 +992,7 @@ async function playTrack(uri, title, artist, album, duration, protocolInfo, albu
         const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl })
+            body: JSON.stringify({ uri, title, artist, album, duration, protocolInfo, albumArtUrl, pathStr })
         });
 
         if (!response.ok) {
@@ -1122,6 +1463,26 @@ function updateBrowserControls(items) {
 }
 
 function renderBrowser(items) {
+    // Sort items: folders first, then alphabetically ignoring case
+    items.sort((a, b) => {
+        const isFolderA = a.type === 'container';
+        const isFolderB = b.type === 'container';
+        if (isFolderA && !isFolderB) return -1;
+        if (!isFolderA && isFolderB) return 1;
+
+        const titleA = String(a.title || '');
+        const titleB = String(b.title || '');
+
+        // Primary sort: case-insensitive, numeric-aware
+        const result = titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
+
+        // Tie-breaker: case-sensitive sort to ensure stable formatting if identical but different casing
+        if (result === 0) {
+            return titleA.localeCompare(titleB, undefined, { numeric: true });
+        }
+        return result;
+    });
+
     currentBrowserItems = items;
 
     // Check if folder contains images
@@ -1223,18 +1584,18 @@ function renderBrowser(items) {
             `;
         }
 
-        const esc = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        const escJs = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
         const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
 
         return `
             <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
                  onclick="${isContainer ?
-                `enterFolder('${item.id}', '${esc(item.title)}')` :
+                `enterFolder('${escJs(item.id)}', '${escJs(item.title)}')` :
                 isImage ?
-                    `event.stopPropagation(); startPhotoSlideshow('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.date)}', '${esc(item.artist)}', '${esc(item.parentID)}', '${esc(pathStr)}')` :
+                    `event.stopPropagation(); startPhotoSlideshow('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.date)}', '${escJs(item.artist)}', '${escJs(item.parentID)}', '${escJs(pathStr)}')` :
                     isVideo ?
-                        `handleVideoClick('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', ${index})` :
-                        `playTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', '${esc(item.albumArtUrl)}')`}">
+                        `handleVideoClick('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', ${index})` :
+                        `playTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', '${escJs(pathStr)}')`}">
                 <div class="item-icon">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
@@ -1248,14 +1609,14 @@ function renderBrowser(items) {
                             <path d="M12 8h.01"></path>
                         </svg>
                     </button>
-                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}', '${esc(item.duration)}', '${esc(item.protocolInfo)}', '${esc(item.albumArtUrl)}', false)" title="Add to queue">
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', false, '${escJs(pathStr)}')" title="Add to queue">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
                         </svg>
                         <span class="btn-label" data-mobile="">Queue</span>
                     </button>
                     ` : `
-                    <button class="btn-control play-btn" onclick="event.stopPropagation(); ${currentBrowserMode === 'photo' ? `playFolderSlideshow('${esc(item.id)}', '${esc(item.title)}')` : `playFolder('${esc(item.id)}', '${esc(item.title)}')`}" title="${currentBrowserMode === 'photo' ? 'Start slideshow of this folder' : 'Play Whole Folder Recursively'}">
+                    <button class="btn-control play-btn" onclick="event.stopPropagation(); ${currentBrowserMode === 'photo' ? `playFolderSlideshow('${escJs(item.id)}', '${escJs(item.title)}')` : `playFolder('${escJs(item.id)}', '${escJs(item.title)}', '${escJs(pathStr)}')`}" title="${currentBrowserMode === 'photo' ? 'Start slideshow of this folder' : 'Play Whole Folder Recursively'}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="${currentBrowserMode === 'photo' ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="2">
                             ${currentBrowserMode === 'photo' ?
                 '<rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line>' :
@@ -1263,23 +1624,65 @@ function renderBrowser(items) {
                         </svg>
                         <span class="btn-label" data-mobile="">${currentBrowserMode === 'photo' ? 'Slideshow' : 'Play'}</span>
                     </button>
-                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${esc(item.id)}', '${esc(item.title)}')" title="Queue Whole Folder Recursively">
+                    <button class="btn-control queue-btn" onclick="event.stopPropagation(); queueFolder('${escJs(item.id)}', '${escJs(item.title)}', '${escJs(pathStr)}')" title="Queue Whole Folder Recursively">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
                         </svg>
                         <span class="btn-label" data-mobile="">Queue</span>
                     </button>
                     `}
-                    
                     ${isLocalServer ? `
-                    <button class="btn-control delete-btn" onclick="event.stopPropagation(); deleteTrack('${esc(item.id)}', '${esc(item.title)}')" title="Delete from local folder">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
-                        </svg>
-                        Delete
-                    </button>
+                    <div class="menu-container folder-menu" onclick="event.stopPropagation();" style="margin-left: 0.25rem;">
+                        <button class="btn-control ghost burger-btn" onclick="toggleFolderMenu(event)" title="More actions">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <line x1="3" y1="12" x2="21" y2="12"></line>
+                                <line x1="3" y1="6" x2="21" y2="6"></line>
+                                <line x1="3" y1="18" x2="21" y2="18"></line>
+                            </svg>
+                        </button>
+                        <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
+                            ${isContainer ? `
+                            <button class="dropdown-item" onclick="moveToVAAlbum(${index}, event)">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                    <polyline points="9 14 12 17 15 14"></polyline>
+                                    <line x1="12" y1="9" x2="12" y2="17"></line>
+                                </svg>
+                                Build Album
+                            </button>
+                            <button class="dropdown-item" onclick="renameFolder(${index}, event)">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                </svg>
+                                Rename
+                            </button>
+                            <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                </svg>
+                                Sync File Tags
+                            </button>
+                            ` : `
+                            <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                </svg>
+                                Sync File Tags
+                            </button>
+                            `}
+                            <button class="dropdown-item" style="color: var(--accent);" onclick="deleteTrack(${index}, event)">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
+                                </svg>
+                                Delete
+                            </button>
+                        </div>
+                    </div>
                     ` : `
-                    <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${esc(item.id)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')` : `downloadTrack('${esc(item.uri)}', '${esc(item.title)}', '${esc(item.artist)}', '${esc(item.album)}')`}" title="Download to local media library">
+                    <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')`}" title="Download to local media library">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                             <polyline points="7 10 12 15 17 10"></polyline>
@@ -1473,7 +1876,7 @@ function updateStatus(status) {
 
             // Only fetch if (query changed and hasn't failed before) OR we have a direct url
             if ((query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) || (currentTrack.albumArtUrl && currentTrack.albumArtUrl !== currentArtworkUrl)) {
-                updatePlayerArtwork(currentTrack.artist, currentTrack.album, currentTrack.albumArtUrl);
+                updatePlayerArtwork(currentTrack.artist, currentTrack.album, currentTrack.uri, currentTrack.albumArtUrl);
             }
         } else {
             updateCardNowPlaying();
@@ -1586,8 +1989,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-async function updatePlayerArtwork(artist, album, albumArtUrl) {
-    if (!artist && !album && !albumArtUrl) return;
+async function updatePlayerArtwork(artist, album, uri, albumArtUrl) {
+    if (!artist && !album && !albumArtUrl && !uri) return;
     const query = `${artist || ''} ${album || ''}`.trim();
     currentArtworkQuery = query;
 
@@ -1601,7 +2004,7 @@ async function updatePlayerArtwork(artist, album, albumArtUrl) {
     }
 
     try {
-        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}`);
+        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}&uri=${encodeURIComponent(uri || '')}`);
         if (res.ok) {
             const data = await res.json();
             currentArtworkUrl = data.url;
@@ -3436,6 +3839,17 @@ function updateLocalOnlyUI() {
             el.style.display = isLocalServer ? 'flex' : 'none';
         }
     });
+
+    // Upload is only meaningful when browsing an external DLNA server (to download/import).
+    // Disable and hide it when the local AMMUI library is selected.
+    const uploadBtn = document.getElementById('btn-upload');
+    if (uploadBtn) {
+        uploadBtn.disabled = isLocalServer;
+        uploadBtn.style.display = isLocalServer ? 'none' : '';
+        uploadBtn.title = isLocalServer
+            ? 'Upload not available when browsing the local library'
+            : 'Upload to local server';
+    }
 }
 
 // Initial update
