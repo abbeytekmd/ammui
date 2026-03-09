@@ -19,6 +19,45 @@
     height: 6px;
 }
 
+.status-indicator {
+    display: none;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.status-indicator.active {
+    display: flex;
+}
+
+.status-indicator .dot {
+    width: 8px;
+    height: 8px;
+    background-color: var(--primary);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--primary);
+    animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(0.9);
+        opacity: 0.7;
+    }
+
+    50% {
+        transform: scale(1.1);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(0.9);
+        opacity: 0.7;
+    }
+}
+
 ::-webkit-scrollbar-track {
     background: rgba(0, 0, 0, 0.1);
 }
@@ -293,8 +332,37 @@ p.subtitle {
 .device-name-container {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 0.75rem;
     margin-bottom: 0.25rem;
+}
+
+.device-protocol-label {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.08);
+    padding: 0.15rem 0.4rem;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 700;
+    flex-shrink: 0;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.modal-device-info-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+}
+
+.modal-device-protocol {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    opacity: 0.8;
 }
 
 .device-name {
@@ -2075,7 +2143,7 @@ p.subtitle {
 
 /* Manage Modal Styles */
 .manage-modal-content {
-    max-width: 600px;
+    max-width: 850px;
 }
 
 .settings-tabs {
@@ -3257,12 +3325,37 @@ p.subtitle {
 /* Info Button Styles */
 .info-btn {
     opacity: 0.6;
-    transition: opacity 0.2s;
+    transition: opacity 0.2s, color 0.2s;
 }
 
 .info-btn:hover {
     opacity: 1;
     color: var(--primary);
+}
+
+/* Red state when folder path conflicts with embedded metadata */
+.info-btn.info-btn-conflict {
+    opacity: 0.85;
+    color: #f87171;
+    animation: conflict-pulse 2.5s ease-in-out infinite;
+}
+
+.info-btn.info-btn-conflict:hover {
+    opacity: 1;
+    color: #ef4444;
+    animation: none;
+}
+
+@keyframes conflict-pulse {
+
+    0%,
+    100% {
+        opacity: 0.85;
+    }
+
+    50% {
+        opacity: 0.45;
+    }
 }
 
 .btn-fav-toggle {
@@ -3310,7 +3403,7 @@ p.subtitle {
 
 .metadata-grid {
     display: grid;
-    grid-template-columns: 140px 1fr 1fr;
+    grid-template-columns: 140px 1fr 1fr 1fr;
     gap: 0;
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
@@ -3355,10 +3448,30 @@ p.subtitle {
     border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.metadata-value-cell.tertiary {
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
 /* Tags Styles */
 .tags-section {
     padding: 1.5rem 2rem 2rem;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.move-to-tags-section {
+    padding: 1.5rem 2rem 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.15);
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.move-to-tags-preview {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .tags-section h3 {
@@ -3485,7 +3598,7 @@ p.subtitle {
 }
 
 .metadata-loading-row {
-    grid-column: span 3;
+    grid-column: span 4;
     padding: 2rem;
     display: flex;
     justify-content: center;
@@ -3498,11 +3611,9 @@ p.subtitle {
         grid-template-columns: 100px 1fr;
     }
 
-    .metadata-header:last-child {
-        display: none;
-    }
-
-    .metadata-value-cell.secondary {
+    .metadata-header:nth-child(n+3),
+    .metadata-value-cell.secondary,
+    .metadata-value-cell.tertiary {
         display: none;
     }
 }
@@ -4877,30 +4988,40 @@ input:checked+.slider:before {
 
     .floating-nav-btn {
         display: flex;
+        flex-direction: row-reverse;
         position: fixed;
         bottom: 2rem;
         right: 1.5rem;
-        width: 50px;
         height: 50px;
-        border-radius: 50%;
+        padding: 0 1.25rem;
+        border-radius: 25px;
         background: var(--primary);
         color: white;
         border: none;
         box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4), 0 0 20px var(--primary-glow);
         z-index: 2000;
         align-items: center;
-        justify-content: center;
+        gap: 0.75rem;
         cursor: pointer;
         transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        font-weight: 700;
+        font-size: 0.95rem;
+        letter-spacing: 0.02em;
+    }
+
+    .nav-btn-label {
+        white-space: nowrap;
     }
 
     .floating-nav-btn.on-left {
         right: auto;
         left: 1.5rem;
+        flex-direction: row;
     }
 
     #nav-arrow-icon {
         transition: transform 0.3s ease;
+        flex-shrink: 0;
     }
 
     /* Flip arrow when on left side */

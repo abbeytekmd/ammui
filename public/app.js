@@ -76,6 +76,11 @@ const manageModal = document.getElementById('manage-modal');
 const aboutModal = document.getElementById('about-modal');
 const manageRendererList = document.getElementById('manage-renderer-list');
 const manageServerList = document.getElementById('manage-server-list');
+const manageAirPlayList = document.getElementById('manage-airplay-list');
+const castModal = document.getElementById('cast-modal');
+const modalCastList = document.getElementById('modal-cast-list');
+const floatingBtn = document.getElementById('floating-nav-btn');
+const navBtnLabel = document.getElementById('nav-btn-label');
 
 let currentDevices = [];
 let selectedRendererUdn = localStorage.getItem('selectedRendererUdn');
@@ -158,6 +163,9 @@ let lastReportedTrackKey = null;
 let manualRotations = {}; // Client-side cache of saved photo rotations
 
 let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
+let airplayScanInterval = null;
+let isAirPlayScanRunning = false;
+let pendingCastIndex = null;
 
 function isImageItem(item) {
     return item && item.type === 'item' && ((item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
@@ -241,6 +249,11 @@ async function fetchDevices() {
         if (JSON.stringify(devices) !== JSON.stringify(currentDevices)) {
             currentDevices = devices;
             renderDevices();
+
+            // Also refresh the management UI if it's currently open
+            if (manageModal && manageModal.style.display === 'flex') {
+                renderManageDevices();
+            }
         }
 
     } catch (err) {
@@ -1602,7 +1615,7 @@ function renderBrowser(items) {
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
-                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showFileInfoFromBrowser(${index})" title="View file information">
+                    <button class="btn-control ghost info-btn${detectFolderMismatch(item) ? ' info-btn-conflict' : ''}" onclick="event.stopPropagation(); showFileInfoFromBrowser(${index})" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M12 16v-4"></path>
@@ -1631,7 +1644,6 @@ function renderBrowser(items) {
                         <span class="btn-label" data-mobile="">Queue</span>
                     </button>
                     `}
-                    ${isLocalServer ? `
                     <div class="menu-container folder-menu" onclick="event.stopPropagation();" style="margin-left: 0.25rem;">
                         <button class="btn-control ghost burger-btn" onclick="toggleFolderMenu(event)" title="More actions">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1641,55 +1653,56 @@ function renderBrowser(items) {
                             </svg>
                         </button>
                         <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
-                            ${isContainer ? `
-                            <button class="dropdown-item" onclick="moveToVAAlbum(${index}, event)">
+                            ${isLocalServer ? `
+                                ${isContainer ? `
+                                <button class="dropdown-item" onclick="moveToVAAlbum(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                        <polyline points="9 14 12 17 15 14"></polyline>
+                                        <line x1="12" y1="9" x2="12" y2="17"></line>
+                                    </svg>
+                                    Build Album
+                                </button>
+                                <button class="dropdown-item" onclick="renameFolder(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                                    </svg>
+                                    Rename
+                                </button>
+                                ` : ''}
+                                <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
+                                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    </svg>
+                                    Sync File Tags
+                                </button>
+                                ${!isContainer && detectFolderMismatch(item) ? `
+                                <button class="dropdown-item" style="color: #10b981;" onclick="moveFileToTagsLocationFromBrowser(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                                    </svg>
+                                    Move to Tag Location
+                                </button>
+                                ` : ''}
+                                <button class="dropdown-item" style="color: var(--accent);" onclick="deleteTrack(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
+                                    </svg>
+                                    Delete
+                                </button>
+                            ` : ''}
+                            <button class="dropdown-item" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')`}" title="Download to local media library">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                                    <polyline points="9 14 12 17 15 14"></polyline>
-                                    <line x1="12" y1="9" x2="12" y2="17"></line>
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="7 10 12 15 17 10"></polyline>
+                                    <line x1="12" y1="15" x2="12" y2="3"></line>
                                 </svg>
-                                Build Album
-                            </button>
-                            <button class="dropdown-item" onclick="renameFolder(${index}, event)">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                                </svg>
-                                Rename
-                            </button>
-                            <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                </svg>
-                                Sync File Tags
-                            </button>
-                            ` : `
-                            <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                </svg>
-                                Sync File Tags
-                            </button>
-                            `}
-                            <button class="dropdown-item" style="color: var(--accent);" onclick="deleteTrack(${index}, event)">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"></path>
-                                </svg>
-                                Delete
+                                Download
                             </button>
                         </div>
                     </div>
-                    ` : `
-                    <button class="btn-control download-btn" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')`}" title="Download to local media library">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                    </button>
-                    `}
                 </div>
             </div>
         `;
@@ -1757,10 +1770,14 @@ async function fetchStatus(includePlaylist = false) {
 
         updateStatus(status);
         rendererFailureCount = 0;
-        setRendererOffline(false, 'fetchStatus');
     } catch (err) {
         console.error(`Status fetch error for ${selectedRendererUdn}:`, err);
-        setRendererOffline(true, 'fetchStatus');
+        if (selectedRendererUdn !== BROWSER_PLAYER_UDN) {
+            rendererFailureCount++;
+            if (rendererFailureCount >= 3) {
+                setRendererOffline(true, 'fetchStatus');
+            }
+        }
     }
 }
 
@@ -2339,7 +2356,7 @@ function renderPlaylist(items) {
                     <div class="item-artist">${esc(item.artist) || ''}</div>
                 </div>
                 <div class="item-actions">
-                    <button class="btn-control ghost info-btn" onclick="event.stopPropagation(); showFileInfoFromPlaylist('${esc(item.id)}')" title="View file information">
+                    <button class="btn-control ghost info-btn${detectFolderMismatch(item) ? ' info-btn-conflict' : ''}" onclick="event.stopPropagation(); showFileInfoFromPlaylist('${esc(item.id)}')" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
                             <path d="M12 16v-4"></path>
@@ -2408,7 +2425,7 @@ async function deleteTrackFromPlaylist(id) {
 }
 
 function updateDocumentTitle() {
-    const defaultTitle = `${currentDeviceName} | OpenHome Explorer`;
+    const defaultTitle = `${currentDeviceName}`;
 
     if (!currentPlaylistItems || currentPlaylistItems.length === 0) {
         document.title = defaultTitle;
@@ -2522,6 +2539,54 @@ function updateTransportControls() {
 
 
 
+async function startAirPlayScan() {
+    if (isAirPlayScanRunning) return;
+    isAirPlayScanRunning = true;
+
+    const indicator = document.getElementById('airplay-status-indicator');
+    if (indicator) indicator.classList.add('active');
+
+    try {
+        console.log('[AirPlay] Starting automatic discovery...');
+        await fetch('/api/airplay/discover', { method: 'POST' });
+
+        // Initial fetch
+        await fetchDevices();
+        renderManageDevices();
+
+        // Continuous refresh while tab is open
+        if (airplayScanInterval) clearInterval(airplayScanInterval);
+        airplayScanInterval = setInterval(async () => {
+            if (!isAirPlayScanRunning) {
+                clearInterval(airplayScanInterval);
+                return;
+            }
+            await fetchDevices();
+            renderManageDevices();
+        }, 3000); // Efficient polling while viewing
+    } catch (err) {
+        console.error('Failed to start AirPlay scan:', err);
+    }
+}
+
+async function stopAirPlayScan() {
+    isAirPlayScanRunning = false;
+    if (airplayScanInterval) {
+        clearInterval(airplayScanInterval);
+        airplayScanInterval = null;
+    }
+
+    const indicator = document.getElementById('airplay-status-indicator');
+    if (indicator) indicator.classList.remove('active');
+
+    try {
+        console.log('[AirPlay] Stopping automatic discovery...');
+        await fetch('/api/airplay/stop-discovery', { method: 'POST' });
+    } catch (err) {
+        console.error('Failed to stop AirPlay scan:', err);
+    }
+}
+
 async function triggerDiscovery(btn) {
     const originalContent = btn ? btn.innerHTML : null;
     if (btn) {
@@ -2611,6 +2676,7 @@ function closeManageModal() {
     if (manageModal) {
         manageModal.style.display = 'none';
         stopS3StatusPolling();
+        stopAirPlayScan(); // Ensure scan stops when modal closes
     }
 }
 
@@ -2647,6 +2713,72 @@ function closePlayTagModal() {
     if (playTagModal) playTagModal.style.display = 'none';
 }
 
+function openCastModal(index) {
+    pendingCastIndex = index;
+    const track = currentBrowserItems[index];
+    if (!track) return;
+
+    const titleEl = document.getElementById('cast-track-title');
+    if (titleEl) titleEl.textContent = `Set playback to: ${track.title}`;
+
+    if (castModal) {
+        updateCastDeviceList();
+        castModal.style.display = 'flex';
+    }
+}
+
+function closeCastModal() {
+    if (castModal) castModal.style.display = 'none';
+    pendingCastIndex = null;
+}
+
+function updateCastDeviceList() {
+    if (!modalCastList) return;
+    const renderers = currentDevices.filter(d => d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn));
+
+    modalCastList.innerHTML = renderers.map(device => {
+        const isSelected = (device.udn === selectedRendererUdn);
+        const displayName = device.customName || device.friendlyName;
+        const iconHtml = `<div class="modal-device-icon">${getDeviceIcon(device, false, 24)}</div>`;
+
+        return `
+            <div class="modal-device-item ${isSelected ? 'selected' : ''}" 
+                 onclick="castToDevice('${device.udn}')"
+                 id="modal-cast-${device.udn?.replace(/:/g, '-')}">
+                <div class="modal-device-item-left">
+                    ${iconHtml}
+                    <div class="modal-device-info-stack">
+                        <div class="modal-device-name">${displayName}</div>
+                        <div class="modal-device-protocol">${device.protocol || (device.isAirPlay ? 'AirPlay' : (device.isSonos ? 'Sonos' : 'DLNA'))}</div>
+                    </div>
+                </div>
+                ${isSelected ? '<div class="selected-indicator">Active</div>' : ''}
+            </div>
+        `;
+    }).join('');
+}
+
+async function castToDevice(deviceUdn) {
+    if (pendingCastIndex === null) return;
+    const track = currentBrowserItems[pendingCastIndex];
+    if (!track) return;
+
+    // First stop the scan if it's running (user might be in AirPlay tab)
+    stopAirPlayScan();
+
+    // Select the device
+    selectedRendererUdn = deviceUdn;
+    localStorage.setItem('selectedRendererUdn', selectedRendererUdn);
+    renderDevices();
+    closeCastModal();
+
+    // Play the track
+    await playTrack(track.uri, track.title, track.artist, track.album, track.duration, track.protocolInfo, track.albumArtUrl);
+
+    // Close dropdowns
+    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
+}
+
 async function playTag(tagName) {
     if (!selectedRendererUdn) {
         showToast('Please select a player first.', 'error');
@@ -2679,6 +2811,12 @@ async function playTag(tagName) {
 }
 
 function switchSettingsTab(tab) {
+    // Stop scanning if switching away from airplay
+    const currentTab = document.querySelector('.settings-tab.active')?.textContent.trim().toLowerCase();
+    if (currentTab === 'airplay' && tab.toLowerCase() !== 'airplay') {
+        stopAirPlayScan();
+    }
+
     // Update tab buttons
     document.querySelectorAll('.settings-tab').forEach(btn => {
         btn.classList.toggle('active', btn.textContent.trim().toLowerCase() === tab.toLowerCase());
@@ -2687,11 +2825,23 @@ function switchSettingsTab(tab) {
     document.querySelectorAll('.settings-panel').forEach(panel => {
         panel.classList.toggle('active', panel.id === `settings-${tab}`);
     });
+
+    // Auto-trigger AirPlay scan when entering the tab
+    if (tab.toLowerCase() === 'airplay') {
+        startAirPlayScan();
+    }
 }
 
 function renderManageDevices() {
     const renderers = currentDevices.filter(d => d.isRenderer);
     const servers = currentDevices.filter(d => d.isServer);
+
+    const getProtocol = (device) => {
+        if (device.isAirPlay || device.protocol === 'AirPlay') return 'AirPlay';
+        if (device.isSonos || device.protocol === 'Sonos') return 'Sonos';
+        if (device.isVirtual || device.udn === BROWSER_PLAYER_UDN) return 'Browser';
+        return 'DLNA';
+    };
 
     const renderItem = (device, role) => {
         let host = 'unknown';
@@ -2745,8 +2895,50 @@ function renderManageDevices() {
     };
 
     if (manageRendererList) {
-        manageRendererList.innerHTML = renderers.length ? renderers.map(d => renderItem(d, 'player')).join('') : '<div class="empty-state-mini">No players saved</div>';
+        const nonAirPlayRenderers = renderers.filter(d => !d.isAirPlay && d.protocol !== 'AirPlay');
+        if (nonAirPlayRenderers.length === 0) {
+            manageRendererList.innerHTML = '<div class="empty-state-mini">No players saved</div>';
+        } else {
+            // Group by protocol
+            const protocolOrder = ['Browser', 'DLNA', 'Sonos'];
+            const groups = {};
+            for (const d of nonAirPlayRenderers) {
+                const proto = getProtocol(d);
+                if (!groups[proto]) groups[proto] = [];
+                groups[proto].push(d);
+            }
+
+            // Also include any unknown protocols not in our predefined order
+            for (const proto of Object.keys(groups)) {
+                if (!protocolOrder.includes(proto)) protocolOrder.push(proto);
+            }
+
+            const protocolIcons = {
+                'DLNA': '📡',
+                'Sonos': '🎵',
+                'Browser': '🌐',
+            };
+
+            manageRendererList.innerHTML = protocolOrder
+                .filter(proto => groups[proto] && groups[proto].length > 0)
+                .map(proto => `
+                    <div class="manage-section" style="margin-bottom: 1rem;">
+                        <h3>${protocolIcons[proto] || '🔌'} ${proto}</h3>
+                        ${groups[proto].map(d => renderItem(d, 'player')).join('')}
+                    </div>
+                `).join('');
+        }
     }
+
+    if (manageAirPlayList) {
+        const airplayDevices = renderers.filter(d => d.isAirPlay || d.protocol === 'AirPlay');
+        if (airplayDevices.length === 0) {
+            manageAirPlayList.innerHTML = '<div class="empty-state-mini">No AirPlay devices found. </div>';
+        } else {
+            manageAirPlayList.innerHTML = airplayDevices.map(d => renderItem(d, 'player')).join('');
+        }
+    }
+
     if (manageServerList) {
         manageServerList.innerHTML = servers.length ? servers.map(d => renderItem(d, 'server')).join('') : '<div class="empty-state-mini">No servers saved</div>';
     }
@@ -2967,7 +3159,9 @@ function renderDevices() {
 
 function getDeviceIcon(device, asServer, size = 32) {
     if (device.iconUrl) {
-        return `<img src="${device.iconUrl}" class="${size === 32 ? 'device-card' : 'modal-device'}-img" alt="" style="width: ${size}px; height: ${size}px; object-fit: contain;">`;
+        const isExternal = device.iconUrl.startsWith('http');
+        const proxyUrl = isExternal ? `/api/proxy-image?url=${encodeURIComponent(device.iconUrl)}` : device.iconUrl;
+        return `<img src="${proxyUrl}" class="${size === 32 ? 'device-card' : 'modal-device'}-img" alt="" style="width: ${size}px; height: ${size}px; object-fit: contain;">`;
     }
 
     if (device.friendlyName === 'Direct in the Browser' && !device.udn) {
@@ -3004,6 +3198,18 @@ function getDeviceIcon(device, asServer, size = 32) {
             </svg>
         `;
     }
+
+    if (device.isAirPlay || device.protocol === 'AirPlay') {
+        return `
+            <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 16.6q-2-2-2-4.6 0-3.1 2.2-5.1t5.3-2h3q3.1 0 5.3 2t2.2 5.1q0 2.6-2 4.6"></path>
+                <path d="M12 12v9"></path>
+                <path d="m9 15 3-3 3 3"></path>
+            </svg>
+        `;
+    }
+
+
 
 
     // Default Speaker icon for other renderers
@@ -3044,7 +3250,10 @@ function renderModalDeviceItem(device, asServer) {
              id="modal-device-${asServer ? 'srv-' : 'ren-'}${device.udn?.replace(/:/g, '-') || Math.random()}">
             <div class="modal-device-item-left">
                 ${iconHtml}
-                <div class="modal-device-name">${displayName}</div>
+                <div class="modal-device-info-stack">
+                    <div class="modal-device-name">${displayName}</div>
+                    <div class="modal-device-protocol">${device.protocol || (device.isAirPlay ? 'AirPlay' : (device.isSonos ? 'Sonos' : 'DLNA'))}</div>
+                </div>
             </div>
             ${isSelected ? '<div class="selected-indicator">✓</div>' : ''}
         </div>
@@ -3128,7 +3337,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             <div class="device-info">
                 <div class="device-name-container">
                     <div class="device-name">${device.customName || device.friendlyName}</div>
-
+                    <div class="device-protocol-label">${device.protocol || (device.isAirPlay ? 'AirPlay' : (device.isSonos ? 'Sonos' : 'DLNA'))}</div>
                 </div>
                 ${(!asServer && isStatic) ? `
                     <div class="device-now-playing" id="card-now-playing">
@@ -3151,18 +3360,19 @@ function switchView(view) {
     const playerCol = document.querySelector('.player-column');
     const browserCol = document.querySelector('.browser-column');
     const layout = document.querySelector('.main-layout');
-    const floatingBtn = document.getElementById('floating-nav-btn');
 
     if (view === 'playlist') {
         playerCol ? playerCol.classList.add('active') : null;
         browserCol ? browserCol.classList.remove('active') : null;
         if (layout) layout.classList.add('show-playlist');
         if (floatingBtn) floatingBtn.classList.add('on-left');
+        if (navBtnLabel) navBtnLabel.textContent = 'Library';
     } else {
         playerCol ? playerCol.classList.remove('active') : null;
         browserCol ? browserCol.classList.add('active') : null;
         if (layout) layout.classList.remove('show-playlist');
         if (floatingBtn) floatingBtn.classList.remove('on-left');
+        if (navBtnLabel) navBtnLabel.textContent = 'Player';
     }
     localStorage.setItem('currentView', view);
 }
@@ -3561,7 +3771,11 @@ async function init() {
     initSwipeHandling();
     if (window.innerWidth <= 1100) {
         const savedView = localStorage.getItem('currentView') || 'browser';
-        switchView(savedView);
+        // Use a short timeout to ensure the DOM is fully interactive and styles are applied 
+        // before switching view on initial load.
+        setTimeout(() => {
+            switchView(savedView);
+        }, 50);
     }
 
     // Global click listener to close dropdowns
@@ -4185,6 +4399,7 @@ async function openFileInfoModal(trackData) {
             <div class="metadata-header">Field</div>
             <div class="metadata-header">Media Server</div>
             <div class="metadata-header">File Tags (Deep Scan)</div>
+            <div class="metadata-header">Folder Path</div>
             
             <div class="metadata-loading-row" id="metadata-loading-spinner">
                 <div class="spinner"></div>
@@ -4196,6 +4411,24 @@ async function openFileInfoModal(trackData) {
     `;
 
     const rowsContainer = document.getElementById('metadata-rows');
+
+    // Derive artist and album from folder structure (Artist/Album/Track convention)
+    const folderMeta = { artist: null, album: null };
+    if (trackData.uri) {
+        try {
+            const uriPath = decodeURIComponent(new URL(trackData.uri).pathname);
+            // Strip leading /local-files/ or similar prefix
+            const cleanPath = uriPath.replace(/^\/local-files\//, '').replace(/^\//, '');
+            const parts = cleanPath.split('/').filter(p => p);
+            // Expect: Artist / Album / Track.ext  (at least 3 parts)
+            if (parts.length >= 3) {
+                folderMeta.artist = parts[parts.length - 3];
+                folderMeta.album = parts[parts.length - 2];
+            } else if (parts.length === 2) {
+                folderMeta.album = parts[0];
+            }
+        } catch (e) { /* not a parseable URL */ }
+    }
 
     // Fetch Deep Metadata early
     let embeddedMeta = null;
@@ -4337,6 +4570,8 @@ async function openFileInfoModal(trackData) {
         }
     ];
 
+    let hasFolderMismatch = false;
+
     fieldGroups.forEach(group => {
         group.fields.forEach(f => {
             const sValRaw = f.sKey ? trackData[f.sKey] : undefined;
@@ -4378,22 +4613,83 @@ async function openFileInfoModal(trackData) {
             const mismatchClass = isMismatch ? 'mismatch' : '';
             const mismatchIcon = isMismatch ? '<div class="mismatch-badge" title="Data Mismatch">!</div>' : '';
 
+            // Folder-derived value (only meaningful for Artist and Album)
+            let folderVal = '-';
+            let folderValRaw = null;
+            let isFolderMismatch = false;
+            if (f.label === 'Artist' && folderMeta.artist) {
+                folderValRaw = folderMeta.artist;
+                folderVal = folderMeta.artist;
+            } else if (f.label === 'Album' && folderMeta.album) {
+                folderValRaw = folderMeta.album;
+                folderVal = folderMeta.album;
+            }
+
+            if (folderValRaw) {
+                const nf = normalizeForComparison(folderValRaw);
+                const ns = normalizeForComparison(sValRaw);
+                const ne = normalizeForComparison(eValRaw);
+                // Highlight if folder value differs from either source
+                if ((ns && nf !== ns) || (ne && nf !== ne)) {
+                    isFolderMismatch = true;
+                    hasFolderMismatch = true;
+                }
+            }
+
+            const folderMismatchClass = isFolderMismatch ? 'mismatch' : '';
+            const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name mismatch">!</div>' : '';
+
             rowsContainer.innerHTML += `
                 <div class="metadata-cell metadata-label-cell">${f.label}</div>
                 <div class="metadata-cell metadata-value-cell ${mismatchClass}">${sVal}</div>
                 <div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>
+                <div class="metadata-cell metadata-value-cell tertiary ${folderMismatchClass}">${folderVal}${folderMismatchIcon}</div>
             `;
         });
     });
 
     if (fetchError) {
         rowsContainer.innerHTML += `
-            <div class="metadata-cell" style="grid-column: span 3; color: #f87171; text-align: center; padding: 1rem;">
+            <div class="metadata-cell" style="grid-column: span 4; color: #f87171; text-align: center; padding: 1rem;">
                 Note: File scan was limited: ${fetchError}
             </div>
         `;
     }
+}
 
+async function moveFileToTagsLocationFromBrowser(index, event) {
+    if (event) event.stopPropagation();
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    if (!confirm('Are you sure you want to move this file to match its tags?')) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/local/move-to-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: item.uri })
+        });
+
+        if (res.ok) {
+            // Reload whatever folder we are currently viewing
+            if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+                await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+            }
+        } else {
+            const err = await res.json();
+            alert('Failed to move file: ' + (err.error || 'Unknown error'));
+        }
+    } catch (e) {
+        console.error(e);
+        alert('Failed to move file: ' + e.message);
+    }
 }
 
 function closeFileInfoModal() {
@@ -4514,6 +4810,36 @@ async function saveFileTags() {
         });
     } catch (err) {
         console.error('Failed to save tags:', err);
+    }
+}
+
+/**
+ * Synchronously checks if a track's folder structure (Artist/Album/Track)
+ * conflicts with its Media Server metadata. Returns true if so.
+ */
+function detectFolderMismatch(item) {
+    if (!item || !item.uri) return false;
+    // Only meaningful for audio files
+    const isAudio = !(item.class && (item.class.includes('imageItem') || item.class.includes('videoItem') || item.class.includes('container')));
+    if (!isAudio) return false;
+
+    try {
+        const uriPath = decodeURIComponent(new URL(item.uri).pathname);
+        const cleanPath = uriPath.replace(/^\/local-files\//, '').replace(/^\//, '');
+        const parts = cleanPath.split('/').filter(p => p);
+        if (parts.length < 3) return false;
+
+        const folderArtist = parts[parts.length - 3];
+        const folderAlbum = parts[parts.length - 2];
+
+        const norm = (v) => (v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        const artistMismatch = item.artist && norm(folderArtist) && norm(folderArtist) !== norm(item.artist);
+        const albumMismatch = item.album && norm(folderAlbum) && norm(folderAlbum) !== norm(item.album);
+
+        return !!(artistMismatch || albumMismatch);
+    } catch (e) {
+        return false;
     }
 }
 
@@ -5220,7 +5546,7 @@ async function fetchGeneralSettings() {
 function updateUIWithDeviceName() {
     const h1 = document.querySelector('.header-main h1');
     if (h1) h1.textContent = currentDeviceName;
-    document.title = `${currentDeviceName} | OpenHome Explorer`;
+    document.title = `${currentDeviceName}`;
 }
 
 async function fetchS3Settings() {

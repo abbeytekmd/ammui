@@ -1,5 +1,8 @@
 import { serverLogs, terminalLog, clearServerLogs } from './lib/logger-init.js';
+global.serverLogs = serverLogs; // Expose for internal debugging log tracking
+
 import express from 'express';
+import dns from 'dns';
 import ssdp from 'node-ssdp';
 import axios from 'axios';
 import path from 'path';
@@ -13,6 +16,7 @@ import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './l
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
+
 import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -21,8 +25,9 @@ import VirtualRenderer from './lib/virtual-renderer.js';
 import crypto from 'crypto';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
+import AirPlayManager from './lib/airplay-manager.js';
 
-
+// setupLocalDlna will be called after settings are loaded below
 
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
@@ -54,6 +59,7 @@ app.use((req, res, next) => {
 
 // Store discovered devices
 let devices = new Map();
+let airplayManager = null;
 
 function loadDevices() {
     try {
@@ -65,6 +71,12 @@ function loadDevices() {
                 if (d.udn === SERVER_UDN || (d.friendlyName && d.friendlyName.includes('Media Library'))) {
                     return;
                 }
+
+                // Merge volume from settings storage when hydrating the list
+                if (settings && settings.devices && settings.devices[d.udn] && settings.devices[d.udn].volume !== undefined) {
+                    d.volume = settings.devices[d.udn].volume;
+                }
+
                 if (d.location) devices.set(d.location, d);
                 if (d.udn) devices.set(d.udn, d);
             });
@@ -194,6 +206,7 @@ function findCaseInsensitivePath(parent, name) {
 
 loadDevices();
 loadSettings();
+airplayManager = new AirPlayManager(devices, saveDevices);
 setupLocalDlna(app, port, settings.deviceName);
 
 // Manually inject the local server into the devices map on startup
@@ -459,10 +472,10 @@ async function parseDescription(url, isServer, isRenderer) {
             udn: device.UDN,
             iconUrl: iconUrl,
             services: services,
-            type: type,
             isRenderer: isRendererType,
             isServer: isServerType,
-            isSonos: hasSonos
+            isSonos: hasSonos,
+            protocol: hasSonos ? 'Sonos' : 'DLNA'
         };
     } catch (err) {
         console.error(`Failed to fetch description from ${url}:`, err.message);
@@ -525,6 +538,7 @@ async function handleSSDPMessage(headers, rinfo) {
             loading: true,
             type: isRenderer ? (isServer ? 'both' : 'renderer') : (isServer ? 'server' : 'unknown'),
             isSonos: isSonosSSDP,
+            protocol: isSonosSSDP ? 'Sonos' : 'DLNA',
             isRenderer,
             isServer
         });
@@ -543,9 +557,12 @@ async function handleSSDPMessage(headers, rinfo) {
 
             const merged = { ...deviceDetails, lastSeen: Date.now(), isSonos: deviceDetails.isSonos || isSonosSSDP };
 
-            // Preserve custom name if it exists
-            if (existingByUdn && existingByUdn.customName) {
-                merged.customName = existingByUdn.customName;
+            // Preserve custom name and disabled states if they exist
+            if (existingByUdn) {
+                if (existingByUdn.customName) merged.customName = existingByUdn.customName;
+                if (existingByUdn.disabledPlayer !== undefined) merged.disabledPlayer = existingByUdn.disabledPlayer;
+                if (existingByUdn.disabledServer !== undefined) merged.disabledServer = existingByUdn.disabledServer;
+                if (existingByUdn.volume !== undefined) merged.volume = existingByUdn.volume;
             }
 
             devices.set(location, merged);
@@ -593,10 +610,15 @@ ssdpClient.on('advertise-bye', (headers, rinfo) => {
     const location = headers.LOCATION;
     if (location && devices.has(location)) {
         const device = devices.get(location);
-        console.log(`Device leaving network (bye-bye): ${device.friendlyName || location} - keeping in database.`);
-        // We no longer delete on bye-bye to maintain a persistent database
+        console.log(`Device left: ${device ? device.friendlyName : location}`);
+        devices.delete(location);
+        if (device && device.udn) devices.delete(device.udn);
+        saveDevices();
     }
 });
+
+
+
 
 console.log('Initializing Sonos discovery listener...');
 try {
@@ -623,9 +645,11 @@ try {
                 const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
                 const merged = { ...deviceDetails, loading: false, lastSeen: Date.now() };
 
-                // Preserve custom name if it exists
-                if (existing && existing.customName) {
-                    merged.customName = existing.customName;
+                // Preserve custom name and disabled states if they exist
+                if (existing) {
+                    if (existing.customName) merged.customName = existing.customName;
+                    if (existing.disabledPlayer !== undefined) merged.disabledPlayer = existing.disabledPlayer;
+                    if (existing.disabledServer !== undefined) merged.disabledServer = existing.disabledServer;
                 }
 
                 devices.set(location, merged);
@@ -658,7 +682,24 @@ app.post('/api/discover', async (_req, res) => {
     // Search for specific targets as well
     SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
     SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
+
     res.json({ success: true });
+});
+
+app.post('/api/airplay/discover', async (_req, res) => {
+    if (airplayManager) {
+        const result = await airplayManager.triggerDiscovery();
+        return res.json(result);
+    }
+    res.status(500).json({ error: 'AirPlay Manager not initialized' });
+});
+
+app.post('/api/airplay/stop-discovery', async (_req, res) => {
+    if (airplayManager) {
+        const result = await airplayManager.stopDiscovery();
+        return res.json(result);
+    }
+    res.status(500).json({ error: 'AirPlay Manager not initialized' });
 });
 
 // Perform initial discovery on startup
@@ -666,6 +707,7 @@ console.log('Performing startup SSDP discovery...');
 ssdpClient.search('ssdp:all');
 SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
 SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
+
 
 /*setInterval(() => {
     const now = Date.now();
@@ -688,6 +730,13 @@ function getRenderer(device) {
             rendererCache.set(BROWSER_PLAYER_UDN, new VirtualRenderer(device));
         }
         return rendererCache.get(BROWSER_PLAYER_UDN);
+    }
+
+    if (device.isAirPlay || device.protocol === 'AirPlay') {
+        if (airplayManager) {
+            return airplayManager.getRenderer(device);
+        }
+        return new Renderer(device);
     }
 
     if (!device.udn) {
@@ -785,11 +834,16 @@ app.get('/api/proxy-image', async (req, res) => {
         return res.status(400).send('Missing url parameter');
     }
 
+    if (!url.startsWith('http')) {
+        // Skip proxying for local relative paths
+        return res.status(400).send('Invalid URL: must be absolute (http/https)');
+    }
+
     try {
         console.log(`[PROXY] Fetching image from: ${url}`);
         const response = await axios.get(url, {
             responseType: 'arraybuffer',
-            timeout: 10000,
+            timeout: 5000, // 5s is plenty for a thumbnail
             headers: {
                 'User-Agent': 'AMMUI/1.0'
             }
@@ -801,8 +855,8 @@ app.get('/api/proxy-image', async (req, res) => {
         res.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
         res.send(response.data);
     } catch (err) {
-        console.error(`[PROXY] Failed to fetch image from ${url}:`, err.message);
-        res.status(500).send('Failed to fetch image');
+        console.warn(`[PROXY] Failed to fetch image from ${url}:`, err.code || err.message);
+        res.status(502).send('Failed to fetch image from remote device'); // 502 Bad Gateway is more appropriate
     }
 });
 
@@ -1168,6 +1222,13 @@ app.post('/api/playlist/:udn/volume', express.json(), async (req, res) => {
     try {
         const renderer = getRenderer(device);
         await renderer.setVolume(volume);
+
+        // Persist volume to prevent resetting back to 50% on AirPlay or Virtual devices
+        device.volume = volume;
+        devices.set(device.location, device);
+        devices.set(device.udn, device);
+        saveDevices();
+
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -2065,22 +2126,36 @@ async function findDiscogsArtUrl(artist, album) {
         return false;
     };
 
+    const fetchDiscogs = async (url) => {
+        dns.setDefaultResultOrder('ipv4first');
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'application/json'
+                },
+                signal: AbortSignal.timeout(10000)
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            return await response.json();
+        } catch (e) {
+            let detail = e.message;
+            if (e.cause) detail += ` (Cause: ${e.cause.message || e.cause.code || e.cause})`;
+            throw new Error(detail);
+        }
+    };
+
     const albumVariations = getAlbumVariations(album);
     for (let attempt = 0; attempt < albumVariations.length; attempt++) {
         const searchAlbum = albumVariations[attempt];
         try {
             console.log(`[ART] Discogs attempt ${attempt + 1}/${albumVariations.length}: "${artist}" - "${searchAlbum}"...`);
             const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
-            const discogsRes = await axios.get(discogsUrl, {
-                timeout: 5000,
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Accept': 'application/json'
-                }
-            });
 
-            if (discogsRes.data.results && discogsRes.data.results.length > 0) {
-                const scoredResults = discogsRes.data.results.map(item => {
+            const data = await fetchDiscogs(discogsUrl);
+
+            if (data.results && data.results.length > 0) {
+                const scoredResults = data.results.map(item => {
                     let score = 0;
                     const titleParts = item.title.split(' - ');
                     const itemArtist = titleParts[0];
@@ -2128,16 +2203,10 @@ async function findDiscogsArtUrl(artist, album) {
             try {
                 console.log(`[ART] Discogs attempt ${attempt + 1} fallback (Album Only): "${searchAlbum}"...`);
                 const fallbackUrl = `https://api.discogs.com/database/search?release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
-                const fallbackRes = await axios.get(fallbackUrl, {
-                    timeout: 5000,
-                    headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                        'Accept': 'application/json'
-                    }
-                });
+                const data = await fetchDiscogs(fallbackUrl);
 
-                if (fallbackRes.data.results && fallbackRes.data.results.length > 0) {
-                    const scoredFallbackResults = fallbackRes.data.results.map(item => {
+                if (data.results && data.results.length > 0) {
+                    const scoredFallbackResults = data.results.map(item => {
                         let score = 0;
                         const titleParts = item.title.split(' - ');
                         const itemAlbum = titleParts[titleParts.length - 1];
@@ -2241,25 +2310,21 @@ app.get('/api/art/proxy', async (req, res) => {
 
     try {
         console.log(`[PROXY] Fetching: ${url}`);
-        const response = await axios.get(url, {
-            responseType: 'stream',
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'image/*'
-            }
+        const response = await fetch(url, {
+            headers: { 'User-Agent': `${settings.deviceName}/1.0` },
+            signal: AbortSignal.timeout(15000)
         });
 
-        // Copy over relevant headers
-        if (response.headers['content-type']) {
-            res.setHeader('Content-Type', response.headers['content-type']);
-        }
-        if (response.headers['content-length']) {
-            res.setHeader('Content-Length', response.headers['content-length']);
-        }
-        res.setHeader('Cache-Control', 'public, max-age=31536000'); // Cache for a year
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-        response.data.pipe(res);
+        // Copy relevant headers
+        if (response.headers.get('content-type')) res.setHeader('Content-Type', response.headers.get('content-type'));
+        if (response.headers.get('content-length')) res.setHeader('Content-Length', response.headers.get('content-length'));
+        res.setHeader('Cache-Control', 'public, max-age=31536000');
+
+        const blob = await response.blob();
+        const buffer = Buffer.from(await blob.arrayBuffer());
+        res.send(buffer);
     } catch (err) {
         console.error(`[PROXY] Error fetching ${url}:`, err.message);
         res.status(500).json({ error: 'Failed to proxy image', details: err.message, url: url });
@@ -2410,7 +2475,7 @@ async function getTrackMetadata(uri) {
     let metadata;
 
     if (uri.startsWith('http')) {
-        const response = await axios.get(uri, { responseType: 'arraybuffer', timeout: 10000 });
+        const response = await axios.get(uri, { responseType: 'arraybuffer', timeout: 10000, family: 4 });
         const buffer = Buffer.from(response.data);
         const contentType = response.headers['content-type'];
 
@@ -2617,6 +2682,95 @@ app.get('/api/local/va-candidates', async (req, res) => {
         res.json({ tracks: results });
     } catch (e) {
         console.error('[VA Candidates] Scan error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/move-to-tags', express.json(), async (req, res) => {
+    const { uri } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+
+        let localPath = uri;
+        if (uri.startsWith('http') && uri.includes('/local-files/')) {
+            try {
+                const url = new URL(uri);
+                const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+                localPath = path.join(localDir, relPath);
+            } catch (e) {
+                console.warn(`[Move to Tags] URL parsing failed for ${uri}:`, e.message);
+            }
+        }
+
+        if (!fs.existsSync(localPath)) {
+            // Fallback: try direct join if not found
+            const absoluteLocal = path.join(localDir, uri);
+            if (fs.existsSync(absoluteLocal)) localPath = absoluteLocal;
+        }
+
+        if (!fs.existsSync(localPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        // Get metadata
+        const metadata = await getTrackMetadata(uri);
+        const artist = metadata?.common?.artist;
+        const album = metadata?.common?.album;
+
+        if (!artist || !album) {
+            return res.status(400).json({ error: 'Track must have both Artist and Album tags' });
+        }
+
+        const safeArtist = artist.replace(/[<>:"/\\|?*]+/g, '_').trim();
+        const safeAlbum = album.replace(/[<>:"/\\|?*]+/g, '_').trim();
+        const fileName = path.basename(localPath);
+
+        // Preserve the base folder (the folder containing the Artist folder)
+        // We assume the structure is .../Base/Artist/Album/File
+        const currentAlbumDir = path.dirname(localPath);
+        const currentArtistDir = path.dirname(currentAlbumDir);
+        const baseDir = path.dirname(currentArtistDir);
+
+        const artistDir = path.join(baseDir, safeArtist);
+        const targetAlbumDir = path.join(artistDir, safeAlbum);
+        const targetPath = path.join(targetAlbumDir, fileName);
+
+        if (localPath.toLowerCase() === targetPath.toLowerCase()) {
+            return res.status(400).json({ error: 'File is already in the correct folder.' });
+        }
+
+        if (fs.existsSync(targetPath)) {
+            return res.status(400).json({ error: 'Target file already exists.' });
+        }
+
+        if (!fs.existsSync(artistDir)) await fs.promises.mkdir(artistDir, { recursive: true });
+        if (!fs.existsSync(targetAlbumDir)) await fs.promises.mkdir(targetAlbumDir, { recursive: true });
+
+        const sourceDir = path.dirname(localPath);
+        await fs.promises.rename(localPath, targetPath);
+
+        // Clean up empty directories
+        let currentDir = sourceDir;
+        while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
+            try {
+                const remaining = await fs.promises.readdir(currentDir);
+                if (remaining.length === 0) {
+                    await fs.promises.rmdir(currentDir);
+                    currentDir = path.dirname(currentDir);
+                } else {
+                    break;
+                }
+            } catch (e) {
+                break;
+            }
+        }
+
+        const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
+        res.json({ success: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) });
+    } catch (e) {
+        console.error('[Move to Tags] Error:', e);
         res.status(500).json({ error: e.message });
     }
 });
