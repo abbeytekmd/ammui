@@ -2,18 +2,25 @@
 
 A web based home hub. Plays music and views family photos.
 
+* Play music from your own server: Subsonic, MiniDLNA, etc.
+* Show a slideshow of your photos without adverts
+* Support for older players : Gen 1 Sonos Players, Airplay, DLNA
+* No subscriptions, No tracking, No adverts
+
+## Features
+
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
-* Send to local players (Sonos and DLNA players)
+* Send to local players (Sonos and DLNA players. Limited Airplay support - ffmepg must be installed on the host machine)
 * Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (currently playing album art)
 * Set home folders for Music Browsing, Photo Browsing and Slideshow.
+* Local media library - Download/Tag/Organise music/photos. Served over DLNA.
 * Album art retrieved from discogs. (Api key required)
-* Includes a local DLNA server where you can download music/photos to.
 
 <img src="images/ammui-desktop-mode.png" />
 
-This UI forms part of a standalone product, the Abbeytek Media Machine, which is basically an embedded device with an Audio HAT and speakers and DLNA player software onboard. Adding this UI makes it an all in one server/player you can just drop on your network.
+This UI forms part of a standalone product, the Abbeytek Media Machine, which is basically an embedded device with DLNA player software onboard. Adding this UI makes it an all in one server/player you can just drop onto your network.
 
-As we have a linux box on our network, we're running this on it, and we have a 10" tablet running the UI in Chrome. The same box is also running minidlna.
+We have this running on our in-house linux box and we have a 10" tablet running the UI in Chrome.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
@@ -76,9 +83,18 @@ As we have a linux box on our network, we're running this on it, and we have a 1
 
 ## Tested with
 
-* Sonos Play 5 Rev 1
-* Sonos Play 3 Rev 1
+### Sonos:
+* Sonos Play 5 Gen 1
+* Sonos Play 3 Gen 1
+* Sonos Beam Gen 1
+
+### Airplay:
+* Logitech UE Wireless Air Speaker S-00118
+
+### DLNA Clients:
 * Linux upmpdcli
+
+### DLNA Servers:
 * ReadyDLNA/MiniDLNA
 * Subsonic
 * JRiver Media Center (Windows)
