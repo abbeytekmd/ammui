@@ -797,7 +797,8 @@
             ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
             onmouseup="event.stopPropagation()">
             <div class="ss-control-item" onclick="previousSlideshow()"
-                ontouchstart="previousSlideshow(); event.preventDefault();">
+                ontouchstart="previousSlideshow(); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button class="btn-ss-back" title="Previous Photo">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -807,7 +808,8 @@
                 <div class="ss-control-label">Last</div>
             </div>
             <div class="ss-control-item" onclick="rotateSlideshow(-90)"
-                ontouchstart="rotateSlideshow(-90); event.preventDefault();">
+                ontouchstart="rotateSlideshow(-90); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button class="btn-ss-rotate" title="Rotate Left">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -819,7 +821,8 @@
             </div>
 
             <div class="ss-control-item" onclick="toggleSlideshowMode()"
-                ontouchstart="toggleSlideshowMode(); event.preventDefault();">
+                ontouchstart="toggleSlideshowMode(); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Favourites)">
                     <span id="ss-mode-label">All</span>
                 </button>
@@ -827,7 +830,8 @@
             </div>
 
             <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
-                ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();">
+                ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button id="btn-ss-favourite" class="btn-ss-favourite" title="Favourite Photo">
                     <svg id="svg-favourite" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -840,7 +844,8 @@
             </div>
 
             <div class="ss-control-item" onclick="deleteCurrentPhoto()"
-                ontouchstart="deleteCurrentPhoto(); event.preventDefault();">
+                ontouchstart="deleteCurrentPhoto(); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button class="btn-ss-delete" title="Hide Photo (Don't show again)">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -854,7 +859,8 @@
                 <div class="ss-control-label">Delete</div>
             </div>
             <div class="ss-control-item" onclick="stopSlideshow()"
-                ontouchstart="stopSlideshow(); event.preventDefault();">
+                ontouchstart="stopSlideshow(); event.preventDefault();"
+                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                 <button class="btn-ss-stop" title="Exit Slideshow">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">

@@ -1,9 +1,9 @@
 # UI for an Abbeytek Media Machine (AMMUI)
 
-A web based home hub. Plays music and views family photos.
+A web based home hub. Plays music and shows family photos.
 
 * Play music from your own server: Subsonic, MiniDLNA, etc.
-* Show a slideshow of your photos without adverts
+* Show a slideshow of your photos from your server without adverts and without the need to upload them to the web
 * Support for older players : Gen 1 Sonos Players, Airplay, DLNA
 * No subscriptions, No tracking, No adverts
 
@@ -61,6 +61,12 @@ We have this running on our in-house linux box and we have a 10" tablet running 
     ```bash
     npm install
     ```
+
+3. Optional: Install ffmpeg for Airplay support.
+    ```bash
+    sudo apt-get install ffmpeg
+    ```
+    or just download/install the package on Windows.
 
 ### Usage
 

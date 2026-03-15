@@ -4374,6 +4374,35 @@ input:checked+.slider:before {
     transform: scale(1.1);
 }
 
+/* Prevent buttons from staying active/highlighted on touch devices */
+.btn-ss-delete:active,
+.btn-ss-favourite:active,
+.btn-ss-back:active,
+.btn-ss-rotate:active,
+.btn-ss-mode:active,
+.btn-ss-stop:active {
+    background: rgba(239, 68, 68, 0.6) !important;
+    transform: scale(0.95) !important;
+}
+
+/* Reset active state immediately on touch end */
+.ss-control-item button {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    transition: all 0.2s ease;
+}
+
+/* Force reset of any stuck active states */
+.ss-control-item button:focus,
+.ss-control-item button:active {
+    outline: none;
+}
+
 #ss-mode-label {
     font-size: 11px;
     font-weight: 800;

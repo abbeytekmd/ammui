@@ -22,7 +22,6 @@ import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
-import crypto from 'crypto';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import AirPlayManager from './lib/airplay-manager.js';
@@ -34,18 +33,23 @@ const { DeviceDiscovery } = sonos;
 const hostIp = getLocalIp();
 export const BROWSER_PLAYER_UDN = 'uuid:ammui-browser-player';
 
+const isPkg = typeof process.pkg !== 'undefined';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DEVICES_FILE = path.join(__dirname, 'devices.json');
-const SETTINGS_FILE = path.join(__dirname, 'settings.json');
-const STATS_FILE = path.join(__dirname, 'stats.json');
+
+// When packaged with pkg, we want to store mutable files (settings, devices, stats) 
+// in the same directory as the executable, not inside the read-only snapshot.
+const baseDataDir = isPkg ? path.dirname(process.execPath) : __dirname;
+
+const DEVICES_FILE = path.join(baseDataDir, 'devices.json');
+const SETTINGS_FILE = path.join(baseDataDir, 'settings.json');
 
 const app = express();
 const port = 3000;
 
 // Ensure directories exist
-if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
-if (!fs.existsSync(path.join(__dirname, 'local'))) fs.mkdirSync(path.join(__dirname, 'local'), { recursive: true });
+if (!fs.existsSync(path.join(baseDataDir, 'uploads'))) fs.mkdirSync(path.join(baseDataDir, 'uploads'), { recursive: true });
+if (!fs.existsSync(path.join(baseDataDir, 'local'))) fs.mkdirSync(path.join(baseDataDir, 'local'), { recursive: true });
 
 app.use(express.json());
 
@@ -281,7 +285,7 @@ async function syncToS3() {
             forcePathStyle: false
         });
 
-        const localDir = path.join(__dirname, 'local');
+        const localDir = path.join(baseDataDir, 'local');
         if (!fs.existsSync(localDir)) return;
 
         const allFiles = [];

@@ -5334,6 +5334,7 @@ class Slideshow {
             console.error('Fav toggle failed:', e);
             this.favBtn.classList.toggle('is-favourite', !newState);
         }
+        this.resetButtonStates();
         this.resetInterval();
     }
 
@@ -5352,6 +5353,8 @@ class Slideshow {
                     this.items.splice(this.index, 1);
                     this.index--; // Back up so next() advances to the new item at this index
                 }
+                // Reset button states to prevent stuck highlighting on touch devices
+                this.resetButtonStates();
                 this.next();
             }
         } catch (e) {
@@ -5438,6 +5441,15 @@ class Slideshow {
             folderTitle
         };
         this.start([item], 0);
+    }
+
+    resetButtonStates() {
+        // Reset button active states to prevent stuck highlighting on touch devices
+        const buttons = document.querySelectorAll('.ss-control-item button');
+        buttons.forEach(button => {
+            button.blur(); // Remove focus
+            button.classList.remove('active'); // Remove any active classes
+        });
     }
 }
 
