@@ -1,26 +1,27 @@
 # UI for an Abbeytek Media Machine (AMMUI)
 
-A web based home hub. Plays music and shows family photos.
+A web based home hub. Plays music and shows family photos, great if you have a large mp3 and/or photo collection.
 
 * Play music from your own server: Subsonic, MiniDLNA, etc.
-* Show a slideshow of your photos from your server without adverts and without the need to upload them to the web
-* Support for older players : Gen 1 Sonos Players, Airplay, DLNA
+* Import mp3s to the local server and play from there.
+* Show a slideshow of your photos without adverts and without the need to upload them to the web
+* Support for wifi music players : Gen 1 Sonos Players, Airplay, DLNA
 * No subscriptions, No tracking, No adverts
 
 ## Features
 
+* Send music to local players (Sonos and DLNA players. Some Airplay support - ffmepg must be installed on the host machine)
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
-* Send to local players (Sonos and DLNA players. Limited Airplay support - ffmepg must be installed on the host machine)
-* Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (currently playing album art)
+* Build local media library - Download/Tag/Organise music/photos. Served over DLNA.
+* Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (album art)
 * Set home folders for Music Browsing, Photo Browsing and Slideshow.
-* Local media library - Download/Tag/Organise music/photos. Served over DLNA.
-* Album art retrieved from discogs. (Api key required)
+* Album art can be retrieved from discogs.
 
 <img src="images/ammui-desktop-mode.png" />
 
 This UI forms part of a standalone product, the Abbeytek Media Machine, which is basically an embedded device with DLNA player software onboard. Adding this UI makes it an all in one server/player you can just drop onto your network.
 
-We have this running on our in-house linux box and we have a 10" tablet running the UI in Chrome.
+You could also have this running on a headless linux/windows box with, say, tablets running the UI in Chrome.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
@@ -33,8 +34,8 @@ We have this running on our in-house linux box and we have a 10" tablet running 
 <img src="images/ammui-slideshow.png" width="300"/>
 <img src="images/ammui-slideshow-map.png" width="300"/>
 
-## Tablet mode
-* Player / server expandable panes.
+## Tablet/Phone mode
+* Player / server switchable panes.
 
 <img src="images/ammui-tablet-mode.png" width="600"/>
 
