@@ -5125,7 +5125,19 @@ class Slideshow {
                 this.img.style.opacity = 1;
                 if (this.info) this.info.style.opacity = 1;
                 const ratio = this.img.naturalWidth / this.img.naturalHeight;
-                this.img.classList.toggle('panorama', ratio > 2.2);
+                const isPanorama = ratio > 2.2;
+                this.img.classList.toggle('panorama', isPanorama);
+                // Reset any previous pan animation
+                this.img.style.animation = 'none';
+                void this.img.offsetWidth; // force reflow
+                if (isPanorama) {
+                    const dur = Math.max((this.duration || 60000) / 1000, 20);
+                    this._panoramaDir = (this._panoramaDir === undefined) ? false : !this._panoramaDir;
+                    const animName = this._panoramaDir ? 'panoramaPanRL' : 'panoramaPanLR';
+                    this.img.style.animation = `${animName} ${dur}s ease-in-out forwards`;
+                } else {
+                    this.img.style.animation = '';
+                }
             };
             if (this.img.complete) this.img.onload();
         }, 500);
@@ -5316,8 +5328,6 @@ class Slideshow {
         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
         localStorage.setItem('screensaverMode', this.mode);
         this.updateModeUI();
-        const modeNames = { all: 'All', onThisDay: 'On This Day', favourites: 'Favourites', nowPlaying: 'Music' };
-        showToast(`Mode: ${modeNames[this.mode] || this.mode}`, 'info', 2000);
         this.next();
     }
 

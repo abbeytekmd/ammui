@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node -e \"import\\(''axios''\\).then\\(\\({default: axios}\\) => axios.get\\(''https://api.github.com/repos/abbeytekmd/ammui/releases/latest'', {headers: {''User-Agent'': ''test''}, timeout: 10000}\\).then\\(r => console.log\\(''status:'', r.status, ''tag:'', r.data.tag_name\\)\\).catch\\(e => console.error\\(''error:'', e.code || e.response?.status, e.message\\)\\)\\)\")"
+      "Bash(node -e \"import\\(''axios''\\).then\\(\\({default: axios}\\) => axios.get\\(''https://api.github.com/repos/abbeytekmd/ammui/releases/latest'', {headers: {''User-Agent'': ''test''}, timeout: 10000}\\).then\\(r => console.log\\(''status:'', r.status, ''tag:'', r.data.tag_name\\)\\).catch\\(e => console.error\\(''error:'', e.code || e.response?.status, e.message\\)\\)\\)\")",
+      "Bash(grep -E \"\\\\.js$|server|index\")",
+      "Bash(grep -n \"clearPlaylist\\\\|stop\\(\\)\\\\|pause\\(\\)\" /z/dlna-webui/lib/*.js)"
     ]
   }
 }

@@ -21,3 +21,4 @@ play_history.json
 # log files
 debug.log
 server.log
+.claude/settings.local.json
