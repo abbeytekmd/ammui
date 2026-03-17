@@ -3223,6 +3223,71 @@ p.subtitle {
     text-decoration: underline;
 }
 
+/* Update Styles */
+.update-status-container {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.update-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.update-info-row:last-child {
+    border-bottom: none;
+}
+
+.update-label {
+    font-weight: 500;
+    color: var(--text);
+}
+
+.update-value {
+    color: var(--text-muted);
+    font-family: 'Inter', monospace;
+}
+
+.update-available {
+    color: var(--primary) !important;
+    font-weight: 600;
+}
+
+.update-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.update-progress-container {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.update-progress-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.update-progress-text {
+    color: var(--text);
+    font-size: 0.875rem;
+}
+
+.update-progress-percent {
+    color: var(--primary);
+    font-weight: 600;
+    font-family: 'Inter', monospace;
+}
+
 /* Console Modal Styles */
 .console-modal-content {
     width: 90vw !important;
@@ -3997,39 +4062,21 @@ input:checked+.slider:before {
     transition: opacity 1s ease-in-out;
     --ss-rotation: 0deg;
     transform: rotate(var(--ss-rotation)) scale(1);
-    animation: ken-burns 40s ease-in-out infinite alternate;
     z-index: 10001;
     position: relative;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
 }
 
-@keyframes ken-burns {
-    0% {
-        transform: rotate(var(--ss-rotation)) scale(1) translate(0, 0);
-    }
 
-    100% {
-        transform: rotate(var(--ss-rotation)) scale(1.1) translate(1%, 1%);
-    }
-}
 
 .screensaver-img.panorama {
     width: 100%;
     height: 100%;
     object-fit: cover;
     object-position: left center;
-    animation: pan-panorama 30s linear infinite alternate;
 }
 
-@keyframes pan-panorama {
-    0% {
-        object-position: left center;
-    }
 
-    100% {
-        object-position: right center;
-    }
-}
 
 /* Modal Panorama Styles */
 .panorama-wrapper {
@@ -4110,6 +4157,35 @@ input:checked+.slider:before {
     display: none;
 }
 
+.ss-now-playing-label {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 14px;
+    font-weight: 500;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8);
+    background: rgba(0, 0, 0, 0.45);
+    padding: 6px 12px;
+    border-radius: 6px;
+    pointer-events: none;
+    z-index: 10001;
+    max-width: 60vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: opacity 0.3s ease;
+}
+
+.ss-now-playing-label .ss-np-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    opacity: 0.7;
+    margin-right: 4px;
+}
+
 .screensaver-info {
     position: absolute;
     bottom: calc(50px + env(safe-area-inset-bottom));
@@ -4183,6 +4259,8 @@ input:checked+.slider:before {
     align-items: center;
     gap: 8px;
     cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .ss-control-label {
@@ -4385,7 +4463,7 @@ input:checked+.slider:before {
     transform: scale(0.95) !important;
 }
 
-/* Reset active state immediately on touch end */
+/* Buttons inside ss-control-item are visual-only; parent div handles all interaction */
 .ss-control-item button {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
@@ -4394,10 +4472,10 @@ input:checked+.slider:before {
     -moz-user-select: none;
     -ms-user-select: none;
     user-select: none;
+    pointer-events: none;
     transition: all 0.2s ease;
 }
 
-/* Force reset of any stuck active states */
 .ss-control-item button:focus,
 .ss-control-item button:active {
     outline: none;

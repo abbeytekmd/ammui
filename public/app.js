@@ -1808,6 +1808,11 @@ function updateStatus(status) {
             slideshow.next();
         }
 
+        // Refresh now-playing label in slideshow (all modes)
+        if (slideshow && slideshow.isActive) {
+            slideshow.refreshNowPlayingLabel();
+        }
+
         // Report play stats if playing a new track
         if (currentTransportState === 'Playing' && currentTrackId != null) {
             const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
@@ -2829,6 +2834,11 @@ function switchSettingsTab(tab) {
     // Auto-trigger AirPlay scan when entering the tab
     if (tab.toLowerCase() === 'airplay') {
         startAirPlayScan();
+    }
+
+    // Auto-check version when entering updates tab
+    if (tab.toLowerCase() === 'updates') {
+        checkForUpdates();
     }
 }
 
@@ -4883,6 +4893,7 @@ class Slideshow {
         this.info = document.getElementById('screensaver-info');
         this.favBtn = document.getElementById('btn-ss-favourite');
         this.modeLabel = document.getElementById('ss-mode-label');
+        this.nowPlayingLabel = document.getElementById('ss-now-playing-label');
         this.mapWindow = document.getElementById('ss-map-window');
         this.leafletMap = null;
         this.leafletMarker = null;
@@ -4966,6 +4977,7 @@ class Slideshow {
             this.overlay.classList.remove('active');
             const popover = document.getElementById('ss-volume-popover');
             if (popover) popover.classList.remove('active');
+            if (this.nowPlayingLabel) this.nowPlayingLabel.style.display = 'none';
             setTimeout(() => {
                 if (!this.isActive) this.overlay.style.display = 'none';
             }, 500);
@@ -5106,9 +5118,6 @@ class Slideshow {
             }
 
             this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
-            this.img.style.animation = 'none';
-            void this.img.offsetWidth;
-            this.img.style.animation = '';
 
             this.updateInfoUI(data);
 
@@ -5159,11 +5168,31 @@ class Slideshow {
             </div>
             <div class="ss-camera">${cameraStr}</div>`;
 
+        if (this.nowPlayingLabel) {
+            this.refreshNowPlayingLabel();
+        }
+
         currentScreensaverFolder = { id: data.folderId, title: data.folderTitle };
 
         // Always fetch full metadata to get camera info (and GPS fallback).
         // The server's 64KB range-fetch often misses EXIF data deeper in the file.
         this.fetchMetadataFallback(data);
+    }
+
+    refreshNowPlayingLabel() {
+        if (!this.nowPlayingLabel) return;
+        const playingTrack = currentTransportState === 'Playing'
+            ? currentPlaylistItems.find(item => item.id == currentTrackId)
+            : null;
+        if (playingTrack) {
+            const title = playingTrack.title || '';
+            const artist = playingTrack.artist || '';
+            const text = artist ? `${title} — ${artist}` : title;
+            this.nowPlayingLabel.innerHTML = `<span class="ss-np-label">Now Playing</span>${text}`;
+            this.nowPlayingLabel.style.display = '';
+        } else {
+            this.nowPlayingLabel.style.display = 'none';
+        }
     }
 
     fetchMetadataFallback(data) {
@@ -5287,7 +5316,8 @@ class Slideshow {
         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
         localStorage.setItem('screensaverMode', this.mode);
         this.updateModeUI();
-        showToast(`Mode: ${this.mode}`, 'info', 2000);
+        const modeNames = { all: 'All', onThisDay: 'On This Day', favourites: 'Favourites', nowPlaying: 'Music' };
+        showToast(`Mode: ${modeNames[this.mode] || this.mode}`, 'info', 2000);
         this.next();
     }
 
@@ -5703,6 +5733,115 @@ async function triggerS3Sync() {
 
 
 
+
+// Update functions
+async function checkForUpdates() {
+    const btn = document.getElementById('btn-check-updates');
+    const currentVersionEl = document.getElementById('current-version');
+    const latestVersionEl = document.getElementById('latest-version');
+    const updateAvailableRow = document.getElementById('update-available-row');
+    const updateBtn = document.getElementById('btn-update-now');
+
+    if (btn) btn.disabled = true;
+    if (currentVersionEl) currentVersionEl.textContent = 'Loading...';
+    if (latestVersionEl) latestVersionEl.textContent = 'Checking...';
+
+    try {
+        // Get current version
+        const versionRes = await fetch('/api/version');
+        if (versionRes.ok) {
+            const versionData = await versionRes.json();
+            if (currentVersionEl) currentVersionEl.textContent = versionData.version || 'Unknown';
+        }
+
+        // Check for updates
+        const updateRes = await fetch('/api/updates/check');
+        if (updateRes.ok) {
+            const updateData = await updateRes.json();
+            if (latestVersionEl) latestVersionEl.textContent = updateData.latestVersion || 'Unknown';
+
+            if (updateData.updateAvailable) {
+                if (updateAvailableRow) updateAvailableRow.style.display = 'flex';
+                if (updateBtn) updateBtn.style.display = 'inline-flex';
+                showToast('Update available!', 'info', 3000);
+            } else {
+                if (updateAvailableRow) updateAvailableRow.style.display = 'none';
+                if (updateBtn) updateBtn.style.display = 'none';
+                showToast('You are running the latest version', 'success', 3000);
+            }
+        } else {
+            if (latestVersionEl) latestVersionEl.textContent = 'Check failed';
+            showToast('Failed to check for updates', 'error', 3000);
+        }
+    } catch (err) {
+        console.error('Update check failed:', err);
+        if (latestVersionEl) latestVersionEl.textContent = 'Error';
+        showToast('Failed to check for updates', 'error', 3000);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function performUpdate() {
+    const updateBtn = document.getElementById('btn-update-now');
+    const progressContainer = document.getElementById('update-progress-container');
+    const progressText = document.getElementById('update-progress-text');
+    const progressPercent = document.getElementById('update-progress-percent');
+    const progressBar = document.getElementById('update-progress-bar');
+
+    if (updateBtn) updateBtn.disabled = true;
+    if (progressContainer) progressContainer.style.display = 'block';
+
+    try {
+        const response = await fetch('/api/updates/apply', {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Update failed');
+        }
+
+        // Handle SSE for progress updates
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value);
+            const lines = chunk.split('\n');
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        if (progressText) progressText.textContent = data.message || 'Updating...';
+                        if (progressPercent) progressPercent.textContent = data.progress ? `${data.progress}%` : '';
+                        if (progressBar) progressBar.style.width = data.progress ? `${data.progress}%` : '0%';
+
+                        if (data.complete) {
+                            showToast('Update completed! Application will restart...', 'success', 5000);
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 2000);
+                            return;
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse progress data:', e);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('Update failed:', err);
+        if (progressText) progressText.textContent = 'Update failed';
+        showToast(`Update failed: ${err.message}`, 'error', 5000);
+    } finally {
+        if (updateBtn) updateBtn.disabled = false;
+    }
+}
 
 // Stats Modal logic
 async function openStatsModal() {

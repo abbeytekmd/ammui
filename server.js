@@ -25,6 +25,12 @@ import VirtualRenderer from './lib/virtual-renderer.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import AirPlayManager from './lib/airplay-manager.js';
+import https from 'https';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import AdmZip from 'adm-zip';
+
+const execAsync = promisify(exec);
 
 // setupLocalDlna will be called after settings are loaded below
 
@@ -2454,6 +2460,262 @@ app.get('/api/art/local', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+// Update API routes
+app.get('/api/version', async (req, res) => {
+    try {
+        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
+        res.json({ version: packageJson.version });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to read version' });
+    }
+});
+
+app.get('/api/updates/check', async (req, res) => {
+    let currentVersion = 'unknown';
+    try {
+        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
+        currentVersion = packageJson.version;
+
+        console.log('[UPDATES] Checking for updates from GitHub...');
+
+        // Get latest release from GitHub
+        const response = await axios.get('https://api.github.com/repos/abbeytekmd/ammui/releases/latest', {
+            headers: {
+                'User-Agent': 'AMMUI-Update-Checker'
+            },
+            timeout: 10000 // 10 second timeout
+        });
+
+        console.log('[UPDATES] GitHub API response received');
+
+        if (!response.data || !response.data.tag_name) {
+            console.error('[UPDATES] Invalid response from GitHub API:', response.data);
+            return res.status(500).json({ error: 'Invalid response from GitHub API' });
+        }
+
+        const latestVersion = response.data.tag_name.replace('v', '');
+        const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
+
+        console.log(`[UPDATES] Current: ${currentVersion}, Latest: ${latestVersion}, Update available: ${updateAvailable}`);
+
+        res.json({
+            currentVersion,
+            latestVersion,
+            updateAvailable,
+            releaseUrl: response.data.html_url,
+            releaseNotes: response.data.body
+        });
+    } catch (err) {
+        console.error('[UPDATES] CAUGHT ERROR in catch block');
+        console.error('[UPDATES] Failed to check for updates - FULL ERROR:', err);
+        console.error('[UPDATES] Error details:', {
+            message: err.message,
+            code: err.code,
+            status: err.response?.status,
+            statusText: err.response?.statusText,
+            url: err.config?.url,
+            isAxiosError: err.isAxiosError,
+            stack: err.stack?.substring(0, 500)
+        });
+
+        // Handle specific error cases
+        let errorMessage = err.message || 'Failed to check for updates';
+        if (err.isAxiosError && err.response?.status === 404) {
+            // No releases found - this is normal for a repository without releases
+            console.log('[UPDATES] No releases found in repository - this is normal');
+            return res.json({
+                currentVersion,
+                latestVersion: currentVersion,
+                updateAvailable: false,
+                releaseUrl: 'https://github.com/abbeytekmd/ammui/releases',
+                releaseNotes: 'No releases available yet. Check back later for updates.',
+                message: 'No releases available in the repository yet.'
+            });
+        } else if (err.isAxiosError && err.response?.status === 403) {
+            errorMessage = 'GitHub API rate limit exceeded or access denied';
+        }
+
+        res.status(500).json({
+            error: errorMessage,
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    }
+});
+
+app.post('/api/updates/apply', async (req, res) => {
+    try {
+        // Set headers for SSE
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Cache-Control'
+        });
+
+        const sendProgress = (message, progress = null) => {
+            res.write(`data: ${JSON.stringify({ message, progress })}\n\n`);
+        };
+
+        sendProgress('Checking for updates...', 10);
+
+        // Get latest release info
+        const releaseResponse = await axios.get('https://api.github.com/repos/abbeytekmd/ammui/releases/latest', {
+            headers: { 'User-Agent': 'AMMUI-Update-Checker' }
+        });
+
+        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
+        const currentVersion = packageJson.version;
+        const latestVersion = releaseResponse.data.tag_name.replace('v', '');
+
+        if (compareVersions(latestVersion, currentVersion) <= 0) {
+            sendProgress('Already up to date', 100);
+            res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
+            res.end();
+            return;
+        }
+
+        sendProgress('Downloading update...', 20);
+
+        // Find the zip asset
+        const zipAsset = releaseResponse.data.assets.find(asset =>
+            asset.name.endsWith('.zip') && !asset.name.includes('pkg')
+        );
+
+        if (!zipAsset) {
+            throw new Error('No update package found');
+        }
+
+        // Download the zip file
+        const zipPath = path.join(baseDataDir, 'update.zip');
+        const file = fs.createWriteStream(zipPath);
+
+        const downloadResponse = await axios({
+            method: 'GET',
+            url: zipAsset.browser_download_url,
+            responseType: 'stream',
+            headers: { 'User-Agent': 'AMMUI-Update-Checker' }
+        });
+
+        let downloaded = 0;
+        const totalSize = parseInt(downloadResponse.headers['content-length'], 10);
+
+        downloadResponse.data.on('data', (chunk) => {
+            downloaded += chunk.length;
+            const progress = Math.round((downloaded / totalSize) * 30) + 20; // 20-50%
+            sendProgress(`Downloading... ${Math.round(downloaded / 1024 / 1024)}MB`, progress);
+        });
+
+        downloadResponse.data.pipe(file);
+
+        await new Promise((resolve, reject) => {
+            file.on('finish', resolve);
+            file.on('error', reject);
+        });
+
+        sendProgress('Extracting update...', 60);
+
+        // Extract the zip file
+        const zip = new AdmZip(zipPath);
+        const extractPath = path.join(baseDataDir, 'update_temp');
+
+        // Clear temp directory if it exists
+        if (fs.existsSync(extractPath)) {
+            fs.rmSync(extractPath, { recursive: true, force: true });
+        }
+
+        zip.extractAllTo(extractPath, true);
+
+        sendProgress('Installing update...', 80);
+
+        // Find the extracted directory (should be the repo name)
+        const extractedDirs = fs.readdirSync(extractPath).filter(item =>
+            fs.statSync(path.join(extractPath, item)).isDirectory()
+        );
+
+        if (extractedDirs.length === 0) {
+            throw new Error('Invalid update package structure');
+        }
+
+        const sourceDir = path.join(extractPath, extractedDirs[0]);
+        const appDir = path.dirname(__dirname);
+
+        // Copy files (excluding certain directories)
+        const excludeDirs = ['node_modules', '.git', 'local', 'uploads', 'update_temp'];
+        const excludeFiles = ['devices.json', 'settings.json', 'play_history.json', 'stats.json', 'db.json'];
+
+        await copyDirectory(sourceDir, appDir, excludeDirs, excludeFiles, (progress) => {
+            sendProgress('Installing update...', 80 + Math.round(progress * 0.15));
+        });
+
+        sendProgress('Cleaning up...', 95);
+
+        // Clean up
+        fs.unlinkSync(zipPath);
+        fs.rmSync(extractPath, { recursive: true, force: true });
+
+        sendProgress('Update completed! Restarting...', 100);
+        res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
+        res.end();
+
+        // Restart the application after a short delay
+        setTimeout(() => {
+            console.log('Update completed, restarting application...');
+            process.exit(0); // The process manager should restart it
+        }, 2000);
+
+    } catch (err) {
+        console.error('Update failed:', err);
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.end();
+    }
+});
+
+// Helper functions
+function compareVersions(version1, version2) {
+    const v1 = version1.split('.').map(Number);
+    const v2 = version2.split('.').map(Number);
+
+    for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
+        const num1 = v1[i] || 0;
+        const num2 = v2[i] || 0;
+
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
+    }
+
+    return 0;
+}
+
+async function copyDirectory(source, destination, excludeDirs = [], excludeFiles = [], progressCallback = null) {
+    const items = fs.readdirSync(source);
+    let processed = 0;
+
+    for (const item of items) {
+        if (excludeDirs.includes(item)) continue;
+
+        const sourcePath = path.join(source, item);
+        const destPath = path.join(destination, item);
+        const stat = fs.statSync(sourcePath);
+
+        if (stat.isDirectory()) {
+            if (!fs.existsSync(destPath)) {
+                fs.mkdirSync(destPath, { recursive: true });
+            }
+            await copyDirectory(sourcePath, destPath, excludeDirs, excludeFiles);
+        } else {
+            if (!excludeFiles.includes(item)) {
+                fs.copyFileSync(sourcePath, destPath);
+            }
+        }
+
+        processed++;
+        if (progressCallback) {
+            progressCallback(processed / items.length);
+        }
+    }
+}
 
 app.listen(port, () => {
     console.log(`AMMUI server listening at http://localhost:${port}`);
