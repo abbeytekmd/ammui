@@ -5035,6 +5035,7 @@ class Slideshow {
                     };
                 } else {
                     this.mode = 'all';
+                    localStorage.setItem('screensaverMode', 'all');
                     this.updateModeUI();
                     return this.next();
                 }
@@ -5046,7 +5047,9 @@ class Slideshow {
                     const err = await res.json();
                     if (this.mode === 'onThisDay' || this.mode === 'favourites') {
                         showToast(err.error || `No photos for ${this.mode}`, 'info', 3000);
-                        this.mode = 'all';
+                        const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
+                        this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
+                        localStorage.setItem('screensaverMode', this.mode);
                         this.updateModeUI();
                         return this.next();
                     }
