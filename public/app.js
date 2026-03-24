@@ -4897,6 +4897,8 @@ class Slideshow {
         this.mapWindow = document.getElementById('ss-map-window');
         this.leafletMap = null;
         this.leafletMarker = null;
+        this.resumeIndex = -1;
+        this.resumeMode = null;
     }
 
     init() {
@@ -4968,6 +4970,13 @@ class Slideshow {
         if (!this.isActive) return;
         console.log('[SLIDESHOW] Stopping...');
         this.isActive = false;
+        if ((this.mode === 'onThisDay' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
+            this.resumeIndex = this.index;
+            this.resumeMode = this.mode;
+        } else {
+            this.resumeIndex = -1;
+            this.resumeMode = null;
+        }
         this.items = [];
         this.index = -1;
 
@@ -5046,7 +5055,13 @@ class Slideshow {
                     const items = await listRes.json();
                     if (items.length > 0) {
                         this.items = items;
-                        this.index = -1;
+                        if (this.resumeMode === this.mode && this.resumeIndex >= 0 && this.resumeIndex < items.length) {
+                            this.index = this.resumeIndex - 1; // next() will increment
+                        } else {
+                            this.index = -1;
+                        }
+                        this.resumeIndex = -1;
+                        this.resumeMode = null;
                         return this.next();
                     }
                 }
