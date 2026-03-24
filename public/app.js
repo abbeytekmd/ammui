@@ -5039,9 +5039,9 @@ class Slideshow {
                     this.updateModeUI();
                     return this.next();
                 }
-            } else if (this.mode === 'onThisDay') {
-                // Load all photos for today into items array and cycle sequentially
-                const listRes = await fetch('/api/slideshow/list?mode=onThisDay');
+            } else if (this.mode === 'onThisDay' || this.mode === 'favourites') {
+                // Load all matching photos into items array and cycle sequentially
+                const listRes = await fetch(`/api/slideshow/list?mode=${this.mode}`);
                 if (listRes.ok) {
                     const items = await listRes.json();
                     if (items.length > 0) {
@@ -5056,7 +5056,8 @@ class Slideshow {
                     data = await res.json();
                 } else {
                     const err = await res.json();
-                    showToast(err.error || 'No photos for Day', 'info', 3000);
+                    const label = this.mode === 'onThisDay' ? 'Day' : 'Favs';
+                    showToast(err.error || `No photos for ${label}`, 'info', 3000);
                     const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
                     this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
                     localStorage.setItem('screensaverMode', this.mode);
@@ -5067,16 +5068,6 @@ class Slideshow {
                 const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
                 if (res.ok) {
                     data = await res.json();
-                } else {
-                    const err = await res.json();
-                    if (this.mode === 'favourites') {
-                        showToast(err.error || `No photos for ${this.mode}`, 'info', 3000);
-                        const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
-                        this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
-                        localStorage.setItem('screensaverMode', this.mode);
-                        this.updateModeUI();
-                        return this.next();
-                    }
                 }
             }
 
@@ -5205,7 +5196,8 @@ class Slideshow {
                     ${path || 'Library'}
                 </span>
             </div>
-            <div class="ss-camera">${cameraStr}</div>`;
+            <div class="ss-camera">${cameraStr}</div>
+            ${this.items.length > 0 ? `<div class="ss-pic-counter">${this.index + 1} of ${this.items.length}</div>` : ''}`;
 
         if (this.nowPlayingLabel) {
             this.refreshNowPlayingLabel();

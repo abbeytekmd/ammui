@@ -2063,6 +2063,14 @@ app.get('/api/slideshow/list', async (req, res) => {
         if (images.length === 0) {
             return res.status(404).json({ error: 'No images found for this day' });
         }
+    } else if (mode === 'favourites') {
+        images = images.filter(img => {
+            const url = img.uri || img.res;
+            return settings.fileTags?.[url]?.includes('fav');
+        });
+        if (images.length === 0) {
+            return res.status(404).json({ error: 'No favourite photos found' });
+        }
     }
 
     res.json(images);
