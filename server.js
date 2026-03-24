@@ -2025,6 +2025,49 @@ app.get('/api/slideshow/random', async (req, res) => {
     }
 });
 
+app.get('/api/slideshow/list', async (req, res) => {
+    if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
+        return res.status(400).json({ error: 'Screensaver not configured' });
+    }
+
+    const { serverUdn, objectId } = settings.screensaver;
+    const { mode } = req.query;
+
+    const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
+    if (!cacheValid || screensaverCache.status !== 'ready' || screensaverCache.images.length === 0) {
+        let device = devices.get(serverUdn);
+        if (!device) {
+            for (const d of devices.values()) {
+                if (d.udn === serverUdn) { device = d; break; }
+            }
+        }
+        if (device && (!cacheValid || screensaverCache.status === 'idle')) {
+            refreshScreensaverCache(device, objectId);
+        }
+        return res.status(503).json({ error: 'Cache not ready yet' });
+    }
+
+    let images = screensaverCache.images;
+
+    if (mode === 'onThisDay') {
+        const today = new Date();
+        const month = today.getMonth() + 1;
+        const day = today.getDate();
+        images = images.filter(img => {
+            const dateStr = img.year || img.date || img['dc:date'];
+            if (!dateStr) return false;
+            const d = new Date(dateStr);
+            if (isNaN(d.getTime())) return false;
+            return (d.getMonth() + 1) === month && d.getDate() === day;
+        });
+        if (images.length === 0) {
+            return res.status(404).json({ error: 'No images found for this day' });
+        }
+    }
+
+    res.json(images);
+});
+
 app.post('/api/slideshow/rotate', (req, res) => {
     const { url, rotation } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });

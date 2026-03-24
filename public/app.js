@@ -5039,13 +5039,37 @@ class Slideshow {
                     this.updateModeUI();
                     return this.next();
                 }
+            } else if (this.mode === 'onThisDay') {
+                // Load all photos for today into items array and cycle sequentially
+                const listRes = await fetch('/api/slideshow/list?mode=onThisDay');
+                if (listRes.ok) {
+                    const items = await listRes.json();
+                    if (items.length > 0) {
+                        this.items = items;
+                        this.index = -1;
+                        return this.next();
+                    }
+                }
+                // Cache not ready or no photos — fall back to random endpoint for error handling
+                const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
+                if (res.ok) {
+                    data = await res.json();
+                } else {
+                    const err = await res.json();
+                    showToast(err.error || 'No photos for Day', 'info', 3000);
+                    const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
+                    this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
+                    localStorage.setItem('screensaverMode', this.mode);
+                    this.updateModeUI();
+                    return this.next();
+                }
             } else {
                 const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
                 if (res.ok) {
                     data = await res.json();
                 } else {
                     const err = await res.json();
-                    if (this.mode === 'onThisDay' || this.mode === 'favourites') {
+                    if (this.mode === 'favourites') {
                         showToast(err.error || `No photos for ${this.mode}`, 'info', 3000);
                         const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
                         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
@@ -5331,6 +5355,8 @@ class Slideshow {
         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
         localStorage.setItem('screensaverMode', this.mode);
         this.updateModeUI();
+        this.items = [];
+        this.index = -1;
         this.next();
     }
 
