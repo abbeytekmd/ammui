@@ -862,13 +862,15 @@ p.subtitle {
     padding: 0.6rem 1rem;
 }
 
-.btn-transport-play {
+.btn-transport-play,
+.btn-play-green {
     background: rgba(34, 197, 94, 0.1) !important;
     border-color: rgba(34, 197, 94, 0.3) !important;
     color: #22c55e !important;
 }
 
-.btn-transport-play:hover {
+.btn-transport-play:hover,
+.btn-play-green:hover:not(.disabled) {
     background: #22c55e !important;
     color: white !important;
     box-shadow: 0 0 20px rgba(34, 197, 94, 0.4) !important;
@@ -1535,50 +1537,28 @@ p.subtitle {
     }
 }
 
-/* Browser Tabs */
-.browser-tabs {
+/* Browser Mode Radios (on server card) */
+.browser-mode-radios {
     display: flex;
-    gap: 1.5rem;
-    margin-bottom: 0.25rem;
-    border-bottom: 1px solid var(--card-border);
-    padding: 0 0.75rem;
+    flex-direction: column;
+    gap: 0.25rem;
+    align-self: center;
+    padding-right: 0.75rem;
 }
 
-.browser-tab {
+.browser-mode-radios label {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
-    padding: 0.4rem 0 0.5rem 0;
-    background: transparent;
-    border: none;
+    gap: 0.35rem;
+    font-size: 0.8rem;
     color: var(--text-muted);
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
     cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-    margin-bottom: -1px;
+    white-space: nowrap;
 }
 
-.browser-tab:hover {
-    color: var(--text);
-}
-
-.browser-tab.active {
+.browser-mode-radios label:has(input:checked) {
     color: var(--primary);
-    border-bottom-color: var(--primary);
-}
-
-.browser-tab svg {
-    width: 14px;
-    height: 14px;
-    opacity: 0.7;
-}
-
-.browser-tab.active svg {
-    opacity: 1;
+    font-weight: 600;
 }
 
 .browser-item {
@@ -5061,7 +5041,7 @@ input:checked+.slider:before {
     #browser-container .header-controls {
         display: flex;
         justify-content: center;
-        margin-top: 0.5rem;
+        margin-bottom: 0.5rem;
     }
 
     #playlist-container .position-control-wrapper {

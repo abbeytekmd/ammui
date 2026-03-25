@@ -2034,7 +2034,15 @@ app.get('/api/slideshow/list', async (req, res) => {
         }
     }
 
-    res.json(images);
+    res.json(images.map(img => {
+        const url = img.uri || img.res;
+        const rot = (settings.manualRotations && settings.manualRotations[url]) || 0;
+        return rot ? { ...img, manualRotation: rot } : img;
+    }));
+});
+
+app.get('/api/slideshow/rotations', (req, res) => {
+    res.json(settings.manualRotations || {});
 });
 
 app.post('/api/slideshow/rotate', (req, res) => {
@@ -2603,13 +2611,23 @@ app.post('/api/updates/apply', (req, res) => {
             return;
         }
         console.log('[UPDATE] git pull output:', stdout);
-        sendProgress('Restarting...', 100);
-        res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
-        res.end();
-        setTimeout(() => {
-            console.log('[UPDATE] Restarting application...');
-            process.exit(0);
-        }, 1000);
+        sendProgress('Running npm ci...', 70);
+        exec('npm ci', { cwd: __dirname }, (err2, stdout2, stderr2) => {
+            if (err2) {
+                console.error('[UPDATE] npm ci failed:', stderr2 || err2.message);
+                res.write(`data: ${JSON.stringify({ error: stderr2 || err2.message })}\n\n`);
+                res.end();
+                return;
+            }
+            console.log('[UPDATE] npm ci output:', stdout2);
+            sendProgress('Restarting...', 100);
+            res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
+            res.end();
+            setTimeout(() => {
+                console.log('[UPDATE] Restarting application...');
+                process.exit(0);
+            }, 1000);
+        });
     });
 });
 

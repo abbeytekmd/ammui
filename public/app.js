@@ -270,6 +270,7 @@ async function selectServer(udn) {
     localStorage.setItem('selectedServerUdn', udn);
     closeServerModal();
     renderDevices();
+    document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === currentBrowserMode; });
     updateLocalOnlyUI();
 
     if (window.innerWidth <= 1100) {
@@ -1399,43 +1400,39 @@ function updateBrowserControls(items) {
     const hasContainers = items.some(item => item.type === 'container');
     const showPhotoControls = images.length > 0 || (currentBrowserMode === 'photo' && hasContainers);
 
+    const inPhotoMode = currentBrowserMode === 'photo';
+
     if (btnPlayAll) {
-        btnPlayAll.style.display = (showMusicControls || showPhotoControls) ? 'flex' : 'none';
+        const canPlay = inPhotoMode ? showPhotoControls : showMusicControls;
+        btnPlayAll.classList.toggle('disabled', !canPlay);
         const label = btnPlayAll.querySelector('.btn-label');
         if (label) {
-            const btnText = showMusicControls ? 'Play All' : 'Slideshow';
-            label.textContent = btnText;
-            label.setAttribute('data-mobile', showMusicControls ? 'All' : 'SS');
+            label.textContent = inPhotoMode ? 'Slideshow' : 'Play All';
+            label.setAttribute('data-mobile', inPhotoMode ? 'SS' : 'All');
         }
-    }
-    if (btnAddAll) btnAddAll.style.display = showMusicControls ? 'flex' : 'none';
-
-    if (btnToggleView) {
-        btnToggleView.style.display = showPhotoControls ? 'flex' : 'none';
-        const label = document.getElementById('label-view-mode');
-        const svgGrid = document.getElementById('svg-view-grid');
-        const svgList = document.getElementById('svg-view-list');
-
-        if (browserViewMode === 'grid') {
-            if (label) label.textContent = 'List';
-            if (svgGrid) svgGrid.style.display = 'none';
-            if (svgList) svgList.style.display = 'block';
-        } else {
-            if (label) label.textContent = 'Grid';
-            if (svgGrid) svgGrid.style.display = 'block';
-            if (svgList) svgList.style.display = 'none';
-        }
-    }
-
-    // Enable/disable buttons based on tracks/images count
-    if (btnPlayAll) {
-        const canPlay = showMusicControls || showPhotoControls;
-        if (canPlay) btnPlayAll.classList.remove('disabled');
-        else btnPlayAll.classList.add('disabled');
     }
     if (btnAddAll) {
-        if (showMusicControls) btnAddAll.classList.remove('disabled');
-        else btnAddAll.classList.add('disabled');
+        btnAddAll.style.display = inPhotoMode ? 'none' : '';
+        if (!inPhotoMode) btnAddAll.classList.toggle('disabled', !showMusicControls);
+    }
+
+    if (btnToggleView) {
+        btnToggleView.style.display = inPhotoMode ? '' : 'none';
+        if (inPhotoMode) {
+            btnToggleView.classList.toggle('disabled', !showPhotoControls);
+            const label = document.getElementById('label-view-mode');
+            const svgGrid = document.getElementById('svg-view-grid');
+            const svgList = document.getElementById('svg-view-list');
+            if (browserViewMode === 'grid') {
+                if (label) label.textContent = 'List';
+                if (svgGrid) svgGrid.style.display = 'none';
+                if (svgList) svgList.style.display = 'block';
+            } else {
+                if (label) label.textContent = 'Grid';
+                if (svgGrid) svgGrid.style.display = 'block';
+                if (svgList) svgList.style.display = 'none';
+            }
+        }
     }
 
     // Filter Set Home buttons based on current mode
@@ -3392,6 +3389,11 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
                 ` : ''}
             </div>
             ${asServer ? `<div class="media-library-label">Media Library</div>` : ''}
+            ${(asServer && isStatic) ? `
+            <div class="browser-mode-radios" onclick="event.stopPropagation()">
+                <label><input type="radio" name="browser-mode" value="music" onchange="switchBrowserMode('music')"> Music</label>
+                <label><input type="radio" name="browser-mode" value="photo" onchange="switchBrowserMode('photo')"> Photos</label>
+            </div>` : ''}
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
                     ${transportHtml}
@@ -3563,14 +3565,8 @@ async function switchBrowserMode(mode) {
     currentBrowserMode = mode;
     localStorage.setItem('currentBrowserMode', mode);
 
-    // Update Tab UI
-    document.querySelectorAll('.browser-tab').forEach(btn => {
-        btn.classList.remove('active');
-    });
-
-    const activeTabId = mode === 'music' ? 'tab-browser-music' : 'tab-browser-photo';
-    const activeTab = document.getElementById(activeTabId);
-    if (activeTab) activeTab.classList.add('active');
+    // Update radio UI
+    document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === mode; });
 
     if (selectedServerUdn) {
         // Load path for new mode
@@ -3716,6 +3712,12 @@ async function init() {
     await fetchGeneralSettings();
     await fetchS3Settings();
 
+    // Seed client-side rotation cache from server DB
+    try {
+        const rotRes = await fetch('/api/slideshow/rotations');
+        if (rotRes.ok) manualRotations = await rotRes.json();
+    } catch (e) { console.warn('Failed to fetch photo rotations'); }
+
     // Fetch screensaver settings
     try {
         const res = await fetch('/api/settings/screensaver');
@@ -3774,10 +3776,7 @@ async function init() {
             // Set initial mode UI
             const mode = localStorage.getItem('currentBrowserMode') || 'music';
             currentBrowserMode = mode;
-            document.querySelectorAll('.browser-tab').forEach(btn => btn.classList.remove('active'));
-            const activeTabId = mode === 'music' ? 'tab-browser-music' : 'tab-browser-photo';
-            const activeTab = document.getElementById(activeTabId);
-            if (activeTab) activeTab.classList.add('active');
+            document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === mode; });
 
             // Prioritize last browsed path, then home location, then root
             let lastPaths = {};
@@ -3854,6 +3853,12 @@ document.addEventListener('visibilitychange', () => {
         if (selectedRendererUdn && !isRendererOffline) {
             fetchStatus();
             fetchPlaylist(selectedRendererUdn);
+        }
+        // If screensaver activated while page was hidden, load the first image now
+        if (slideshow && slideshow.isActive) {
+            slideshow.next();
+        } else if (slideshow) {
+            slideshow.resetIdleTimer();
         }
     }
 });
@@ -4090,21 +4095,11 @@ async function handleFileUpload(event) {
 
 function updateLocalOnlyUI() {
     const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
-    const localOnlyElements = document.querySelectorAll('.local-only');
-    localOnlyElements.forEach(el => {
-        if (el.tagName === 'SPAN' && el.classList.contains('divider')) {
-            el.style.display = isLocalServer ? 'inline-block' : 'none';
-        } else {
-            el.style.display = isLocalServer ? 'flex' : 'none';
-        }
-    });
-
-    // Upload is only meaningful when browsing an external DLNA server (to download/import).
-    // Disable and hide it when the local AMMUI library is selected.
+    const noServer = !selectedServerUdn;
     const uploadBtn = document.getElementById('btn-upload');
     if (uploadBtn) {
-        uploadBtn.disabled = isLocalServer;
-        uploadBtn.style.display = isLocalServer ? 'none' : '';
+        const disable = isLocalServer || noServer;
+        uploadBtn.classList.toggle('disabled', disable);
         uploadBtn.title = isLocalServer
             ? 'Upload not available when browsing the local library'
             : 'Upload to local server';
@@ -4947,7 +4942,7 @@ class Slideshow {
 
     resetIdleTimer(e) {
         clearTimeout(this.timer);
-        if (!this.isActive) {
+        if (!this.isActive && !document.hidden) {
             const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
             if (!isVideoVisible) {
                 this.timer = setTimeout(() => {
@@ -5003,6 +4998,7 @@ class Slideshow {
 
     stop() {
         if (!this.isActive) return;
+        clearTimeout(this._modeRetryTimer);
         console.log('[SLIDESHOW] Stopping...');
         this.isActive = false;
         if ((this.mode === 'onThisDay' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
@@ -5089,6 +5085,7 @@ class Slideshow {
                 if (listRes.ok) {
                     const items = await listRes.json();
                     if (items.length > 0) {
+                        clearTimeout(this._modeRetryTimer);
                         this.items = items;
                         if (this.resumeMode === this.mode && this.resumeIndex >= 0 && this.resumeIndex < items.length) {
                             this.index = this.resumeIndex - 1; // next() will increment
@@ -5100,20 +5097,16 @@ class Slideshow {
                         return this.next();
                     }
                 }
-                // Cache not ready or no photos — fall back to random endpoint for error handling
-                const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
-                if (res.ok) {
-                    data = await res.json();
+                // Keep the selected mode — just wait if preparing, or show toast if no photos
+                const label = this.mode === 'onThisDay' ? 'Day' : 'Favs';
+                if (listRes.status === 503) {
+                    showToast(`Preparing ${label} mode…`, 'info', 3000);
+                    clearTimeout(this._modeRetryTimer);
+                    this._modeRetryTimer = setTimeout(() => { if (this.isActive) this.next(); }, 5000);
                 } else {
-                    const err = await res.json();
-                    const label = this.mode === 'onThisDay' ? 'Day' : 'Favs';
-                    showToast(err.error || `No photos for ${label}`, 'info', 3000);
-                    const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
-                    this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
-                    localStorage.setItem('screensaverMode', this.mode);
-                    this.updateModeUI();
-                    return this.next();
+                    showToast(`No photos for ${label}`, 'info', 3000);
                 }
+                return; // Keep current slide, don't advance
             } else {
                 const res = await fetch(`/api/slideshow/random?mode=${this.mode}`);
                 if (res.ok) {
@@ -5393,6 +5386,7 @@ class Slideshow {
     }
 
     toggleMode() {
+        clearTimeout(this._modeRetryTimer);
         const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
         localStorage.setItem('screensaverMode', this.mode);
@@ -5732,9 +5726,9 @@ async function fetchS3Settings() {
         if (bucket) bucket.value = data.bucket || '';
         if (accessKey) accessKey.value = data.accessKeyId || '';
         if (secretKey) secretKey.value = data.secretAccessKey || '';
-        const statusContainer = document.getElementById('s3-sync-status-container');
-        if (statusContainer) {
-            statusContainer.style.display = data.enabled ? 'block' : 'none';
+        const fieldsContainer = document.getElementById('s3-settings-fields');
+        if (fieldsContainer) {
+            fieldsContainer.style.display = data.enabled ? 'block' : 'none';
         }
         if (data.enabled) {
             updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
@@ -5761,8 +5755,8 @@ async function saveS3Settings() {
             body: JSON.stringify(settings)
         });
         if (response.ok) {
-            const statusContainer = document.getElementById('s3-sync-status-container');
-            if (statusContainer) statusContainer.style.display = enabled ? 'block' : 'none';
+            const fieldsContainer = document.getElementById('s3-settings-fields');
+            if (fieldsContainer) fieldsContainer.style.display = enabled ? 'block' : 'none';
             if (enabled) {
                 startS3StatusPolling();
             } else {

@@ -80,25 +80,83 @@
                 </section>
 
                 <div id="browser-container" class="playlist-container">
-                    <div class="browser-tabs">
-                        <button id="tab-browser-music" onclick="switchBrowserMode('music')" class="browser-tab active">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <path d="M9 18V5l12-2v13"></path>
-                                <circle cx="6" cy="18" r="3"></circle>
-                                <circle cx="18" cy="16" r="3"></circle>
-                            </svg>
-                            Music
-                        </button>
-                        <button id="tab-browser-photo" onclick="switchBrowserMode('photo')" class="browser-tab">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2">
-                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                <polyline points="21 15 16 10 5 21"></polyline>
-                            </svg>
-                            Photos
-                        </button>
+                    <div class="header-controls">
+                        <div class="browser-control-group">
+                            <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
+                                class="btn-control disabled btn-play-green"
+                                title="Clear and play all tracks">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M5 3l14 9-14 9V3z"></path>
+                                </svg>
+                                <span class="btn-label" data-mobile="All">Play All</span>
+                            </button>
+                            <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
+                                title="Queue all tracks on view">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M12 5v14M5 12h14"></path>
+                                </svg>
+                                <span class="btn-label" data-mobile="All">Queue All</span>
+                            </button>
+                            <button id="btn-play-tag" onclick="openPlayTagModal()" class="btn-control btn-play-green"
+                                title="Play items by tag">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path
+                                        d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z">
+                                    </path>
+                                    <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="Tag">Play Tag</span>
+                            </button>
+                            <button id="btn-browser-find" onclick="toggleBrowserFind()" class="btn-control"
+                                title="Find in list">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="Find">Find</span>
+                            </button>
+                            <input type="text" id="input-browser-find" placeholder="Find..."
+                                style="display: none; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: inherit; width: 120px; outline: none; margin-left: 0.2rem; font-family: inherit; font-size: 0.9rem;"
+                                onkeydown="if(event.key==='Enter') executeBrowserFind()">
+                            <button id="btn-toggle-view" onclick="toggleBrowserView()" class="btn-control disabled"
+                                title="Toggle between List and Grid view">
+                                <svg id="svg-view-grid" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="3" width="7" height="7"></rect>
+                                    <rect x="14" y="14" width="7" height="7"></rect>
+                                    <rect x="3" y="14" width="7" height="7"></rect>
+                                </svg>
+                                <svg id="svg-view-list" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                                    stroke="currentColor" stroke-width="2" style="display: none;">
+                                    <line x1="8" y1="6" x2="21" y2="6"></line>
+                                    <line x1="8" y1="12" x2="21" y2="12"></line>
+                                    <line x1="8" y1="18" x2="21" y2="18"></line>
+                                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                                </svg>
+                                <span id="label-view-mode" class="btn-label" data-mobile="View">Grid</span>
+                            </button>
+
+                            <span class="divider"></span>
+                            <button id="btn-upload" onclick="triggerUpload()" class="btn-control disabled"
+                                title="Upload to local server">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="">Upload</span>
+                            </button>
+                            <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*"
+                                onchange="handleFileUpload(event)">
+                        </div>
                     </div>
                     <div class="section-header">
                         <div class="header-group">
@@ -165,84 +223,6 @@
                             <div class="empty-state">Select a server to browse folders</div>
                         </div>
                         <div id="alphabet-scroll" class="alphabet-scroll"></div>
-                    </div>
-                    <div class="header-controls">
-                        <div class="browser-control-group">
-                            <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
-                                class="btn-control disabled primary" style="display: none;"
-                                title="Clear and play all tracks">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M5 3l14 9-14 9V3z"></path>
-                                </svg>
-                                <span class="btn-label" data-mobile="All">Play All</span>
-                            </button>
-                            <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
-                                style="display: none;" title="Queue all tracks on view">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M12 5v14M5 12h14"></path>
-                                </svg>
-                                <span class="btn-label" data-mobile="All">Queue All</span>
-                            </button>
-                            <button id="btn-play-tag" onclick="openPlayTagModal()" class="btn-control"
-                                title="Play items by tag">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path
-                                        d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z">
-                                    </path>
-                                    <line x1="7" y1="7" x2="7.01" y2="7"></line>
-                                </svg>
-                                <span class="btn-label" data-mobile="Tag">Play Tag</span>
-                            </button>
-                            <button id="btn-browser-find" onclick="toggleBrowserFind()" class="btn-control"
-                                title="Find in list">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <circle cx="11" cy="11" r="8"></circle>
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                </svg>
-                                <span class="btn-label" data-mobile="Find">Find</span>
-                            </button>
-                            <input type="text" id="input-browser-find" placeholder="Find..."
-                                style="display: none; padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.2); background: rgba(0,0,0,0.2); color: inherit; width: 120px; outline: none; margin-left: 0.2rem; font-family: inherit; font-size: 0.9rem;"
-                                onkeydown="if(event.key==='Enter') executeBrowserFind()">
-                            <button id="btn-toggle-view" onclick="toggleBrowserView()" class="btn-control"
-                                style="display: none;" title="Toggle between List and Grid view">
-                                <svg id="svg-view-grid" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2">
-                                    <rect x="3" y="3" width="7" height="7"></rect>
-                                    <rect x="14" y="3" width="7" height="7"></rect>
-                                    <rect x="14" y="14" width="7" height="7"></rect>
-                                    <rect x="3" y="14" width="7" height="7"></rect>
-                                </svg>
-                                <svg id="svg-view-list" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                    stroke="currentColor" stroke-width="2" style="display: none;">
-                                    <line x1="8" y1="6" x2="21" y2="6"></line>
-                                    <line x1="8" y1="12" x2="21" y2="12"></line>
-                                    <line x1="8" y1="18" x2="21" y2="18"></line>
-                                    <line x1="3" y1="6" x2="3.01" y2="6"></line>
-                                    <line x1="3" y1="12" x2="3.01" y2="12"></line>
-                                    <line x1="3" y1="18" x2="3.01" y2="18"></line>
-                                </svg>
-                                <span id="label-view-mode" class="btn-label" data-mobile="View">Grid</span>
-                            </button>
-
-                            <span class="divider local-only" style="display: none;"></span>
-                            <button id="btn-upload" onclick="triggerUpload()" class="btn-control local-only"
-                                style="display: none;" title="Upload to local server">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="17 8 12 3 7 8"></polyline>
-                                    <line x1="12" y1="3" x2="12" y2="15"></line>
-                                </svg>
-                                <span class="btn-label" data-mobile="">Upload</span>
-                            </button>
-                            <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*"
-                                onchange="handleFileUpload(event)">
-                        </div>
                     </div>
                 </div>
             </div>
@@ -524,59 +504,63 @@
                         <div class="settings-group" style="margin-top: 2rem;">
                             <div class="settings-header-row">
                                 <label>S3 Cloud Sync</label>
-                                <label class="switch">
+                            </div>
+                            <div style="margin-bottom: 0.75rem;">
+                                <label style="display:inline-flex; align-items:center; gap:0.5rem; cursor:pointer;">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
-                                    <span class="slider round"></span>
+                                    Enable sync
                                 </label>
                             </div>
-                            <div class="s3-settings-grid">
-                                <div class="input-group">
-                                    <label for="s3-endpoint">Endpoint</label>
-                                    <input type="text" id="s3-endpoint" placeholder="e.g. s3.amazonaws.com"
-                                        onchange="saveS3Settings()">
+                            <div id="s3-settings-fields" style="display:none;">
+                                <div class="s3-settings-grid">
+                                    <div class="input-group">
+                                        <label for="s3-endpoint">Endpoint</label>
+                                        <input type="text" id="s3-endpoint" placeholder="e.g. s3.amazonaws.com"
+                                            onchange="saveS3Settings()">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="s3-region">Region</label>
+                                        <input type="text" id="s3-region" placeholder="e.g. us-east-1"
+                                            onchange="saveS3Settings()">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="s3-bucket">Bucket</label>
+                                        <input type="text" id="s3-bucket" placeholder="Bucket name"
+                                            onchange="saveS3Settings()">
+                                    </div>
+                                    <div class="input-group">
+                                        <label for="s3-access-key">Access Key</label>
+                                        <input type="text" id="s3-access-key" placeholder="Access Key ID"
+                                            onchange="saveS3Settings()">
+                                    </div>
+                                    <div class="input-group" style="grid-column: span 2;">
+                                        <label for="s3-secret-key">Secret Key</label>
+                                        <input type="password" id="s3-secret-key" placeholder="Secret Access Key"
+                                            onchange="saveS3Settings()">
+                                    </div>
                                 </div>
-                                <div class="input-group">
-                                    <label for="s3-region">Region</label>
-                                    <input type="text" id="s3-region" placeholder="e.g. us-east-1"
-                                        onchange="saveS3Settings()">
-                                </div>
-                                <div class="input-group">
-                                    <label for="s3-bucket">Bucket</label>
-                                    <input type="text" id="s3-bucket" placeholder="Bucket name"
-                                        onchange="saveS3Settings()">
-                                </div>
-                                <div class="input-group">
-                                    <label for="s3-access-key">Access Key</label>
-                                    <input type="text" id="s3-access-key" placeholder="Access Key ID"
-                                        onchange="saveS3Settings()">
-                                </div>
-                                <div class="input-group" style="grid-column: span 2;">
-                                    <label for="s3-secret-key">Secret Key</label>
-                                    <input type="password" id="s3-secret-key" placeholder="Secret Access Key"
-                                        onchange="saveS3Settings()">
-                                </div>
-                            </div>
 
-                            <div id="s3-sync-status-container" class="sync-status-container"
-                                style="display: none; margin-top: 1rem;">
-                                <div class="sync-status-row">
-                                    <span class="sync-status-label">Status:</span>
-                                    <span id="s3-sync-state" class="sync-status-value">Idle</span>
-                                </div>
-                                <div id="s3-sync-progress-row" class="sync-progress-row" style="display: none;">
-                                    <div class="progress-info">
-                                        <span id="s3-sync-count">0/0 files</span>
-                                        <span id="s3-sync-percent">0%</span>
+                                <div id="s3-sync-status-container" class="sync-status-container"
+                                    style="margin-top: 1rem;">
+                                    <div class="sync-status-row">
+                                        <span class="sync-status-label">Status:</span>
+                                        <span id="s3-sync-state" class="sync-status-value">Idle</span>
                                     </div>
-                                    <div class="progress-bar-bg">
-                                        <div id="s3-sync-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                                    <div id="s3-sync-progress-row" class="sync-progress-row" style="display: none;">
+                                        <div class="progress-info">
+                                            <span id="s3-sync-count">0/0 files</span>
+                                            <span id="s3-sync-percent">0%</span>
+                                        </div>
+                                        <div class="progress-bar-bg">
+                                            <div id="s3-sync-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                                        </div>
+                                        <div id="s3-sync-file" class="sync-current-file"></div>
                                     </div>
-                                    <div id="s3-sync-file" class="sync-current-file"></div>
-                                </div>
-                                <div class="sync-actions" style="margin-top: 0.5rem;">
-                                    <button id="btn-s3-sync-now" onclick="triggerS3Sync()"
-                                        class="btn-control btn-small primary">Sync Now</button>
-                                    <span id="s3-last-sync" class="last-sync-time"></span>
+                                    <div class="sync-actions" style="margin-top: 0.5rem;">
+                                        <button id="btn-s3-sync-now" onclick="triggerS3Sync()"
+                                            class="btn-control btn-small primary">Sync Now</button>
+                                        <span id="s3-last-sync" class="last-sync-time"></span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
