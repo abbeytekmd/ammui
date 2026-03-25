@@ -24,11 +24,18 @@ import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
+import {
+    getSetting, setSetting,
+    saveAllDevices, getAllDevices,
+    getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getUrisByTag,
+    setPhotoRotation, getAllPhotoRotations,
+    markPhotoDeleted, getAllDeletedPhotos,
+    getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
+} from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import AdmZip from 'adm-zip';
 
 const execAsync = promisify(exec);
 
@@ -47,8 +54,6 @@ const __dirname = path.dirname(__filename);
 // in the same directory as the executable, not inside the read-only snapshot.
 const baseDataDir = isPkg ? path.dirname(process.execPath) : __dirname;
 
-const DEVICES_FILE = path.join(baseDataDir, 'devices.json');
-const SETTINGS_FILE = path.join(baseDataDir, 'settings.json');
 
 const app = express();
 const port = 3000;
@@ -73,25 +78,13 @@ let airplayManager = null;
 
 function loadDevices() {
     try {
-        if (fs.existsSync(DEVICES_FILE)) {
-            const data = fs.readFileSync(DEVICES_FILE, 'utf8');
-            const list = JSON.parse(data);
-            list.forEach(d => {
-                // Skip any stale entries for the local server from previous runs on different IPs
-                if (d.udn === SERVER_UDN || (d.friendlyName && d.friendlyName.includes('Media Library'))) {
-                    return;
-                }
-
-                // Merge volume from settings storage when hydrating the list
-                if (settings && settings.devices && settings.devices[d.udn] && settings.devices[d.udn].volume !== undefined) {
-                    d.volume = settings.devices[d.udn].volume;
-                }
-
-                if (d.location) devices.set(d.location, d);
-                if (d.udn) devices.set(d.udn, d);
-            });
-            console.log(`Loaded ${devices.size / 2} devices from storage (filtered).`);
-        }
+        const list = getAllDevices();
+        list.forEach(d => {
+            if (d.udn === SERVER_UDN || (d.friendlyName && d.friendlyName.includes('Media Library'))) return;
+            if (d.location) devices.set(d.location, d);
+            if (d.udn) devices.set(d.udn, d);
+        });
+        console.log(`Loaded ${devices.size / 2} devices from DB.`);
     } catch (err) {
         console.error('Failed to load devices:', err.message);
     }
@@ -107,7 +100,7 @@ function saveDevices() {
                 seenUdns.add(device.udn);
             }
         }
-        fs.writeFileSync(DEVICES_FILE, JSON.stringify(uniqueDevices, null, 2));
+        saveAllDevices(uniqueDevices);
     } catch (err) {
         console.error('Failed to save devices:', err.message);
     }
@@ -144,53 +137,21 @@ let s3SyncStatus = {
 };
 
 function loadSettings() {
-    try {
-        if (fs.existsSync(SETTINGS_FILE)) {
-            const data = fs.readFileSync(SETTINGS_FILE, 'utf8');
-            const loaded = JSON.parse(data);
-            settings = {
-                ...settings,
-                ...loaded,
-                s3: { ...settings.s3, ...(loaded.s3 || {}) },
-                deviceName: loaded.deviceName || settings.deviceName,
-                screensaver: { ...settings.screensaver, ...(loaded.screensaver || {}) },
-                manualRotations: loaded.manualRotations || {},
-                deletedPhotos: loaded.deletedPhotos || {},
-                fileTags: loaded.fileTags || {}
-            };
-
-            // Migrate legacy favourites to tags
-            if (Object.keys(settings.favouritePhotos || {}).length > 0) {
-                let migrated = 0;
-                for (const url in settings.favouritePhotos) {
-                    if (settings.favouritePhotos[url]) {
-                        if (!settings.fileTags[url]) settings.fileTags[url] = [];
-                        if (!settings.fileTags[url].includes('fav')) {
-                            settings.fileTags[url].push('fav');
-                            migrated++;
-                        }
-                    }
-                }
-                if (migrated > 0) {
-                    console.log(`[MIGRATION] Migrated ${migrated} legacy favorites to tags.`);
-                    saveSettings();
-                }
-                delete settings.favouritePhotos;
-            }
-
-            console.log('Loaded settings from storage.');
-        }
-    } catch (err) {
-        console.error('Failed to load settings:', err.message);
-    }
+    settings.discogsToken = getSetting('discogsToken', '');
+    settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
+    settings.deviceName = getSetting('deviceName', 'AMMUI');
+    settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
+    settings.manualRotations = getAllPhotoRotations();
+    settings.deletedPhotos = getAllDeletedPhotos();
+    settings.fileTags = getAllFileTags();
+    console.log('Loaded settings from DB.');
 }
 
 function saveSettings() {
-    try {
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
-    } catch (err) {
-        console.error('Failed to save settings:', err.message);
-    }
+    setSetting('discogsToken', settings.discogsToken);
+    setSetting('s3', settings.s3);
+    setSetting('deviceName', settings.deviceName);
+    setSetting('screensaver', settings.screensaver);
 }
 
 // stats.json migration completed to play_history.db
@@ -2080,11 +2041,9 @@ app.post('/api/slideshow/rotate', (req, res) => {
     const { url, rotation } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
 
-    if (!settings.manualRotations) settings.manualRotations = {};
-
     // rotation should be 0, 90, 180, or 270
+    setPhotoRotation(url, Number(rotation));
     settings.manualRotations[url] = Number(rotation);
-    saveSettings();
 
     console.log(`[SCREENSAVER] Saved manual rotation for ${url}: ${rotation}`);
     res.json({ success: true, rotation });
@@ -2094,9 +2053,8 @@ app.post('/api/slideshow/delete', (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
 
-    if (!settings.deletedPhotos) settings.deletedPhotos = {};
+    markPhotoDeleted(url);
     settings.deletedPhotos[url] = true;
-    saveSettings();
 
     // Also remove from current cache if present
     if (screensaverCache.images && screensaverCache.images.length > 0) {
@@ -2118,24 +2076,24 @@ app.post('/api/slideshow/favourite', (req, res) => {
     const { url, favourite } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
 
-    if (!settings.fileTags) settings.fileTags = {};
-    if (!settings.fileTags[url]) settings.fileTags[url] = [];
-
     if (favourite) {
+        addFileTag(url, 'fav');
+        if (!settings.fileTags[url]) settings.fileTags[url] = [];
         if (!settings.fileTags[url].includes('fav')) settings.fileTags[url].push('fav');
     } else {
-        settings.fileTags[url] = settings.fileTags[url].filter(t => t !== 'fav');
+        removeFileTag(url, 'fav');
+        if (settings.fileTags[url]) settings.fileTags[url] = settings.fileTags[url].filter(t => t !== 'fav');
     }
-    saveSettings();
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
 });
 
 // Helper function for Discogs search
-async function findDiscogsArtUrl(artist, album) {
+async function findDiscogsArtUrl(artist, album, skipUrls = []) {
     const DISCOGS_TOKEN = settings.discogsToken;
     if (!DISCOGS_TOKEN || (!artist && !album)) return null;
+    const skipSet = new Set(skipUrls);
 
     const queryStr = `${artist || ''} ${album || ''}`.trim();
     const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -2242,9 +2200,8 @@ async function findDiscogsArtUrl(artist, album) {
                     return { item, score };
                 }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
 
-                if (scoredResults.length > 0) {
-                    return scoredResults[0].item.cover_image;
-                }
+                const pick = scoredResults.find(r => !skipSet.has(r.item.cover_image));
+                if (pick) return pick.item.cover_image;
             }
         } catch (e) {
             let errorMsg = `[ART] Discogs attempt ${attempt + 1} failed: ${e.message}`;
@@ -2294,20 +2251,82 @@ async function findDiscogsArtUrl(artist, album) {
                         return { item, score };
                     }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
 
-                    if (scoredFallbackResults.length > 0) {
-                        return scoredFallbackResults[0].item.cover_image;
-                    }
+                    const fallbackPick = scoredFallbackResults.find(r => !skipSet.has(r.item.cover_image));
+                    if (fallbackPick) return fallbackPick.item.cover_image;
                 }
             } catch (e) {
                 console.warn(`[ART] Discogs fallback attempt (Album Only) failed: ${e.message}`);
             }
         }
     }
+
+    // Final fallback: general keyword search (same as typing in the Discogs UI)
+    if (queryStr) {
+        try {
+            console.log(`[ART] Discogs keyword fallback: q="${queryStr}"...`);
+            const kwUrl = `https://api.discogs.com/database/search?q=${encodeURIComponent(queryStr)}&token=${DISCOGS_TOKEN}`;
+            const data = await fetchDiscogs(kwUrl);
+            if (data.results && data.results.length > 0) {
+                const scoredResults = data.results.map(item => {
+                    let score = 0;
+                    const titleParts = item.title.split(' - ');
+                    const itemArtist = titleParts[0];
+                    const itemAlbum = titleParts[titleParts.length - 1];
+                    const artistMatch = !artist || isFuzzyMatch(itemArtist, artist);
+                    const albumMatch = !album || isFuzzyMatch(itemAlbum, album) ||
+                        isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
+                    if (!artistMatch || !albumMatch) return { item, score: -1 };
+                    if (artist && normalize(itemArtist) === normalize(artist)) score += 20;
+                    if (album && (normalize(itemAlbum) === normalize(album) ||
+                        normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album)))) score += 20;
+                    if (item.type === 'master') score += 50;
+                    const format = (item.format || []).join(' ').toLowerCase();
+                    if (format.includes('album')) score += 15;
+                    if (format.includes('lp') || format.includes('vinyl')) score += 10;
+                    if (format.includes('cd')) score += 8;
+                    if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+                    return { item, score };
+                }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
+                const pick = scoredResults.find(r => !skipSet.has(r.item.cover_image));
+                if (pick) {
+                    console.log(`[ART] Discogs keyword fallback found: ${pick.item.title}`);
+                    return pick.item.cover_image;
+                }
+            }
+        } catch (e) {
+            console.warn(`[ART] Discogs keyword fallback failed: ${e.message}`);
+        }
+    }
+
     return null;
 }
 
+// Download an image URL and store as blob; returns the local cached URL path
+async function downloadAndCacheArt(artist, album, externalUrl) {
+    const response = await fetch(externalUrl, {
+        headers: { 'User-Agent': `${settings.deviceName}/1.0` },
+        signal: AbortSignal.timeout(15000)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status} fetching art`);
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const data = Buffer.from(await response.arrayBuffer());
+    setCachedArt(artist, album, data, contentType);
+    return `/api/art/cached?key=${encodeURIComponent(artCacheKey(artist, album))}`;
+}
+
+app.get('/api/art/cached', (req, res) => {
+    const { key } = req.query;
+    if (!key) return res.status(400).json({ error: 'key required' });
+    const row = getCachedArtByKey(key);
+    if (!row) return res.status(404).json({ error: 'Not in cache' });
+    res.setHeader('Content-Type', row.content_type);
+    res.setHeader('Cache-Control', 'public, max-age=604800'); // 1 week
+    res.send(row.data);
+});
+
 app.get('/api/art/search', async (req, res) => {
-    let { artist, album, uri } = req.query;
+    let { artist, album, uri, skip } = req.query;
+    const skipUrls = skip ? skip.split(',').map(s => s.trim()).filter(Boolean) : [];
 
     if (uri && (!artist || !album)) {
         try {
@@ -2321,10 +2340,21 @@ app.get('/api/art/search', async (req, res) => {
 
     if (!artist && !album && (!uri || uri.startsWith('http'))) return res.status(400).json({ error: 'Artist or Album is required' });
 
+    // Check DB cache first (bypass if the local cached URL is in the skip list, i.e. user retrying)
+    if (artist || album) {
+        const key = artCacheKey(artist, album);
+        const localUrl = `/api/art/cached?key=${encodeURIComponent(key)}`;
+        if (getCachedArt(artist, album) && !skipUrls.includes(localUrl)) {
+            return res.json({ url: localUrl, source: 'cache' });
+        }
+    }
+
     try {
         let coverUrl = null;
+        let cacheArtist = artist, cacheAlbum = album;
+
         if (artist || album) {
-            coverUrl = await findDiscogsArtUrl(artist, album);
+            coverUrl = await findDiscogsArtUrl(artist, album, skipUrls);
         }
 
         if (!coverUrl && uri && !uri.startsWith('http://') && !uri.startsWith('https://')) {
@@ -2335,7 +2365,8 @@ app.get('/api/art/search', async (req, res) => {
                 const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
                 if (folderArtist && normalize(folderArtist) !== normalize(artist)) {
                     console.log(`[ART] Search falling back to local folder artist: "${folderArtist}" for album "${album || folderAlbum}"`);
-                    coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum);
+                    coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum, skipUrls);
+                    if (coverUrl) { cacheArtist = folderArtist; cacheAlbum = album || folderAlbum; }
                 }
             }
         }
@@ -2350,14 +2381,21 @@ app.get('/api/art/search', async (req, res) => {
                     const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
                     if (folderArtist && folderArtist.length > 0 && normalize(folderArtist) !== normalize(artist)) {
                         console.log(`[ART] Search falling back to UI path string artist: "${folderArtist}" for album "${album || folderAlbum}"`);
-                        coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum);
+                        coverUrl = await findDiscogsArtUrl(folderArtist, album || folderAlbum, skipUrls);
+                        if (coverUrl) { cacheArtist = folderArtist; cacheAlbum = album || folderAlbum; }
                     }
                 }
             }
         }
 
         if (coverUrl) {
-            return res.json({ url: coverUrl, source: 'discogs' });
+            const localUrl = await downloadAndCacheArt(cacheArtist, cacheAlbum, coverUrl);
+            // Also cache under the original artist/album key if the fallback used a different one
+            if (cacheArtist !== artist || cacheAlbum !== album) {
+                const row = getCachedArt(cacheArtist, cacheAlbum);
+                if (row) setCachedArt(artist, album, row.data, row.content_type);
+            }
+            return res.json({ url: localUrl, source: 'discogs' });
         }
         res.status(404).json({ error: 'No artwork found' });
     } catch (err) {
@@ -2460,6 +2498,18 @@ app.get('/api/art/local', async (req, res) => {
             let searchArtist = artist;
             let searchAlbum = album;
             let coverUrl = null;
+            let cacheArtist = searchArtist, cacheAlbum = searchAlbum;
+
+            // Check DB cache before hitting Discogs
+            if (searchArtist || searchAlbum) {
+                const cached = getCachedArt(searchArtist, searchAlbum);
+                if (cached) {
+                    console.log(`[ART] Cache hit for "${searchArtist}" - "${searchAlbum}"`);
+                    res.setHeader('Content-Type', cached.content_type);
+                    res.setHeader('Cache-Control', 'public, max-age=604800');
+                    return res.send(cached.data);
+                }
+            }
 
             if (searchArtist || searchAlbum) {
                 console.log(`[ART] No embedded art. Attempting Discogs search for: "${searchArtist}" - "${searchAlbum}"`);
@@ -2476,6 +2526,7 @@ app.get('/api/art/local', async (req, res) => {
                     if (folderArtist && (!searchArtist || normalize(folderArtist) !== normalize(searchArtist))) {
                         console.log(`[ART] Local attempting Discogs search with folder artist: "${folderArtist}" and album "${searchAlbum || folderAlbum}"`);
                         coverUrl = await findDiscogsArtUrl(folderArtist, searchAlbum || folderAlbum);
+                        if (coverUrl) { cacheArtist = folderArtist; cacheAlbum = searchAlbum || folderAlbum; }
                     }
                 }
             }
@@ -2491,14 +2542,20 @@ app.get('/api/art/local', async (req, res) => {
                         if (folderArtist && folderArtist.length > 0 && (!searchArtist || normalize(folderArtist) !== normalize(searchArtist))) {
                             console.log(`[ART] Local proxy falling back to UI path string artist: "${folderArtist}" for album "${searchAlbum || folderAlbum}"`);
                             coverUrl = await findDiscogsArtUrl(folderArtist, searchAlbum || folderAlbum);
+                            if (coverUrl) { cacheArtist = folderArtist; cacheAlbum = searchAlbum || folderAlbum; }
                         }
                     }
                 }
             }
 
             if (coverUrl) {
-                console.log(`[ART] Success: Found Discogs art for ${uri}`);
-                return res.redirect(coverUrl);
+                const localUrl = await downloadAndCacheArt(cacheArtist, cacheAlbum, coverUrl);
+                if (cacheArtist !== searchArtist || cacheAlbum !== searchAlbum) {
+                    const row = getCachedArt(cacheArtist, cacheAlbum);
+                    if (row) setCachedArt(searchArtist, searchAlbum, row.data, row.content_type);
+                }
+                console.log(`[ART] Success: Found and cached Discogs art for ${uri}`);
+                return res.redirect(localUrl);
             } else {
                 console.log(`[ART] Skipping Discogs or no result found for ${uri}`);
             }
@@ -2513,260 +2570,48 @@ app.get('/api/art/local', async (req, res) => {
 });
 
 // Update API routes
-app.get('/api/version', async (req, res) => {
-    try {
-        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
-        res.json({ version: packageJson.version });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to read version' });
-    }
-});
-
 app.get('/api/updates/check', async (req, res) => {
-    let currentVersion = 'unknown';
     try {
-        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
-        currentVersion = packageJson.version;
-
-        console.log('[UPDATES] Checking for updates from GitHub...');
-
-        // Get latest release from GitHub
-        const response = await axios.get('https://api.github.com/repos/abbeytekmd/ammui/releases/latest', {
-            headers: {
-                'User-Agent': 'AMMUI-Update-Checker'
-            },
-            timeout: 10000 // 10 second timeout
-        });
-
-        console.log('[UPDATES] GitHub API response received');
-
-        if (!response.data || !response.data.tag_name) {
-            console.error('[UPDATES] Invalid response from GitHub API:', response.data);
-            return res.status(500).json({ error: 'Invalid response from GitHub API' });
-        }
-
-        const latestVersion = response.data.tag_name.replace('v', '');
-        const updateAvailable = compareVersions(latestVersion, currentVersion) > 0;
-
-        console.log(`[UPDATES] Current: ${currentVersion}, Latest: ${latestVersion}, Update available: ${updateAvailable}`);
-
-        res.json({
-            currentVersion,
-            latestVersion,
-            updateAvailable,
-            releaseUrl: response.data.html_url,
-            releaseNotes: response.data.body
-        });
+        await execAsync('git fetch', { cwd: __dirname });
+        const { stdout } = await execAsync('git rev-list HEAD..@{u} --count', { cwd: __dirname });
+        const behind = parseInt(stdout.trim(), 10);
+        res.json({ available: behind > 0, behind });
     } catch (err) {
-        console.error('[UPDATES] CAUGHT ERROR in catch block');
-        console.error('[UPDATES] Failed to check for updates - FULL ERROR:', err);
-        console.error('[UPDATES] Error details:', {
-            message: err.message,
-            code: err.code,
-            status: err.response?.status,
-            statusText: err.response?.statusText,
-            url: err.config?.url,
-            isAxiosError: err.isAxiosError,
-            stack: err.stack?.substring(0, 500)
-        });
-
-        // Handle specific error cases
-        let errorMessage = err.message || 'Failed to check for updates';
-        if (err.isAxiosError && err.response?.status === 404) {
-            // No releases found - this is normal for a repository without releases
-            console.log('[UPDATES] No releases found in repository - this is normal');
-            return res.json({
-                currentVersion,
-                latestVersion: currentVersion,
-                updateAvailable: false,
-                releaseUrl: 'https://github.com/abbeytekmd/ammui/releases',
-                releaseNotes: 'No releases available yet. Check back later for updates.',
-                message: 'No releases available in the repository yet.'
-            });
-        } else if (err.isAxiosError && err.response?.status === 403) {
-            errorMessage = 'GitHub API rate limit exceeded or access denied';
-        }
-
-        res.status(500).json({
-            error: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
+        res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/updates/apply', async (req, res) => {
-    try {
-        // Set headers for SSE
-        res.writeHead(200, {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': 'Cache-Control'
-        });
+app.post('/api/updates/apply', (req, res) => {
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control'
+    });
 
-        const sendProgress = (message, progress = null) => {
-            res.write(`data: ${JSON.stringify({ message, progress })}\n\n`);
-        };
+    const sendProgress = (message, progress = null) => {
+        res.write(`data: ${JSON.stringify({ message, progress })}\n\n`);
+    };
 
-        sendProgress('Checking for updates...', 10);
-
-        // Get latest release info
-        const releaseResponse = await axios.get('https://api.github.com/repos/abbeytekmd/ammui/releases/latest', {
-            headers: { 'User-Agent': 'AMMUI-Update-Checker' }
-        });
-
-        const packageJson = JSON.parse(await fsp.readFile(path.join(__dirname, 'package.json'), 'utf8'));
-        const currentVersion = packageJson.version;
-        const latestVersion = releaseResponse.data.tag_name.replace('v', '');
-
-        if (compareVersions(latestVersion, currentVersion) <= 0) {
-            sendProgress('Already up to date', 100);
-            res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
+    sendProgress('Running git pull...', 30);
+    exec('git pull', { cwd: __dirname }, (err, stdout, stderr) => {
+        if (err) {
+            console.error('[UPDATE] git pull failed:', stderr || err.message);
+            res.write(`data: ${JSON.stringify({ error: stderr || err.message })}\n\n`);
             res.end();
             return;
         }
-
-        sendProgress('Downloading update...', 20);
-
-        // Find the zip asset
-        const zipAsset = releaseResponse.data.assets.find(asset =>
-            asset.name.endsWith('.zip') && !asset.name.includes('pkg')
-        );
-
-        if (!zipAsset) {
-            throw new Error('No update package found');
-        }
-
-        // Download the zip file
-        const zipPath = path.join(baseDataDir, 'update.zip');
-        const file = fs.createWriteStream(zipPath);
-
-        const downloadResponse = await axios({
-            method: 'GET',
-            url: zipAsset.browser_download_url,
-            responseType: 'stream',
-            headers: { 'User-Agent': 'AMMUI-Update-Checker' }
-        });
-
-        let downloaded = 0;
-        const totalSize = parseInt(downloadResponse.headers['content-length'], 10);
-
-        downloadResponse.data.on('data', (chunk) => {
-            downloaded += chunk.length;
-            const progress = Math.round((downloaded / totalSize) * 30) + 20; // 20-50%
-            sendProgress(`Downloading... ${Math.round(downloaded / 1024 / 1024)}MB`, progress);
-        });
-
-        downloadResponse.data.pipe(file);
-
-        await new Promise((resolve, reject) => {
-            file.on('finish', resolve);
-            file.on('error', reject);
-        });
-
-        sendProgress('Extracting update...', 60);
-
-        // Extract the zip file
-        const zip = new AdmZip(zipPath);
-        const extractPath = path.join(baseDataDir, 'update_temp');
-
-        // Clear temp directory if it exists
-        if (fs.existsSync(extractPath)) {
-            fs.rmSync(extractPath, { recursive: true, force: true });
-        }
-
-        zip.extractAllTo(extractPath, true);
-
-        sendProgress('Installing update...', 80);
-
-        // Find the extracted directory (should be the repo name)
-        const extractedDirs = fs.readdirSync(extractPath).filter(item =>
-            fs.statSync(path.join(extractPath, item)).isDirectory()
-        );
-
-        if (extractedDirs.length === 0) {
-            throw new Error('Invalid update package structure');
-        }
-
-        const sourceDir = path.join(extractPath, extractedDirs[0]);
-        const appDir = path.dirname(__dirname);
-
-        // Copy files (excluding certain directories)
-        const excludeDirs = ['node_modules', '.git', 'local', 'uploads', 'update_temp'];
-        const excludeFiles = ['devices.json', 'settings.json', 'play_history.json', 'stats.json', 'db.json'];
-
-        await copyDirectory(sourceDir, appDir, excludeDirs, excludeFiles, (progress) => {
-            sendProgress('Installing update...', 80 + Math.round(progress * 0.15));
-        });
-
-        sendProgress('Cleaning up...', 95);
-
-        // Clean up
-        fs.unlinkSync(zipPath);
-        fs.rmSync(extractPath, { recursive: true, force: true });
-
-        sendProgress('Update completed! Restarting...', 100);
+        console.log('[UPDATE] git pull output:', stdout);
+        sendProgress('Restarting...', 100);
         res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
         res.end();
-
-        // Restart the application after a short delay
         setTimeout(() => {
-            console.log('Update completed, restarting application...');
-            process.exit(0); // The process manager should restart it
-        }, 2000);
-
-    } catch (err) {
-        console.error('Update failed:', err);
-        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
-        res.end();
-    }
+            console.log('[UPDATE] Restarting application...');
+            process.exit(0);
+        }, 1000);
+    });
 });
-
-// Helper functions
-function compareVersions(version1, version2) {
-    const v1 = version1.split('.').map(Number);
-    const v2 = version2.split('.').map(Number);
-
-    for (let i = 0; i < Math.max(v1.length, v2.length); i++) {
-        const num1 = v1[i] || 0;
-        const num2 = v2[i] || 0;
-
-        if (num1 > num2) return 1;
-        if (num1 < num2) return -1;
-    }
-
-    return 0;
-}
-
-async function copyDirectory(source, destination, excludeDirs = [], excludeFiles = [], progressCallback = null) {
-    const items = fs.readdirSync(source);
-    let processed = 0;
-
-    for (const item of items) {
-        if (excludeDirs.includes(item)) continue;
-
-        const sourcePath = path.join(source, item);
-        const destPath = path.join(destination, item);
-        const stat = fs.statSync(sourcePath);
-
-        if (stat.isDirectory()) {
-            if (!fs.existsSync(destPath)) {
-                fs.mkdirSync(destPath, { recursive: true });
-            }
-            await copyDirectory(sourcePath, destPath, excludeDirs, excludeFiles);
-        } else {
-            if (!excludeFiles.includes(item)) {
-                fs.copyFileSync(sourcePath, destPath);
-            }
-        }
-
-        processed++;
-        if (progressCallback) {
-            progressCallback(processed / items.length);
-        }
-    }
-}
 
 app.listen(port, () => {
     console.log(`AMMUI server listening at http://localhost:${port}`);
@@ -2937,21 +2782,14 @@ app.post('/api/file-tags', (req, res) => {
     if (!uri) return res.status(400).json({ error: 'URI is required' });
     if (!Array.isArray(tags)) return res.status(400).json({ error: 'Tags must be an array' });
 
+    setFileTags(uri, tags);
     settings.fileTags[uri] = tags;
-    saveSettings();
     terminalLog(`[TAGS] Updated tags for ${uri}: ${tags.join(', ')}`);
     res.json({ success: true });
 });
 
 app.get('/api/tags', (req, res) => {
-    const tagsSet = new Set();
-    Object.values(settings.fileTags).forEach(tags => {
-        if (Array.isArray(tags)) {
-            tags.forEach(t => tagsSet.add(t));
-        }
-    });
-    const tags = Array.from(tagsSet).sort();
-    res.json({ tags });
+    res.json({ tags: getAllTags() });
 });
 
 app.get('/api/local/va-candidates', async (req, res) => {
@@ -3296,11 +3134,7 @@ app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
     const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
     if (!rendererDevice || rendererDevice.loading) return res.status(404).json({ error: 'Renderer not found or still discovering' });
 
-    const uris = Object.keys(settings.fileTags).filter(uri => {
-        if (!Array.isArray(settings.fileTags[uri]) || !settings.fileTags[uri].includes(tag)) return false;
-        // Only include music/audio files
-        return uri.match(/\.(mp3|flac|wav|aac|m4a|ogg|wma|aiff|alac)$/i);
-    });
+    const uris = getUrisByTag(tag).filter(uri => uri.match(/\.(mp3|flac|wav|aac|m4a|ogg|wma|aiff|alac)$/i));
 
     if (uris.length === 0) {
         return res.json({ success: true, count: 0 });

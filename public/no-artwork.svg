@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3a3a3a"/>
+      <stop offset="100%" stop-color="#2a2a2a"/>
+    </linearGradient>
+    <radialGradient id="vinyl" cx="50%" cy="45%" r="50%">
+      <stop offset="0%" stop-color="#555"/>
+      <stop offset="100%" stop-color="#3a3a3a"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="400" height="400" fill="url(#bg)"/>
+
+  <!-- Vinyl record body -->
+  <circle cx="200" cy="190" r="130" fill="url(#vinyl)"/>
+
+  <!-- Groove rings -->
+  <circle cx="200" cy="190" r="122" fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="200" cy="190" r="113" fill="none" stroke="#5a5a5a" stroke-width="1"/>
+  <circle cx="200" cy="190" r="104" fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="200" cy="190" r="95"  fill="none" stroke="#5a5a5a" stroke-width="1"/>
+  <circle cx="200" cy="190" r="86"  fill="none" stroke="#666" stroke-width="1.5"/>
+  <circle cx="200" cy="190" r="77"  fill="none" stroke="#5a5a5a" stroke-width="1"/>
+  <circle cx="200" cy="190" r="68"  fill="none" stroke="#666" stroke-width="1.5"/>
+
+  <!-- Label area -->
+  <circle cx="200" cy="190" r="55" fill="#c8a96e"/>
+  <circle cx="200" cy="190" r="52" fill="none" stroke="#b8955a" stroke-width="1"/>
+
+  <!-- Label text -->
+  <text x="200" y="184" font-family="system-ui, -apple-system, sans-serif"
+        font-size="9" fill="#7a5a30" text-anchor="middle" letter-spacing="2"
+        font-weight="700">NOT</text>
+  <text x="200" y="197" font-family="system-ui, -apple-system, sans-serif"
+        font-size="9" fill="#7a5a30" text-anchor="middle" letter-spacing="2"
+        font-weight="700">AVAILABLE</text>
+
+  <!-- Center spindle hole -->
+  <circle cx="200" cy="190" r="7" fill="#2a2a2a"/>
+  <circle cx="200" cy="190" r="3" fill="#1a1a1a"/>
+
+  <!-- Caption below -->
+  <text x="200" y="358" font-family="system-ui, -apple-system, sans-serif"
+        font-size="13" fill="#888" text-anchor="middle" letter-spacing="3"
+        font-weight="500">NO ARTWORK</text>
+</svg>

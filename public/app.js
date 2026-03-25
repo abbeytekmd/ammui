@@ -100,6 +100,9 @@ let currentExistingLetters = [];
 let currentArtworkQuery = '';
 let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
+let triedArtworkUrls = []; // URLs already tried for the current track (for retry skipping)
+let triedArtworkQueryKey = ''; // which query the triedArtworkUrls belong to
+const artworkOverrides = new Map(JSON.parse(localStorage.getItem('artworkOverrides') || '[]')); // uri → manually chosen url, persisted across refreshes
 let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 2;
@@ -2016,67 +2019,96 @@ async function updatePlayerArtwork(artist, album, uri, albumArtUrl) {
     const query = `${artist || ''} ${album || ''}`.trim();
     currentArtworkQuery = query;
 
-    if (albumArtUrl) {
-        currentArtworkUrl = albumArtUrl;
-        showPlayerArt(albumArtUrl);
-        if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
-            slideshow.next();
+    // Reset tried-URLs list when the track changes
+    if (query !== triedArtworkQueryKey) {
+        triedArtworkUrls = [];
+        triedArtworkQueryKey = query;
+    }
+
+    // If the user manually chose artwork for this track, always use it
+    const override = uri && artworkOverrides.get(uri);
+    if (override) {
+        if (override !== currentArtworkUrl) {
+            currentArtworkUrl = override;
+            showPlayerArt(override);
+            if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') slideshow.next();
         }
         return;
     }
 
+    // Try Discogs / DB cache first (higher quality than DLNA thumbnails)
+    if (artist || album || uri) {
+        try {
+            const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}&uri=${encodeURIComponent(uri || '')}`);
+            if (res.ok) {
+                const data = await res.json();
+                currentArtworkUrl = data.url;
+                if (!triedArtworkUrls.includes(data.url)) triedArtworkUrls.push(data.url);
+                showPlayerArt(data.url);
+                if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') slideshow.next();
+                return;
+            }
+        } catch (e) {
+            console.warn('[ART] Discogs search failed, trying DLNA art fallback:', e);
+        }
+    }
+
+    // Fall back to DLNA-provided art if Discogs had nothing
+    if (albumArtUrl) {
+        currentArtworkUrl = albumArtUrl;
+        if (!triedArtworkUrls.includes(albumArtUrl)) triedArtworkUrls.push(albumArtUrl);
+        showPlayerArt(albumArtUrl);
+        if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') slideshow.next();
+        return;
+    }
+
+    // Nothing worked
+    console.warn('[ART] No artwork found, will not retry this query');
+    failedArtworkQueries.add(query);
+    currentArtworkUrl = '/no-artwork.svg';
+    showPlayerArt('/no-artwork.svg');
+}
+
+async function loadDiscogsToken() {
     try {
-        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album || '')}&uri=${encodeURIComponent(uri || '')}`);
+        const res = await fetch('/api/settings/discogs');
         if (res.ok) {
             const data = await res.json();
-            currentArtworkUrl = data.url;
-            showPlayerArt(data.url);
-
-            // Trigger screensaver update if in music mode
-            if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
-                slideshow.next();
+            const tokenInput = document.getElementById('discogs-token-input');
+            if (tokenInput) {
+                tokenInput.value = data.maskedToken || '';
+                tokenInput.dataset.loaded = '1';
             }
-        } else {
-            console.warn('[ART] No artwork found, will not retry this query');
-            failedArtworkQueries.add(query);
-            currentArtworkUrl = '';
-            hideAllPlayerArt();
         }
     } catch (e) {
-        console.warn('[ART] Failed to fetch player artwork:', e);
-        failedArtworkQueries.add(query);
-        currentArtworkUrl = '';
-        hideAllPlayerArt();
+        console.warn('Failed to load Discogs token status:', e);
     }
 }
 
 async function saveDiscogsToken() {
     const tokenInput = document.getElementById('discogs-token-input');
-    if (tokenInput) {
-        const token = tokenInput.value.trim();
-        // If it's the masked token, don't re-save it
-        if (token.includes('****')) return;
+    if (!tokenInput) return;
+    const token = tokenInput.value.trim();
+    // If the value is the masked placeholder loaded from the server, nothing changed
+    if (token.includes('****')) return;
 
-        try {
-            const response = await fetch('/api/settings/discogs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token })
-            });
+    try {
+        const response = await fetch('/api/settings/discogs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token })
+        });
 
-            if (response.ok) {
-                if (token) {
-                    showToast('Discogs token saved to server', 'success', 2000);
-                } else {
-                    showToast('Discogs token removed from server', 'success', 2000);
-                }
-            } else {
-                throw new Error('Failed to save token');
-            }
-        } catch (err) {
-            console.error('Save settings error:', err);
-            showToast('Failed to save settings to server');
+        if (response.ok) {
+            showToast(token ? 'Discogs token saved' : 'Discogs token removed', 'success', 2000);
+            // Reload masked value so field reflects current state
+            await loadDiscogsToken();
+        } else {
+            throw new Error('Failed to save token');
         }
+    } catch (err) {
+        console.error('Save settings error:', err);
+        showToast('Failed to save settings to server');
     }
 }
 
@@ -2102,9 +2134,15 @@ function showPlayerArt(url) {
     imgs.forEach((img, idx) => {
         if (!img) return;
         img.onload = () => onLoaded(containers[idx]);
-        img.onerror = (err) => {
+        img.onerror = () => {
             console.error(`[ART] Failed to load image element ${idx}: ${url}`);
-            if (containers[idx]) containers[idx].classList.remove('visible');
+            if (url !== '/no-artwork.svg') {
+                img.onload = () => onLoaded(containers[idx]);
+                img.onerror = () => { if (containers[idx]) containers[idx].classList.remove('visible'); };
+                img.src = '/no-artwork.svg';
+            } else {
+                if (containers[idx]) containers[idx].classList.remove('visible');
+            }
         };
         img.src = url;
     });
@@ -2672,6 +2710,7 @@ function openManageModal() {
     if (manageModal) {
         renderManageDevices();
         manageModal.style.display = 'flex';
+        loadDiscogsToken();
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
         if (s3Enabled) startS3StatusPolling();
     }
@@ -2836,10 +2875,6 @@ function switchSettingsTab(tab) {
         startAirPlayScan();
     }
 
-    // Auto-check version when entering updates tab
-    if (tab.toLowerCase() === 'updates') {
-        checkForUpdates();
-    }
 }
 
 function renderManageDevices() {
@@ -5372,6 +5407,8 @@ class Slideshow {
             const labels = { all: 'All', onThisDay: 'Day', favourites: 'Favs', nowPlaying: 'Music' };
             this.modeLabel.textContent = labels[this.mode] || 'All';
         }
+        const retryBtn = document.getElementById('btn-ss-retry-art');
+        if (retryBtn) retryBtn.style.display = this.mode === 'nowPlaying' ? '' : 'none';
     }
 
     async rotate(delta) {
@@ -5543,6 +5580,47 @@ function rotateSlideshow(delta) { if (slideshow) slideshow.rotate(delta); }
 function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
 function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
 function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
+
+async function retryAlbumArt() {
+    const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+    if (!currentTrack) return;
+    const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
+
+    // Reset tried list if track has somehow changed
+    if (query !== triedArtworkQueryKey) {
+        triedArtworkUrls = [];
+        triedArtworkQueryKey = query;
+    }
+
+    // Add current URL to skip list before searching (but not the placeholder)
+    if (currentArtworkUrl && currentArtworkUrl !== '/no-artwork.svg' && !triedArtworkUrls.includes(currentArtworkUrl)) {
+        triedArtworkUrls.push(currentArtworkUrl);
+    }
+
+    try {
+        const skipParam = triedArtworkUrls.length ? `&skip=${encodeURIComponent(triedArtworkUrls.join(','))}` : '';
+        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(currentTrack.artist || '')}&album=${encodeURIComponent(currentTrack.album || '')}&uri=${encodeURIComponent(currentTrack.uri || '')}${skipParam}`);
+        if (res.ok) {
+            const data = await res.json();
+            currentArtworkUrl = data.url;
+            currentArtworkQuery = query;
+            failedArtworkQueries.delete(query);
+            if (!triedArtworkUrls.includes(data.url)) triedArtworkUrls.push(data.url);
+            if (currentTrack?.uri) {
+                artworkOverrides.set(currentTrack.uri, data.url);
+                localStorage.setItem('artworkOverrides', JSON.stringify([...artworkOverrides]));
+            }
+            showPlayerArt(data.url);
+            if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
+                slideshow.next();
+            }
+        } else {
+            showToast('No more artwork found', 'info', 2000);
+        }
+    } catch (e) {
+        console.warn('[ART] Retry failed:', e);
+    }
+}
 
 // Slideshow music bar: play/pause toggle
 function toggleSlideshowPlayback(event) {
@@ -5782,49 +5860,23 @@ async function triggerS3Sync() {
 
 // Update functions
 async function checkForUpdates() {
-    const btn = document.getElementById('btn-check-updates');
-    const currentVersionEl = document.getElementById('current-version');
-    const latestVersionEl = document.getElementById('latest-version');
-    const updateAvailableRow = document.getElementById('update-available-row');
-    const updateBtn = document.getElementById('btn-update-now');
-
+    const btn = document.getElementById('btn-update-now');
+    const statusText = document.getElementById('update-status-text');
     if (btn) btn.disabled = true;
-    if (currentVersionEl) currentVersionEl.textContent = 'Loading...';
-    if (latestVersionEl) latestVersionEl.textContent = 'Checking...';
-
+    if (statusText) statusText.textContent = 'Checking...';
     try {
-        // Get current version
-        const versionRes = await fetch('/api/version');
-        if (versionRes.ok) {
-            const versionData = await versionRes.json();
-            if (currentVersionEl) currentVersionEl.textContent = versionData.version || 'Unknown';
-        }
-
-        // Check for updates
-        const updateRes = await fetch('/api/updates/check');
-        if (updateRes.ok) {
-            const updateData = await updateRes.json();
-            if (latestVersionEl) latestVersionEl.textContent = updateData.latestVersion || 'Unknown';
-
-            if (updateData.updateAvailable) {
-                if (updateAvailableRow) updateAvailableRow.style.display = 'flex';
-                if (updateBtn) updateBtn.style.display = 'inline-flex';
-                showToast('Update available!', 'info', 3000);
-            } else {
-                if (updateAvailableRow) updateAvailableRow.style.display = 'none';
-                if (updateBtn) updateBtn.style.display = 'none';
-                showToast('You are running the latest version', 'success', 3000);
-            }
+        const res = await fetch('/api/updates/check');
+        if (!res.ok) throw new Error('Check failed');
+        const data = await res.json();
+        if (data.available) {
+            if (btn) btn.disabled = false;
+            if (statusText) statusText.textContent = `${data.behind} commit${data.behind !== 1 ? 's' : ''} behind`;
         } else {
-            if (latestVersionEl) latestVersionEl.textContent = 'Check failed';
-            showToast('Failed to check for updates', 'error', 3000);
+            if (statusText) statusText.textContent = 'Up to date';
         }
     } catch (err) {
+        if (statusText) statusText.textContent = 'Check failed';
         console.error('Update check failed:', err);
-        if (latestVersionEl) latestVersionEl.textContent = 'Error';
-        showToast('Failed to check for updates', 'error', 3000);
-    } finally {
-        if (btn) btn.disabled = false;
     }
 }
 
@@ -5832,23 +5884,15 @@ async function performUpdate() {
     const updateBtn = document.getElementById('btn-update-now');
     const progressContainer = document.getElementById('update-progress-container');
     const progressText = document.getElementById('update-progress-text');
-    const progressPercent = document.getElementById('update-progress-percent');
     const progressBar = document.getElementById('update-progress-bar');
 
     if (updateBtn) updateBtn.disabled = true;
     if (progressContainer) progressContainer.style.display = 'block';
+    if (progressText) progressText.textContent = 'Running git pull...';
+    if (progressBar) progressBar.style.width = '30%';
 
     try {
-        const response = await fetch('/api/updates/apply', {
-            method: 'POST'
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Update failed');
-        }
-
-        // Handle SSE for progress updates
+        const response = await fetch('/api/updates/apply', { method: 'POST' });
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
 
@@ -5857,32 +5901,27 @@ async function performUpdate() {
             if (done) break;
 
             const chunk = decoder.decode(value);
-            const lines = chunk.split('\n');
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const data = JSON.parse(line.slice(6));
-                        if (progressText) progressText.textContent = data.message || 'Updating...';
-                        if (progressPercent) progressPercent.textContent = data.progress ? `${data.progress}%` : '';
-                        if (progressBar) progressBar.style.width = data.progress ? `${data.progress}%` : '0%';
-
-                        if (data.complete) {
-                            showToast('Update completed! Application will restart...', 'success', 5000);
-                            setTimeout(() => {
-                                window.location.reload();
-                            }, 2000);
-                            return;
-                        }
-                    } catch (e) {
-                        console.error('Failed to parse progress data:', e);
+            for (const line of chunk.split('\n')) {
+                if (!line.startsWith('data: ')) continue;
+                try {
+                    const data = JSON.parse(line.slice(6));
+                    if (data.message && progressText) progressText.textContent = data.message;
+                    if (data.progress !== null && progressBar) progressBar.style.width = `${data.progress}%`;
+                    if (data.error) throw new Error(data.error);
+                    if (data.complete) {
+                        if (progressBar) progressBar.style.width = '100%';
+                        showToast('Update complete — reloading...', 'success', 5000);
+                        setTimeout(() => window.location.reload(), 3000);
+                        return;
                     }
+                } catch (e) {
+                    if (e.message !== 'Unexpected end of JSON input') throw e;
                 }
             }
         }
     } catch (err) {
         console.error('Update failed:', err);
-        if (progressText) progressText.textContent = 'Update failed';
+        if (progressText) progressText.textContent = `Failed: ${err.message}`;
         showToast(`Update failed: ${err.message}`, 'error', 5000);
     } finally {
         if (updateBtn) updateBtn.disabled = false;
