@@ -5854,19 +5854,16 @@ async function triggerS3Sync() {
 
 // Update functions
 async function checkForUpdates() {
-    const btn = document.getElementById('btn-update-now');
     const statusText = document.getElementById('update-status-text');
-    if (btn) btn.disabled = true;
     if (statusText) statusText.textContent = 'Checking...';
     try {
         const res = await fetch('/api/updates/check');
         if (!res.ok) throw new Error('Check failed');
         const data = await res.json();
-        if (data.available) {
-            if (btn) btn.disabled = false;
-            if (statusText) statusText.textContent = `${data.behind} commit${data.behind !== 1 ? 's' : ''} behind`;
-        } else {
-            if (statusText) statusText.textContent = 'Up to date';
+        if (statusText) {
+            statusText.textContent = data.available
+                ? `${data.behind} commit${data.behind !== 1 ? 's' : ''} behind`
+                : 'Up to date';
         }
     } catch (err) {
         if (statusText) statusText.textContent = 'Check failed';
