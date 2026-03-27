@@ -3469,6 +3469,8 @@ function initSwipeHandling() {
 
 async function setHome(type = 'music') {
     if (!selectedServerUdn) return;
+    const btnIdCheck = type === 'music' ? 'btn-set-music-home' : 'btn-set-photo-home';
+    if (document.getElementById(btnIdCheck)?.classList.contains('disabled')) return;
 
     // Get existing home locations map
     let homeLocations = {};
@@ -3512,6 +3514,7 @@ async function setHome(type = 'music') {
 
 async function setScreensaver() {
     if (!selectedServerUdn) return;
+    if (document.getElementById('btn-set-screensaver')?.classList.contains('disabled')) return;
 
     // Use current folder
     const currentFolder = browsePath[browsePath.length - 1];
@@ -5148,60 +5151,72 @@ class Slideshow {
             return;
         }
 
-        this.img.style.opacity = 0;
-        if (this.info) this.info.style.opacity = 0;
+        const doTransition = (naturalWidth, naturalHeight) => {
+            this.img.style.opacity = 0;
+            if (this.info) this.info.style.opacity = 0;
 
-        setTimeout(() => {
-            if (this.currentPhoto) {
-                this.previousPhoto = {
-                    url: this.currentPhoto,
-                    rotation: this.rotation,
-                    data: this.currentPhotoData
-                };
-            }
-
-            if (this.bg) {
-                this.bg.style.opacity = 0;
-                setTimeout(() => {
-                    this.bg.style.backgroundImage = `url("${data.url.replace(/"/g, '%22')}")`;
-                    this.bg.style.opacity = 1;
-                }, 500);
-            }
-
-            this.img.src = data.url;
-            this.currentPhoto = data.url;
-            this.currentPhotoData = data;
-            this.rotation = data.manualRotation || 0;
-
-            if (this.favBtn) {
-                const isFav = data.tags && data.tags.includes('fav');
-                this.favBtn.classList.toggle('is-favourite', !!isFav);
-            }
-
-            this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
-
-            this.updateInfoUI(data);
-
-            this.img.onload = () => {
-                this.img.style.opacity = 1;
-                if (this.info) this.info.style.opacity = 1;
-                const ratio = this.img.naturalWidth / this.img.naturalHeight;
-                const isPanorama = ratio > 2.2;
-                this.img.classList.toggle('panorama', isPanorama);
-                // Reset any previous pan animation
-                this.img.style.animation = 'none';
-                void this.img.offsetWidth; // force reflow
-                if (isPanorama) {
-                    const dur = Math.max((this.duration || 60000) / 1000, 20);
-                    this._panoramaDir = (this._panoramaDir === undefined) ? false : !this._panoramaDir;
-                    const animName = this._panoramaDir ? 'panoramaPanRL' : 'panoramaPanLR';
-                    this.img.style.animation = `${animName} ${dur}s ease-in-out forwards`;
-                } else {
-                    this.img.style.animation = '';
+            setTimeout(() => {
+                if (this.currentPhoto) {
+                    this.previousPhoto = {
+                        url: this.currentPhoto,
+                        rotation: this.rotation,
+                        data: this.currentPhotoData
+                    };
                 }
-            };
-            if (this.img.complete) this.img.onload();
-        }, 500);
+
+                if (this.bg) {
+                    this.bg.style.opacity = 0;
+                    setTimeout(() => {
+                        this.bg.style.backgroundImage = `url("${data.url.replace(/"/g, '%22')}")`;
+                        this.bg.style.opacity = 1;
+                    }, 500);
+                }
+
+                this.img.src = data.url;
+                this.currentPhoto = data.url;
+                this.currentPhotoData = data;
+                this.rotation = data.manualRotation || 0;
+
+                if (this.favBtn) {
+                    const isFav = data.tags && data.tags.includes('fav');
+                    this.favBtn.classList.toggle('is-favourite', !!isFav);
+                }
+
+                this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
+
+                this.updateInfoUI(data);
+
+                const applyDisplay = (w, h) => {
+                    this.img.style.opacity = 1;
+                    if (this.info) this.info.style.opacity = 1;
+                    const ratio = w / h;
+                    const isPanorama = ratio > 2.2;
+                    this.img.classList.toggle('panorama', isPanorama);
+                    this.img.style.animation = 'none';
+                    void this.img.offsetWidth; // force reflow
+                    if (isPanorama) {
+                        const dur = Math.max((this.duration || 60000) / 1000, 20);
+                        this._panoramaDir = (this._panoramaDir === undefined) ? false : !this._panoramaDir;
+                        const animName = this._panoramaDir ? 'panoramaPanRL' : 'panoramaPanLR';
+                        this.img.style.animation = `${animName} ${dur}s ease-in-out forwards`;
+                    } else {
+                        this.img.style.animation = '';
+                    }
+                };
+
+                if (this.img.complete) {
+                    applyDisplay(naturalWidth || this.img.naturalWidth, naturalHeight || this.img.naturalHeight);
+                } else {
+                    this.img.onload = () => applyDisplay(this.img.naturalWidth, this.img.naturalHeight);
+                }
+            }, 500);
+        };
+
+        // Preload the image so the current photo stays visible until the new one is ready
+        const preload = new Image();
+        preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight);
+        preload.onerror = () => doTransition(0, 1);
+        preload.src = data.url;
     }
 
     updateInfoUI(data) {

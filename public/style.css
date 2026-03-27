@@ -753,6 +753,12 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
 }
 
+.dropdown-item.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .dropdown-item svg {
     color: var(--primary);
     flex-shrink: 0;
