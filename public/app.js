@@ -614,25 +614,108 @@ async function downloadTrack(uri, title, artist, album) {
     }
 }
 
+let _dlEventSource = null;
+let _dlLastLogLen = 0;
+
 async function downloadFolder(udn, objectId, title, artist, album) {
-    showToast(`Downloading folder: ${title}...`, 'info', 5000);
     try {
-        const response = await fetch('/api/download-folder', {
+        const response = await fetch('/api/download-folder-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ udn, objectId, title, artist, album })
         });
-
         if (!response.ok) {
             const errData = await response.json();
-            throw new Error(errData.error || 'Folder download failed');
+            throw new Error(errData.error || 'Failed to start download');
         }
-
-        const data = await response.json();
-        showToast(`Folder download complete! Saved ${data.downloadCount} tracks.`, 'success', 5000);
+        const { jobId } = await response.json();
+        localStorage.setItem('activeDownloadJob', jobId);
+        openDownloadProgressModal(jobId, title);
     } catch (err) {
-        console.error('Folder download error:', err);
-        showToast(`Folder download failed: ${err.message}`);
+        showToast(`Download failed: ${err.message}`, 'error');
+    }
+}
+
+function openDownloadProgressModal(jobId, folderTitle) {
+    const modal = document.getElementById('download-progress-modal');
+    const titleEl = document.getElementById('download-progress-title');
+    const bar = document.getElementById('download-progress-bar');
+    const current = document.getElementById('download-progress-current');
+    const log = document.getElementById('download-progress-log');
+    const stats = document.getElementById('download-progress-stats');
+    const closeBtn = document.getElementById('download-progress-close');
+
+    if (folderTitle) titleEl.textContent = `Downloading: ${folderTitle}`;
+    bar.style.width = '0%';
+    current.textContent = 'Starting...';
+    log.innerHTML = '';
+    log.style.cssText = 'font-size:14px;color:#e2e8f0;max-height:240px;min-height:60px;overflow-y:auto;background:rgba(0,0,0,0.35);border-radius:0.5rem;padding:0.6rem 0.75rem;display:flex;flex-direction:column;gap:2px;';
+    stats.textContent = '';
+    closeBtn.disabled = true;
+    modal.style.display = 'flex';
+
+    _dlLastLogLen = 0;
+    if (_dlEventSource) { _dlEventSource.close(); _dlEventSource = null; }
+    _dlEventSource = new EventSource(`/api/download-job/${jobId}/stream`);
+    _dlEventSource.onmessage = (e) => applyDownloadJobUpdate(JSON.parse(e.data));
+    _dlEventSource.onerror = () => { _dlEventSource.close(); _dlEventSource = null; };
+}
+
+function applyDownloadJobUpdate(job) {
+    const bar = document.getElementById('download-progress-bar');
+    const current = document.getElementById('download-progress-current');
+    const log = document.getElementById('download-progress-log');
+    const stats = document.getElementById('download-progress-stats');
+    const titleEl = document.getElementById('download-progress-title');
+    const closeBtn = document.getElementById('download-progress-close');
+
+    // Append only new log entries
+    const newEntries = job.log.slice(_dlLastLogLen);
+    _dlLastLogLen = job.log.length;
+    for (const entry of newEntries) {
+        const icon = entry.status === 'done' ? '✓' : entry.status === 'skipped' ? '—' : '✗';
+        const cls = entry.status === 'done' ? 'dl-done' : entry.status === 'skipped' ? 'dl-skipped' : 'dl-failed';
+        const el = document.createElement('div');
+        el.className = `dl-log-entry ${cls}`;
+        el.textContent = `${icon} ${entry.title}${entry.error ? ': ' + entry.error : ''}`;
+        const entryColor = entry.status === 'done' ? '#4ade80' : entry.status === 'skipped' ? '#94a3b8' : '#f87171';
+        el.style.cssText = `font-size:14px;line-height:1.6;color:${entryColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;`;
+        log.appendChild(el);
+    }
+    if (newEntries.length) log.scrollTop = log.scrollHeight;
+
+    const done = job.downloadCount + job.skippedCount + job.failCount;
+    if (job.total > 0) bar.style.width = Math.round((done / job.total) * 100) + '%';
+
+    if (job.done || job.error) {
+        if (_dlEventSource) { _dlEventSource.close(); _dlEventSource = null; }
+        localStorage.removeItem('activeDownloadJob');
+        bar.style.width = '100%';
+        current.textContent = job.error ? `Error: ${job.error}` : 'Complete';
+        stats.textContent = job.error ? '' : `${job.downloadCount} downloaded, ${job.skippedCount} skipped, ${job.failCount} failed`;
+        if (!job.error) titleEl.textContent = titleEl.textContent.replace('Downloading:', 'Complete:');
+        closeBtn.disabled = false;
+    } else {
+        current.textContent = job.current || (job.total ? `${done} / ${job.total}` : 'Working...');
+    }
+}
+
+function closeDownloadProgressModal() {
+    document.getElementById('download-progress-modal').style.display = 'none';
+}
+
+// On page load, reconnect to any in-progress download job
+async function checkActiveDownloadJob() {
+    const jobId = localStorage.getItem('activeDownloadJob');
+    if (!jobId) return;
+    try {
+        const res = await fetch(`/api/download-job/${jobId}`);
+        if (!res.ok) { localStorage.removeItem('activeDownloadJob'); return; }
+        const job = await res.json();
+        if (job.done) { localStorage.removeItem('activeDownloadJob'); return; }
+        openDownloadProgressModal(jobId, job.title);
+    } catch (e) {
+        localStorage.removeItem('activeDownloadJob');
     }
 }
 
@@ -716,6 +799,73 @@ async function renameFolder(index, event) {
     } catch (err) {
         console.error('[RENAME] Error:', err);
         showToast(`Rename failed: ${err.message}`);
+    }
+}
+
+let _mergeSourceItem = null;
+
+async function openMergeIntoModal(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+    _mergeSourceItem = item;
+
+    const desc = document.getElementById('merge-into-desc');
+    const input = document.getElementById('merge-into-input');
+    const datalist = document.getElementById('merge-into-siblings');
+    const modal = document.getElementById('merge-into-modal');
+
+    desc.textContent = `Move all contents of "${item.title}" into:`;
+    input.value = '';
+    datalist.innerHTML = '';
+
+    modal.style.display = 'flex';
+    input.focus();
+
+    try {
+        const res = await fetch(`/api/local/sibling-folders?id=${encodeURIComponent(item.id)}`);
+        if (res.ok) {
+            const { siblings } = await res.json();
+            datalist.innerHTML = siblings.map(s => `<option value="${s.replace(/"/g, '&quot;')}"></option>`).join('');
+        }
+    } catch (e) { /* non-fatal */ }
+}
+
+function closeMergeIntoModal() {
+    document.getElementById('merge-into-modal').style.display = 'none';
+    _mergeSourceItem = null;
+}
+
+async function executeMergeInto() {
+    const input = document.getElementById('merge-into-input');
+    const targetName = input.value.trim();
+    if (!targetName || !_mergeSourceItem) return;
+
+    const btn = document.getElementById('merge-into-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = '...';
+
+    try {
+        const res = await fetch('/api/local/merge-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourceId: _mergeSourceItem.id, targetName })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        const { moved } = await res.json();
+        showToast(`Merged ${moved} item${moved !== 1 ? 's' : ''} into "${targetName}"`, 'success', 3000);
+        closeMergeIntoModal();
+
+        // Refresh current browser view
+        const lastFolder = browsePath[browsePath.length - 1];
+        if (lastFolder) await browse(selectedServerUdn, lastFolder.id);
+    } catch (err) {
+        showToast(`Merge failed: ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Merge';
     }
 }
 
@@ -1670,6 +1820,14 @@ function renderBrowser(items) {
                                     </svg>
                                     Rename
                                 </button>
+                                <button class="dropdown-item" onclick="openMergeIntoModal(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M8 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3"></path>
+                                        <polyline points="15 3 21 3 21 9"></polyline>
+                                        <line x1="10" y1="14" x2="21" y2="3"></line>
+                                    </svg>
+                                    Merge Into
+                                </button>
                                 ` : ''}
                                 <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1951,7 +2109,19 @@ function syncLocalPlayback(status) {
     // Check if we need to load or change track
     if (video.getAttribute('data-track-id') != status.trackId) {
         console.log(`[LOCAL PLAYER] Loading: ${currentTrack.title}`);
-        video.src = currentTrack.uri;
+        // If the URI has a loopback host (server couldn't detect its LAN IP), rewrite it
+        // to the current page's host so the browser can always reach it.
+        const resolvedUri = (() => {
+            try {
+                const u = new URL(currentTrack.uri);
+                if (u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '::1') {
+                    u.host = window.location.host;
+                    return u.toString();
+                }
+            } catch (e) {}
+            return currentTrack.uri;
+        })();
+        video.src = resolvedUri;
         video.setAttribute('data-track-id', status.trackId);
         video.setAttribute('data-is-local-player', 'true');
 
@@ -2710,6 +2880,7 @@ function openManageModal() {
         loadDiscogsToken();
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
         if (s3Enabled) startS3StatusPolling();
+        loadLocalStats();
     }
 }
 
@@ -3729,6 +3900,9 @@ async function init() {
         }
     } catch (e) { console.warn('Failed to fetch screensaver settings'); }
 
+    // Reconnect to any in-progress download job
+    checkActiveDownloadJob();
+
     // Start idle timer
     resetIdleTimer();
 
@@ -4595,6 +4769,7 @@ async function openFileInfoModal(trackData) {
             fields: [
                 { label: 'Title', sKey: 'title', eKey: 'common.title' },
                 { label: 'Artist', sKey: 'artist', eKey: 'common.artist' },
+                { label: 'Album Artist', sKey: 'albumArtist', eKey: 'common.albumartist' },
                 { label: 'Album', sKey: 'album', eKey: 'common.album' },
                 { label: 'Year', sKey: 'year', eKey: 'common.year' },
                 { label: 'Genre', sKey: 'genre', eKey: 'common.genre' }
@@ -4682,10 +4857,20 @@ async function openFileInfoModal(trackData) {
             const folderMismatchClass = isFolderMismatch ? 'mismatch' : '';
             const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name mismatch">!</div>' : '';
 
+            const isEditable = (f.label === 'Artist' || f.label === 'Album Artist' || f.label === 'Album') && trackData.uri && trackData.uri.includes('/local-files/');
+            const editField = f.label === 'Artist' ? 'artist' : f.label === 'Album Artist' ? 'albumartist' : 'album';
+            const editCell = isEditable
+                ? `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
+                       <input class="metadata-edit-input" data-field="${editField}" value="${(eValRaw || '').toString().replace(/"/g, '&quot;')}" placeholder="Enter ${f.label.toLowerCase()}..." />
+                       <button class="metadata-save-btn" onclick="saveTrackTag('${editField}', this)">Save</button>
+                       <button class="metadata-save-btn metadata-copy-folder-btn" onclick="copyTagToFolderAll('${editField}', this)" title="Copy to all tracks in this folder">All</button>
+                   </div>`
+                : `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>`;
+
             rowsContainer.innerHTML += `
                 <div class="metadata-cell metadata-label-cell">${f.label}</div>
                 <div class="metadata-cell metadata-value-cell ${mismatchClass}">${sVal}</div>
-                <div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>
+                ${editCell}
                 <div class="metadata-cell metadata-value-cell tertiary ${folderMismatchClass}">${folderVal}${folderMismatchIcon}</div>
             `;
         });
@@ -4739,6 +4924,35 @@ function closeFileInfoModal() {
     const modal = document.getElementById('track-info-modal');
     if (modal) {
         modal.style.display = 'none';
+    }
+}
+
+async function saveTrackTag(field, btn) {
+    const cell = btn.closest('.metadata-editable-cell');
+    const input = cell.querySelector('.metadata-edit-input');
+    const value = input.value.trim();
+
+    btn.disabled = true;
+    btn.textContent = '...';
+
+    try {
+        const res = await fetch('/api/local/write-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: currentInfoUri, [field]: value })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Failed');
+        }
+        btn.textContent = 'Saved!';
+        btn.style.color = '#4ade80';
+        setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
+    } catch (e) {
+        btn.textContent = 'Error';
+        btn.style.color = '#f87171';
+        setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
+        showToast(`Failed to save ${field}: ${e.message}`, 'error');
     }
 }
 
@@ -4856,6 +5070,35 @@ async function saveFileTags() {
     }
 }
 
+async function copyTagToFolderAll(field, btn) {
+    const cell = btn.closest('.metadata-editable-cell');
+    const input = cell.querySelector('.metadata-edit-input');
+    const value = input.value.trim();
+    if (!value || !currentInfoUri) return;
+
+    btn.disabled = true;
+    const origText = btn.textContent;
+    btn.textContent = '...';
+
+    try {
+        const res = await fetch('/api/local/write-tags-to-folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: currentInfoUri, field, value })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        const { updated } = await res.json();
+        btn.textContent = 'Done!';
+        btn.style.color = '#4ade80';
+        showToast(`${field} copied to ${updated} track${updated !== 1 ? 's' : ''} in folder`, 'success', 3000);
+        setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000);
+    } catch (err) {
+        btn.textContent = origText;
+        btn.disabled = false;
+        showToast(`Copy failed: ${err.message}`);
+    }
+}
+
 /**
  * Synchronously checks if a track's folder structure (Artist/Album/Track)
  * conflicts with its Media Server metadata. Returns true if so.
@@ -4931,6 +5174,7 @@ class Slideshow {
         this.leafletMap = null;
         this.leafletMarker = null;
         this.resumeIndex = -1;
+        this.resumeUrl = null;
         this.resumeMode = null;
     }
 
@@ -5005,10 +5249,13 @@ class Slideshow {
         console.log('[SLIDESHOW] Stopping...');
         this.isActive = false;
         if ((this.mode === 'onThisDay' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
+            const currentItem = this.items[this.index];
+            this.resumeUrl = currentItem ? (currentItem.uri || currentItem.res) : null;
             this.resumeIndex = this.index;
             this.resumeMode = this.mode;
         } else {
             this.resumeIndex = -1;
+            this.resumeUrl = null;
             this.resumeMode = null;
         }
         this.items = [];
@@ -5046,15 +5293,18 @@ class Slideshow {
             if (this.items.length > 0) {
                 this.index = (this.index + 1) % this.items.length;
                 const item = this.items[this.index];
+                const originalUrl = item.uri || item.res;
                 data = {
-                    url: item.uri || item.res,
+                    url: originalUrl,
+                    originalUrl: originalUrl,
                     title: item.title,
                     date: item.year || item.date || item['dc:date'] || '',
                     location: item.artist || item.creator || '',
                     latitude: item.latitude,
                     longitude: item.longitude,
                     camera: item.camera || '',
-                    manualRotation: manualRotations[item.uri || item.res] || 0,
+                    tags: item.tags || [],
+                    manualRotation: manualRotations[originalUrl] || 0,
                     folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                     folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
                 };
@@ -5090,12 +5340,22 @@ class Slideshow {
                     if (items.length > 0) {
                         clearTimeout(this._modeRetryTimer);
                         this.items = items;
-                        if (this.resumeMode === this.mode && this.resumeIndex >= 0 && this.resumeIndex < items.length) {
-                            this.index = this.resumeIndex - 1; // next() will increment
+                        if (this.resumeMode === this.mode) {
+                            // Try to resume by URL so deleted items don't shift position
+                            let resumePos = -1;
+                            if (this.resumeUrl) {
+                                resumePos = items.findIndex(i => (i.uri || i.res) === this.resumeUrl);
+                            }
+                            // Fallback to saved index if URL not found (e.g. it was deleted)
+                            if (resumePos === -1 && this.resumeIndex >= 0 && this.resumeIndex < items.length) {
+                                resumePos = this.resumeIndex;
+                            }
+                            this.index = resumePos - 1; // next() will increment
                         } else {
                             this.index = -1;
                         }
                         this.resumeIndex = -1;
+                        this.resumeUrl = null;
                         this.resumeMode = null;
                         return this.next();
                     }
@@ -5174,6 +5434,7 @@ class Slideshow {
 
                 this.img.src = data.url;
                 this.currentPhoto = data.url;
+                this.originalUrl = data.originalUrl || data.url;
                 this.currentPhotoData = data;
                 this.rotation = data.manualRotation || 0;
 
@@ -5287,6 +5548,11 @@ class Slideshow {
     fetchMetadataFallback(data) {
         const rawUrl = this.currentPhoto;
         if (!rawUrl) {
+            this.hideMap();
+            return;
+        }
+        // Album art URLs have no EXIF/GPS metadata — skip
+        if (rawUrl.startsWith('/api/art/')) {
             this.hideMap();
             return;
         }
@@ -5426,14 +5692,15 @@ class Slideshow {
         if (this.rotation < 0) this.rotation += 360;
         this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
 
+        const urlForSave = this.originalUrl || this.currentPhoto;
         try {
             await fetch('/api/slideshow/rotate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: this.currentPhoto, rotation: this.rotation })
+                body: JSON.stringify({ url: urlForSave, rotation: this.rotation })
             });
             // Update client-side cache
-            manualRotations[this.currentPhoto] = this.rotation;
+            manualRotations[urlForSave] = this.rotation;
         } catch (e) {
             console.error('Rotate save failed:', e);
         }
@@ -5445,13 +5712,26 @@ class Slideshow {
         const newState = !this.favBtn.classList.contains('is-favourite');
         this.favBtn.classList.toggle('is-favourite', newState);
 
+        const urlToFav = this.originalUrl || this.currentPhoto;
         try {
             const res = await fetch('/api/slideshow/favourite', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: this.currentPhoto, favourite: newState })
+                body: JSON.stringify({ url: urlToFav, favourite: newState })
             });
-            if (res.ok) showToast(newState ? 'Added to Favourites' : 'Removed', 'success', 2000);
+            if (res.ok) {
+                showToast(newState ? 'Added to Favourites' : 'Removed', 'success', 2000);
+                // Update in-memory item so the heart stays correct next time around
+                if (this.items && this.index >= 0 && this.index < this.items.length) {
+                    const item = this.items[this.index];
+                    if (!item.tags) item.tags = [];
+                    if (newState) {
+                        if (!item.tags.includes('fav')) item.tags.push('fav');
+                    } else {
+                        item.tags = item.tags.filter(t => t !== 'fav');
+                    }
+                }
+            }
         } catch (e) {
             console.error('Fav toggle failed:', e);
             this.favBtn.classList.toggle('is-favourite', !newState);
@@ -5462,11 +5742,12 @@ class Slideshow {
 
     async delete() {
         if (!this.currentPhoto || !confirm('Hide this photo forever?')) return;
+        const urlToDelete = this.originalUrl || this.currentPhoto;
         try {
             const res = await fetch('/api/slideshow/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: this.currentPhoto })
+                body: JSON.stringify({ url: urlToDelete })
             });
             if (res.ok) {
                 showToast('Photo hidden', 'success', 2000);
@@ -5590,44 +5871,134 @@ function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
 function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
 function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
 
-async function retryAlbumArt() {
+function retryAlbumArt() {
     const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
     if (!currentTrack) return;
-    const query = `${currentTrack.artist || ''} ${currentTrack.album || ''}`.trim();
 
-    // Reset tried list if track has somehow changed
-    if (query !== triedArtworkQueryKey) {
-        triedArtworkUrls = [];
-        triedArtworkQueryKey = query;
-    }
+    document.getElementById('art-search-album-artist').value = currentTrack.albumArtist || '';
+    document.getElementById('art-search-artist').value = currentTrack.artist || '';
+    document.getElementById('art-search-album').value = currentTrack.album || '';
+    document.getElementById('art-search-modal').dataset.uri = currentTrack.uri || '';
+    document.getElementById('art-search-results').style.display = 'none';
+    document.getElementById('art-search-results-list').innerHTML = '';
+    document.getElementById('art-search-modal').style.display = 'flex';
+    document.getElementById('art-search-album-artist').focus();
+}
 
-    // Add current URL to skip list before searching (but not the placeholder)
-    if (currentArtworkUrl && currentArtworkUrl !== '/no-artwork.svg' && !triedArtworkUrls.includes(currentArtworkUrl)) {
-        triedArtworkUrls.push(currentArtworkUrl);
-    }
+function closeArtSearchModal() {
+    document.getElementById('art-search-modal').style.display = 'none';
+    document.getElementById('art-search-results').style.display = 'none';
+    document.getElementById('art-search-results-list').innerHTML = '';
+}
+
+async function submitArtSearch() {
+    const albumArtist = document.getElementById('art-search-album-artist').value.trim();
+    const artist = document.getElementById('art-search-artist').value.trim();
+    const album = document.getElementById('art-search-album').value.trim();
+    const uri = document.getElementById('art-search-modal').dataset.uri || '';
+
+    const btn = document.getElementById('btn-art-search-submit');
+    const resultsList = document.getElementById('art-search-results-list');
+    const resultsPanel = document.getElementById('art-search-results');
+
+    if (btn) btn.disabled = true;
+    resultsList.innerHTML = '';
+    resultsPanel.style.display = 'block';
+
+    const loadingEl = document.createElement('div');
+    loadingEl.style.cssText = 'padding:1rem;text-align:center;opacity:0.6;';
+    loadingEl.textContent = 'Searching Discogs…';
+    resultsList.appendChild(loadingEl);
 
     try {
-        const skipParam = triedArtworkUrls.length ? `&skip=${encodeURIComponent(triedArtworkUrls.join(','))}` : '';
-        const res = await fetch(`/api/art/search?artist=${encodeURIComponent(currentTrack.artist || '')}&album=${encodeURIComponent(currentTrack.album || '')}&uri=${encodeURIComponent(currentTrack.uri || '')}${skipParam}`);
-        if (res.ok) {
-            const data = await res.json();
-            currentArtworkUrl = data.url;
-            currentArtworkQuery = query;
-            failedArtworkQueries.delete(query);
-            if (!triedArtworkUrls.includes(data.url)) triedArtworkUrls.push(data.url);
-            if (currentTrack?.uri) {
-                artworkOverrides.set(currentTrack.uri, data.url);
-                localStorage.setItem('artworkOverrides', JSON.stringify([...artworkOverrides]));
-            }
-            showPlayerArt(data.url);
-            if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
-                slideshow.next();
-            }
-        } else {
-            showToast('No more artwork found', 'info', 2000);
+        const params = new URLSearchParams();
+        if (albumArtist) params.set('albumArtist', albumArtist);
+        if (artist) params.set('artist', artist);
+        if (album) params.set('album', album);
+        if (uri) params.set('uri', uri);
+
+        const res = await fetch(`/api/art/candidates?${params}`);
+        resultsList.innerHTML = '';
+
+        if (!res.ok) {
+            resultsList.innerHTML = '<div style="padding:1rem;opacity:0.6;">Search failed.</div>';
+            return;
+        }
+
+        const data = await res.json();
+        if (!data.candidates || data.candidates.length === 0) {
+            resultsList.innerHTML = '<div style="padding:1rem;opacity:0.6;">No results found.</div>';
+            return;
+        }
+
+        for (const candidate of data.candidates) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;gap:0.75rem;align-items:center;cursor:pointer;padding:0.5rem;border-radius:6px;transition:background 0.15s;';
+            row.onmouseenter = () => row.style.background = 'var(--card-hover, rgba(255,255,255,0.07))';
+            row.onmouseleave = () => row.style.background = '';
+
+            const img = document.createElement('img');
+            img.src = candidate.thumb;
+            img.style.cssText = 'width:56px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--card-bg);';
+            img.onerror = () => { img.style.display = 'none'; };
+
+            const info = document.createElement('div');
+            info.style.cssText = 'min-width:0;flex:1;';
+            const title = document.createElement('div');
+            title.style.cssText = 'font-size:0.9rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            title.textContent = candidate.title;
+            const sub = document.createElement('div');
+            sub.style.cssText = 'font-size:0.75rem;opacity:0.55;margin-top:2px;';
+            sub.textContent = [candidate.year, candidate.format].filter(Boolean).join(' · ');
+            info.appendChild(title);
+            info.appendChild(sub);
+
+            row.appendChild(img);
+            row.appendChild(info);
+
+            const coverUrl = candidate.coverImage;
+            row.onclick = () => selectArtCandidate(coverUrl, artist, album, uri);
+            resultsList.appendChild(row);
         }
     } catch (e) {
-        console.warn('[ART] Retry failed:', e);
+        resultsList.innerHTML = '<div style="padding:1rem;opacity:0.6;">Search failed.</div>';
+        console.warn('[ART] Candidates search failed:', e);
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function selectArtCandidate(coverUrl, artist, album, uri) {
+    const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
+    const trackUri = uri || currentTrack?.uri || '';
+    const trackArtist = artist || currentTrack?.artist || '';
+    const trackAlbum = album || currentTrack?.album || '';
+
+    closeArtSearchModal();
+
+    try {
+        const res = await fetch('/api/art/cache-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist: trackArtist, album: trackAlbum, coverUrl })
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        currentArtworkUrl = data.url;
+        const query = `${trackArtist} ${trackAlbum}`.trim();
+        currentArtworkQuery = query;
+        failedArtworkQueries.delete(query);
+        if (trackUri) {
+            artworkOverrides.set(trackUri, data.url);
+            localStorage.setItem('artworkOverrides', JSON.stringify([...artworkOverrides]));
+        }
+        showPlayerArt(data.url);
+        if (slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying') {
+            slideshow.next();
+        }
+    } catch (e) {
+        console.warn('[ART] Select candidate failed:', e);
+        showToast('Failed to save artwork', 'error', 3000);
     }
 }
 
@@ -5680,6 +6051,40 @@ async function goToScreensaverFolder() {
 
 
 
+
+function fmtBytes(bytes) {
+    if (bytes === null || bytes === undefined) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+async function loadLocalStats() {
+    const el = document.getElementById('local-stats-content');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/local-stats');
+        if (!res.ok) throw new Error('Failed');
+        const { music, photos, freeBytes } = await res.json();
+        el.innerHTML = `
+            <span class="local-stats-label">Tracks</span>
+            <span class="local-stats-value">${music.count.toLocaleString()}</span>
+            <span class="local-stats-label">Music size</span>
+            <span class="local-stats-value">${fmtBytes(music.bytes)}</span>
+            <hr class="local-stats-divider">
+            <span class="local-stats-label">Photos</span>
+            <span class="local-stats-value">${photos.count.toLocaleString()}</span>
+            <span class="local-stats-label">Photos size</span>
+            <span class="local-stats-value">${fmtBytes(photos.bytes)}</span>
+            <hr class="local-stats-divider">
+            <span class="local-stats-label">Free disk space</span>
+            <span class="local-stats-value">${fmtBytes(freeBytes)}</span>
+        `;
+    } catch (e) {
+        el.innerHTML = '<span class="settings-hint">Could not load stats.</span>';
+    }
+}
 
 async function saveGeneralSettings() {
     const nameInput = document.getElementById('device-name-input');

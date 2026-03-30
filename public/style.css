@@ -1811,7 +1811,7 @@ p.subtitle {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: 20000;
     animation: fadeIn 0.3s ease;
 }
 
@@ -3209,6 +3209,37 @@ p.subtitle {
     text-decoration: underline;
 }
 
+/* Local Library Stats */
+.local-stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem 1.5rem;
+}
+
+.local-stats-grid .stat-row {
+    display: contents;
+}
+
+.local-stats-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    align-self: center;
+}
+
+.local-stats-value {
+    font-size: 0.85rem;
+    color: var(--text);
+    font-weight: 500;
+    align-self: center;
+}
+
+.local-stats-divider {
+    grid-column: 1 / -1;
+    border: none;
+    border-top: 1px solid var(--card-border);
+    margin: 0.25rem 0;
+}
+
 /* Update Styles */
 .update-status-container {
     display: flex;
@@ -3446,6 +3477,83 @@ p.subtitle {
     margin-bottom: 0 !important;
 }
 
+/* Download Progress Modal */
+.download-progress-modal-content {
+    max-width: 520px !important;
+    width: 92% !important;
+}
+
+.download-progress-body {
+    padding: 1rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.download-progress-bar-wrap {
+    height: 6px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+#download-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.download-progress-current {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.download-progress-log {
+    max-height: 240px;
+    min-height: 60px;
+    overflow-y: auto;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    color: #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 0.5rem;
+    padding: 0.6rem 0.75rem;
+}
+
+.dl-log-entry {
+    padding: 0.1rem 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: #e2e8f0;
+}
+
+.dl-done    { color: #4ade80 !important; }
+.dl-skipped { color: #94a3b8 !important; }
+.dl-failed  { color: #f87171 !important; }
+
+.modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1.5rem 1.25rem;
+    border-top: 1px solid var(--card-border);
+}
+
+.download-progress-stats {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
 /* Metadata Comparative Styles */
 .info-modal-content {
     max-width: 800px !important;
@@ -3501,6 +3609,51 @@ p.subtitle {
 
 .metadata-value-cell.tertiary {
     border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.metadata-editable-cell {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.8rem;
+}
+
+.metadata-edit-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 0.4rem;
+    color: #fff;
+    font-size: 0.85rem;
+    padding: 0.3rem 0.5rem;
+    outline: none;
+    min-width: 0;
+}
+
+.metadata-edit-input:focus {
+    border-color: var(--primary);
+}
+
+.metadata-save-btn {
+    background: rgba(99, 102, 241, 0.2);
+    border: 1px solid var(--primary);
+    border-radius: 0.4rem;
+    color: var(--primary);
+    font-size: 0.75rem;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+
+.metadata-save-btn:hover:not(:disabled) {
+    background: var(--primary);
+    color: #fff;
+}
+
+.metadata-save-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 /* Tags Styles */
@@ -3572,6 +3725,14 @@ p.subtitle {
 .tag-input-wrapper {
     display: flex;
     gap: 0.5rem;
+}
+
+.metadata-copy-folder-btn {
+    opacity: 0.6;
+}
+
+.metadata-copy-folder-btn:hover {
+    opacity: 1;
 }
 
 .tag-input-wrapper input {

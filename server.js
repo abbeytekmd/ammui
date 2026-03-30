@@ -43,7 +43,6 @@ const execAsync = promisify(exec);
 
 const { Client } = ssdp;
 const { DeviceDiscovery } = sonos;
-const hostIp = getLocalIp();
 export const BROWSER_PLAYER_UDN = 'uuid:ammui-browser-player';
 
 const isPkg = typeof process.pkg !== 'undefined';
@@ -183,7 +182,7 @@ setupLocalDlna(app, port, settings.deviceName);
 // Manually inject the local server into the devices map on startup
 // so it's always available even if SSDP discovery is slow or blocked.
 (function injectLocalServer() {
-    const localLocation = `http://${hostIp}:${port}/dlna/description.xml`;
+    const localLocation = `http://${getLocalIp()}:${port}/dlna/description.xml`;
     const localServer = {
         udn: SERVER_UDN,
         location: localLocation,
@@ -196,15 +195,15 @@ setupLocalDlna(app, port, settings.deviceName);
         services: [
             {
                 serviceType: 'urn:schemas-upnp-org:service:ContentDirectory:1',
-                controlURL: `http://${hostIp}:${port}/dlna/ContentDirectory/control`,
-                eventSubURL: `http://${hostIp}:${port}/dlna/ContentDirectory/event`,
-                SCPDURL: `http://${hostIp}:${port}/dlna/ContentDirectory.xml`
+                controlURL: `http://127.0.0.1:${port}/dlna/ContentDirectory/control`,
+                eventSubURL: `http://127.0.0.1:${port}/dlna/ContentDirectory/event`,
+                SCPDURL: `http://127.0.0.1:${port}/dlna/ContentDirectory.xml`
             },
             {
                 serviceType: 'urn:schemas-upnp-org:service:ConnectionManager:1',
-                controlURL: `http://${hostIp}:${port}/dlna/ConnectionManager/control`,
-                eventSubURL: `http://${hostIp}:${port}/dlna/ConnectionManager/event`,
-                SCPDURL: `http://${hostIp}:${port}/dlna/ConnectionManager.xml`
+                controlURL: `http://127.0.0.1:${port}/dlna/ConnectionManager/control`,
+                eventSubURL: `http://127.0.0.1:${port}/dlna/ConnectionManager/event`,
+                SCPDURL: `http://127.0.0.1:${port}/dlna/ConnectionManager.xml`
             }
         ]
     };
@@ -215,7 +214,7 @@ setupLocalDlna(app, port, settings.deviceName);
     // Inject Browser Player
     const browserPlayer = {
         udn: BROWSER_PLAYER_UDN,
-        location: `http://${hostIp}:${port}/virtual/browser-player`,
+        location: `http://${getLocalIp()}:${port}/virtual/browser-player`,
         friendlyName: 'Direct in the Browser',
         type: 'renderer',
         isServer: false,
@@ -495,7 +494,7 @@ async function handleSSDPMessage(headers, rinfo) {
         const isLocalPath = location && location.includes('/dlna/description.xml');
         if (isLocalPath) {
             const url = new URL(location);
-            if (url.hostname === hostIp || url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
+            if (url.hostname === getLocalIp() || url.hostname === '127.0.0.1' || url.hostname === 'localhost') {
                 return; // our own server
             }
         }
@@ -1326,7 +1325,7 @@ app.delete('/api/devices/:udn', (req, res) => {
         console.log('Re-injecting browser player after deletion');
         const browserPlayer = {
             udn: BROWSER_PLAYER_UDN,
-            location: `http://${hostIp}:${port}/virtual/browser-player`,
+            location: `http://${getLocalIp()}:${port}/virtual/browser-player`,
             friendlyName: 'Direct in the Browser',
             type: 'renderer',
             isServer: false,
@@ -1593,13 +1592,9 @@ async function downloadFileHelper(uri, title, artist, album) {
         const musicDir = path.join(localDir, 'music');
         const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
         const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
-
         const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
         targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
-
-        if (!fs.existsSync(targetDir)) {
-            fs.mkdirSync(targetDir, { recursive: true });
-        }
+        if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
     }
 
     const downloadPath = tempPath || path.join(targetDir, filename);
@@ -1624,6 +1619,11 @@ async function downloadFileHelper(uri, title, artist, album) {
         writer.on('finish', resolve);
         writer.on('error', reject);
     });
+
+    if (!isImage) {
+        console.log(`Download finished: ${filename}`);
+        return { success: true, filename };
+    }
 
     if (isImage) {
         // Post-process image: determine Year/Month
@@ -1659,9 +1659,6 @@ async function downloadFileHelper(uri, title, artist, album) {
         console.log(`Picture saved to ${finalPath}`);
         return { success: true, filename };
     }
-
-    console.log(`Download finished: ${filename}`);
-    return { success: true, filename };
 }
 
 app.post('/api/download', express.json(), async (req, res) => {
@@ -1706,6 +1703,157 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         res.json({ success: true, downloadCount, failCount });
     } catch (err) {
         console.error('Folder download error:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// In-memory download job state — survives client disconnects/refreshes
+const downloadJobs = new Map();
+const downloadJobClients = new Map(); // jobId -> Set of SSE res objects
+
+function createDownloadJob(title) {
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2);
+    const job = { id, title, done: false, error: null, total: 0, current: '', log: [], downloadCount: 0, skippedCount: 0, failCount: 0 };
+    downloadJobs.set(id, job);
+    downloadJobClients.set(id, new Set());
+    return job;
+}
+
+function pushDownloadJobUpdate(job) {
+    const clients = downloadJobClients.get(job.id);
+    if (!clients || clients.size === 0) return;
+    const data = `data: ${JSON.stringify(job)}\n\n`;
+    for (const client of clients) {
+        try { client.write(data); } catch (e) { clients.delete(client); }
+    }
+}
+
+app.post('/api/download-folder-start', express.json(), async (req, res) => {
+    const { udn, objectId, title, artist, album } = req.body;
+    if (!udn || !objectId) return res.status(400).json({ error: 'UDN and ObjectID are required' });
+
+    const device = Array.from(devices.values()).find(d => d.udn === udn);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+
+    const job = createDownloadJob(title || objectId);
+    res.json({ jobId: job.id });
+
+    // Run download in background — push updates to SSE clients
+    (async () => {
+        try {
+            const server = new MediaServer(device);
+            job.current = 'Scanning folder...';
+            pushDownloadJobUpdate(job);
+            const tracks = await server.browseRecursive(objectId);
+            job.total = tracks.length;
+            pushDownloadJobUpdate(job);
+
+            for (let i = 0; i < tracks.length; i++) {
+                const track = tracks[i];
+                job.current = track.title;
+                try {
+                    const result = await downloadFileHelper(track.uri, track.title, track.artist || artist, track.album || album);
+                    if (result.skipped) {
+                        job.skippedCount++;
+                        job.log.push({ status: 'skipped', title: track.title });
+                    } else {
+                        job.downloadCount++;
+                        job.log.push({ status: 'done', title: track.title });
+                    }
+                } catch (err) {
+                    job.failCount++;
+                    job.log.push({ status: 'failed', title: track.title, error: err.message });
+                }
+                pushDownloadJobUpdate(job);
+            }
+        } catch (err) {
+            job.error = err.message;
+        } finally {
+            job.done = true;
+            job.current = '';
+            pushDownloadJobUpdate(job);
+            // Close all SSE clients and clean up after 10 minutes
+            const clients = downloadJobClients.get(job.id);
+            if (clients) { for (const c of clients) { try { c.end(); } catch (e) {} } clients.clear(); }
+            setTimeout(() => { downloadJobs.delete(job.id); downloadJobClients.delete(job.id); }, 10 * 60 * 1000);
+        }
+    })();
+});
+
+app.get('/api/download-job/:id/stream', (req, res) => {
+    const job = downloadJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
+    });
+
+    // Send current state immediately so the client can render right away
+    res.write(`data: ${JSON.stringify(job)}\n\n`);
+
+    if (job.done) { res.end(); return; }
+
+    const clients = downloadJobClients.get(job.id);
+    if (clients) clients.add(res);
+
+    req.on('close', () => {
+        if (clients) clients.delete(res);
+    });
+});
+
+app.get('/api/download-job/:id', (req, res) => {
+    const job = downloadJobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found' });
+    res.json(job);
+});
+
+app.get('/api/local-stats', async (req, res) => {
+    const musicDir = path.join(baseDataDir, 'local', 'music');
+    const photosDir = path.join(baseDataDir, 'local', 'photos');
+    const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.wma', '.aiff', '.alac']);
+    const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic']);
+
+    async function walkDir(dir, extSet) {
+        let count = 0, bytes = 0;
+        if (!fs.existsSync(dir)) return { count, bytes };
+        const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const sub = await walkDir(full, extSet);
+                count += sub.count; bytes += sub.bytes;
+            } else if (extSet.has(path.extname(entry.name).toLowerCase())) {
+                count++;
+                try { bytes += (await fs.promises.stat(full)).size; } catch (e) {}
+            }
+        }
+        return { count, bytes };
+    }
+
+    try {
+        const [music, photos] = await Promise.all([walkDir(musicDir, audioExts), walkDir(photosDir, imageExts)]);
+
+        // Get free disk space using statvfs equivalent — df output
+        let freeBytes = null;
+        try {
+            const { execSync } = await import('child_process');
+            const target = fs.existsSync(musicDir) ? musicDir : baseDataDir;
+            if (process.platform === 'win32') {
+                const out = execSync(`wmic logicaldisk where "DeviceID='${path.parse(target).root.replace(/\\/g, '').replace('/', '')}" get FreeSpace /value`, { encoding: 'utf8' });
+                const match = out.match(/FreeSpace=(\d+)/);
+                if (match) freeBytes = parseInt(match[1], 10);
+            } else {
+                const out = execSync(`df -Pk "${target}"`, { encoding: 'utf8' });
+                const lines = out.trim().split('\n');
+                if (lines.length >= 2) freeBytes = parseInt(lines[1].split(/\s+/)[3], 10) * 1024;
+            }
+        } catch (e) {}
+
+        res.json({ music, photos, freeBytes });
+    } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
@@ -2008,7 +2156,10 @@ app.get('/api/slideshow/list', async (req, res) => {
         return res.status(503).json({ error: 'Cache not ready yet' });
     }
 
-    let images = screensaverCache.images;
+    let images = screensaverCache.images.filter(img => {
+        const url = img.uri || img.res;
+        return !settings.deletedPhotos[url];
+    });
 
     if (mode === 'onThisDay') {
         const today = new Date();
@@ -2037,7 +2188,8 @@ app.get('/api/slideshow/list', async (req, res) => {
     res.json(images.map(img => {
         const url = img.uri || img.res;
         const rot = (settings.manualRotations && settings.manualRotations[url]) || 0;
-        return rot ? { ...img, manualRotation: rot } : img;
+        const tags = settings.fileTags?.[url] || [];
+        return { ...img, ...(rot ? { manualRotation: rot } : {}), tags };
     }));
 });
 
@@ -2098,12 +2250,12 @@ app.post('/api/slideshow/favourite', (req, res) => {
 });
 
 // Helper function for Discogs search
-async function findDiscogsArtUrl(artist, album, skipUrls = []) {
+// Search order: albumArtist+album, artist+album, album-only, keyword
+async function findDiscogsArtUrl(artist, album, skipUrls = [], albumArtist = null) {
     const DISCOGS_TOKEN = settings.discogsToken;
-    if (!DISCOGS_TOKEN || (!artist && !album)) return null;
+    if (!DISCOGS_TOKEN || (!artist && !album && !albumArtist)) return null;
     const skipSet = new Set(skipUrls);
 
-    const queryStr = `${artist || ''} ${album || ''}`.trim();
     const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]/g, '');
 
     const cleanAlbumName = (albumName) => {
@@ -2172,28 +2324,76 @@ async function findDiscogsArtUrl(artist, album, skipUrls = []) {
         }
     };
 
+    // Build ordered artist candidates: albumArtist first, then track artist if different
+    const artistCandidates = [];
+    if (albumArtist && albumArtist.trim()) {
+        artistCandidates.push(albumArtist.trim());
+    }
+    if (artist && artist.trim() && normalize(artist) !== normalize(albumArtist)) {
+        artistCandidates.push(artist.trim());
+    }
+
     const albumVariations = getAlbumVariations(album);
+
+    // Phase 1 & 2: Try each artist candidate with each album variation
+    for (const candidateArtist of artistCandidates) {
+        for (let attempt = 0; attempt < albumVariations.length; attempt++) {
+            const searchAlbum = albumVariations[attempt];
+            try {
+                console.log(`[ART] Discogs search (artist: "${candidateArtist}"): "${searchAlbum}"...`);
+                const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(candidateArtist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+                const data = await fetchDiscogs(discogsUrl);
+                if (data.results && data.results.length > 0) {
+                    const scoredResults = data.results.map(item => {
+                        let score = 0;
+                        const titleParts = item.title.split(' - ');
+                        const itemArtist = titleParts[0];
+                        const itemAlbum = titleParts[titleParts.length - 1];
+                        const artistMatch = isFuzzyMatch(itemArtist, candidateArtist);
+                        const albumMatch = isFuzzyMatch(itemAlbum, album) ||
+                            isFuzzyMatch(itemAlbum, searchAlbum) ||
+                            isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
+                        if (!artistMatch || !albumMatch) return { item, score: -1 };
+                        if (normalize(itemArtist) === normalize(candidateArtist)) score += 20;
+                        if (normalize(itemAlbum) === normalize(album) ||
+                            normalize(itemAlbum) === normalize(searchAlbum) ||
+                            normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album))) {
+                            score += 20;
+                        }
+                        if (item.type === 'master') score += 50;
+                        const format = (item.format || []).join(' ').toLowerCase();
+                        if (format.includes('album')) score += 15;
+                        if (format.includes('lp') || format.includes('vinyl')) score += 10;
+                        if (format.includes('cd')) score += 8;
+                        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+                        return { item, score };
+                    }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
+                    const pick = scoredResults.find(r => !skipSet.has(r.item.cover_image));
+                    if (pick) return pick.item.cover_image;
+                }
+            } catch (e) {
+                console.warn(`[ART] Discogs search (artist: "${candidateArtist}", album: "${searchAlbum}") failed: ${e.message}`);
+            }
+        }
+    }
+
+    // Phase 3: Album-only fallback — exhaust all artist options before trying this
     for (let attempt = 0; attempt < albumVariations.length; attempt++) {
         const searchAlbum = albumVariations[attempt];
+        if (!searchAlbum) continue;
         try {
-            console.log(`[ART] Discogs attempt ${attempt + 1}/${albumVariations.length}: "${artist}" - "${searchAlbum}"...`);
-            const discogsUrl = `https://api.discogs.com/database/search?artist=${encodeURIComponent(artist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
-
-            const data = await fetchDiscogs(discogsUrl);
-
+            console.log(`[ART] Discogs album-only fallback: "${searchAlbum}"...`);
+            const fallbackUrl = `https://api.discogs.com/database/search?release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+            const data = await fetchDiscogs(fallbackUrl);
             if (data.results && data.results.length > 0) {
-                const scoredResults = data.results.map(item => {
+                const scoredFallbackResults = data.results.map(item => {
                     let score = 0;
                     const titleParts = item.title.split(' - ');
-                    const itemArtist = titleParts[0];
                     const itemAlbum = titleParts[titleParts.length - 1];
-                    const artistMatch = isFuzzyMatch(itemArtist, artist);
                     const albumMatch = isFuzzyMatch(itemAlbum, album) ||
                         isFuzzyMatch(itemAlbum, searchAlbum) ||
                         isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
-
-                    if (!artistMatch || !albumMatch) return { item, score: -1 };
-                    if (normalize(itemArtist) === normalize(artist)) score += 20;
+                    if (!albumMatch) return { item, score: -1 };
                     if (normalize(itemAlbum) === normalize(album) ||
                         normalize(itemAlbum) === normalize(searchAlbum) ||
                         normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album))) {
@@ -2207,68 +2407,17 @@ async function findDiscogsArtUrl(artist, album, skipUrls = []) {
                     if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
                     return { item, score };
                 }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
-
-                const pick = scoredResults.find(r => !skipSet.has(r.item.cover_image));
-                if (pick) return pick.item.cover_image;
+                const fallbackPick = scoredFallbackResults.find(r => !skipSet.has(r.item.cover_image));
+                if (fallbackPick) return fallbackPick.item.cover_image;
             }
         } catch (e) {
-            let errorMsg = `[ART] Discogs attempt ${attempt + 1} failed: ${e.message}`;
-            if (e.code) errorMsg += ` (Code: ${e.code})`;
-            if (e.response) {
-                // If it's an axios error with a response
-                errorMsg += ` (Status: ${e.response.status}, Data: ${JSON.stringify(e.response.data)})`;
-            }
-            if (e.config && e.config.url) {
-                errorMsg += ` | URL: ${e.config.url}`;
-            }
-            console.warn(errorMsg);
-        }
-
-        // Fallback: search just by album name if Artist+Album failed
-        if (artist && searchAlbum) {
-            try {
-                console.log(`[ART] Discogs attempt ${attempt + 1} fallback (Album Only): "${searchAlbum}"...`);
-                const fallbackUrl = `https://api.discogs.com/database/search?release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
-                const data = await fetchDiscogs(fallbackUrl);
-
-                if (data.results && data.results.length > 0) {
-                    const scoredFallbackResults = data.results.map(item => {
-                        let score = 0;
-                        const titleParts = item.title.split(' - ');
-                        const itemAlbum = titleParts[titleParts.length - 1];
-
-                        // For an album-only fallback search, we are much more lenient on artist matching, but we still heavily weigh exact album matches.
-                        const albumMatch = isFuzzyMatch(itemAlbum, album) ||
-                            isFuzzyMatch(itemAlbum, searchAlbum) ||
-                            isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
-
-                        if (!albumMatch) return { item, score: -1 };
-
-                        if (normalize(itemAlbum) === normalize(album) ||
-                            normalize(itemAlbum) === normalize(searchAlbum) ||
-                            normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album))) {
-                            score += 20;
-                        }
-
-                        if (item.type === 'master') score += 50;
-                        const format = (item.format || []).join(' ').toLowerCase();
-                        if (format.includes('album')) score += 15;
-                        if (format.includes('lp') || format.includes('vinyl')) score += 10;
-                        if (format.includes('cd')) score += 8;
-                        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
-                        return { item, score };
-                    }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
-
-                    const fallbackPick = scoredFallbackResults.find(r => !skipSet.has(r.item.cover_image));
-                    if (fallbackPick) return fallbackPick.item.cover_image;
-                }
-            } catch (e) {
-                console.warn(`[ART] Discogs fallback attempt (Album Only) failed: ${e.message}`);
-            }
+            console.warn(`[ART] Discogs album-only fallback failed: ${e.message}`);
         }
     }
 
-    // Final fallback: general keyword search (same as typing in the Discogs UI)
+    // Phase 4: General keyword search
+    const effectiveArtist = albumArtist || artist;
+    const queryStr = `${effectiveArtist || ''} ${album || ''}`.trim();
     if (queryStr) {
         try {
             console.log(`[ART] Discogs keyword fallback: q="${queryStr}"...`);
@@ -2280,11 +2429,11 @@ async function findDiscogsArtUrl(artist, album, skipUrls = []) {
                     const titleParts = item.title.split(' - ');
                     const itemArtist = titleParts[0];
                     const itemAlbum = titleParts[titleParts.length - 1];
-                    const artistMatch = !artist || isFuzzyMatch(itemArtist, artist);
+                    const artistMatch = !effectiveArtist || isFuzzyMatch(itemArtist, effectiveArtist);
                     const albumMatch = !album || isFuzzyMatch(itemAlbum, album) ||
                         isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
                     if (!artistMatch || !albumMatch) return { item, score: -1 };
-                    if (artist && normalize(itemArtist) === normalize(artist)) score += 20;
+                    if (effectiveArtist && normalize(itemArtist) === normalize(effectiveArtist)) score += 20;
                     if (album && (normalize(itemAlbum) === normalize(album) ||
                         normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album)))) score += 20;
                     if (item.type === 'master') score += 50;
@@ -2308,6 +2457,176 @@ async function findDiscogsArtUrl(artist, album, skipUrls = []) {
 
     return null;
 }
+
+async function findDiscogsCandidates(artist, album, albumArtist) {
+    const DISCOGS_TOKEN = settings.discogsToken;
+    if (!DISCOGS_TOKEN || (!artist && !album && !albumArtist)) return [];
+
+    const normalize = (s) => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const cleanAlbumName = (albumName) => {
+        if (!albumName) return '';
+        return albumName
+            .replace(/\s*\[.*?\]\s*/g, ' ')
+            .replace(/\s*\(.*?\)\s*/g, ' ')
+            .replace(/\s*-\s*(Deluxe|Special|Limited|Remaster|Edition|Expanded|Anniversary).*$/i, '')
+            .replace(/\s+/g, ' ').trim();
+    };
+
+    const getAlbumVariations = (albumName) => {
+        if (!albumName) return [];
+        const variations = new Set();
+        variations.add(albumName);
+        const cleaned = cleanAlbumName(albumName);
+        if (cleaned) variations.add(cleaned);
+        if (albumName.includes(':')) {
+            const beforeColon = albumName.split(':')[0].trim();
+            variations.add(beforeColon);
+            variations.add(cleanAlbumName(beforeColon));
+        }
+        const withoutMarkers = albumName
+            .replace(/\s*[:\-]\s*(Original|Motion Picture|Film|Movie)?\s*(Soundtrack|Score|OST).*$/i, '')
+            .replace(/\s*\&\s*additional\s+music.*$/i, '')
+            .replace(/\s*\[.*?\]\s*/g, ' ')
+            .replace(/\s*\(.*?\)\s*/g, ' ')
+            .replace(/\s+/g, ' ').trim();
+        if (withoutMarkers) variations.add(withoutMarkers);
+        return Array.from(variations).filter(v => v && v.length > 0);
+    };
+
+    const isFuzzyMatch = (s1, s2) => {
+        const n1 = normalize(s1), n2 = normalize(s2);
+        if (!n1 || !n2) return false;
+        if (n1 === n2) return true;
+        const longer = n1.length > n2.length ? n1 : n2;
+        const shorter = n1.length > n2.length ? n2 : n1;
+        if (longer.includes(shorter)) {
+            const ratio = shorter.length / longer.length;
+            if (ratio >= 0.35 || shorter.length >= 15) return true;
+        }
+        return false;
+    };
+
+    const fetchDiscogs = async (url) => {
+        dns.setDefaultResultOrder('ipv4first');
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json'
+            },
+            signal: AbortSignal.timeout(10000)
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return await response.json();
+    };
+
+    const scoreItem = (item, candidateArtist, requireArtistMatch) => {
+        let score = 0;
+        const titleParts = item.title.split(' - ');
+        const itemArtist = titleParts[0];
+        const itemAlbum = titleParts[titleParts.length - 1];
+        const artistMatch = !requireArtistMatch || !candidateArtist || isFuzzyMatch(itemArtist, candidateArtist);
+        const albumMatch = !album || isFuzzyMatch(itemAlbum, album) || isFuzzyMatch(itemAlbum, cleanAlbumName(album)) || isFuzzyMatch(cleanAlbumName(itemAlbum), cleanAlbumName(album));
+        if (!artistMatch || !albumMatch) return -1;
+        if (candidateArtist && normalize(itemArtist) === normalize(candidateArtist)) score += 20;
+        if (album && (normalize(itemAlbum) === normalize(album) || normalize(cleanAlbumName(itemAlbum)) === normalize(cleanAlbumName(album)))) score += 20;
+        if (item.type === 'master') score += 50;
+        const format = (item.format || []).join(' ').toLowerCase();
+        if (format.includes('album')) score += 15;
+        if (format.includes('lp') || format.includes('vinyl')) score += 10;
+        if (format.includes('cd')) score += 8;
+        if (format.includes('unofficial') || format.includes('bootleg')) score -= 30;
+        return score;
+    };
+
+    const seen = new Set();
+    const results = [];
+
+    const collect = (items, candidateArtist, requireArtistMatch) => {
+        const scored = items
+            .map(item => ({ item, score: scoreItem(item, candidateArtist, requireArtistMatch) }))
+            .filter(r => r.score > 0 && r.item.cover_image && !seen.has(r.item.cover_image))
+            .sort((a, b) => b.score - a.score);
+        for (const { item, score } of scored) {
+            seen.add(item.cover_image);
+            results.push({ title: item.title, thumb: item.thumb || item.cover_image, coverImage: item.cover_image, year: item.year || '', format: (item.format || []).join(', '), score });
+        }
+    };
+
+    const artistCandidates = [];
+    if (albumArtist && albumArtist.trim()) artistCandidates.push(albumArtist.trim());
+    if (artist && artist.trim() && normalize(artist) !== normalize(albumArtist)) artistCandidates.push(artist.trim());
+
+    const albumVariations = getAlbumVariations(album);
+
+    // Phase 1&2: artist + album
+    for (const candidateArtist of artistCandidates) {
+        for (const searchAlbum of albumVariations) {
+            try {
+                const url = `https://api.discogs.com/database/search?artist=${encodeURIComponent(candidateArtist)}&release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+                const data = await fetchDiscogs(url);
+                if (data.results?.length) collect(data.results, candidateArtist, true);
+            } catch (e) { /* ignore */ }
+        }
+    }
+
+    // Phase 3: album-only
+    for (const searchAlbum of albumVariations) {
+        if (!searchAlbum) continue;
+        try {
+            const url = `https://api.discogs.com/database/search?release_title=${encodeURIComponent(searchAlbum)}&token=${DISCOGS_TOKEN}`;
+            const data = await fetchDiscogs(url);
+            if (data.results?.length) collect(data.results, null, false);
+        } catch (e) { /* ignore */ }
+    }
+
+    // Phase 4: keyword
+    const effectiveArtist = albumArtist || artist;
+    const queryStr = `${effectiveArtist || ''} ${album || ''}`.trim();
+    if (queryStr) {
+        try {
+            const url = `https://api.discogs.com/database/search?q=${encodeURIComponent(queryStr)}&token=${DISCOGS_TOKEN}`;
+            const data = await fetchDiscogs(url);
+            if (data.results?.length) collect(data.results, effectiveArtist, false);
+        } catch (e) { /* ignore */ }
+    }
+
+    return results.sort((a, b) => b.score - a.score).slice(0, 30);
+}
+
+app.get('/api/art/candidates', async (req, res) => {
+    let { artist, album, uri } = req.query;
+    let albumArtist = req.query.albumArtist || null;
+
+    if (uri && (!artist || !album || !albumArtist)) {
+        try {
+            const metadata = await getTrackMetadata(uri);
+            if (metadata && metadata.common) {
+                if (!artist && metadata.common.artist) artist = metadata.common.artist;
+                if (!album && metadata.common.album) album = metadata.common.album;
+                if (!albumArtist && metadata.common.albumartist) albumArtist = metadata.common.albumartist;
+            }
+        } catch (e) { }
+    }
+
+    try {
+        const candidates = await findDiscogsCandidates(artist, album, albumArtist);
+        res.json({ candidates });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/art/cache-url', express.json(), async (req, res) => {
+    const { artist, album, coverUrl } = req.body;
+    if (!coverUrl) return res.status(400).json({ error: 'coverUrl required' });
+    try {
+        const localUrl = await downloadAndCacheArt(artist || '', album || '', coverUrl);
+        res.json({ url: `${localUrl}&t=${Date.now()}` });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
 
 // Download an image URL and store as blob; returns the local cached URL path
 async function downloadAndCacheArt(artist, album, externalUrl) {
@@ -2335,13 +2654,15 @@ app.get('/api/art/cached', (req, res) => {
 app.get('/api/art/search', async (req, res) => {
     let { artist, album, uri, skip } = req.query;
     const skipUrls = skip ? skip.split(',').map(s => s.trim()).filter(Boolean) : [];
+    let albumArtist = req.query.albumArtist || null;
 
-    if (uri && (!artist || !album)) {
+    if (uri && (!artist || !album || !albumArtist)) {
         try {
             const metadata = await getTrackMetadata(uri);
             if (metadata && metadata.common) {
                 if (metadata.common.artist) artist = metadata.common.artist;
                 if (metadata.common.album) album = metadata.common.album;
+                if (metadata.common.albumartist) albumArtist = metadata.common.albumartist;
             }
         } catch (e) { }
     }
@@ -2361,8 +2682,8 @@ app.get('/api/art/search', async (req, res) => {
         let coverUrl = null;
         let cacheArtist = artist, cacheAlbum = album;
 
-        if (artist || album) {
-            coverUrl = await findDiscogsArtUrl(artist, album, skipUrls);
+        if (artist || album || albumArtist) {
+            coverUrl = await findDiscogsArtUrl(artist, album, skipUrls, albumArtist);
         }
 
         if (!coverUrl && uri && !uri.startsWith('http://') && !uri.startsWith('https://')) {
@@ -2403,7 +2724,8 @@ app.get('/api/art/search', async (req, res) => {
                 const row = getCachedArt(cacheArtist, cacheAlbum);
                 if (row) setCachedArt(artist, album, row.data, row.content_type);
             }
-            return res.json({ url: localUrl, source: 'discogs' });
+            // Append a timestamp so the browser doesn't serve a stale cached version of the same URL
+            return res.json({ url: `${localUrl}&t=${Date.now()}`, source: 'discogs' });
         }
         res.status(404).json({ error: 'No artwork found' });
     } catch (err) {
@@ -2489,8 +2811,9 @@ app.get('/api/art/local', async (req, res) => {
         const metadata = await getTrackMetadata(uri);
         if (metadata && metadata.common) {
             const artist = metadata.common.artist || '';
+            const albumArtist = metadata.common.albumartist || '';
             const album = metadata.common.album || '';
-            console.log(`[ART] Metadata tags found - Artist: "${artist}", Album: "${album}"`);
+            console.log(`[ART] Metadata tags found - AlbumArtist: "${albumArtist}", Artist: "${artist}", Album: "${album}"`);
 
             // Try embedded picture first
             if (metadata.common.picture && metadata.common.picture.length > 0) {
@@ -2519,9 +2842,9 @@ app.get('/api/art/local', async (req, res) => {
                 }
             }
 
-            if (searchArtist || searchAlbum) {
-                console.log(`[ART] No embedded art. Attempting Discogs search for: "${searchArtist}" - "${searchAlbum}"`);
-                coverUrl = await findDiscogsArtUrl(searchArtist, searchAlbum);
+            if (searchArtist || searchAlbum || albumArtist) {
+                console.log(`[ART] No embedded art. Attempting Discogs search for: albumArtist="${albumArtist}" artist="${searchArtist}" album="${searchAlbum}"`);
+                coverUrl = await findDiscogsArtUrl(searchArtist, searchAlbum, [], albumArtist);
             }
 
             if (!coverUrl && uri && !uri.startsWith('http://') && !uri.startsWith('https://')) {
@@ -2810,6 +3133,7 @@ app.get('/api/tags', (req, res) => {
     res.json({ tags: getAllTags() });
 });
 
+
 app.get('/api/local/va-candidates', async (req, res) => {
     const { albumTitle } = req.query;
     if (!albumTitle) return res.status(400).json({ error: 'Album title required' });
@@ -3014,6 +3338,71 @@ app.post('/api/local/move-va', async (req, res) => {
     }
 });
 
+app.get('/api/local/sibling-folders', async (req, res) => {
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        const sourcePath = path.join(localDir, safeId);
+        const parentPath = path.dirname(sourcePath);
+
+        if (!parentPath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+
+        const entries = await fs.promises.readdir(parentPath, { withFileTypes: true });
+        const siblings = entries
+            .filter(e => e.isDirectory() && path.join(parentPath, e.name) !== sourcePath)
+            .map(e => e.name);
+        res.json({ siblings });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/local/merge-folder', express.json(), async (req, res) => {
+    const { sourceId, targetName } = req.body;
+    if (!sourceId || !targetName) return res.status(400).json({ error: 'sourceId and targetName are required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeSrcId = path.normalize(sourceId).replace(/^(\.\.(\/|\\|$))+/, '');
+        const sourcePath = path.join(localDir, safeSrcId);
+        const parentPath = path.dirname(sourcePath);
+        const targetPath = path.join(parentPath, targetName);
+
+        if (!sourcePath.startsWith(localDir) || !targetPath.startsWith(localDir))
+            return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(sourcePath)) return res.status(404).json({ error: 'Source folder not found' });
+
+        // Create target if it doesn't exist yet
+        if (!fs.existsSync(targetPath)) fs.mkdirSync(targetPath, { recursive: true });
+
+        const items = await fs.promises.readdir(sourcePath);
+        let moved = 0;
+        for (const item of items) {
+            const src = path.join(sourcePath, item);
+            let dest = path.join(targetPath, item);
+            if (fs.existsSync(dest)) {
+                const ext = path.extname(item);
+                const base = path.basename(item, ext);
+                dest = path.join(targetPath, `${base}_${Date.now()}${ext}`);
+            }
+            await fs.promises.rename(src, dest);
+            moved++;
+        }
+
+        // Remove the now-empty source folder
+        await fs.promises.rmdir(sourcePath);
+
+        terminalLog(`[MERGE] Moved ${moved} items from "${safeSrcId}" into "${targetName}"`);
+        res.json({ success: true, moved });
+    } catch (err) {
+        console.error('[MERGE]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/local/rename-folder', express.json(), async (req, res) => {
     const { oldId, newTitle, merge } = req.body;
     if (!oldId || !newTitle) return res.status(400).json({ error: 'oldId and newTitle are required' });
@@ -3098,6 +3487,68 @@ app.post('/api/local/update-tags', express.json(), async (req, res) => {
         }
     } catch (err) {
         console.error('[TAGS] Server error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/local/write-tags', express.json(), async (req, res) => {
+    const { uri, artist, album, albumartist } = req.body;
+    if (!uri) return res.status(400).json({ error: 'uri is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const url = new URL(uri);
+        const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+        const filePath = path.join(localDir, path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, ''));
+
+        if (!filePath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+        const tags = {};
+        if (artist !== undefined) tags.artist = artist;
+        if (album !== undefined) tags.album = album;
+        if (albumartist !== undefined) tags.performerInfo = albumartist; // TPE2
+
+        const success = NodeID3.update(tags, filePath);
+        if (success !== true) throw new Error('NodeID3 failed to write tags');
+
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[WRITE-TAGS]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => {
+    const { uri, field, value } = req.body;
+    if (!uri || !field || value === undefined) return res.status(400).json({ error: 'uri, field, and value are required' });
+    if (!['artist', 'album', 'albumartist'].includes(field)) return res.status(400).json({ error: 'Invalid field' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const url = new URL(uri);
+        const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+        const filePath = path.join(localDir, path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, ''));
+        if (!filePath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+
+        const folderPath = path.dirname(filePath);
+        const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.wma', '.aiff']);
+
+        const tagKey = field === 'albumartist' ? 'performerInfo' : field;
+        const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
+        let updated = 0;
+        for (const entry of entries) {
+            if (!entry.isFile()) continue;
+            if (!audioExts.has(path.extname(entry.name).toLowerCase())) continue;
+            const target = path.join(folderPath, entry.name);
+            const result = NodeID3.update({ [tagKey]: value }, target);
+            if (result === true) updated++;
+        }
+
+        terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}`);
+        res.json({ success: true, updated });
+    } catch (err) {
+        console.error('[WRITE-TAGS-FOLDER]', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -3191,7 +3642,7 @@ app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
                 title,
                 artist,
                 album,
-                albumArtUrl: `http://${hostIp}:${port}/api/art/local?uri=${encodeURIComponent(uri)}`,
+                albumArtUrl: `http://${getLocalIp()}:${port}/api/art/local?uri=${encodeURIComponent(uri)}`,
                 class: title.match(/\.(jpg|jpeg|png|gif|webp)$/i) ? 'object.item.imageItem.photo'
                     : title.match(/\.(mp4|mkv|avi|mov)$/i) ? 'object.item.videoItem'
                         : 'object.item.audioItem.musicTrack'
