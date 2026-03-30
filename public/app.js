@@ -5193,11 +5193,6 @@ class Slideshow {
             const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
             if (!isVideoVisible) {
                 this.timer = setTimeout(() => {
-                    // Start in music mode if music is playing
-                    if (currentTransportState === 'Playing' && currentArtworkUrl) {
-                        this.mode = 'nowPlaying';
-                        this.updateModeUI();
-                    }
                     this.start();
                 }, this.idleTimeout);
             }
