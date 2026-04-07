@@ -1717,7 +1717,9 @@ function renderBrowser(items) {
         const thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
         if (thumbUrl) {
             const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-            icon = `<img src="${escThumb}" loading="lazy" alt="" data-thumb-url="${escThumb}">`;
+            const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
+            const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
+            icon = `<img src="${escThumb}" loading="lazy" alt="" data-thumb-url="${escThumb}"${rotStyle}>`;
         }
 
 
@@ -1772,12 +1774,28 @@ function renderBrowser(items) {
                             <path d="M12 8h.01"></path>
                         </svg>
                     </button>
+                    ${isImage && currentBrowserMode === 'photo' ? `
+                    <button class="btn-control ghost" onclick="event.stopPropagation(); rotatePhotoFromBrowser(${index})" title="Rotate 90°">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 2v6h-6"></path>
+                            <path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path>
+                            <path d="M3 22v-6h6"></path>
+                            <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
+                        </svg>
+                    </button>
+                    <button class="btn-control ghost" style="color: var(--accent);" onclick="deletePhotoFromBrowser(${index}, event)" title="Move to _deleted folder">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+                        </svg>
+                    </button>
+                    ` : `
                     <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', false, '${escJs(pathStr)}')" title="Add to queue">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
                         </svg>
                         <span class="btn-label" data-mobile="">Queue</span>
                     </button>
+                    `}
                     ` : `
                     <button class="btn-control play-btn" onclick="event.stopPropagation(); ${currentBrowserMode === 'photo' ? `playFolderSlideshow('${escJs(item.id)}', '${escJs(item.title)}')` : `playFolder('${escJs(item.id)}', '${escJs(item.title)}', '${escJs(pathStr)}')`}" title="${currentBrowserMode === 'photo' ? 'Start slideshow of this folder' : 'Play Whole Folder Recursively'}">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="${currentBrowserMode === 'photo' ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="2">
@@ -4742,6 +4760,14 @@ async function openFileInfoModal(trackData) {
         if ((key === 'format.width' || key === 'format.height' || key === 'width' || key === 'height') && (typeof value === 'number' || (typeof value === 'string' && value !== ''))) {
             return value + ' px';
         }
+        if (key === 'format.orientation' && typeof value === 'number') {
+            const labels = {
+                1: 'Normal', 2: 'Mirrored', 3: 'Rotated 180°',
+                4: 'Mirrored, Rotated 180°', 5: 'Mirrored, Rotated 90° CW',
+                6: 'Rotated 90° CW', 7: 'Mirrored, Rotated 90° CCW', 8: 'Rotated 90° CCW'
+            };
+            return labels[value] ? `${value} — ${labels[value]}` : String(value);
+        }
         if (key === 'common.date' && value) {
             try {
                 const d = new Date(value);
@@ -4776,7 +4802,8 @@ async function openFileInfoModal(trackData) {
                 { label: 'Height', sKey: 'height', eKey: 'format.height' },
                 { label: 'Format', sKey: '', eKey: 'format.container' },
                 { label: 'File Size', sKey: 'size', eKey: 'format.size' },
-                { label: 'Location', sKey: '', eKey: 'format.latitude' }
+                { label: 'Location', sKey: '', eKey: 'format.latitude' },
+                { label: 'Orientation', sKey: '', eKey: 'format.orientation' }
             ]
         },
         {
@@ -5005,6 +5032,60 @@ async function movePictureToDateFolder(index, event) {
         }
     } catch (e) {
         console.error(e);
+        showToast('Failed: ' + e.message, 'error', 4000);
+    }
+}
+
+async function rotatePhotoFromBrowser(index) {
+    const item = currentBrowserItems[index];
+    if (!item || !item.uri) return;
+
+    const current = manualRotations[item.uri] || 0;
+    const next = (current + 90) % 360;
+
+    // Update thumbnail in DOM immediately
+    const browserItems = document.querySelectorAll('.browser-item');
+    const el = browserItems[index];
+    if (el) {
+        const img = el.querySelector('.item-icon img');
+        if (img) img.style.transform = next ? `rotate(${next}deg)` : '';
+    }
+
+    try {
+        await fetch('/api/slideshow/rotate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: item.uri, rotation: next })
+        });
+        manualRotations[item.uri] = next;
+    } catch (e) {
+        showToast('Rotate failed: ' + e.message, 'error', 3000);
+    }
+}
+
+async function deletePhotoFromBrowser(index, event) {
+    if (event) event.stopPropagation();
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    try {
+        const res = await fetch('/api/local/photo-delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: item.uri })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            showToast('Moved to _deleted', 'success', 2000);
+            if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+                await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+            }
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error', 4000);
+        }
+    } catch (e) {
         showToast('Failed: ' + e.message, 'error', 4000);
     }
 }

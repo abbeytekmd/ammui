@@ -3086,6 +3086,7 @@ async function getTrackMetadata(uri) {
                         if (exif.Make) metadata.common.make = exif.Make;
                         if (exif.Model) metadata.common.model = exif.Model;
                         if (exif.Software) metadata.common.software = exif.Software;
+                        if (exif.Orientation !== undefined) metadata.format.orientation = exif.Orientation;
                     }
                 } catch (e) {
                     console.warn(`[METADATA] EXIF parse failed for ${uri}: ${e.message}`);
@@ -3137,6 +3138,7 @@ async function getTrackMetadata(uri) {
                             if (exif.Make) metadata.common.make = exif.Make;
                             if (exif.Model) metadata.common.model = exif.Model;
                             if (exif.Software) metadata.common.software = exif.Software;
+                            if (exif.Orientation !== undefined) metadata.format.orientation = exif.Orientation;
                         }
                     } catch (e) {
                         console.warn(`[METADATA] EXIF parse failed for ${localPath}: ${e.message}`);
@@ -3183,7 +3185,8 @@ app.get('/api/track-metadata', async (req, res) => {
                 size: metadata.format.size,
                 isImage: metadata.format.isImage,
                 latitude: metadata.format.latitude,
-                longitude: metadata.format.longitude
+                longitude: metadata.format.longitude,
+                orientation: metadata.format.orientation
             },
             tags: settings.fileTags?.[uri] || []
         };
@@ -3522,6 +3525,53 @@ app.post('/api/local/move-picture-to-date', express.json(), async (req, res) => 
     } catch (e) {
         console.error('[Move Picture] Error:', e);
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/photo-delete', express.json(), async (req, res) => {
+    const { uri } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+
+        let localPath = uri;
+        if (uri.startsWith('http') && uri.includes('/local-files/')) {
+            try {
+                const url = new URL(uri);
+                const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+                localPath = path.join(localDir, relPath);
+            } catch (e) {
+                console.warn(`[Photo Delete] URL parsing failed for ${uri}:`, e.message);
+            }
+        }
+
+        if (!fs.existsSync(localPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const filename = path.basename(localPath);
+        const sourceDir = path.dirname(localPath);
+        const deletedDir = path.join(sourceDir, '_deleted');
+
+        if (!fs.existsSync(deletedDir)) await fs.promises.mkdir(deletedDir, { recursive: true });
+
+        let destPath = path.join(deletedDir, filename);
+        if (fs.existsSync(destPath)) {
+            const ext = path.extname(filename);
+            const base = path.basename(filename, ext);
+            for (let i = 1; i < 1000; i++) {
+                const candidate = path.join(deletedDir, `${base}_${i}${ext}`);
+                if (!fs.existsSync(candidate)) { destPath = candidate; break; }
+            }
+        }
+
+        await fs.promises.rename(localPath, destPath);
+        console.log(`[Photo Delete] Moved ${localPath} → ${destPath}`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[Photo Delete] Error:', err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
