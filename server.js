@@ -34,6 +34,7 @@ import {
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
+import crypto from 'crypto';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -1563,6 +1564,64 @@ app.post('/api/delete', express.json(), async (req, res) => {
     }
 });
 
+// Extract the best available date from a cached image item.
+// Returns a Date object or null. Checks dc:date field, then folder path, then title.
+function getImageDate(img) {
+    // 1. dc:date field (stored as img.year by media-server)
+    const dateStr = img.year || img.date || img['dc:date'];
+    if (dateStr) {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) return d;
+    }
+
+    // 2. Folder path segments (stored as JSON array of {id, title})
+    try {
+        const pathSegments = JSON.parse(img._path || '[]');
+        // Scan from innermost folder outward
+        for (let i = pathSegments.length - 1; i >= 0; i--) {
+            const parsed = extractDateFromString(pathSegments[i].title);
+            if (parsed && parsed.month && parsed.day) {
+                return new Date(`${parsed.year}-${parsed.month}-${parsed.day}`);
+            }
+        }
+    } catch (e) { /* ignore */ }
+
+    // 3. Item title / filename
+    const parsed = extractDateFromString(img.title);
+    if (parsed && parsed.month && parsed.day) {
+        return new Date(`${parsed.year}-${parsed.month}-${parsed.day}`);
+    }
+
+    return null;
+}
+
+function extractDateFromString(str) {
+    if (!str) return null;
+    // YYYY-MM-DD or YYYY_MM_DD or YYYY.MM.DD
+    let m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])[-_.]((0[1-9]|[12]\d|3[01]))\b/);
+    if (m) return { year: m[1], month: m[2], day: m[3] };
+    // YYYYMMDDHHMMSS (must be checked before YYYYMMDD to avoid partial match)
+    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)([0-5]\d)\b/);
+    if (m) return { year: m[1], month: m[2], day: m[3] };
+    // YYYYMMDD
+    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+    if (m) return { year: m[1], month: m[2], day: m[3] };
+    // YYYY-MM or YYYY_MM
+    m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])\b/);
+    if (m) return { year: m[1], month: m[2], day: null };
+    // YYYY alone
+    m = str.match(/\b((?:19|20)\d{2})\b/);
+    if (m) return { year: m[1], month: null, day: null };
+    // DD-MM-YY at the start of the string (e.g. "15-03-24_photo.jpg")
+    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})/);
+    if (m) {
+        const yy = parseInt(m[3], 10);
+        const year = (yy >= 70 ? 1900 + yy : 2000 + yy).toString();
+        return { year, month: m[2], day: m[1] };
+    }
+    return null;
+}
+
 async function downloadFileHelper(uri, title, artist, album) {
     const localDir = path.join(__dirname, 'local');
 
@@ -1627,26 +1686,48 @@ async function downloadFileHelper(uri, title, artist, album) {
 
     if (isImage) {
         // Post-process image: determine Year/Month
-        let year = new Date().getFullYear().toString();
-        let month = (new Date().getMonth() + 1).toString().padStart(2, '0');
+        let year = null;
+        let month = null;
 
-        if (ext === '.jpg' || ext === '.jpeg') {
-            try {
-                const buffer = fs.readFileSync(downloadPath);
-                const parser = exifParser.create(buffer);
-                const result = parser.parse();
-                if (result.tags && (result.tags.DateTimeOriginal || result.tags.CreateDate)) {
-                    const timestamp = result.tags.DateTimeOriginal || result.tags.CreateDate;
-                    const date = new Date(timestamp * 1000);
-                    year = date.getFullYear().toString();
-                    month = (date.getMonth() + 1).toString().padStart(2, '0');
-                }
-            } catch (e) {
-                console.log(`[DOWNLOAD] EXIF parse failed for ${filename}, using current date`);
+        // 1. Try EXIF DateTimeOriginal
+        try {
+            const exifData = await exifr.parse(downloadPath, { ifd0: true });
+            if (exifData && exifData.DateTimeOriginal) {
+                const date = new Date(exifData.DateTimeOriginal);
+                year = date.getFullYear().toString();
+                month = (date.getMonth() + 1).toString().padStart(2, '0');
+                console.log(`[DOWNLOAD] Date from EXIF: ${year}-${month}`);
             }
+        } catch (e) {
+            console.log(`[DOWNLOAD] EXIF parse failed for ${filename}`);
         }
 
-        const finalDir = path.join(localDir, 'pictures', year, month);
+        // 2. Fallback: scan folder segments in the source URI
+        if (!year) {
+            try {
+                const uriPath = new URL(uri).pathname;
+                const segments = uriPath.split('/').reverse(); // inner folders first
+                for (const seg of segments) {
+                    const d = extractDateFromString(decodeURIComponent(seg));
+                    if (d) { year = d.year; month = d.month; console.log(`[DOWNLOAD] Date from URI folder "${seg}": ${year}-${month ?? '??'}`); break; }
+                }
+            } catch (e) { /* ignore malformed URI */ }
+        }
+
+        // 3. Fallback: scan the filename/title
+        if (!year) {
+            const d = extractDateFromString(title || filename);
+            if (d) { year = d.year; month = d.month; console.log(`[DOWNLOAD] Date from filename "${filename}": ${year}-${month ?? '??'}`); }
+        }
+
+        // Final fallback: unknown date folder
+        let finalDir;
+        if (!year) {
+            console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
+            finalDir = path.join(localDir, 'pictures', 'unknown-date');
+        } else {
+            finalDir = path.join(localDir, 'pictures', year, month ?? '01');
+        }
         if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
         const finalPath = path.join(finalDir, filename);
@@ -1962,10 +2043,8 @@ app.get('/api/slideshow/random', async (req, res) => {
                 const day = today.getDate();
 
                 imagesToUse = imagesToUse.filter(img => {
-                    const dateStr = img.year || img.date || img['dc:date'];
-                    if (!dateStr) return false;
-                    const d = new Date(dateStr);
-                    if (isNaN(d.getTime())) return false;
+                    const d = getImageDate(img);
+                    if (!d) return false;
                     return (d.getMonth() + 1) === month && d.getDate() === day;
                 });
 
@@ -2166,10 +2245,8 @@ app.get('/api/slideshow/list', async (req, res) => {
         const month = today.getMonth() + 1;
         const day = today.getDate();
         images = images.filter(img => {
-            const dateStr = img.year || img.date || img['dc:date'];
-            if (!dateStr) return false;
-            const d = new Date(dateStr);
-            if (isNaN(d.getTime())) return false;
+            const d = getImageDate(img);
+            if (!d) return false;
             return (d.getMonth() + 1) === month && d.getDate() === day;
         });
         if (images.length === 0) {
@@ -3268,6 +3345,262 @@ app.post('/api/local/move-to-tags', express.json(), async (req, res) => {
         res.json({ success: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) });
     } catch (e) {
         console.error('[Move to Tags] Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+async function hashFile(filePath) {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(filePath);
+    for await (const chunk of stream) hash.update(chunk);
+    return hash.digest('hex');
+}
+
+// Resolves the final destination path for a picture move, handling collisions.
+// Returns { finalPath, isDuplicate } where isDuplicate=true means the source is
+// identical to an existing file and should go to the _deleted folder instead.
+async function resolveTargetPath(sourcePath, targetDir, deletedDir) {
+    const filename = path.basename(sourcePath);
+    const targetPath = path.join(targetDir, filename);
+
+    if (!fs.existsSync(targetPath)) {
+        return { finalPath: targetPath, isDuplicate: false };
+    }
+
+    // Same-size check first, then hash only if sizes match
+    const [srcStat, dstStat] = await Promise.all([fs.promises.stat(sourcePath), fs.promises.stat(targetPath)]);
+    if (srcStat.size === dstStat.size) {
+        const [srcHash, dstHash] = await Promise.all([hashFile(sourcePath), hashFile(targetPath)]);
+        if (srcHash === dstHash) {
+            // Identical file — route to deleted folder, preserving the original filename
+            const deletedPath = path.join(deletedDir, filename);
+            if (fs.existsSync(deletedPath)) {
+                // Even the deleted slot is taken — append suffix there too
+                const ext = path.extname(filename);
+                const base = path.basename(filename, ext);
+                for (let i = 1; i < 1000; i++) {
+                    const candidate = path.join(deletedDir, `${base}_${i}${ext}`);
+                    if (!fs.existsSync(candidate)) return { finalPath: candidate, isDuplicate: true };
+                }
+            }
+            return { finalPath: deletedPath, isDuplicate: true };
+        }
+    }
+
+    // Different content — find a unique name in the target dir
+    const ext = path.extname(filename);
+    const base = path.basename(filename, ext);
+    for (let i = 1; i < 1000; i++) {
+        const candidate = path.join(targetDir, `${base}_${i}${ext}`);
+        if (!fs.existsSync(candidate)) return { finalPath: candidate, isDuplicate: false };
+    }
+
+    throw new Error(`Could not find a unique name for ${filename} in ${targetDir}`);
+}
+
+function dateToYearMonth(date) {
+    if (!date || isNaN(date.getTime())) return null;
+    return { year: date.getFullYear().toString(), month: (date.getMonth() + 1).toString().padStart(2, '0') };
+}
+
+// Shared helper: determine year/month for a picture file. Returns { year, month } or null.
+async function detectPictureDate(localPath) {
+    const filename = path.basename(localPath);
+
+    // 1. EXIF date fields (DateTimeOriginal, then CreateDate)
+    try {
+        const exifData = await exifr.parse(localPath, { ifd0: true, iptc: true, xmp: true });
+        const dt = exifData?.DateTimeOriginal || exifData?.CreateDate || exifData?.DateCreated;
+        if (dt) {
+            const result = dateToYearMonth(new Date(dt));
+            if (result) return result;
+        }
+    } catch (e) { /* ignore */ }
+
+    // 2. File system creation time (birthtime)
+    try {
+        const stat = await fs.promises.stat(localPath);
+        const birthtime = stat.birthtime;
+        const now = new Date();
+        if (birthtime && birthtime.getFullYear() >= 1990 && birthtime <= now) {
+            return dateToYearMonth(birthtime);
+        }
+    } catch (e) { /* ignore */ }
+
+    // 3. Date in path segments (parent folders)
+    const segments = localPath.replace(/\\/g, '/').split('/').reverse();
+    for (const seg of segments) {
+        const d = extractDateFromString(seg);
+        if (d) return { year: d.year, month: d.month };
+    }
+
+    // 4. Date in filename
+    const d = extractDateFromString(filename);
+    if (d) return { year: d.year, month: d.month };
+
+    return null;
+}
+
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif']);
+
+async function* walkImages(dir) {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            yield* walkImages(full);
+        } else if (IMAGE_EXTS.has(path.extname(entry.name).toLowerCase())) {
+            yield full;
+        }
+    }
+}
+
+app.post('/api/local/move-picture-to-date', express.json(), async (req, res) => {
+    const { uri } = req.body;
+    if (!uri) return res.status(400).json({ error: 'URI is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+
+        let localPath = uri;
+        if (uri.startsWith('http') && uri.includes('/local-files/')) {
+            try {
+                const url = new URL(uri);
+                const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+                localPath = path.join(localDir, relPath);
+            } catch (e) {
+                console.warn(`[Move Picture] URL parsing failed for ${uri}:`, e.message);
+            }
+        }
+
+        if (!fs.existsSync(localPath)) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        const filename = path.basename(localPath);
+        const detected = await detectPictureDate(localPath);
+
+        if (!detected) {
+            return res.status(400).json({ error: 'Could not determine date from EXIF, folder name, or filename.' });
+        }
+
+        const { year, month } = detected;
+
+        const targetDir = path.join(localDir, 'pictures', year, month ?? '01');
+        const naiveTarget = path.join(targetDir, filename);
+
+        if (localPath.toLowerCase() === naiveTarget.toLowerCase()) {
+            return res.status(400).json({ error: 'File is already in the correct folder.' });
+        }
+
+        const deletedDir = path.join(localDir, 'pictures', '_deleted');
+        const { finalPath, isDuplicate } = await resolveTargetPath(localPath, targetDir, deletedDir);
+        const destDir = path.dirname(finalPath);
+
+        const sourceDir = path.dirname(localPath);
+        if (!fs.existsSync(destDir)) await fs.promises.mkdir(destDir, { recursive: true });
+        await fs.promises.rename(localPath, finalPath);
+
+        // Clean up empty source directories up to the pictures root
+        const picturesRoot = path.join(localDir, 'pictures');
+        let currentDir = sourceDir;
+        while (currentDir.length > picturesRoot.length && currentDir.startsWith(picturesRoot)) {
+            try {
+                const remaining = await fs.promises.readdir(currentDir);
+                if (remaining.length === 0) {
+                    await fs.promises.rmdir(currentDir);
+                    currentDir = path.dirname(currentDir);
+                } else {
+                    break;
+                }
+            } catch (e) {
+                break;
+            }
+        }
+
+        res.json({ success: true, year, month, isDuplicate });
+    } catch (e) {
+        console.error('[Move Picture] Error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/move-folder-pictures-to-date', express.json(), async (req, res) => {
+    const { objectId } = req.body;
+    if (!objectId) return res.status(400).json({ error: 'objectId is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const folderPath = path.join(localDir, objectId);
+
+        if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+
+        const picturesRoot = path.join(localDir, 'pictures');
+        const deletedDir = path.join(localDir, 'pictures', '_deleted');
+        let moved = 0, duplicates = 0, skipped = 0, failed = 0;
+        const sourceDirs = new Set();
+
+        for await (const filePath of walkImages(folderPath)) {
+            const filename = path.basename(filePath);
+            const detected = await detectPictureDate(filePath);
+
+            if (!detected) {
+                console.log(`[Move Folder Pictures] No date for ${filename}, skipping`);
+                skipped++;
+                continue;
+            }
+
+            const { year, month } = detected;
+            const targetDir = path.join(localDir, 'pictures', year, month ?? '01');
+            const naiveTarget = path.join(targetDir, filename);
+
+            if (filePath.toLowerCase() === naiveTarget.toLowerCase()) {
+                skipped++;
+                continue;
+            }
+
+            try {
+                const { finalPath, isDuplicate } = await resolveTargetPath(filePath, targetDir, deletedDir);
+                const destDir = path.dirname(finalPath);
+                if (!fs.existsSync(destDir)) await fs.promises.mkdir(destDir, { recursive: true });
+                sourceDirs.add(path.dirname(filePath));
+                await fs.promises.rename(filePath, finalPath);
+                if (isDuplicate) {
+                    console.log(`[Move Folder Pictures] Duplicate ${filename} → _deleted`);
+                    duplicates++;
+                } else {
+                    console.log(`[Move Folder Pictures] Moved ${filename} → ${year}/${month}`);
+                    moved++;
+                }
+            } catch (e) {
+                console.error(`[Move Folder Pictures] Failed to move ${filename}:`, e.message);
+                failed++;
+            }
+        }
+
+        // Clean up empty source directories up to the pictures root
+        for (const dir of [...sourceDirs].sort((a, b) => b.length - a.length)) {
+            let currentDir = dir;
+            while (currentDir.length > picturesRoot.length && currentDir.startsWith(picturesRoot)) {
+                try {
+                    const remaining = await fs.promises.readdir(currentDir);
+                    if (remaining.length === 0) {
+                        await fs.promises.rmdir(currentDir);
+                        currentDir = path.dirname(currentDir);
+                    } else {
+                        break;
+                    }
+                } catch (e) {
+                    break;
+                }
+            }
+        }
+
+        res.json({ success: true, moved, duplicates, skipped, failed });
+    } catch (e) {
+        console.error('[Move Folder Pictures] Error:', e);
         res.status(500).json({ error: e.message });
     }
 });

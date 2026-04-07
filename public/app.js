@@ -1804,6 +1804,18 @@ function renderBrowser(items) {
                         </button>
                         <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
                             ${isLocalServer ? `
+                                ${isContainer && currentBrowserMode === 'photo' ? `
+                                <button class="dropdown-item" onclick="moveFolderPicturesToDateFolder(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                                        <path d="M8 14h.01M12 14h.01M16 14h.01"/>
+                                    </svg>
+                                    Place in Date Folders
+                                </button>
+                                ` : ''}
                                 ${isContainer ? `
                                 <button class="dropdown-item" onclick="moveToVAAlbum(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1842,6 +1854,18 @@ function renderBrowser(items) {
                                         <path d="M5 12h14M12 5l7 7-7 7"/>
                                     </svg>
                                     Move to Tag Location
+                                </button>
+                                ` : ''}
+                                ${!isContainer && isImage ? `
+                                <button class="dropdown-item" onclick="movePictureToDateFolder(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                                        <path d="M8 14h.01M12 14h.01M16 14h.01"/>
+                                    </svg>
+                                    Place in Date Folder
                                 </button>
                                 ` : ''}
                                 <button class="dropdown-item" style="color: var(--accent);" onclick="deleteTrack(${index}, event)">
@@ -4917,6 +4941,71 @@ async function moveFileToTagsLocationFromBrowser(index, event) {
     } catch (e) {
         console.error(e);
         alert('Failed to move file: ' + e.message);
+    }
+}
+
+async function moveFolderPicturesToDateFolder(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    try {
+        const res = await fetch('/api/local/move-folder-pictures-to-date', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ objectId: item.id })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            const parts = [`Moved: ${data.moved}`];
+            if (data.duplicates) parts.push(`Duplicates: ${data.duplicates}`);
+            if (data.skipped) parts.push(`Skipped: ${data.skipped}`);
+            if (data.failed) parts.push(`Failed: ${data.failed}`);
+            showToast(parts.join(', '), data.failed ? 'error' : 'success', 4000);
+            if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+                await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+            }
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error', 4000);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Failed: ' + e.message, 'error', 4000);
+    }
+}
+
+async function movePictureToDateFolder(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    try {
+        const res = await fetch('/api/local/move-picture-to-date', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: item.uri })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            const msg = data.isDuplicate
+                ? `Duplicate — moved to _deleted`
+                : `Moved to ${data.year}/${data.month}`;
+            showToast(msg, 'success', 3000);
+            if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+                await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+            }
+        } else {
+            showToast('Failed: ' + (data.error || 'Unknown error'), 'error', 4000);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Failed: ' + e.message, 'error', 4000);
     }
 }
 
