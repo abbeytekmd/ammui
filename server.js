@@ -1612,12 +1612,20 @@ function extractDateFromString(str) {
     // YYYY alone
     m = str.match(/\b((?:19|20)\d{2})\b/);
     if (m) return { year: m[1], month: null, day: null };
-    // DD-MM-YY at the start of the string (e.g. "15-03-24_photo.jpg")
-    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})/);
+    // XX-XX-XX at the start: underscore after → DD-MM-YY, otherwise → YY-MM-DD
+    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})_/);
     if (m) {
+        // DD-MM-YY_ e.g. "15-03-24_photo.jpg"
         const yy = parseInt(m[3], 10);
         const year = (yy >= 70 ? 1900 + yy : 2000 + yy).toString();
         return { year, month: m[2], day: m[1] };
+    }
+    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})/);
+    if (m) {
+        // YY-MM-DD e.g. "24-03-15-photo.jpg"
+        const yy = parseInt(m[1], 10);
+        const year = (yy >= 70 ? 1900 + yy : 2000 + yy).toString();
+        return { year, month: m[2], day: m[3] };
     }
     return null;
 }
@@ -1685,47 +1693,23 @@ async function downloadFileHelper(uri, title, artist, album) {
     }
 
     if (isImage) {
-        // Post-process image: determine Year/Month
-        let year = null;
-        let month = null;
-
-        // 1. Try EXIF DateTimeOriginal
+        // Post-process image: determine Year/Month via shared detectPictureDate
+        let hintSegments;
         try {
-            const exifData = await exifr.parse(downloadPath, { ifd0: true });
-            if (exifData && exifData.DateTimeOriginal) {
-                const date = new Date(exifData.DateTimeOriginal);
-                year = date.getFullYear().toString();
-                month = (date.getMonth() + 1).toString().padStart(2, '0');
-                console.log(`[DOWNLOAD] Date from EXIF: ${year}-${month}`);
-            }
-        } catch (e) {
-            console.log(`[DOWNLOAD] EXIF parse failed for ${filename}`);
-        }
+            const uriPath = new URL(uri).pathname;
+            hintSegments = uriPath.split('/').map(s => decodeURIComponent(s)).reverse();
+        } catch (e) { /* ignore malformed URI */ }
 
-        // 2. Fallback: scan folder segments in the source URI
-        if (!year) {
-            try {
-                const uriPath = new URL(uri).pathname;
-                const segments = uriPath.split('/').reverse(); // inner folders first
-                for (const seg of segments) {
-                    const d = extractDateFromString(decodeURIComponent(seg));
-                    if (d) { year = d.year; month = d.month; console.log(`[DOWNLOAD] Date from URI folder "${seg}": ${year}-${month ?? '??'}`); break; }
-                }
-            } catch (e) { /* ignore malformed URI */ }
-        }
-
-        // 3. Fallback: scan the filename/title
-        if (!year) {
-            const d = extractDateFromString(title || filename);
-            if (d) { year = d.year; month = d.month; console.log(`[DOWNLOAD] Date from filename "${filename}": ${year}-${month ?? '??'}`); }
-        }
+        const detected = await detectPictureDate(downloadPath, { hintFilename: title || filename, hintSegments });
+        if (detected) console.log(`[DOWNLOAD] Date detected: ${detected.year}-${detected.month ?? '??'} for ${filename}`);
 
         // Final fallback: unknown date folder
         let finalDir;
-        if (!year) {
+        if (!detected) {
             console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
             finalDir = path.join(localDir, 'pictures', 'unknown-date');
         } else {
+            const { year, month } = detected;
             finalDir = path.join(localDir, 'pictures', year, month ?? '01');
         }
         if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
@@ -3111,8 +3095,11 @@ async function getTrackMetadata(uri) {
         if (fs.existsSync(localPath)) {
             if (isImage) {
                 try {
-                    const dimensions = sizeOf(localPath);
-                    const stats = fs.statSync(localPath);
+                    const [fileBuffer, stats] = await Promise.all([
+                        fs.promises.readFile(localPath),
+                        fs.promises.stat(localPath)
+                    ]);
+                    const dimensions = sizeOf(fileBuffer);
                     metadata = {
                         common: { title: path.basename(localPath) },
                         format: {
@@ -3407,8 +3394,10 @@ function dateToYearMonth(date) {
 }
 
 // Shared helper: determine year/month for a picture file. Returns { year, month } or null.
-async function detectPictureDate(localPath) {
-    const filename = path.basename(localPath);
+// hintFilename: override the filename to parse (e.g. original title when file is at a temp path)
+// hintSegments: override path segments to check (e.g. decoded URI path parts for downloaded files)
+async function detectPictureDate(localPath, { hintFilename, hintSegments } = {}) {
+    const filename = hintFilename || path.basename(localPath);
 
     // 1. EXIF date fields (DateTimeOriginal, then CreateDate)
     try {
@@ -3420,7 +3409,18 @@ async function detectPictureDate(localPath) {
         }
     } catch (e) { /* ignore */ }
 
-    // 2. File system creation time (birthtime)
+    // 2. Date in filename
+    const d = extractDateFromString(filename);
+    if (d) return { year: d.year, month: d.month };
+
+    // 3. Date in path segments (parent folders or URI segments if provided)
+    const segments = hintSegments ?? localPath.replace(/\\/g, '/').split('/').reverse();
+    for (const seg of segments) {
+        const fd = extractDateFromString(seg);
+        if (fd) return { year: fd.year, month: fd.month };
+    }
+
+    // 4. File system creation time (birthtime) — last resort
     try {
         const stat = await fs.promises.stat(localPath);
         const birthtime = stat.birthtime;
@@ -3429,17 +3429,6 @@ async function detectPictureDate(localPath) {
             return dateToYearMonth(birthtime);
         }
     } catch (e) { /* ignore */ }
-
-    // 3. Date in path segments (parent folders)
-    const segments = localPath.replace(/\\/g, '/').split('/').reverse();
-    for (const seg of segments) {
-        const d = extractDateFromString(seg);
-        if (d) return { year: d.year, month: d.month };
-    }
-
-    // 4. Date in filename
-    const d = extractDateFromString(filename);
-    if (d) return { year: d.year, month: d.month };
 
     return null;
 }
