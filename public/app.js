@@ -166,6 +166,7 @@ let lastReportedTrackKey = null;
 let manualRotations = {}; // Client-side cache of saved photo rotations
 
 let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
+let selectedPhotos = new Set(); // URIs of selected photos for batch operations
 let airplayScanInterval = null;
 let isAirPlayScanRunning = false;
 let pendingCastIndex = null;
@@ -1600,6 +1601,13 @@ function updateBrowserControls(items) {
 
     if (btnSetSS) btnSetSS.style.display = (currentBrowserMode === 'photo') ? 'flex' : 'none';
 
+    const btnDeleteSelected = document.getElementById('btn-delete-selected');
+    if (btnDeleteSelected) {
+        const showDeleteSelected = inPhotoMode && browserViewMode === 'grid';
+        btnDeleteSelected.style.display = showDeleteSelected ? '' : 'none';
+        if (showDeleteSelected) updatePhotoSelectionUI();
+    }
+
     // Show/hide the entire menu button if no actions available
     const menuBtn = document.getElementById('btn-browser-menu');
     if (menuBtn) {
@@ -1626,6 +1634,9 @@ function updateBrowserControls(items) {
 }
 
 function renderBrowser(items) {
+    selectedPhotos.clear();
+    updatePhotoSelectionUI();
+
     // Sort items: folders first, then alphabetically ignoring case
     items.sort((a, b) => {
         const isFolderA = a.type === 'container';
@@ -1753,7 +1764,7 @@ function renderBrowser(items) {
         const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
 
         return `
-            <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}" 
+            <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}${isImage && currentBrowserMode === 'photo' && selectedPhotos.has(item.uri) ? ' photo-selected' : ''}" data-item-index="${index}"
                  onclick="${isContainer ?
                 `enterFolder('${escJs(item.id)}', '${escJs(item.title)}')` :
                 isImage ?
@@ -1783,9 +1794,9 @@ function renderBrowser(items) {
                             <path d="M21 12a9 9 0 0 1-15 6.7L3 16"></path>
                         </svg>
                     </button>
-                    <button class="btn-control ghost" style="color: var(--accent);" onclick="deletePhotoFromBrowser(${index}, event)" title="Move to _deleted folder">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+                    <button class="btn-control ghost photo-select-btn${selectedPhotos.has(item.uri) ? ' active' : ''}" onclick="event.stopPropagation(); togglePhotoSelection('${escJs(item.uri)}', ${index})" title="${selectedPhotos.has(item.uri) ? 'Deselect photo' : 'Select photo'}">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="${selectedPhotos.has(item.uri) ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2.5">
+                            <polyline points="20 6 9 17 4 12"></polyline>
                         </svg>
                     </button>
                     ` : `
@@ -4153,11 +4164,11 @@ function adjustVolume(delta) {
 }
 
 let pollCounter = 0;
-// Poll status (which now includes volume), and conditionally playlist every 3rd poll (15s) (only when page is visible)
+// Poll status every 5s always (keeps tab title current in background); playlist only when visible
 setInterval(() => {
-    if (isPageVisible && selectedRendererUdn && !isRendererOffline) {
+    if (selectedRendererUdn && !isRendererOffline) {
         pollCounter++;
-        const includePlaylist = (pollCounter % 3 === 0);
+        const includePlaylist = isPageVisible && (pollCounter % 3 === 0);
         fetchStatus(includePlaylist);
     }
 }, 5000);
@@ -5060,6 +5071,63 @@ async function rotatePhotoFromBrowser(index) {
         manualRotations[item.uri] = next;
     } catch (e) {
         showToast('Rotate failed: ' + e.message, 'error', 3000);
+    }
+}
+
+function updatePhotoSelectionUI() {
+    const btn = document.getElementById('btn-delete-selected');
+    if (!btn) return;
+    const count = selectedPhotos.size;
+    btn.classList.toggle('disabled', count === 0);
+    const label = btn.querySelector('.btn-label');
+    if (label) label.textContent = count > 0 ? `Delete (${count})` : 'Delete (0)';
+    btn.title = count > 0 ? `Delete ${count} selected photo${count > 1 ? 's' : ''}` : 'Delete selected photos';
+}
+
+function togglePhotoSelection(uri, index) {
+    if (selectedPhotos.has(uri)) {
+        selectedPhotos.delete(uri);
+    } else {
+        selectedPhotos.add(uri);
+    }
+    const selected = selectedPhotos.has(uri);
+    const el = document.querySelector(`.browser-item[data-item-index="${index}"]`);
+    if (el) {
+        el.classList.toggle('photo-selected', selected);
+        const btn = el.querySelector('.photo-select-btn');
+        if (btn) {
+            btn.classList.toggle('active', selected);
+            btn.title = selected ? 'Deselect photo' : 'Select photo';
+            const svg = btn.querySelector('svg');
+            if (svg) svg.setAttribute('fill', selected ? 'currentColor' : 'none');
+        }
+    }
+    updatePhotoSelectionUI();
+}
+
+async function deleteSelectedPhotos() {
+    if (selectedPhotos.size === 0) return;
+    const uris = [...selectedPhotos];
+    let successCount = 0;
+    let failCount = 0;
+    for (const uri of uris) {
+        try {
+            const res = await fetch('/api/local/photo-delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uri })
+            });
+            if (res.ok) successCount++;
+            else failCount++;
+        } catch (e) {
+            failCount++;
+        }
+    }
+    selectedPhotos.clear();
+    if (successCount > 0) showToast(`Moved ${successCount} photo${successCount > 1 ? 's' : ''} to _deleted`, 'success', 2000);
+    if (failCount > 0) showToast(`Failed to delete ${failCount} photo${failCount > 1 ? 's' : ''}`, 'error', 4000);
+    if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+        await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
     }
 }
 

@@ -3540,8 +3540,8 @@ app.post('/api/local/photo-delete', express.json(), async (req, res) => {
         }
 
         const filename = path.basename(localPath);
-        const sourceDir = path.dirname(localPath);
-        const deletedDir = path.join(sourceDir, '_deleted');
+        const picturesRoot = path.join(__dirname, 'local', 'pictures');
+        const deletedDir = path.join(picturesRoot, '_deleted');
 
         if (!fs.existsSync(deletedDir)) await fs.promises.mkdir(deletedDir, { recursive: true });
 
