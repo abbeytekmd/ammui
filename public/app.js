@@ -342,12 +342,47 @@ async function selectDevice(udn) {
 }
 
 
+function normalizeTitle(s) {
+    return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+async function enrichWithDiscogs(items) {
+    const audioTracks = items.filter(i => i.type === 'item' && !isImageItem(i));
+    if (audioTracks.length === 0) return;
+    if (audioTracks.some(t => t.trackNumber > 0)) return; // already have track numbers
+
+    const album = audioTracks[0].album;
+    const artist = audioTracks[0].artist;
+    if (!album || !artist) return;
+    // Only enrich if all tracks share the same album
+    if (!audioTracks.every(t => t.album === album)) return;
+
+    try {
+        const resp = await fetch(`/api/discogs/tracklist?artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(album)}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.tracks || data.tracks.length === 0) return;
+
+        for (const item of audioTracks) {
+            const norm = normalizeTitle(item.title);
+            const match = data.tracks.find(t => normalizeTitle(t.title) === norm);
+            if (match) {
+                item.trackNumber = match.trackNumber;
+                item.discNumber = match.discNumber;
+            }
+        }
+    } catch (e) {
+        console.warn('[Discogs] enrichment failed:', e);
+    }
+}
+
 async function browse(udn, objectId) {
     browserItems.innerHTML = '<div class="loading">Browsing...</div>';
     try {
         const response = await fetch(`/api/browse/${encodeURIComponent(udn)}?objectId=${encodeURIComponent(objectId)}`);
         if (!response.ok) throw new Error('Failed to browse server');
         const data = await response.json();
+        await enrichWithDiscogs(data.items);
         renderBrowser(data.items);
     } catch (err) {
         console.error('Browse error:', err);

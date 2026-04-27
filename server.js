@@ -831,6 +831,70 @@ app.get('/api/proxy-image', async (req, res) => {
     }
 });
 
+// Discogs tracklist lookup
+const discogsCache = new Map();
+
+function parseDiscogsPosition(pos) {
+    if (!pos) return { trackNumber: 0, discNumber: 1 };
+    // Multi-disc: "1-1", "1-2", "2-1" or "1.1", "2.3"
+    const multiDisc = pos.match(/^(\d+)[-.](\d+)$/);
+    if (multiDisc) return { discNumber: parseInt(multiDisc[1]), trackNumber: parseInt(multiDisc[2]) };
+    // Vinyl side: "A1", "B2", "C1" → A=disc1, B=disc1, C=disc2, D=disc2 etc.
+    const vinyl = pos.match(/^([A-Z])(\d+)$/);
+    if (vinyl) {
+        const side = vinyl[1].charCodeAt(0) - 65; // A=0, B=1, C=2 ...
+        return { discNumber: Math.floor(side / 2) + 1, trackNumber: parseInt(vinyl[2]) + (side % 2) * 100 };
+    }
+    // Simple numeric
+    const simple = pos.match(/^(\d+)$/);
+    if (simple) return { discNumber: 1, trackNumber: parseInt(simple[1]) };
+    return { trackNumber: 0, discNumber: 1 };
+}
+
+app.get('/api/discogs/tracklist', async (req, res) => {
+    const { artist, album } = req.query;
+    if (!artist || !album) return res.status(400).json({ error: 'artist and album required' });
+
+    const cacheKey = `${artist.toLowerCase()}|||${album.toLowerCase()}`;
+    if (discogsCache.has(cacheKey)) return res.json(discogsCache.get(cacheKey));
+
+    try {
+        const searchResp = await axios.get('https://api.discogs.com/database/search', {
+            params: { artist, release_title: album, type: 'release' },
+            headers: { 'User-Agent': 'AMMUI/1.0 (DLNA media browser)' },
+            timeout: 8000
+        });
+
+        const results = searchResp.data.results;
+        if (!results || results.length === 0) {
+            return res.json({ tracks: [] });
+        }
+
+        const releaseId = results[0].id;
+        const releaseResp = await axios.get(`https://api.discogs.com/releases/${releaseId}`, {
+            headers: { 'User-Agent': 'AMMUI/1.0 (DLNA media browser)' },
+            timeout: 8000
+        });
+
+        const tracklist = (releaseResp.data.tracklist || []).filter(t => t.type_ === 'track' || !t.type_);
+        const tracks = tracklist.map((t, idx) => {
+            const { trackNumber, discNumber } = parseDiscogsPosition(t.position);
+            return {
+                title: t.title,
+                trackNumber: trackNumber || (idx + 1),
+                discNumber
+            };
+        });
+
+        const result = { tracks, releaseTitle: releaseResp.data.title };
+        discogsCache.set(cacheKey, result);
+        res.json(result);
+    } catch (err) {
+        console.warn('[Discogs] Lookup failed:', err.message);
+        res.status(502).json({ error: 'Discogs lookup failed' });
+    }
+});
+
 const uriPathCache = new Map();
 const MAX_URI_CACHE = 10000;
 
