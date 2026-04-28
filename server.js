@@ -2071,6 +2071,7 @@ app.get('/api/local-stats', async (req, res) => {
 // Screensaver Routes
 
 // Screensaver Cache
+
 let screensaverCache = {
     udn: null,
     objectId: null,
@@ -2161,7 +2162,6 @@ app.get('/api/slideshow/random', async (req, res) => {
 
         // CHECK CACHE STRATEGY
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-
         // If cache is ready and has images, use it!
         if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
             let imagesToUse = screensaverCache.images;
@@ -2351,14 +2351,14 @@ app.get('/api/slideshow/list', async (req, res) => {
     const { mode } = req.query;
 
     const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-    if (!cacheValid || screensaverCache.status !== 'ready' || screensaverCache.images.length === 0) {
+    if (!cacheValid || screensaverCache.status !== 'ready') {
         let device = devices.get(serverUdn);
         if (!device) {
             for (const d of devices.values()) {
                 if (d.udn === serverUdn) { device = d; break; }
             }
         }
-        if (device && (!cacheValid || screensaverCache.status === 'idle')) {
+        if (device && (!cacheValid || screensaverCache.status === 'idle' || screensaverCache.status === 'error')) {
             refreshScreensaverCache(device, objectId);
         }
         return res.status(503).json({ error: 'Cache not ready yet' });
@@ -2388,16 +2388,6 @@ app.get('/api/slideshow/list', async (req, res) => {
         });
         if (images.length === 0) {
             return res.status(404).json({ error: 'No favourite photos found' });
-        }
-    } else if (mode === 'recent') {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - 7);
-        images = images.filter(img => {
-            const d = getImageDate(img);
-            return d && d >= cutoff;
-        });
-        if (images.length === 0) {
-            return res.status(404).json({ error: 'No photos from the last week' });
         }
     }
 
