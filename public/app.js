@@ -3999,6 +3999,7 @@ async function init() {
     if (ssModeLabel && slideshow) {
         if (slideshow.mode === 'all') ssModeLabel.textContent = 'All';
         else if (slideshow.mode === 'onThisDay') ssModeLabel.textContent = 'Day';
+        else if (slideshow.mode === 'recent') ssModeLabel.textContent = 'Recent';
         else if (slideshow.mode === 'favourites') ssModeLabel.textContent = 'Favs';
         else if (slideshow.mode === 'nowPlaying') ssModeLabel.textContent = 'Music';
     }
@@ -4355,6 +4356,99 @@ async function handleFileUpload(event) {
             btn.innerHTML = originalContent;
         }
         event.target.value = ''; // Reset input
+    }
+}
+
+function triggerFolderUpload() {
+    const input = document.getElementById('upload-folder-input');
+    if (input) input.click();
+}
+
+function openUploadFolderModal(folderName, total) {
+    const modal = document.getElementById('upload-folder-modal');
+    document.getElementById('upload-folder-title').textContent = `Uploading: ${folderName} (${total} files)`;
+    document.getElementById('upload-folder-bar').style.width = '0%';
+    document.getElementById('upload-folder-current').textContent = 'Starting...';
+    document.getElementById('upload-folder-log').innerHTML = '';
+    document.getElementById('upload-folder-stats').textContent = '';
+    document.getElementById('upload-folder-close').disabled = true;
+    modal.style.display = 'flex';
+}
+
+function closeUploadFolderModal() {
+    document.getElementById('upload-folder-modal').style.display = 'none';
+}
+
+async function handleFolderUpload(event) {
+    const files = Array.from(event.target.files);
+    event.target.value = '';
+    if (!files.length) return;
+
+    const audioExts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus']);
+    const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif']);
+
+    const eligible = files.filter(f => {
+        const dot = f.name.lastIndexOf('.');
+        if (dot === -1) return false;
+        const ext = f.name.slice(dot).toLowerCase();
+        return audioExts.has(ext) || imageExts.has(ext);
+    });
+
+    if (!eligible.length) {
+        showToast('No supported audio or image files found in the selected folder', 'warning');
+        return;
+    }
+
+    const folderName = (eligible[0].webkitRelativePath || eligible[0].name).split('/')[0];
+    openUploadFolderModal(folderName, eligible.length);
+
+    let uploaded = 0, skipped = 0, failed = 0;
+
+    for (const file of eligible) {
+        const log = document.getElementById('upload-folder-log');
+        document.getElementById('upload-folder-current').textContent = file.name;
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('relativePath', file.webkitRelativePath || file.name);
+
+        const entry = document.createElement('div');
+        try {
+            const res = await fetch('/api/upload-local-file', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Upload failed');
+
+            if (data.skipped) {
+                skipped++;
+                entry.textContent = `— ${file.name}`;
+                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+            } else {
+                uploaded++;
+                entry.textContent = `✓ ${file.name}`;
+                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#4ade80;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+            }
+        } catch (err) {
+            failed++;
+            entry.textContent = `✗ ${file.name}: ${err.message}`;
+            entry.style.cssText = 'font-size:14px;line-height:1.6;color:#f87171;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+        }
+
+        log.appendChild(entry);
+        log.scrollTop = log.scrollHeight;
+
+        const done = uploaded + skipped + failed;
+        document.getElementById('upload-folder-bar').style.width = Math.round((done / eligible.length) * 100) + '%';
+    }
+
+    document.getElementById('upload-folder-current').textContent = 'Complete';
+    document.getElementById('upload-folder-stats').textContent = `${uploaded} uploaded, ${skipped} skipped, ${failed} failed`;
+    document.getElementById('upload-folder-title').textContent =
+        document.getElementById('upload-folder-title').textContent.replace('Uploading:', 'Complete:');
+    document.getElementById('upload-folder-close').disabled = false;
+
+    if (selectedServerUdn === LOCAL_SERVER_UDN && uploaded > 0) {
+        const currentFolder = browsePath[browsePath.length - 1];
+        if (currentFolder) await browse(selectedServerUdn, currentFolder.id);
     }
 }
 

@@ -165,6 +165,18 @@
                             </button>
                             <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*"
                                 onchange="handleFileUpload(event)">
+                            <button id="btn-upload-folder" onclick="triggerFolderUpload()" class="btn-control"
+                                title="Upload a folder of photos or music to local server">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                    <polyline points="12 11 12 17"></polyline>
+                                    <polyline points="9 14 12 11 15 14"></polyline>
+                                </svg>
+                                <span class="btn-label" data-mobile="">Upload Folder</span>
+                            </button>
+                            <input type="file" id="upload-folder-input" style="display: none;" webkitdirectory multiple
+                                onchange="handleFolderUpload(event)">
                         </div>
                     </div>
                     <div class="section-header">
@@ -794,6 +806,26 @@
             <div class="modal-footer">
                 <div id="download-progress-stats" class="download-progress-stats"></div>
                 <button id="download-progress-close" class="btn-modal-close" onclick="closeDownloadProgressModal()" disabled>Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Folder Progress Modal -->
+    <div id="upload-folder-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content download-progress-modal-content">
+            <div class="modal-header">
+                <h3 id="upload-folder-title">Uploading folder...</h3>
+            </div>
+            <div class="download-progress-body">
+                <div class="download-progress-bar-wrap">
+                    <div id="upload-folder-bar"></div>
+                </div>
+                <div id="upload-folder-current" class="download-progress-current"></div>
+                <div id="upload-folder-log" class="download-progress-log"></div>
+            </div>
+            <div class="modal-footer">
+                <div id="upload-folder-stats" class="download-progress-stats"></div>
+                <button id="upload-folder-close" class="btn-modal-close" onclick="closeUploadFolderModal()" disabled>Close</button>
             </div>
         </div>
     </div>

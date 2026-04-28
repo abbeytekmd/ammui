@@ -1597,6 +1597,87 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     }
 });
 
+app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const relativePath = req.body.relativePath || req.file.originalname;
+
+    try {
+        const ext = path.extname(req.file.originalname).toLowerCase();
+        const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif']);
+        const audioExts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus']);
+        const isImage = imageExts.has(ext);
+        const isAudio = audioExts.has(ext);
+
+        if (!isImage && !isAudio) {
+            fs.unlinkSync(req.file.path);
+            return res.json({ success: true, skipped: true, reason: 'unsupported type' });
+        }
+
+        const localDir = path.join(__dirname, 'local');
+        const filename = req.file.originalname;
+
+        if (isImage) {
+            const hintSegments = relativePath.split(/[/\\]/).reverse();
+            const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments });
+
+            let finalDir;
+            if (!detected) {
+                finalDir = path.join(localDir, 'pictures', 'unknown-date');
+            } else {
+                const { year, month } = detected;
+                finalDir = path.join(localDir, 'pictures', year, month ?? '01');
+            }
+            if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
+
+            const finalPath = path.join(finalDir, filename);
+            if (fs.existsSync(finalPath)) {
+                fs.unlinkSync(req.file.path);
+                return res.json({ success: true, filename, skipped: true });
+            }
+
+            fs.renameSync(req.file.path, finalPath);
+            return res.json({ success: true, filename, type: 'image', year: detected?.year, month: detected?.month });
+
+        } else {
+            let artist = 'Unknown Artist';
+            let album = 'Unknown Album';
+            let title = path.basename(filename, ext);
+
+            try {
+                const metadata = await mm.parseFile(req.file.path);
+                artist = metadata.common.artist || artist;
+                album = metadata.common.album || album;
+                title = metadata.common.title || title;
+            } catch (e) { /* ignore */ }
+
+            const musicDir = path.join(localDir, 'music');
+            const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
+            const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
+            const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+
+            const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
+            const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
+            if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+            const targetPath = path.join(targetDir, `${safeTitle}${ext}`);
+            if (fs.existsSync(targetPath)) {
+                fs.unlinkSync(req.file.path);
+                return res.json({ success: true, filename, skipped: true });
+            }
+
+            fs.renameSync(req.file.path, targetPath);
+            return res.json({ success: true, filename, type: 'music', artist, album, title });
+        }
+    } catch (err) {
+        console.error('[upload-local-file] error:', err);
+        if (req.file && fs.existsSync(req.file.path)) {
+            try { fs.unlinkSync(req.file.path); } catch (e) { }
+        }
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/delete', express.json(), async (req, res) => {
     const { id } = req.body;
     if (!id) return res.status(400).json({ error: 'ID (path) is required' });
@@ -2307,6 +2388,16 @@ app.get('/api/slideshow/list', async (req, res) => {
         });
         if (images.length === 0) {
             return res.status(404).json({ error: 'No favourite photos found' });
+        }
+    } else if (mode === 'recent') {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 7);
+        images = images.filter(img => {
+            const d = getImageDate(img);
+            return d && d >= cutoff;
+        });
+        if (images.length === 0) {
+            return res.status(404).json({ error: 'No photos from the last week' });
         }
     }
 

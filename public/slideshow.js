@@ -98,7 +98,7 @@ class Slideshow {
         clearTimeout(this._modeRetryTimer);
         console.log('[SLIDESHOW] Stopping...');
         this.isActive = false;
-        if ((this.mode === 'onThisDay' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
+        if ((this.mode === 'onThisDay' || this.mode === 'recent' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
             const currentItem = this.items[this.index];
             this.resumeUrl = currentItem ? (currentItem.uri || currentItem.res) : null;
             this.resumeIndex = this.index;
@@ -182,7 +182,7 @@ class Slideshow {
                     this.updateModeUI();
                     return this.next();
                 }
-            } else if (this.mode === 'onThisDay' || this.mode === 'favourites') {
+            } else if (this.mode === 'onThisDay' || this.mode === 'recent' || this.mode === 'favourites') {
                 // Load all matching photos into items array and cycle sequentially
                 const listRes = await fetch(`/api/slideshow/list?mode=${this.mode}`);
                 if (listRes.ok) {
@@ -211,7 +211,8 @@ class Slideshow {
                     }
                 }
                 // Keep the selected mode — just wait if preparing, or show toast if no photos
-                const label = this.mode === 'onThisDay' ? 'Day' : 'Favs';
+                const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs' };
+                const label = labels[this.mode] || this.mode;
                 if (listRes.status === 503) {
                     showToast(`Preparing ${label} mode…`, 'info', 3000);
                     clearTimeout(this._modeRetryTimer);
@@ -518,7 +519,7 @@ class Slideshow {
 
     toggleMode() {
         clearTimeout(this._modeRetryTimer);
-        const modes = ['all', 'onThisDay', 'favourites', 'nowPlaying'];
+        const modes = ['all', 'onThisDay', 'recent', 'favourites', 'nowPlaying'];
         this.mode = modes[(modes.indexOf(this.mode) + 1) % modes.length];
         localStorage.setItem('screensaverMode', this.mode);
         this.updateModeUI();
@@ -529,7 +530,7 @@ class Slideshow {
 
     updateModeUI() {
         if (this.modeLabel) {
-            const labels = { all: 'All', onThisDay: 'Day', favourites: 'Favs', nowPlaying: 'Music' };
+            const labels = { all: 'All', onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', nowPlaying: 'Music' };
             this.modeLabel.textContent = labels[this.mode] || 'All';
         }
         const retryBtn = document.getElementById('btn-ss-retry-art');
