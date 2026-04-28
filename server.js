@@ -37,6 +37,9 @@ import https from 'https';
 import crypto from 'crypto';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { createRequire } from 'module';
+const _require = createRequire(import.meta.url);
+const piexif = _require('piexifjs');
 
 const execAsync = promisify(exec);
 
@@ -2453,6 +2456,71 @@ app.post('/api/slideshow/favourite', (req, res) => {
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
+});
+
+app.post('/api/slideshow/set-date', async (req, res) => {
+    const { url, date } = req.body;
+    if (!url || !date) return res.status(400).json({ error: 'url and date required' });
+
+    const dateObj = new Date(date);
+    if (isNaN(dateObj.getTime())) return res.status(400).json({ error: 'Invalid date' });
+
+    // Resolve URL to a local file path
+    let filePath = null;
+    try {
+        const parsed = new URL(url);
+        const pathname = decodeURIComponent(parsed.pathname);
+        if (pathname.startsWith('/local-files/')) {
+            const rel = pathname.replace('/local-files/', '');
+            const candidate = path.join(__dirname, 'local', rel);
+            if (fs.existsSync(candidate)) filePath = candidate;
+        }
+    } catch (e) {
+        if (fs.existsSync(url)) filePath = url;
+    }
+
+    if (!filePath) {
+        return res.status(422).json({ error: 'Date editing only works for photos in this app\'s local library' });
+    }
+
+    const ext = path.extname(filePath).toLowerCase();
+    if (!['.jpg', '.jpeg'].includes(ext)) {
+        return res.status(422).json({ error: 'EXIF date editing only supported for JPEG files' });
+    }
+
+    try {
+        const imgBuffer = await fsp.readFile(filePath);
+        const imgData = imgBuffer.toString('binary');
+
+        const y = dateObj.getFullYear();
+        const mo = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dateObj.getDate()).padStart(2, '0');
+        const exifDate = `${y}:${mo}:${d} 00:00:00`;
+
+        let exifObj;
+        try { exifObj = piexif.load(imgData); }
+        catch (e) { exifObj = { '0th': {}, 'Exif': {}, 'GPS': {}, '1st': {} }; }
+
+        exifObj['0th'][piexif.ImageIFD.DateTime] = exifDate;
+        exifObj['Exif'][piexif.ExifIFD.DateTimeOriginal] = exifDate;
+        exifObj['Exif'][piexif.ExifIFD.DateTimeDigitized] = exifDate;
+
+        const exifBytes = piexif.dump(exifObj);
+        const newImgData = piexif.insert(exifBytes, imgData);
+        await fsp.writeFile(filePath, Buffer.from(newImgData, 'binary'));
+
+        // Update in-memory cache so the change is reflected immediately
+        if (screensaverCache.images) {
+            const item = screensaverCache.images.find(img => (img.uri || img.res) === url);
+            if (item) item.year = `${y}-${mo}-${d}`;
+        }
+
+        console.log(`[SET-DATE] Updated EXIF date for ${filePath} to ${exifDate}`);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[SET-DATE]', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // Helper function for Discogs search

@@ -4426,6 +4426,75 @@ input:checked+.slider:before {
     letter-spacing: 0.03em;
 }
 
+.ss-nav-prev,
+.ss-nav-next {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10005;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.ss-nav-prev { left: 16px; }
+.ss-nav-next { right: 16px; }
+
+#screensaver-overlay:hover .ss-nav-prev,
+#screensaver-overlay:hover .ss-nav-next {
+    opacity: 1;
+}
+
+.btn-ss-nav {
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 50%;
+    width: 52px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    cursor: pointer;
+    backdrop-filter: blur(6px);
+    transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.btn-ss-nav:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.1);
+}
+
+.btn-ss-exit-corner {
+    position: absolute;
+    top: calc(16px + env(safe-area-inset-top));
+    right: 16px;
+    z-index: 10006;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    transition: background 0.2s, transform 0.15s;
+    opacity: 0;
+    transition: opacity 0.3s, background 0.2s, transform 0.15s;
+}
+
+#screensaver-overlay:hover .btn-ss-exit-corner {
+    opacity: 1;
+}
+
+.btn-ss-exit-corner:hover {
+    background: rgba(220, 50, 50, 0.7);
+    transform: scale(1.1);
+}
+
 .screensaver-controls {
     position: absolute;
     bottom: calc(40px + env(safe-area-inset-bottom));

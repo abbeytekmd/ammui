@@ -236,22 +236,44 @@ class Slideshow {
     }
 
     async previous() {
-        if (!this.previousPhoto) return;
+        if (this.items.length > 0) {
+            this.index = (this.index - 1 + this.items.length) % this.items.length;
+            const item = this.items[this.index];
+            const originalUrl = item.uri || item.res;
+            const data = {
+                url: originalUrl,
+                originalUrl: originalUrl,
+                title: item.title,
+                date: item.year || item.date || item['dc:date'] || '',
+                location: item.artist || item.creator || '',
+                latitude: item.latitude,
+                longitude: item.longitude,
+                camera: item.camera || '',
+                tags: item.tags || [],
+                manualRotation: manualRotations[originalUrl] || 0,
+                folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
+                folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
+            };
+            if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+                data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
+            }
+            this.renderPhoto(data);
+            this.resetInterval();
+            return;
+        }
 
-        // Save current to swap back later
+        // Fallback for single-photo mode: swap with stored previous
+        if (!this.previousPhoto) return;
         const temp = {
             url: this.currentPhoto,
             rotation: this.rotation,
             data: this.currentPhotoData
         };
-
-        // Render previous
         this.renderPhoto({
             ...this.previousPhoto.data,
             url: this.previousPhoto.url,
             manualRotation: this.previousPhoto.rotation
         });
-
         this.previousPhoto = temp;
         this.resetInterval();
     }

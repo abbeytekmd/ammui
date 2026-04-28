@@ -1636,12 +1636,15 @@ function updateBrowserControls(items) {
 
     if (btnSetSS) btnSetSS.style.display = (currentBrowserMode === 'photo') ? 'flex' : 'none';
 
-    const btnDeleteSelected = document.getElementById('btn-delete-selected');
-    if (btnDeleteSelected) {
-        const showDeleteSelected = inPhotoMode && browserViewMode === 'grid';
-        btnDeleteSelected.style.display = showDeleteSelected ? '' : 'none';
-        if (showDeleteSelected) updatePhotoSelectionUI();
-    }
+    const showDeleteSelected = inPhotoMode && browserViewMode === 'grid';
+    ['btn-delete-selected', 'btn-setdate-selected'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.style.display = showDeleteSelected ? '' : 'none';
+    });
+    if (showDeleteSelected) updatePhotoSelectionUI();
+
+    const btnPlayTag = document.getElementById('btn-play-tag');
+    if (btnPlayTag) btnPlayTag.style.display = inPhotoMode ? 'none' : '';
 
     // Show/hide the entire menu button if no actions available
     const menuBtn = document.getElementById('btn-browser-menu');
@@ -5048,15 +5051,32 @@ async function openFileInfoModal(trackData) {
             const folderMismatchClass = isFolderMismatch ? 'mismatch' : '';
             const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name mismatch">!</div>' : '';
 
-            const isEditable = (f.label === 'Artist' || f.label === 'Album Artist' || f.label === 'Album') && trackData.uri && trackData.uri.includes('/local-files/');
+            const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
+            const isEditable = (f.label === 'Artist' || f.label === 'Album Artist' || f.label === 'Album' || f.label === 'Created') && isLocalFile;
             const editField = f.label === 'Artist' ? 'artist' : f.label === 'Album Artist' ? 'albumartist' : 'album';
-            const editCell = isEditable
-                ? `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
+
+            let editCell;
+            if (!isEditable) {
+                editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>`;
+            } else if (f.label === 'Created') {
+                let dateInputVal = '';
+                if (eValRaw) {
+                    try {
+                        const d = new Date(eValRaw);
+                        if (!isNaN(d.getTime())) dateInputVal = d.toISOString().slice(0, 10);
+                    } catch (e) {}
+                }
+                editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
+                       <input class="metadata-edit-input" type="date" value="${dateInputVal}" />
+                       <button class="metadata-save-btn" onclick="savePhotoDate(this)">Save</button>
+                   </div>`;
+            } else {
+                editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
                        <input class="metadata-edit-input" data-field="${editField}" value="${(eValRaw || '').toString().replace(/"/g, '&quot;')}" placeholder="Enter ${f.label.toLowerCase()}..." />
                        <button class="metadata-save-btn" onclick="saveTrackTag('${editField}', this)">Save</button>
                        <button class="metadata-save-btn metadata-copy-folder-btn" onclick="copyTagToFolderAll('${editField}', this)" title="Copy to all tracks in this folder">All</button>
-                   </div>`
-                : `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>`;
+                   </div>`;
+            }
 
             rowsContainer.innerHTML += `
                 <div class="metadata-cell metadata-label-cell">${f.label}</div>
@@ -5204,13 +5224,26 @@ async function rotatePhotoFromBrowser(index) {
 }
 
 function updatePhotoSelectionUI() {
-    const btn = document.getElementById('btn-delete-selected');
-    if (!btn) return;
     const count = selectedPhotos.size;
-    btn.classList.toggle('disabled', count === 0);
-    const label = btn.querySelector('.btn-label');
-    if (label) label.textContent = count > 0 ? `Delete (${count})` : 'Delete (0)';
-    btn.title = count > 0 ? `Delete ${count} selected photo${count > 1 ? 's' : ''}` : 'Delete selected photos';
+
+    const delBtn = document.getElementById('btn-delete-selected');
+    if (delBtn) {
+        delBtn.classList.toggle('disabled', count === 0);
+        const label = delBtn.querySelector('.btn-label');
+        if (label) label.textContent = `Delete (${count})`;
+        delBtn.title = count > 0 ? `Delete ${count} selected photo${count > 1 ? 's' : ''}` : 'Delete selected photos';
+    }
+
+    const localCount = [...selectedPhotos].filter(u => u.includes('/local-files/')).length;
+
+    const dateBtn = document.getElementById('btn-setdate-selected');
+    if (dateBtn) {
+        dateBtn.classList.toggle('disabled', localCount === 0);
+        const label = dateBtn.querySelector('.btn-label');
+        if (label) label.textContent = `Set Date (${localCount})`;
+        dateBtn.title = localCount > 0 ? `Set created date on ${localCount} local photo${localCount > 1 ? 's' : ''}` : 'Set created date (local photos only)';
+    }
+
 }
 
 function togglePhotoSelection(uri, index) {
@@ -5255,6 +5288,74 @@ async function deleteSelectedPhotos() {
     selectedPhotos.clear();
     if (successCount > 0) showToast(`Moved ${successCount} photo${successCount > 1 ? 's' : ''} to _deleted`, 'success', 2000);
     if (failCount > 0) showToast(`Failed to delete ${failCount} photo${failCount > 1 ? 's' : ''}`, 'error', 4000);
+    if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+        await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+    }
+}
+
+async function setDateSelectedPhotos() {
+    const localUris = [...selectedPhotos].filter(u => u.includes('/local-files/'));
+    if (localUris.length === 0) return;
+
+    const date = prompt(`Set created date for ${localUris.length} photo${localUris.length > 1 ? 's' : ''} (YYYY-MM-DD):`);
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        if (date !== null) showToast('Invalid date — use YYYY-MM-DD format', 'error', 3000);
+        return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+    for (const url of localUris) {
+        try {
+            const res = await fetch('/api/slideshow/set-date', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, date })
+            });
+            if (res.ok) successCount++;
+            else failCount++;
+        } catch (e) {
+            failCount++;
+        }
+    }
+
+    if (successCount > 0) showToast(`Date set on ${successCount} photo${successCount > 1 ? 's' : ''}`, 'success', 2000);
+    if (failCount > 0) showToast(`Failed on ${failCount} photo${failCount > 1 ? 's' : ''}`, 'error', 4000);
+}
+
+async function dateFolderSelectedPhotos() {
+    const localUris = [...selectedPhotos].filter(u => u.includes('/local-files/'));
+    if (localUris.length === 0) return;
+
+    let successCount = 0, failCount = 0, dupCount = 0;
+    for (const uri of localUris) {
+        try {
+            const res = await fetch('/api/local/move-picture-to-date', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uri })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                if (data.isDuplicate) dupCount++;
+                else successCount++;
+            } else {
+                failCount++;
+            }
+        } catch (e) {
+            failCount++;
+        }
+    }
+
+    selectedPhotos.clear();
+    updatePhotoSelectionUI();
+
+    const parts = [];
+    if (successCount > 0) parts.push(`${successCount} moved`);
+    if (dupCount > 0) parts.push(`${dupCount} duplicate${dupCount > 1 ? 's' : ''} deleted`);
+    if (failCount > 0) parts.push(`${failCount} failed`);
+    showToast(parts.join(', '), failCount > 0 ? 'error' : 'success', 3000);
+
     if (browsePath && browsePath.length > 0 && selectedServerUdn) {
         await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
     }
@@ -5320,6 +5421,36 @@ async function saveTrackTag(field, btn) {
         btn.style.color = '#f87171';
         setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
         showToast(`Failed to save ${field}: ${e.message}`, 'error');
+    }
+}
+
+async function savePhotoDate(btn) {
+    const cell = btn.closest('.metadata-editable-cell');
+    const input = cell.querySelector('.metadata-edit-input');
+    const value = input.value;
+    if (!value) return;
+
+    btn.disabled = true;
+    btn.textContent = '...';
+
+    try {
+        const res = await fetch('/api/slideshow/set-date', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: currentInfoUri, date: value })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || 'Failed');
+        }
+        btn.textContent = 'Saved!';
+        btn.style.color = '#4ade80';
+        setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
+    } catch (e) {
+        btn.textContent = 'Error';
+        btn.style.color = '#f87171';
+        setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
+        showToast(`Failed to save date: ${e.message}`, 'error');
     }
 }
 

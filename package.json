@@ -32,6 +32,7 @@
     "music-metadata": "^11.11.1",
     "node-id3": "^0.2.9",
     "node-ssdp": "^4.0.1",
+    "piexifjs": "^1.0.6",
     "sonos": "^1.14.2",
     "xml2js": "^0.6.2"
   },
