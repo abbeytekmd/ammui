@@ -4,11 +4,13 @@ yarn-debug.log*
 yarn-error.log*
 .env
 .DS_Store
+._.DS_Store
 dist/
 build/
 coverage/
 .vscode/
 .idea/
+.claude/
 local/
 
 # JSON settings and data
