@@ -3975,6 +3975,7 @@ app.post('/api/local/merge-folder', express.json(), async (req, res) => {
 
         const items = await fs.promises.readdir(sourcePath);
         let moved = 0;
+        const movedDests = [];
         for (const item of items) {
             const src = path.join(sourcePath, item);
             let dest = path.join(targetPath, item);
@@ -3984,14 +3985,32 @@ app.post('/api/local/merge-folder', express.json(), async (req, res) => {
                 dest = path.join(targetPath, `${base}_${Date.now()}${ext}`);
             }
             await fs.promises.rename(src, dest);
+            movedDests.push(dest);
             moved++;
         }
 
         // Remove the now-empty source folder
         await fs.promises.rmdir(sourcePath);
 
-        terminalLog(`[MERGE] Moved ${moved} items from "${safeSrcId}" into "${targetName}"`);
-        res.json({ success: true, moved });
+        // Bring moved tracks' Artist/Album Artist tags in line with their new folder location
+        const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav']);
+        let tagsSynced = 0;
+        for (const dest of movedDests) {
+            const destStats = await fs.promises.stat(dest);
+            if (destStats.isDirectory()) {
+                tagsSynced += await processDirectory(dest, { includeAlbumArtist: true });
+            } else if (audioExts.has(path.extname(dest).toLowerCase())) {
+                try {
+                    await syncSingleFile(dest, { includeAlbumArtist: true });
+                    tagsSynced++;
+                } catch (e) {
+                    console.warn(`[MERGE] Skipping tag sync for ${dest}: ${e.message}`);
+                }
+            }
+        }
+
+        terminalLog(`[MERGE] Moved ${moved} items from "${safeSrcId}" into "${targetName}" (synced tags on ${tagsSynced} file${tagsSynced !== 1 ? 's' : ''})`);
+        res.json({ success: true, moved, tagsSynced });
     } catch (err) {
         console.error('[MERGE]', err.message);
         res.status(500).json({ error: err.message });
@@ -4024,6 +4043,7 @@ app.post('/api/local/rename-folder', express.json(), async (req, res) => {
 
             // Perform Merge
             const items = await fs.promises.readdir(oldDirPath);
+            const movedDests = [];
             for (const item of items) {
                 const src = path.join(oldDirPath, item);
                 const dest = path.join(newDirPath, item);
@@ -4036,14 +4056,31 @@ app.post('/api/local/rename-folder', express.json(), async (req, res) => {
                     const timestamp = Date.now();
                     const newDest = path.join(newDirPath, `${base}_${timestamp}${ext}`);
                     await fs.promises.rename(src, newDest);
+                    movedDests.push(newDest);
                 } else {
                     await fs.promises.rename(src, dest);
+                    movedDests.push(dest);
                 }
             }
 
             // Remove the now empty old directory
             await fs.promises.rmdir(oldDirPath);
             console.log(`[RENAME] Merge complete: ${oldDirPath} removed`);
+
+            // Bring moved tracks' Artist/Album Artist tags in line with their new folder location
+            const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav']);
+            for (const dest of movedDests) {
+                const destStats = await fs.promises.stat(dest);
+                if (destStats.isDirectory()) {
+                    await processDirectory(dest, { includeAlbumArtist: true });
+                } else if (audioExts.has(path.extname(dest).toLowerCase())) {
+                    try {
+                        await syncSingleFile(dest, { includeAlbumArtist: true });
+                    } catch (e) {
+                        console.warn(`[RENAME] Skipping tag sync for ${dest}: ${e.message}`);
+                    }
+                }
+            }
         } else {
             // Simple rename
             await fs.promises.rename(oldDirPath, newDirPath);
@@ -4148,7 +4185,7 @@ app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => 
     }
 });
 
-async function syncSingleFile(filePath) {
+async function syncSingleFile(filePath, opts = {}) {
     const albumDir = path.dirname(filePath);
     const artistDir = path.dirname(albumDir);
 
@@ -4160,24 +4197,25 @@ async function syncSingleFile(filePath) {
     }
 
     const tags = { artist, album };
+    if (opts.includeAlbumArtist) tags.performerInfo = artist; // TPE2
     const success = NodeID3.update(tags, filePath);
     if (success !== true) throw new Error('Failed to update tags in file');
     return { artist, album };
 }
 
-async function processDirectory(dirPath) {
+async function processDirectory(dirPath, opts = {}) {
     let count = 0;
     const items = await fs.promises.readdir(dirPath, { withFileTypes: true });
 
     for (const item of items) {
         const fullPath = path.join(dirPath, item.name);
         if (item.isDirectory()) {
-            count += await processDirectory(fullPath);
+            count += await processDirectory(fullPath, opts);
         } else if (item.isFile()) {
             const ext = path.extname(item.name).toLowerCase();
             if (['.mp3', '.flac', '.m4a', '.aac', '.wav'].includes(ext)) {
                 try {
-                    await syncSingleFile(fullPath);
+                    await syncSingleFile(fullPath, opts);
                     count++;
                 } catch (e) {
                     console.warn(`[TAGS] Skipping file ${item.name}: ${e.message}`);
