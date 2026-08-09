@@ -4984,6 +4984,18 @@ async function openFileInfoModal(trackData) {
 
     let hasFolderMismatch = false;
 
+    // Decide whether the folder-derived artist reflects the Artist tag or the Album Artist tag,
+    // so it's shown alongside whichever one it actually corresponds to
+    let folderArtistRow = 'Artist';
+    if (folderMeta.artist) {
+        const nf = normalizeForComparison(folderMeta.artist);
+        const artistMatches = !!nf && (nf === normalizeForComparison(trackData.artist) || nf === normalizeForComparison(getEmbeddedValue('common.artist')));
+        const albumArtistMatches = !!nf && (nf === normalizeForComparison(trackData.albumArtist) || nf === normalizeForComparison(getEmbeddedValue('common.albumartist')));
+        if (!artistMatches && albumArtistMatches) {
+            folderArtistRow = 'Album Artist';
+        }
+    }
+
     fieldGroups.forEach(group => {
         group.fields.forEach(f => {
             const sValRaw = f.sKey ? trackData[f.sKey] : undefined;
@@ -5029,7 +5041,7 @@ async function openFileInfoModal(trackData) {
             let folderVal = '-';
             let folderValRaw = null;
             let isFolderMismatch = false;
-            if (f.label === 'Artist' && folderMeta.artist) {
+            if (f.label === folderArtistRow && folderMeta.artist) {
                 folderValRaw = folderMeta.artist;
                 folderVal = folderMeta.artist;
             } else if (f.label === 'Album' && folderMeta.album) {
@@ -5618,7 +5630,11 @@ function detectFolderMismatch(item) {
 
         const norm = (v) => (v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        const artistMismatch = item.artist && norm(folderArtist) && norm(folderArtist) !== norm(item.artist);
+        const normFolderArtist = norm(folderArtist);
+        const artistMismatch = normFolderArtist
+            && (item.artist || item.albumArtist)
+            && normFolderArtist !== norm(item.artist)
+            && normFolderArtist !== norm(item.albumArtist);
         const albumMismatch = item.album && norm(folderAlbum) && norm(folderAlbum) !== norm(item.album);
 
         return !!(artistMismatch || albumMismatch);
