@@ -708,6 +708,7 @@ function applyDownloadJobUpdate(job) {
     // Append only new log entries
     const newEntries = job.log.slice(_dlLastLogLen);
     _dlLastLogLen = job.log.length;
+    const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
     for (const entry of newEntries) {
         const icon = entry.status === 'done' ? '✓' : entry.status === 'skipped' ? '—' : '✗';
         const cls = entry.status === 'done' ? 'dl-done' : entry.status === 'skipped' ? 'dl-skipped' : 'dl-failed';
@@ -715,10 +716,10 @@ function applyDownloadJobUpdate(job) {
         el.className = `dl-log-entry ${cls}`;
         el.textContent = `${icon} ${entry.title}${entry.error ? ': ' + entry.error : ''}`;
         const entryColor = entry.status === 'done' ? '#4ade80' : entry.status === 'skipped' ? '#94a3b8' : '#f87171';
-        el.style.cssText = `font-size:14px;line-height:1.6;color:${entryColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;`;
+        el.style.cssText = `font-size:14px;line-height:1.6;color:${entryColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;`;
         log.appendChild(el);
     }
-    if (newEntries.length) log.scrollTop = log.scrollHeight;
+    if (newEntries.length && wasAtBottom) log.scrollTop = log.scrollHeight;
 
     const done = job.downloadCount + job.skippedCount + job.failCount;
     if (job.total > 0) bar.style.width = Math.round((done / job.total) * 100) + '%';
@@ -4424,20 +4425,21 @@ async function handleFolderUpload(event) {
             if (data.skipped) {
                 skipped++;
                 entry.textContent = `— ${file.name}`;
-                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
             } else {
                 uploaded++;
                 entry.textContent = `✓ ${file.name}`;
-                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#4ade80;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#4ade80;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
             }
         } catch (err) {
             failed++;
             entry.textContent = `✗ ${file.name}: ${err.message}`;
-            entry.style.cssText = 'font-size:14px;line-height:1.6;color:#f87171;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;';
+            entry.style.cssText = 'font-size:14px;line-height:1.6;color:#f87171;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
         }
 
+        const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
         log.appendChild(entry);
-        log.scrollTop = log.scrollHeight;
+        if (wasAtBottom) log.scrollTop = log.scrollHeight;
 
         const done = uploaded + skipped + failed;
         document.getElementById('upload-folder-bar').style.width = Math.round((done / eligible.length) * 100) + '%';

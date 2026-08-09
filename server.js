@@ -1622,7 +1622,7 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
 
         if (isImage) {
             const hintSegments = relativePath.split(/[/\\]/).reverse();
-            const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments });
+            const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments, useBirthtime: false });
 
             let finalDir;
             if (!detected) {
@@ -1850,7 +1850,7 @@ async function downloadFileHelper(uri, title, artist, album) {
             hintSegments = uriPath.split('/').map(s => decodeURIComponent(s)).reverse();
         } catch (e) { /* ignore malformed URI */ }
 
-        const detected = await detectPictureDate(downloadPath, { hintFilename: title || filename, hintSegments });
+        const detected = await detectPictureDate(downloadPath, { hintFilename: title || filename, hintSegments, useBirthtime: false });
         if (detected) console.log(`[DOWNLOAD] Date detected: ${detected.year}-${detected.month ?? '??'} for ${filename}`);
 
         // Final fallback: unknown date folder
@@ -3611,7 +3611,10 @@ function dateToYearMonth(date) {
 // Shared helper: determine year/month for a picture file. Returns { year, month } or null.
 // hintFilename: override the filename to parse (e.g. original title when file is at a temp path)
 // hintSegments: override path segments to check (e.g. decoded URI path parts for downloaded files)
-async function detectPictureDate(localPath, { hintFilename, hintSegments } = {}) {
+// useBirthtime: fall back to filesystem birthtime as a last resort. Only meaningful when localPath
+// is a file that already existed in the library — for a file we just downloaded/uploaded to a temp
+// path, birthtime is just "now" and would mask a genuinely unknown date as the current month.
+async function detectPictureDate(localPath, { hintFilename, hintSegments, useBirthtime = true } = {}) {
     const filename = hintFilename || path.basename(localPath);
 
     // 1. EXIF date fields (DateTimeOriginal, then CreateDate)
@@ -3636,14 +3639,16 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments } = {})
     }
 
     // 4. File system creation time (birthtime) — last resort
-    try {
-        const stat = await fs.promises.stat(localPath);
-        const birthtime = stat.birthtime;
-        const now = new Date();
-        if (birthtime && birthtime.getFullYear() >= 1990 && birthtime <= now) {
-            return dateToYearMonth(birthtime);
-        }
-    } catch (e) { /* ignore */ }
+    if (useBirthtime) {
+        try {
+            const stat = await fs.promises.stat(localPath);
+            const birthtime = stat.birthtime;
+            const now = new Date();
+            if (birthtime && birthtime.getFullYear() >= 1990 && birthtime <= now) {
+                return dateToYearMonth(birthtime);
+            }
+        } catch (e) { /* ignore */ }
+    }
 
     return null;
 }

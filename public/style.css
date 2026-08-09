@@ -3553,6 +3553,7 @@ p.subtitle {
     overflow: hidden;
     text-overflow: ellipsis;
     color: #e2e8f0;
+    flex-shrink: 0;
 }
 
 .dl-done    { color: #4ade80 !important; }
