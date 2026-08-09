@@ -58,6 +58,16 @@ const __dirname = path.dirname(__filename);
 const baseDataDir = isPkg ? path.dirname(process.execPath) : __dirname;
 
 
+// Without these, a single unexpected error anywhere (e.g. a malformed EXIF blob in one photo
+// out of thousands during a big folder import) crashes the whole process — every in-flight
+// request just hangs forever with no error shown, which looks like the UI silently "stopping".
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught exception (process kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[FATAL] Unhandled promise rejection (process kept alive):', reason);
+});
+
 const app = express();
 const port = 3000;
 
@@ -2458,6 +2468,110 @@ app.post('/api/slideshow/favourite', (req, res) => {
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
+});
+
+// Portable export: local-files favourites are stored as host/port-free relative paths so the
+// file can be imported into a different instance of this app; favourites pointing at another
+// DLNA server are kept as full URIs since the host there is part of their identity.
+app.get('/api/favourites/export', (req, res) => {
+    const uris = getUrisByTag('fav');
+    const favourites = [];
+
+    for (const uri of uris) {
+        try {
+            const u = new URL(uri);
+            if (u.pathname.startsWith('/local-files/')) {
+                favourites.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')) });
+            } else {
+                favourites.push({ type: 'remote', uri });
+            }
+        } catch (e) {
+            // Not a parseable absolute URL — treat as an already-relative local path
+            favourites.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, '') });
+        }
+    }
+
+    res.json({ version: 1, exportedAt: new Date().toISOString(), favourites });
+});
+
+app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, res) => {
+    const { favourites } = req.body;
+    if (!Array.isArray(favourites)) return res.status(400).json({ error: 'favourites array required' });
+
+    // Rehome local-files favourites onto this instance's own address, same logic the DLNA
+    // browse handler uses so the resulting URIs match what the app will actually serve items as.
+    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
+    const requestHostname = rawHost.split(':')[0];
+    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
+    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
+    const baseUrl = `http://${requestHost}`;
+
+    const localDir = path.join(__dirname, 'local');
+    const picturesRoot = path.join(localDir, 'pictures');
+
+    let invalid = 0;
+    const parsed = [];
+    for (const fav of favourites) {
+        let uri = null, relPath = null;
+        if (typeof fav === 'string') {
+            relPath = fav.replace(/^\/local-files\//, '').replace(/^\//, '');
+        } else if (fav && fav.type === 'remote' && fav.uri) {
+            uri = fav.uri;
+        } else if (fav && fav.type === 'local' && fav.path) {
+            relPath = fav.path.replace(/^\//, '');
+        } else {
+            invalid++;
+            continue;
+        }
+        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
+        parsed.push({ uri, relPath, exists });
+    }
+
+    // A photo can easily have moved (re-sorted into a different year/month, deduped, etc.)
+    // between when favourites were exported and imported. Only pay for indexing the whole
+    // pictures library if something actually failed the exact-path check.
+    let filenameIndex = null;
+    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
+        filenameIndex = new Map();
+        for await (const filePath of walkImages(picturesRoot)) {
+            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
+            if (relFromPictures.startsWith('_deleted/')) continue; // don't resurrect deleted photos
+            const key = path.basename(filePath).toLowerCase();
+            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
+            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
+            filenameIndex.get(key).push(relPath);
+        }
+    }
+
+    let added = 0, alreadyFav = 0, missing = 0, fixed = 0, ambiguous = 0;
+
+    for (const item of parsed) {
+        let { uri, relPath, exists } = item;
+
+        if (relPath !== null) {
+            if (!exists) {
+                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
+                if (matches && matches.length) {
+                    console.log(`[Favourites Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
+                    relPath = matches[0];
+                    fixed++;
+                    if (matches.length > 1) ambiguous++;
+                } else {
+                    missing++;
+                    continue;
+                }
+            }
+            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
+        }
+
+        if (getFileTags(uri).includes('fav')) { alreadyFav++; continue; }
+        addFileTag(uri, 'fav');
+        added++;
+    }
+
+    settings.fileTags = getAllFileTags();
+    console.log(`[Favourites Import] added=${added} alreadyFav=${alreadyFav} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
+    res.json({ success: true, added, alreadyFav, fixed, ambiguous, missing, invalid, total: favourites.length });
 });
 
 app.post('/api/slideshow/set-date', async (req, res) => {

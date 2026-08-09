@@ -474,6 +474,22 @@
                             <span class="settings-hint">Loading...</span>
                         </div>
                     </div>
+                    <div class="manage-section">
+                        <h3>Favourites</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Export your favourited photos to a file, or import a
+                                favourites file exported from another instance of this app.</p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-seek" onclick="exportFavourites()">Export
+                                    Favourites</button>
+                                <button class="btn-control btn-seek"
+                                    onclick="document.getElementById('import-favourites-input').click()">Import
+                                    Favourites</button>
+                            </div>
+                            <input type="file" id="import-favourites-input" accept="application/json"
+                                style="display:none" onchange="importFavourites(event)">
+                        </div>
+                    </div>
                 </div>
                 <div id="settings-players" class="settings-panel">
                     <div class="manage-section">

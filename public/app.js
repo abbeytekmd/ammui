@@ -719,6 +719,7 @@ function applyDownloadJobUpdate(job) {
         el.style.cssText = `font-size:14px;line-height:1.6;color:${entryColor};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;`;
         log.appendChild(el);
     }
+    while (log.children.length > 500) log.removeChild(log.firstChild);
     if (newEntries.length && wasAtBottom) log.scrollTop = log.scrollHeight;
 
     const done = job.downloadCount + job.skippedCount + job.failCount;
@@ -4407,42 +4408,52 @@ async function handleFolderUpload(event) {
     openUploadFolderModal(folderName, eligible.length);
 
     let uploaded = 0, skipped = 0, failed = 0;
+    const MAX_LOG_ENTRIES = 500;
 
     for (const file of eligible) {
-        const log = document.getElementById('upload-folder-log');
-        document.getElementById('upload-folder-current').textContent = file.name;
-
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('relativePath', file.webkitRelativePath || file.name);
-
-        const entry = document.createElement('div');
+        // Everything for this file — including DOM lookups and building the request — lives in
+        // one try/catch. A single bad file (stale File handle, transient DOM hiccup) must not be
+        // able to throw out of the loop and silently abandon the rest of a huge import.
+        let outcome;
         try {
+            const current = document.getElementById('upload-folder-current');
+            if (current) current.textContent = file.name;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('relativePath', file.webkitRelativePath || file.name);
+
             const res = await fetch('/api/upload-local-file', { method: 'POST', body: formData });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Upload failed');
 
             if (data.skipped) {
                 skipped++;
-                entry.textContent = `— ${file.name}`;
-                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
+                outcome = { text: `— ${file.name}`, color: '#94a3b8' };
             } else {
                 uploaded++;
-                entry.textContent = `✓ ${file.name}`;
-                entry.style.cssText = 'font-size:14px;line-height:1.6;color:#4ade80;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
+                outcome = { text: `✓ ${file.name}`, color: '#4ade80' };
             }
         } catch (err) {
             failed++;
-            entry.textContent = `✗ ${file.name}: ${err.message}`;
-            entry.style.cssText = 'font-size:14px;line-height:1.6;color:#f87171;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;';
+            console.error(`[Upload Folder] Failed on ${file.name}:`, err);
+            outcome = { text: `✗ ${file.name}: ${err && err.message ? err.message : 'Unknown error'}`, color: '#f87171' };
         }
 
-        const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
-        log.appendChild(entry);
-        if (wasAtBottom) log.scrollTop = log.scrollHeight;
+        const log = document.getElementById('upload-folder-log');
+        if (log) {
+            const entry = document.createElement('div');
+            entry.textContent = outcome.text;
+            entry.style.cssText = `font-size:14px;line-height:1.6;color:${outcome.color};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:1px 0;flex-shrink:0;`;
+            const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 8;
+            log.appendChild(entry);
+            while (log.children.length > MAX_LOG_ENTRIES) log.removeChild(log.firstChild);
+            if (wasAtBottom) log.scrollTop = log.scrollHeight;
+        }
 
         const done = uploaded + skipped + failed;
-        document.getElementById('upload-folder-bar').style.width = Math.round((done / eligible.length) * 100) + '%';
+        const bar = document.getElementById('upload-folder-bar');
+        if (bar) bar.style.width = Math.round((done / eligible.length) * 100) + '%';
     }
 
     document.getElementById('upload-folder-current').textContent = 'Complete';
@@ -5895,6 +5906,68 @@ async function saveGeneralSettings() {
     } catch (err) {
         console.error('Failed to save general settings:', err);
         showToast('Failed to save settings');
+    }
+}
+
+async function exportFavourites() {
+    try {
+        const response = await fetch('/api/favourites/export');
+        if (!response.ok) throw new Error('Export failed');
+        const data = await response.json();
+
+        if (!data.favourites.length) {
+            showToast('No favourites to export', 'warning', 3000);
+            return;
+        }
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ammui-favourites-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        showToast(`Exported ${data.favourites.length} favourite${data.favourites.length === 1 ? '' : 's'}`, 'success', 2500);
+    } catch (err) {
+        console.error('Failed to export favourites:', err);
+        showToast('Failed to export favourites');
+    }
+}
+
+async function importFavourites(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const favourites = Array.isArray(data) ? data : data.favourites;
+        if (!Array.isArray(favourites)) throw new Error('Not a valid favourites file');
+
+        const response = await fetch('/api/favourites/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ favourites })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Import failed');
+
+        let msg = `Imported ${result.added} favourite${result.added === 1 ? '' : 's'}`;
+        const extras = [];
+        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
+        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
+        if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
+        if (result.missing) extras.push(`${result.missing} not found locally`);
+        if (result.invalid) extras.push(`${result.invalid} invalid`);
+        if (extras.length) msg += ` (${extras.join(', ')})`;
+        showToast(msg, 'success', 4000);
+    } catch (err) {
+        console.error('Failed to import favourites:', err);
+        showToast('Failed to import favourites: ' + err.message);
     }
 }
 
