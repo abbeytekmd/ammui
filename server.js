@@ -4085,6 +4085,10 @@ app.post('/api/local/rename-folder', express.json(), async (req, res) => {
             // Simple rename
             await fs.promises.rename(oldDirPath, newDirPath);
             console.log(`[RENAME] Simple rename complete`);
+
+            // Bring contained tracks' Artist/Album tags in line with the new folder name
+            const tagsSynced = await processDirectory(newDirPath);
+            if (tagsSynced) console.log(`[RENAME] Synced tags on ${tagsSynced} file(s) under ${newDirPath}`);
         }
 
         res.json({ success: true });
