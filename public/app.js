@@ -627,13 +627,13 @@ async function playFolderSlideshow(objectId, title) {
 }
 
 
-async function downloadTrack(uri, title, artist, album) {
+async function downloadTrack(uri, title, artist, album, albumArtist) {
     showToast(`Downloading: ${title}...`, 'info', 3000);
     try {
         const response = await fetch('/api/download', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uri, title, artist, album })
+            body: JSON.stringify({ uri, title, artist, album, albumArtist })
         });
 
         if (!response.ok) {
@@ -653,12 +653,12 @@ async function downloadTrack(uri, title, artist, album) {
 let _dlEventSource = null;
 let _dlLastLogLen = 0;
 
-async function downloadFolder(udn, objectId, title, artist, album) {
+async function downloadFolder(udn, objectId, title, artist, album, albumArtist) {
     try {
         const response = await fetch('/api/download-folder-start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ udn, objectId, title, artist, album })
+            body: JSON.stringify({ udn, objectId, title, artist, album, albumArtist })
         });
         if (!response.ok) {
             const errData = await response.json();
@@ -1942,7 +1942,7 @@ function renderBrowser(items) {
                                     Delete
                                 </button>
                             ` : ''}
-                            <button class="dropdown-item" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}')`}" title="Download to local media library">
+                            <button class="dropdown-item" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.albumArtist)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.albumArtist)}')`}" title="Download to local media library">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                                     <polyline points="7 10 12 15 17 10"></polyline>

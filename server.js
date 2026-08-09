@@ -1804,6 +1804,8 @@ async function downloadFileHelper(uri, title, artist, album) {
         console.log(`Downloading image ${uri} to temp ${tempPath}...`);
     } else {
         // Music logic: local/music/[Artist]/[Album]
+        // `artist` here is expected to already be album-artist-first (callers pass
+        // albumArtist || artist), so compilations land in one folder, not per-track.
         const musicDir = path.join(localDir, 'music');
         const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
         const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
@@ -1875,11 +1877,11 @@ async function downloadFileHelper(uri, title, artist, album) {
 }
 
 app.post('/api/download', express.json(), async (req, res) => {
-    const { uri, title, artist, album } = req.body;
+    const { uri, title, artist, album, albumArtist } = req.body;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
 
     try {
-        const result = await downloadFileHelper(uri, title, artist, album);
+        const result = await downloadFileHelper(uri, title, albumArtist || artist, album);
         res.json(result);
     } catch (err) {
         console.error('Download error:', err.message);
@@ -1888,7 +1890,7 @@ app.post('/api/download', express.json(), async (req, res) => {
 });
 
 app.post('/api/download-folder', express.json(), async (req, res) => {
-    const { udn, objectId, title, artist, album } = req.body;
+    const { udn, objectId, title, artist, album, albumArtist } = req.body;
     if (!udn || !objectId) return res.status(400).json({ error: 'UDN and ObjectID are required' });
 
     const device = Array.from(devices.values())
@@ -1905,7 +1907,7 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         const tracks = await server.browseRecursive(objectId);
         for (const track of tracks) {
             try {
-                await downloadFileHelper(track.uri, track.title, track.artist || artist, track.album || album);
+                await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
                 downloadCount++;
             } catch (err) {
                 console.error(`Failed to download ${track.title}:`, err.message);
@@ -1942,7 +1944,7 @@ function pushDownloadJobUpdate(job) {
 }
 
 app.post('/api/download-folder-start', express.json(), async (req, res) => {
-    const { udn, objectId, title, artist, album } = req.body;
+    const { udn, objectId, title, artist, album, albumArtist } = req.body;
     if (!udn || !objectId) return res.status(400).json({ error: 'UDN and ObjectID are required' });
 
     const device = Array.from(devices.values()).find(d => d.udn === udn);
@@ -1965,7 +1967,7 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
                 const track = tracks[i];
                 job.current = track.title;
                 try {
-                    const result = await downloadFileHelper(track.uri, track.title, track.artist || artist, track.album || album);
+                    const result = await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
                     if (result.skipped) {
                         job.skippedCount++;
                         job.log.push({ status: 'skipped', title: track.title });
@@ -3893,6 +3895,14 @@ app.post('/api/local/move-va', async (req, res) => {
                 await fs.promises.rename(sourcePath, targetPath);
                 movedCount++;
                 parentDirsToCheck.add(path.dirname(sourcePath));
+
+                if (path.extname(targetPath).toLowerCase() === '.mp3') {
+                    try {
+                        NodeID3.update({ performerInfo: effectiveArtist }, targetPath); // TPE2
+                    } catch (e) {
+                        console.error(`[Move to VA] Failed to tag ${path.basename(targetPath)}:`, e.message);
+                    }
+                }
             }
         }
 
