@@ -1684,6 +1684,12 @@ function renderBrowser(items) {
         if (isFolderA && !isFolderB) return -1;
         if (!isFolderA && isFolderB) return 1;
 
+        // Audio tracks: match the disc/track-number order they get queued in (see addAllToPlaylist/playAll)
+        if (!isFolderA && !isFolderB && !isImageItem(a) && !isImageItem(b)) {
+            if (a.discNumber !== b.discNumber) return (a.discNumber || 1) - (b.discNumber || 1);
+            if (a.trackNumber !== b.trackNumber) return (a.trackNumber || 0) - (b.trackNumber || 0);
+        }
+
         const titleA = String(a.title || '');
         const titleB = String(b.title || '');
 
