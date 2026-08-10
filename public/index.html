@@ -490,6 +490,23 @@
                                 style="display:none" onchange="importFavourites(event)">
                         </div>
                     </div>
+                    <div class="manage-section">
+                        <h3>Deleted Photos</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Export your deleted (hidden from slideshow) photos to a
+                                file, or import a deleted-photos file exported from another instance of this
+                                app.</p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-seek" onclick="exportDeleted()">Export
+                                    Deleted</button>
+                                <button class="btn-control btn-seek"
+                                    onclick="document.getElementById('import-deleted-input').click()">Import
+                                    Deleted</button>
+                            </div>
+                            <input type="file" id="import-deleted-input" accept="application/json"
+                                style="display:none" onchange="importDeleted(event)">
+                        </div>
+                    </div>
                 </div>
                 <div id="settings-players" class="settings-panel">
                     <div class="manage-section">
@@ -982,7 +999,7 @@
             <div class="ss-control-item" onclick="toggleSlideshowMode()"
                 ontouchstart="toggleSlideshowMode(); event.preventDefault();"
                 ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Favourites)">
+                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Recent / Favourites)">
                     <span id="ss-mode-label">All</span>
                 </button>
                 <div class="ss-control-label">Mode</div>

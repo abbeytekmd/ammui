@@ -29,7 +29,7 @@ import {
     saveAllDevices, getAllDevices,
     getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getUrisByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, getAllDeletedPhotos,
+    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
@@ -2196,6 +2196,18 @@ app.get('/api/slideshow/random', async (req, res) => {
                     console.log(`[SCREENSAVER] No images found for "On This Day" (${month}/${day})`);
                     return res.status(404).json({ error: 'No images found for this day' });
                 }
+            } else if (mode === 'recent') {
+                const cutoff = new Date();
+                cutoff.setMonth(cutoff.getMonth() - 1);
+                imagesToUse = imagesToUse.filter(img => {
+                    const d = getImageDate(img);
+                    return d && d >= cutoff;
+                });
+
+                if (imagesToUse.length === 0) {
+                    console.log(`[SCREENSAVER] No images found for "Recent"`);
+                    return res.status(404).json({ error: 'No recent photos found' });
+                }
             } else if (mode === 'favourites') {
                 imagesToUse = imagesToUse.filter(img => {
                     const url = img.uri || img.res;
@@ -2227,6 +2239,11 @@ app.get('/api/slideshow/random', async (req, res) => {
             if (mode === 'onThisDay') {
                 // On This Day requires a full scan
                 return res.status(503).json({ error: 'Preparing On This Day slideshow...' });
+            }
+
+            if (mode === 'recent') {
+                // Recent requires a full scan
+                return res.status(503).json({ error: 'Preparing Recent slideshow...' });
             }
 
             if (mode === 'favourites') {
@@ -2395,6 +2412,16 @@ app.get('/api/slideshow/list', async (req, res) => {
         });
         if (images.length === 0) {
             return res.status(404).json({ error: 'No images found for this day' });
+        }
+    } else if (mode === 'recent') {
+        const cutoff = new Date();
+        cutoff.setMonth(cutoff.getMonth() - 1);
+        images = images.filter(img => {
+            const d = getImageDate(img);
+            return d && d >= cutoff;
+        });
+        if (images.length === 0) {
+            return res.status(404).json({ error: 'No recent photos found' });
         }
     } else if (mode === 'favourites') {
         images = images.filter(img => {
@@ -2572,6 +2599,106 @@ app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, r
     settings.fileTags = getAllFileTags();
     console.log(`[Favourites Import] added=${added} alreadyFav=${alreadyFav} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
     res.json({ success: true, added, alreadyFav, fixed, ambiguous, missing, invalid, total: favourites.length });
+});
+
+// Portable export: same local-files-as-relative-path convention as favourites export, so
+// deleted (hidden-from-slideshow) markers can be copied to another instance of this app.
+app.get('/api/deleted/export', (req, res) => {
+    const uris = Object.keys(getAllDeletedPhotos());
+    const deleted = [];
+
+    for (const uri of uris) {
+        try {
+            const u = new URL(uri);
+            if (u.pathname.startsWith('/local-files/')) {
+                deleted.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')) });
+            } else {
+                deleted.push({ type: 'remote', uri });
+            }
+        } catch (e) {
+            // Not a parseable absolute URL — treat as an already-relative local path
+            deleted.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, '') });
+        }
+    }
+
+    res.json({ version: 1, exportedAt: new Date().toISOString(), deleted });
+});
+
+app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res) => {
+    const { deleted } = req.body;
+    if (!Array.isArray(deleted)) return res.status(400).json({ error: 'deleted array required' });
+
+    // Rehome local-files entries onto this instance's own address, same logic favourites import
+    // uses so the resulting URIs match what the app will actually serve items as.
+    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
+    const requestHostname = rawHost.split(':')[0];
+    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
+    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
+    const baseUrl = `http://${requestHost}`;
+
+    const localDir = path.join(__dirname, 'local');
+    const picturesRoot = path.join(localDir, 'pictures');
+
+    let invalid = 0;
+    const parsed = [];
+    for (const item of deleted) {
+        let uri = null, relPath = null;
+        if (typeof item === 'string') {
+            relPath = item.replace(/^\/local-files\//, '').replace(/^\//, '');
+        } else if (item && item.type === 'remote' && item.uri) {
+            uri = item.uri;
+        } else if (item && item.type === 'local' && item.path) {
+            relPath = item.path.replace(/^\//, '');
+        } else {
+            invalid++;
+            continue;
+        }
+        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
+        parsed.push({ uri, relPath, exists });
+    }
+
+    let filenameIndex = null;
+    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
+        filenameIndex = new Map();
+        for await (const filePath of walkImages(picturesRoot)) {
+            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
+            if (relFromPictures.startsWith('_deleted/')) continue;
+            const key = path.basename(filePath).toLowerCase();
+            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
+            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
+            filenameIndex.get(key).push(relPath);
+        }
+    }
+
+    let added = 0, alreadyDeleted = 0, missing = 0, fixed = 0, ambiguous = 0;
+
+    for (const item of parsed) {
+        let { uri, relPath, exists } = item;
+
+        if (relPath !== null) {
+            if (!exists) {
+                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
+                if (matches && matches.length) {
+                    console.log(`[Deleted Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
+                    relPath = matches[0];
+                    fixed++;
+                    if (matches.length > 1) ambiguous++;
+                } else {
+                    missing++;
+                    continue;
+                }
+            }
+            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
+        }
+
+        if (isPhotoDeleted(uri)) { alreadyDeleted++; continue; }
+        markPhotoDeleted(uri);
+        added++;
+    }
+
+    settings.deletedPhotos = getAllDeletedPhotos();
+    console.log(`[Deleted Import] added=${added} alreadyDeleted=${alreadyDeleted} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
+    res.json({ success: true, added, alreadyDeleted, fixed, ambiguous, missing, invalid, total: deleted.length });
 });
 
 app.post('/api/slideshow/set-date', async (req, res) => {

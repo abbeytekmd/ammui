@@ -5971,6 +5971,68 @@ async function importFavourites(event) {
     }
 }
 
+async function exportDeleted() {
+    try {
+        const response = await fetch('/api/deleted/export');
+        if (!response.ok) throw new Error('Export failed');
+        const data = await response.json();
+
+        if (!data.deleted.length) {
+            showToast('No deleted photos to export', 'warning', 3000);
+            return;
+        }
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ammui-deleted-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        showToast(`Exported ${data.deleted.length} deleted photo${data.deleted.length === 1 ? '' : 's'}`, 'success', 2500);
+    } catch (err) {
+        console.error('Failed to export deleted photos:', err);
+        showToast('Failed to export deleted photos');
+    }
+}
+
+async function importDeleted(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const deleted = Array.isArray(data) ? data : data.deleted;
+        if (!Array.isArray(deleted)) throw new Error('Not a valid deleted-photos file');
+
+        const response = await fetch('/api/deleted/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deleted })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Import failed');
+
+        let msg = `Imported ${result.added} deleted photo${result.added === 1 ? '' : 's'}`;
+        const extras = [];
+        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
+        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
+        if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
+        if (result.missing) extras.push(`${result.missing} not found locally`);
+        if (result.invalid) extras.push(`${result.invalid} invalid`);
+        if (extras.length) msg += ` (${extras.join(', ')})`;
+        showToast(msg, 'success', 4000);
+    } catch (err) {
+        console.error('Failed to import deleted photos:', err);
+        showToast('Failed to import deleted photos: ' + err.message);
+    }
+}
+
 async function fetchGeneralSettings() {
     try {
         const response = await fetch('/api/settings/general');
