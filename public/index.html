@@ -507,6 +507,22 @@
                                 style="display:none" onchange="importDeleted(event)">
                         </div>
                     </div>
+                    <div class="manage-section">
+                        <h3>Tags</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Export your file tags (including favourites) to a
+                                file, or import a tags file exported from another instance of this app.</p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-seek" onclick="exportTags()">Export
+                                    Tags</button>
+                                <button class="btn-control btn-seek"
+                                    onclick="document.getElementById('import-tags-input').click()">Import
+                                    Tags</button>
+                            </div>
+                            <input type="file" id="import-tags-input" accept="application/json"
+                                style="display:none" onchange="importTags(event)">
+                        </div>
+                    </div>
                 </div>
                 <div id="settings-players" class="settings-panel">
                     <div class="manage-section">

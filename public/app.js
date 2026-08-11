@@ -6039,6 +6039,68 @@ async function importDeleted(event) {
     }
 }
 
+async function exportTags() {
+    try {
+        const response = await fetch('/api/tags/export');
+        if (!response.ok) throw new Error('Export failed');
+        const data = await response.json();
+
+        if (!data.tags.length) {
+            showToast('No tags to export', 'warning', 3000);
+            return;
+        }
+
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ammui-tags-${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+
+        showToast(`Exported tags for ${data.tags.length} file${data.tags.length === 1 ? '' : 's'}`, 'success', 2500);
+    } catch (err) {
+        console.error('Failed to export tags:', err);
+        showToast('Failed to export tags');
+    }
+}
+
+async function importTags(event) {
+    const file = event.target.files[0];
+    event.target.value = '';
+    if (!file) return;
+
+    try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        const tags = Array.isArray(data) ? data : data.tags;
+        if (!Array.isArray(tags)) throw new Error('Not a valid tags file');
+
+        const response = await fetch('/api/tags/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Import failed');
+
+        let msg = `Imported ${result.tagsAdded} tag${result.tagsAdded === 1 ? '' : 's'} on ${result.filesProcessed} file${result.filesProcessed === 1 ? '' : 's'}`;
+        const extras = [];
+        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
+        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
+        if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
+        if (result.missing) extras.push(`${result.missing} not found locally`);
+        if (result.invalid) extras.push(`${result.invalid} invalid`);
+        if (extras.length) msg += ` (${extras.join(', ')})`;
+        showToast(msg, 'success', 4000);
+    } catch (err) {
+        console.error('Failed to import tags:', err);
+        showToast('Failed to import tags: ' + err.message);
+    }
+}
+
 async function fetchGeneralSettings() {
     try {
         const response = await fetch('/api/settings/general');

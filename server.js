@@ -2701,6 +2701,119 @@ app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res)
     res.json({ success: true, added, alreadyDeleted, fixed, ambiguous, missing, invalid, total: deleted.length });
 });
 
+// Portable export: same local-files-as-relative-path convention as favourites/deleted export.
+// Exports every tag on every file (favourites included, since 'fav' is just a reserved tag) so
+// the whole file_tags table can be copied to another instance of this app.
+app.get('/api/tags/export', (req, res) => {
+    const allTags = getAllFileTags();
+    const tags = [];
+
+    for (const [uri, uriTags] of Object.entries(allTags)) {
+        try {
+            const u = new URL(uri);
+            if (u.pathname.startsWith('/local-files/')) {
+                tags.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')), tags: uriTags });
+            } else {
+                tags.push({ type: 'remote', uri, tags: uriTags });
+            }
+        } catch (e) {
+            tags.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, ''), tags: uriTags });
+        }
+    }
+
+    res.json({ version: 1, exportedAt: new Date().toISOString(), tags });
+});
+
+app.post('/api/tags/import', express.json({ limit: '5mb' }), async (req, res) => {
+    const { tags } = req.body;
+    if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags array required' });
+
+    // Rehome local-files entries onto this instance's own address, same logic favourites/deleted
+    // import uses so the resulting URIs match what the app will actually serve items as.
+    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
+    const requestHostname = rawHost.split(':')[0];
+    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
+    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
+    const baseUrl = `http://${requestHost}`;
+
+    const localDir = path.join(__dirname, 'local');
+    const picturesRoot = path.join(localDir, 'pictures');
+    const musicRoot = path.join(localDir, 'music');
+
+    let invalid = 0;
+    const parsed = [];
+    for (const item of tags) {
+        let uri = null, relPath = null, itemTags = null;
+        if (item && item.type === 'remote' && item.uri && Array.isArray(item.tags)) {
+            uri = item.uri;
+            itemTags = item.tags;
+        } else if (item && item.type === 'local' && item.path && Array.isArray(item.tags)) {
+            relPath = item.path.replace(/^\//, '');
+            itemTags = item.tags;
+        } else {
+            invalid++;
+            continue;
+        }
+        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
+        parsed.push({ uri, relPath, exists, itemTags });
+    }
+
+    // Files can move (re-sorted into a different folder, deduped, etc.) between when tags were
+    // exported and imported. Only pay for indexing the library if something failed the exact-path
+    // check, and cover both pictures and music since tags apply to either.
+    let filenameIndex = null;
+    if (parsed.some(p => p.relPath !== null && !p.exists)) {
+        filenameIndex = new Map();
+        const addToIndex = async (root, extSet, subdir) => {
+            if (!fs.existsSync(root)) return;
+            for await (const filePath of walkByExt(root, extSet)) {
+                const relFromRoot = path.relative(root, filePath).split(path.sep).join('/');
+                if (relFromRoot.startsWith('_deleted/')) continue; // don't resurrect deleted photos
+                const key = path.basename(filePath).toLowerCase();
+                const indexedPath = path.join(subdir, relFromRoot).split(path.sep).join('/');
+                if (!filenameIndex.has(key)) filenameIndex.set(key, []);
+                filenameIndex.get(key).push(indexedPath);
+            }
+        };
+        await addToIndex(picturesRoot, IMAGE_EXTS, 'pictures');
+        await addToIndex(musicRoot, AUDIO_EXTS, 'music');
+    }
+
+    let filesProcessed = 0, tagsAdded = 0, alreadyPresent = 0, missing = 0, fixed = 0, ambiguous = 0;
+
+    for (const item of parsed) {
+        let { uri, relPath, exists, itemTags } = item;
+
+        if (relPath !== null) {
+            if (!exists) {
+                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
+                if (matches && matches.length) {
+                    console.log(`[Tags Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
+                    relPath = matches[0];
+                    fixed++;
+                    if (matches.length > 1) ambiguous++;
+                } else {
+                    missing++;
+                    continue;
+                }
+            }
+            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
+        }
+
+        const existingTags = getFileTags(uri);
+        for (const tag of itemTags) {
+            if (existingTags.includes(tag)) { alreadyPresent++; continue; }
+            addFileTag(uri, tag);
+            tagsAdded++;
+        }
+        filesProcessed++;
+    }
+
+    settings.fileTags = getAllFileTags();
+    console.log(`[Tags Import] filesProcessed=${filesProcessed} tagsAdded=${tagsAdded} alreadyPresent=${alreadyPresent} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
+    res.json({ success: true, filesProcessed, tagsAdded, alreadyPresent, fixed, ambiguous, missing, invalid, total: tags.length });
+});
+
 app.post('/api/slideshow/set-date', async (req, res) => {
     const { url, date } = req.body;
     if (!url || !date) return res.status(400).json({ error: 'url and date required' });
@@ -3895,6 +4008,7 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments, useBir
 }
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif']);
+const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.wma', '.aiff', '.alac']);
 
 async function* walkImages(dir) {
     const entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -3903,6 +4017,18 @@ async function* walkImages(dir) {
         if (entry.isDirectory()) {
             yield* walkImages(full);
         } else if (IMAGE_EXTS.has(path.extname(entry.name).toLowerCase())) {
+            yield full;
+        }
+    }
+}
+
+async function* walkByExt(dir, extSet) {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+            yield* walkByExt(full, extSet);
+        } else if (extSet.has(path.extname(entry.name).toLowerCase())) {
             yield full;
         }
     }
