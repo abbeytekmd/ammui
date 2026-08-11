@@ -31,6 +31,7 @@ import {
     setPhotoRotation, getAllPhotoRotations,
     markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
+    getCachedLyrics, setCachedLyrics,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -74,6 +75,10 @@ const port = 3000;
 // Ensure directories exist
 if (!fs.existsSync(path.join(baseDataDir, 'uploads'))) fs.mkdirSync(path.join(baseDataDir, 'uploads'), { recursive: true });
 if (!fs.existsSync(path.join(baseDataDir, 'local'))) fs.mkdirSync(path.join(baseDataDir, 'local'), { recursive: true });
+
+const logsDir = path.join(baseDataDir, 'logs');
+if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+const s3SyncLogPath = path.join(logsDir, 's3-sync.log');
 
 app.use(express.json());
 
@@ -241,6 +246,12 @@ setupLocalDlna(app, port, settings.deviceName);
     console.log(`[DEBUG] Manually injected virtual browser player`);
 })();
 
+function s3Log(message, isError = false) {
+    const line = `[${new Date().toISOString()}] ${message}`;
+    try { fs.appendFileSync(s3SyncLogPath, line + '\n'); } catch (e) { /* ignore log write failures */ }
+    if (isError) console.error(message); else console.log(message);
+}
+
 async function syncToS3() {
     if (s3SyncStatus.running) return;
     if (!settings.s3.enabled || !settings.s3.bucket || !settings.s3.accessKeyId) {
@@ -249,7 +260,8 @@ async function syncToS3() {
     }
 
     try {
-        console.log('[S3] Starting sync...');
+        try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
+        s3Log('[S3] Starting sync...');
         s3SyncStatus.running = true;
         s3SyncStatus.syncedCount = 0;
         s3SyncStatus.totalCount = 0;
@@ -303,7 +315,7 @@ async function syncToS3() {
                     // Not found, proceed with upload
                 }
 
-                console.log(`[S3] Uploading ${relativePath}...`);
+                s3Log(`[S3] Uploading ${relativePath}...`);
                 const fileStream = fs.createReadStream(filePath);
                 const parallelUploads3 = new Upload({
                     client: s3,
@@ -321,16 +333,16 @@ async function syncToS3() {
                 await parallelUploads3.done();
                 s3SyncStatus.syncedCount++;
             } catch (err) {
-                console.error(`[S3] Failed to upload ${relativePath}:`, err.message);
+                s3Log(`[S3] Failed to upload ${relativePath}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Upload failed for ${relativePath}: ${err.message}`;
                 // Continue with next file
             }
         }
 
         s3SyncStatus.lastSync = new Date().toISOString();
-        console.log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
+        s3Log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
     } catch (err) {
-        console.error('[S3] Global Sync Error:', err);
+        s3Log(`[S3] Global Sync Error: ${err.message}`, true);
         s3SyncStatus.lastError = err.message;
     } finally {
         s3SyncStatus.running = false;
@@ -1525,6 +1537,16 @@ app.post('/api/sync/s3/start', (req, res) => {
     if (s3SyncStatus.running) return res.status(400).json({ error: 'Sync already running' });
     syncToS3(); // Trigger async
     res.json({ success: true });
+});
+
+app.get('/api/sync/s3/log', (req, res) => {
+    try {
+        if (!fs.existsSync(s3SyncLogPath)) return res.json({ log: '', exists: false });
+        const log = fs.readFileSync(s3SyncLogPath, 'utf8');
+        res.json({ log, exists: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 const upload = multer({ dest: 'uploads/' });
@@ -3750,6 +3772,48 @@ app.get('/api/track-metadata', async (req, res) => {
         res.json(result);
     } catch (err) {
         terminalLog(`[METADATA] ERROR: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+async function fetchLrcLibLyrics(artist, title, album, duration) {
+    const params = new URLSearchParams({ artist_name: artist, track_name: title });
+    if (album) params.set('album_name', album);
+    if (duration) params.set('duration', String(Math.round(duration)));
+
+    const response = await fetch(`https://lrclib.net/api/get?${params.toString()}`, {
+        headers: { 'User-Agent': `${settings.deviceName}/1.0 (${SERVER_UDN})`, 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(10000)
+    });
+
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const data = await response.json();
+    if (!data.syncedLyrics && !data.plainLyrics) return null;
+    return { synced: data.syncedLyrics || null, plain: data.plainLyrics || null };
+}
+
+app.get('/api/lyrics', async (req, res) => {
+    const { artist, title, album, duration } = req.query;
+    if (!artist || !title) return res.status(400).json({ error: 'artist and title are required' });
+
+    const cached = getCachedLyrics(artist, title, album);
+    if (cached) {
+        if (!cached.found) return res.status(404).json({ error: 'No lyrics found' });
+        return res.json({ synced: cached.synced, plain: cached.plain, source: 'cache' });
+    }
+
+    try {
+        const result = await fetchLrcLibLyrics(artist, title, album, duration ? parseFloat(duration) : null);
+        if (!result) {
+            setCachedLyrics(artist, title, album, { found: false });
+            return res.status(404).json({ error: 'No lyrics found' });
+        }
+        setCachedLyrics(artist, title, album, { synced: result.synced, plain: result.plain, found: true });
+        res.json({ synced: result.synced, plain: result.plain, source: 'lrclib' });
+    } catch (err) {
+        console.error('[LYRICS] Fetch failed:', err.message);
         res.status(500).json({ error: err.message });
     }
 });

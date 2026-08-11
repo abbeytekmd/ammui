@@ -102,6 +102,9 @@ let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let triedArtworkUrls = []; // URLs already tried for the current track (for retry skipping)
 let triedArtworkQueryKey = ''; // which query the triedArtworkUrls belong to
+let currentLyrics = null; // { lines: [{time, text}], plain: string|null } or null when unavailable/unsynced-only
+let lyricsTrackKey = ''; // artist|title|album for the track currentLyrics was fetched for
+let lyricsActiveLineIndex = -1;
 const artworkOverrides = new Map(JSON.parse(localStorage.getItem('artworkOverrides') || '[]')); // uri → manually chosen url, persisted across refreshes
 let browseScrollPositions = {}; // Store scroll position by folder ID
 let rendererFailureCount = 0;
@@ -2157,6 +2160,8 @@ function updateStatus(status) {
             if ((query && query !== currentArtworkQuery && !failedArtworkQueries.has(query)) || (currentTrack.albumArtUrl && currentTrack.albumArtUrl !== currentArtworkUrl)) {
                 updatePlayerArtwork(currentTrack.artist, currentTrack.album, currentTrack.uri, currentTrack.albumArtUrl);
             }
+
+            fetchLyricsForTrack(currentTrack);
         } else {
             updateCardNowPlaying();
         }
@@ -2165,6 +2170,7 @@ function updateStatus(status) {
         currentArtworkQuery = '';
         currentArtworkUrl = '';
         hideAllPlayerArt();
+        clearLyrics();
     }
 
     updatePositionUI();
@@ -2617,6 +2623,7 @@ setInterval(() => {
             currentPositionSeconds = lastStatusPositionSeconds;
         }
         updatePositionUI();
+        updateLyricsHighlight(currentPositionSeconds);
     }
 }, 250);
 
@@ -3401,6 +3408,200 @@ function updateCardNowPlaying() {
         if (parent) parent.style.background = '';
     }
     if (cardDefaultIcon) cardDefaultIcon.style.display = 'block';
+}
+
+// ─── Lyrics ─────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+}
+
+window.addEventListener('resize', () => {
+    const panel = document.getElementById('ss-lyrics-panel');
+    if (panel && panel.style.display !== 'none') {
+        syncLyricsSpacerPadding(panel);
+        updateLyricsHighlight(currentPositionSeconds, true);
+    }
+});
+
+function parseLRC(lrcText) {
+    const lines = [];
+    const timeTag = /\[(\d{2}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+    for (const rawLine of lrcText.split(/\r?\n/)) {
+        const matches = [...rawLine.matchAll(timeTag)];
+        if (matches.length === 0) continue;
+        const text = rawLine.replace(timeTag, '').trim();
+        for (const m of matches) {
+            const minutes = parseInt(m[1], 10);
+            const seconds = parseInt(m[2], 10);
+            const fraction = m[3] ? parseInt(m[3].padEnd(3, '0'), 10) / 1000 : 0;
+            lines.push({ time: minutes * 60 + seconds + fraction, text });
+        }
+    }
+    lines.sort((a, b) => a.time - b.time);
+    return lines;
+}
+
+// Lyrics only ever appear in the screensaver's Music ("nowPlaying") mode, not in the file-list playlist view.
+function isLyricsDisplayActive() {
+    return !!(currentLyrics && slideshow && slideshow.isActive && slideshow.mode === 'nowPlaying');
+}
+
+async function fetchLyricsForTrack(track) {
+    if (!track || !track.title || !track.artist) {
+        clearLyrics();
+        return;
+    }
+
+    const key = `${track.artist}|${track.title}|${track.album || ''}`;
+    if (key === lyricsTrackKey) return; // Already fetched (or fetching) for this track
+    lyricsTrackKey = key;
+
+    // Drop any lyrics from the previous track so the highlighter/panel don't show stale content
+    currentLyrics = null;
+    lyricsActiveLineIndex = -1;
+    updateSsLyricsVisibility();
+
+    try {
+        const durationSecondsForTrack = track.duration ? formatToSeconds(track.duration) : durationSeconds;
+        const params = new URLSearchParams({ artist: track.artist, title: track.title });
+        if (track.album) params.set('album', track.album);
+        if (durationSecondsForTrack) params.set('duration', String(Math.round(durationSecondsForTrack)));
+
+        console.log(`[LYRICS] Fetching lyrics for: ${track.artist} - ${track.title}`);
+        const response = await fetch(`/api/lyrics?${params.toString()}`);
+        // A newer track change may have started a different fetch while this one was in flight
+        if (key !== lyricsTrackKey) return;
+
+        if (!response.ok) {
+            console.warn(`[LYRICS] No lyrics found for: ${track.artist} - ${track.title}`);
+            currentLyrics = null;
+            updateSsLyricsVisibility();
+            return;
+        }
+
+        const data = await response.json();
+        if (data.synced) {
+            const parsedLines = parseLRC(data.synced);
+            currentLyrics = { lines: parsedLines, plain: data.plain || null };
+            console.log(`[LYRICS] Synced lyrics found for: ${track.artist} - ${track.title} (${parsedLines.length} lines, source: ${data.source})`);
+        } else if (data.plain) {
+            currentLyrics = { lines: [], plain: data.plain };
+            console.log(`[LYRICS] Plain (unsynced) lyrics found for: ${track.artist} - ${track.title} (source: ${data.source})`);
+        } else {
+            currentLyrics = null;
+            console.warn(`[LYRICS] No lyrics found for: ${track.artist} - ${track.title}`);
+        }
+
+        renderLyricsPanel();
+        updateSsLyricsVisibility();
+    } catch (err) {
+        console.error('[LYRICS] Failed to fetch lyrics:', err);
+        currentLyrics = null;
+        updateSsLyricsVisibility();
+    }
+}
+
+function clearLyrics() {
+    currentLyrics = null;
+    lyricsTrackKey = '';
+    lyricsActiveLineIndex = -1;
+    updateSsLyricsVisibility();
+}
+
+// Called whenever the track, the lyrics fetch result, or the slideshow mode/active state changes
+function updateSsLyricsVisibility() {
+    const panel = document.getElementById('ss-lyrics-panel');
+    if (!panel) return;
+    if (isLyricsDisplayActive()) {
+        panel.style.display = 'block';
+        syncLyricsSpacerPadding(panel);
+        updateLyricsHighlight(currentPositionSeconds, true);
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+// The first and last lyric lines can't be scrolled to the panel's vertical center unless there's
+// as much empty scroll room above the first line and below the last as there is panel height —
+// otherwise the browser clamps the scroll and the line sits pinned near the top edge, hidden by
+// the fade mask. Pad the content by half the panel's own (fixed) height to guarantee that room.
+function syncLyricsSpacerPadding(panel) {
+    const content = document.getElementById('ss-lyrics-content');
+    if (!content || !panel) return;
+    const half = Math.round(panel.clientHeight / 2);
+    content.style.paddingTop = `${half}px`;
+    content.style.paddingBottom = `${half}px`;
+}
+
+function renderLyricsPanel() {
+    const content = document.getElementById('ss-lyrics-content');
+    if (!content) return;
+
+    lyricsActiveLineIndex = -1;
+    if (!currentLyrics) {
+        content.innerHTML = '';
+    } else if (currentLyrics.lines.length > 0) {
+        content.innerHTML = currentLyrics.lines
+            .map((line, i) => `<div class="ss-lyrics-line" data-index="${i}">${escapeHtml(line.text) || '&nbsp;'}</div>`)
+            .join('');
+    } else if (currentLyrics.plain) {
+        content.innerHTML = currentLyrics.plain
+            .split(/\r?\n/)
+            .map(line => `<div class="ss-lyrics-line">${escapeHtml(line) || '&nbsp;'}</div>`)
+            .join('');
+    } else {
+        content.innerHTML = '';
+    }
+}
+
+function updateLyricsHighlight(positionSeconds, forceScroll = false) {
+    if (!isLyricsDisplayActive() || currentLyrics.lines.length === 0) return;
+
+    const content = document.getElementById('ss-lyrics-content');
+    if (!content) return;
+
+    const lines = currentLyrics.lines;
+    let activeIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].time <= positionSeconds) activeIndex = i;
+        else break;
+    }
+
+    const indexChanged = activeIndex !== lyricsActiveLineIndex;
+    lyricsActiveLineIndex = activeIndex;
+
+    // Re-assert the active class on every tick (not just on change) so a stale/cleared
+    // DOM state (e.g. from a re-render elsewhere) can never leave the panel stuck grey.
+    content.querySelectorAll('.ss-lyrics-line.active').forEach(el => {
+        if (!el.dataset.index || Number(el.dataset.index) !== activeIndex) el.classList.remove('active');
+    });
+
+    if (activeIndex >= 0) {
+        const el = content.querySelector(`.ss-lyrics-line[data-index="${activeIndex}"]`);
+        if (el) {
+            el.classList.add('active');
+            if (indexChanged || forceScroll) centerLyricsLine(el, content, !forceScroll);
+        }
+    } else if (forceScroll) {
+        // Before the first line's timestamp (e.g. an instrumental intro): center the upcoming
+        // first line so the panel shows something meaningful instead of a blank gap.
+        const el = content.querySelector('.ss-lyrics-line[data-index="0"]');
+        if (el) centerLyricsLine(el, content, false);
+    }
+}
+
+// Manually centers the active line within the scrollable lyrics container using bounding-rect math
+// rather than scrollIntoView(), which can miscompute against an absolutely-positioned ancestor and
+// leave the highlighted line scrolled off the top edge of the panel.
+function centerLyricsLine(el, content, smooth = true) {
+    const contentRect = content.getBoundingClientRect();
+    const elRect = el.getBoundingClientRect();
+    const delta = (elRect.top + elRect.height / 2) - (contentRect.top + contentRect.height / 2);
+    const targetTop = Math.max(0, Math.min(content.scrollHeight - content.clientHeight, content.scrollTop + delta));
+    content.scrollTo({ top: targetTop, behavior: smooth ? 'smooth' : 'auto' });
 }
 
 function renderDevices() {
@@ -6241,6 +6442,36 @@ async function updateS3Status() {
         }
     } catch (err) {
         console.error('Failed to update S3 status:', err);
+    }
+}
+
+function openS3SyncLogModal() {
+    const modal = document.getElementById('s3-sync-log-modal');
+    if (modal) modal.style.display = 'flex';
+    loadS3SyncLog();
+}
+
+function closeS3SyncLogModal() {
+    const modal = document.getElementById('s3-sync-log-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadS3SyncLog() {
+    const contentEl = document.getElementById('s3-sync-log-content');
+    if (!contentEl) return;
+    contentEl.textContent = 'Loading...';
+    try {
+        const response = await fetch('/api/sync/s3/log');
+        const data = await response.json();
+        if (!data.exists || !data.log) {
+            contentEl.textContent = 'No sync has been run yet.';
+        } else {
+            contentEl.textContent = data.log;
+            contentEl.scrollTop = contentEl.scrollHeight;
+        }
+    } catch (err) {
+        console.error('Failed to load S3 sync log:', err);
+        contentEl.textContent = 'Failed to load sync log.';
     }
 }
 

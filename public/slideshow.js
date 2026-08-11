@@ -98,6 +98,7 @@ class Slideshow {
         clearTimeout(this._modeRetryTimer);
         console.log('[SLIDESHOW] Stopping...');
         this.isActive = false;
+        if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
         if ((this.mode === 'onThisDay' || this.mode === 'recent' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
             const currentItem = this.items[this.index];
             this.resumeUrl = currentItem ? (currentItem.uri || currentItem.res) : null;
@@ -395,6 +396,8 @@ class Slideshow {
             this.refreshNowPlayingLabel();
         }
 
+        if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
+
         currentScreensaverFolder = { id: data.folderId, title: data.folderTitle };
 
         // Always fetch full metadata to get camera info (and GPS fallback).
@@ -557,6 +560,7 @@ class Slideshow {
         }
         const retryBtn = document.getElementById('btn-ss-retry-art');
         if (retryBtn) retryBtn.style.display = this.mode === 'nowPlaying' ? '' : 'none';
+        if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
     }
 
     async rotate(delta) {
