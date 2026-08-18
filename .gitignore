@@ -25,3 +25,4 @@ debug.log
 server.log
 .claude/settings.local.json
 ammui.db*
+logs/

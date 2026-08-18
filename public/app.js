@@ -102,7 +102,7 @@ let currentArtworkUrl = '';
 let failedArtworkQueries = new Set(); // Track failed artwork queries to avoid retrying
 let triedArtworkUrls = []; // URLs already tried for the current track (for retry skipping)
 let triedArtworkQueryKey = ''; // which query the triedArtworkUrls belong to
-let currentLyrics = null; // { lines: [{time, text}], plain: string|null } or null when unavailable/unsynced-only
+let currentLyrics = null; // { lines: [{time, text}] } or null when unavailable/unsynced
 let lyricsTrackKey = ''; // artist|title|album for the track currentLyrics was fetched for
 let lyricsActiveLineIndex = -1;
 const artworkOverrides = new Map(JSON.parse(localStorage.getItem('artworkOverrides') || '[]')); // uri → manually chosen url, persisted across refreshes
@@ -1918,6 +1918,14 @@ function renderBrowser(items) {
                                     </svg>
                                     Merge Into
                                 </button>
+                                ${currentBrowserMode === 'music' ? `
+                                <button class="dropdown-item" style="color: #10b981;" onclick="moveFolderToTagsLocation(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M5 12h14M12 5l7 7-7 7"/>
+                                    </svg>
+                                    Reimport (Move to Tag Locations)
+                                </button>
+                                ` : ''}
                                 ` : ''}
                                 <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -3483,16 +3491,15 @@ async function fetchLyricsForTrack(track) {
         }
 
         const data = await response.json();
+        // Without time tags there's no way to keep the panel in sync with playback, so
+        // unsynced (plain-only) results are treated the same as no lyrics found.
         if (data.synced) {
             const parsedLines = parseLRC(data.synced);
-            currentLyrics = { lines: parsedLines, plain: data.plain || null };
+            currentLyrics = parsedLines.length > 0 ? { lines: parsedLines } : null;
             console.log(`[LYRICS] Synced lyrics found for: ${track.artist} - ${track.title} (${parsedLines.length} lines, source: ${data.source})`);
-        } else if (data.plain) {
-            currentLyrics = { lines: [], plain: data.plain };
-            console.log(`[LYRICS] Plain (unsynced) lyrics found for: ${track.artist} - ${track.title} (source: ${data.source})`);
         } else {
             currentLyrics = null;
-            console.warn(`[LYRICS] No lyrics found for: ${track.artist} - ${track.title}`);
+            console.warn(`[LYRICS] No synced lyrics found for: ${track.artist} - ${track.title}`);
         }
 
         renderLyricsPanel();
@@ -3541,19 +3548,12 @@ function renderLyricsPanel() {
     if (!content) return;
 
     lyricsActiveLineIndex = -1;
-    if (!currentLyrics) {
+    if (!currentLyrics || currentLyrics.lines.length === 0) {
         content.innerHTML = '';
-    } else if (currentLyrics.lines.length > 0) {
+    } else {
         content.innerHTML = currentLyrics.lines
             .map((line, i) => `<div class="ss-lyrics-line" data-index="${i}">${escapeHtml(line.text) || '&nbsp;'}</div>`)
             .join('');
-    } else if (currentLyrics.plain) {
-        content.innerHTML = currentLyrics.plain
-            .split(/\r?\n/)
-            .map(line => `<div class="ss-lyrics-line">${escapeHtml(line) || '&nbsp;'}</div>`)
-            .join('');
-    } else {
-        content.innerHTML = '';
     }
 }
 
@@ -5360,6 +5360,45 @@ async function moveFileToTagsLocationFromBrowser(index, event) {
     } catch (e) {
         console.error(e);
         alert('Failed to move file: ' + e.message);
+    }
+}
+
+async function moveFolderToTagsLocation(index, event) {
+    if (event) event.stopPropagation();
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    if (!confirm(`Reimport "${item.title}"? Every track inside will be moved to match its own Artist/Album tags, same as a fresh import.`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/local/move-folder-to-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.id })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unknown error');
+
+        const parts = [`${data.moved} moved`];
+        if (data.skipped) parts.push(`${data.skipped} already correct`);
+        if (data.failed) parts.push(`${data.failed} failed`);
+        showToast(`Reimported "${item.title}": ${parts.join(', ')}`, data.failed ? 'error' : 'success', 4000);
+        if (data.failed && data.errors?.length) console.warn('[Reimport] Failures:', data.errors);
+
+        // Reload whatever folder we are currently viewing (the moved-out folder may now be gone)
+        if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+            await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Reimport failed: ' + e.message);
     }
 }
 

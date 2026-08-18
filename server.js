@@ -3883,6 +3883,67 @@ app.get('/api/local/va-candidates', async (req, res) => {
     }
 });
 
+// Moves a single local audio file into <base>/<Artist>/<Album>/<file> per its embedded tags,
+// where <base> is assumed to be three levels up (.../Base/Artist/Album/File). Shared by the
+// single-file and whole-folder "move to tag location" endpoints below.
+async function moveFileToTagLocation(localPath) {
+    const localDir = path.join(__dirname, 'local');
+
+    const metadata = await getTrackMetadata(localPath);
+    const artist = metadata?.common?.artist;
+    const album = metadata?.common?.album;
+
+    if (!artist || !album) {
+        return { success: false, error: 'Track must have both Artist and Album tags' };
+    }
+
+    const safeArtist = artist.replace(/[<>:"/\\|?*]+/g, '_').trim();
+    const safeAlbum = album.replace(/[<>:"/\\|?*]+/g, '_').trim();
+    const fileName = path.basename(localPath);
+
+    // Preserve the base folder (the folder containing the Artist folder)
+    const currentAlbumDir = path.dirname(localPath);
+    const currentArtistDir = path.dirname(currentAlbumDir);
+    const baseDir = path.dirname(currentArtistDir);
+
+    const artistDir = path.join(baseDir, safeArtist);
+    const targetAlbumDir = path.join(artistDir, safeAlbum);
+    const targetPath = path.join(targetAlbumDir, fileName);
+
+    if (localPath.toLowerCase() === targetPath.toLowerCase()) {
+        return { success: false, alreadyCorrect: true, error: 'File is already in the correct folder.' };
+    }
+
+    if (fs.existsSync(targetPath)) {
+        return { success: false, error: 'Target file already exists.' };
+    }
+
+    if (!fs.existsSync(artistDir)) await fs.promises.mkdir(artistDir, { recursive: true });
+    if (!fs.existsSync(targetAlbumDir)) await fs.promises.mkdir(targetAlbumDir, { recursive: true });
+
+    const sourceDir = path.dirname(localPath);
+    await fs.promises.rename(localPath, targetPath);
+
+    // Clean up empty directories
+    let currentDir = sourceDir;
+    while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
+        try {
+            const remaining = await fs.promises.readdir(currentDir);
+            if (remaining.length === 0) {
+                await fs.promises.rmdir(currentDir);
+                currentDir = path.dirname(currentDir);
+            } else {
+                break;
+            }
+        } catch (e) {
+            break;
+        }
+    }
+
+    const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
+    return { success: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) };
+}
+
 app.post('/api/local/move-to-tags', express.json(), async (req, res) => {
     const { uri } = req.body;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
@@ -3911,64 +3972,48 @@ app.post('/api/local/move-to-tags', express.json(), async (req, res) => {
             return res.status(404).json({ error: 'File not found' });
         }
 
-        // Get metadata
-        const metadata = await getTrackMetadata(uri);
-        const artist = metadata?.common?.artist;
-        const album = metadata?.common?.album;
-
-        if (!artist || !album) {
-            return res.status(400).json({ error: 'Track must have both Artist and Album tags' });
-        }
-
-        const safeArtist = artist.replace(/[<>:"/\\|?*]+/g, '_').trim();
-        const safeAlbum = album.replace(/[<>:"/\\|?*]+/g, '_').trim();
-        const fileName = path.basename(localPath);
-
-        // Preserve the base folder (the folder containing the Artist folder)
-        // We assume the structure is .../Base/Artist/Album/File
-        const currentAlbumDir = path.dirname(localPath);
-        const currentArtistDir = path.dirname(currentAlbumDir);
-        const baseDir = path.dirname(currentArtistDir);
-
-        const artistDir = path.join(baseDir, safeArtist);
-        const targetAlbumDir = path.join(artistDir, safeAlbum);
-        const targetPath = path.join(targetAlbumDir, fileName);
-
-        if (localPath.toLowerCase() === targetPath.toLowerCase()) {
-            return res.status(400).json({ error: 'File is already in the correct folder.' });
-        }
-
-        if (fs.existsSync(targetPath)) {
-            return res.status(400).json({ error: 'Target file already exists.' });
-        }
-
-        if (!fs.existsSync(artistDir)) await fs.promises.mkdir(artistDir, { recursive: true });
-        if (!fs.existsSync(targetAlbumDir)) await fs.promises.mkdir(targetAlbumDir, { recursive: true });
-
-        const sourceDir = path.dirname(localPath);
-        await fs.promises.rename(localPath, targetPath);
-
-        // Clean up empty directories
-        let currentDir = sourceDir;
-        while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
-            try {
-                const remaining = await fs.promises.readdir(currentDir);
-                if (remaining.length === 0) {
-                    await fs.promises.rmdir(currentDir);
-                    currentDir = path.dirname(currentDir);
-                } else {
-                    break;
-                }
-            } catch (e) {
-                break;
-            }
-        }
-
-        const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
-        res.json({ success: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) });
+        const result = await moveFileToTagLocation(localPath);
+        if (!result.success) return res.status(400).json({ error: result.error });
+        res.json(result);
     } catch (e) {
         console.error('[Move to Tags] Error:', e);
         res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/local/move-folder-to-tags', express.json(), async (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        const folderPath = path.join(localDir, safeId);
+
+        if (!folderPath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+            return res.status(404).json({ error: 'Folder not found' });
+        }
+
+        let moved = 0, skipped = 0, failed = 0;
+        const errors = [];
+        for await (const filePath of walkByExt(folderPath, AUDIO_EXTS)) {
+            const result = await moveFileToTagLocation(filePath);
+            if (result.success) {
+                moved++;
+            } else if (result.alreadyCorrect) {
+                skipped++;
+            } else {
+                failed++;
+                errors.push(`${path.basename(filePath)}: ${result.error}`);
+            }
+        }
+
+        terminalLog(`[MOVE-FOLDER-TO-TAGS] "${safeId}": moved ${moved}, skipped ${skipped}, failed ${failed}`);
+        res.json({ success: true, moved, skipped, failed, errors });
+    } catch (err) {
+        console.error('[MOVE-FOLDER-TO-TAGS] Error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
