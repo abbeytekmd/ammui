@@ -178,6 +178,54 @@ function isImageItem(item) {
     return item && item.type === 'item' && ((item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
 }
 
+// Parse a loose date string (dc:date / EXIF date from the media server) to a ms
+// timestamp, or null. Handles YYYY, YYYY-MM, YYYY-MM-DD and full ISO.
+function parseLooseDate(s) {
+    if (!s) return null;
+    s = String(s).trim();
+    let m = s.match(/^((?:19|20)\d{2})-(\d{2})-(\d{2})/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    m = s.match(/^((?:19|20)\d{2})-(\d{2})$/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, 1);
+    m = s.match(/^((?:19|20)\d{2})$/);
+    if (m) return Date.UTC(+m[1], 0, 1);
+    const t = Date.parse(s);
+    return Number.isNaN(t) ? null : t;
+}
+
+// Extract a date embedded in a filename to a ms timestamp, or null. Mirrors the
+// server's extractDateFromString() so browser ordering matches "Identify Date
+// from Filename".
+function dateFromFilename(str) {
+    if (!str) return null;
+    let m;
+    m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])[-_.](0[1-9]|[12]\d|3[01])\b/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)([0-5]\d)\b/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, +m[3]);
+    m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])\b/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, 1);
+    m = str.match(/\b((?:19|20)\d{2})\b/);
+    if (m) return Date.UTC(+m[1], 0, 1);
+    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})_/);
+    if (m) { const yy = +m[3]; return Date.UTC(yy >= 70 ? 1900 + yy : 2000 + yy, +m[2] - 1, +m[1]); }
+    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})/);
+    if (m) { const yy = +m[1]; return Date.UTC(yy >= 70 ? 1900 + yy : 2000 + yy, +m[2] - 1, +m[3]); }
+    return null;
+}
+
+// Chronological sort key for a photo browser item: earliest first, with undated
+// photos pushed to the end.
+function photoDateSortKey(item) {
+    const fromMeta = parseLooseDate(item.year || item.date);
+    if (fromMeta != null) return fromMeta;
+    const fromName = dateFromFilename(item.title);
+    if (fromName != null) return fromName;
+    return Number.MAX_SAFE_INTEGER;
+}
+
 // Local Disabling
 let localDisabledDevices = new Set();
 try {
@@ -1693,6 +1741,13 @@ function renderBrowser(items) {
             if (a.trackNumber !== b.trackNumber) return (a.trackNumber || 0) - (b.trackNumber || 0);
         }
 
+        // Photos: earliest capture date first (undated photos sort last, then by name)
+        if (!isFolderA && !isFolderB && isImageItem(a) && isImageItem(b)) {
+            const da = photoDateSortKey(a);
+            const db = photoDateSortKey(b);
+            if (da !== db) return da - db;
+        }
+
         const titleA = String(a.title || '');
         const titleB = String(b.title || '');
 
@@ -1733,7 +1788,8 @@ function renderBrowser(items) {
             .map(i => i.title[0].toUpperCase())
         )];
 
-        if (effectiveViewMode === 'list' && !currentBrowserFindText) {
+        // Photos are ordered by date, so an A–Z jump bar would be misleading.
+        if (effectiveViewMode === 'list' && !currentBrowserFindText && !hasImages) {
             alphabetScroll.classList.add('visible');
             renderAlphabet();
         } else {
@@ -1774,12 +1830,17 @@ function renderBrowser(items) {
             (item.protocolInfo && item.protocolInfo.includes('video/'));
 
         let icon = '';
-        const thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
+        let thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
+        // Route local photos through the server-side thumbnailer so scrolling a
+        // folder doesn't download/decode full-resolution originals for each tile.
+        if (isImage && thumbUrl && thumbUrl.includes('/local-files/')) {
+            thumbUrl = `/api/thumb?w=400&uri=${encodeURIComponent(thumbUrl)}`;
+        }
         if (thumbUrl) {
             const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
             const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
-            icon = `<img src="${escThumb}" loading="lazy" alt="" data-thumb-url="${escThumb}"${rotStyle}>`;
+            icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}>`;
         }
 
 
@@ -1883,6 +1944,13 @@ function renderBrowser(items) {
                         <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
                             ${isLocalServer ? `
                                 ${isContainer && currentBrowserMode === 'photo' ? `
+                                <button class="dropdown-item" onclick="identifyFolderPictureDatesFromFilename(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                    Identify Dates from Filename
+                                </button>
                                 <button class="dropdown-item" onclick="moveFolderPicturesToDateFolder(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -1950,6 +2018,13 @@ function renderBrowser(items) {
                                 </button>
                                 ` : ''}
                                 ${!isContainer && isImage ? `
+                                <button class="dropdown-item" onclick="identifyPictureDateFromFilename(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                    Identify Date from Filename
+                                </button>
                                 <button class="dropdown-item" onclick="movePictureToDateFolder(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
@@ -5300,10 +5375,20 @@ async function openFileInfoModal(trackData) {
             } else if (f.label === 'Created') {
                 let dateInputVal = '';
                 if (eValRaw) {
-                    try {
+                    // A plain YYYY-MM-DD[...] value is a timezone-less capture date —
+                    // take the date part verbatim. Only fall back to Date parsing for
+                    // other shapes, and then read local components (never toISOString,
+                    // which shifts the day in UTC+ timezones).
+                    const dm = String(eValRaw).match(/^(\d{4}-\d{2}-\d{2})/);
+                    if (dm) {
+                        dateInputVal = dm[1];
+                    } else {
                         const d = new Date(eValRaw);
-                        if (!isNaN(d.getTime())) dateInputVal = d.toISOString().slice(0, 10);
-                    } catch (e) {}
+                        if (!isNaN(d.getTime())) {
+                            const p = n => String(n).padStart(2, '0');
+                            dateInputVal = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+                        }
+                    }
                 }
                 editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
                        <input class="metadata-edit-input" type="date" value="${dateInputVal}" />
@@ -5455,6 +5540,42 @@ async function identifyTracksFromFilename(index, event) {
     }
 }
 
+async function identifyFolderPictureDatesFromFilename(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    if (!confirm(`Scan "${item.title}" and its subfolders for photos with no capture date, and set it from a date found in each filename? Photos that already have a date are left untouched (JPEG only).`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/local/identify-folder-picture-dates-from-filename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ objectId: item.id })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unknown error');
+
+        const parts = [`${data.set} dated`];
+        if (data.alreadySet) parts.push(`${data.alreadySet} already dated`);
+        if (data.noMatch) parts.push(`${data.noMatch} no date in name`);
+        if (data.notJpeg) parts.push(`${data.notJpeg} not JPEG`);
+        if (data.failed) parts.push(`${data.failed} failed`);
+        showToast(`"${item.title}": ${parts.join(', ')}`, data.failed ? 'error' : 'success', 5000);
+
+        if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+            await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Identify dates failed: ' + e.message, 'error', 4000);
+    }
+}
+
 async function moveFolderPicturesToDateFolder(index, event) {
     if (event) event.stopPropagation();
     document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
@@ -5485,6 +5606,38 @@ async function moveFolderPicturesToDateFolder(index, event) {
     } catch (e) {
         console.error(e);
         showToast('Failed: ' + e.message, 'error', 4000);
+    }
+}
+
+async function identifyPictureDateFromFilename(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item || !item.uri) return;
+
+    try {
+        const res = await fetch('/api/local/identify-picture-date-from-filename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: item.uri })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unknown error');
+
+        if (data.success) {
+            showToast(`Created date set to ${data.date} (from filename)`, 'success', 3000);
+            if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+                await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+            }
+        } else if (data.skipped) {
+            showToast(`"${item.title}" already has a created date (${data.existing}) — left unchanged`, 'info', 3500);
+        } else {
+            showToast(`No date found in the filename "${item.title}"`, 'error', 3500);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Identify date failed: ' + e.message, 'error', 4000);
     }
 }
 

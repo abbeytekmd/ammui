@@ -12,6 +12,7 @@ coverage/
 .idea/
 .claude/
 local/
+cache/
 
 # JSON settings and data
 devices.json

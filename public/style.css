@@ -1322,6 +1322,8 @@ p.subtitle {
     gap: 0.4rem;
     height: auto;
     width: 100%;
+    /* Estimated tile size (square icon + title row) used while scrolled off-screen. */
+    contain-intrinsic-size: 150px 170px;
 }
 
 .playlist-items.grid-view .browser-item:hover {
@@ -1588,6 +1590,19 @@ p.subtitle {
 .browser-item {
     padding: 0.35rem 0.5rem;
     gap: 1rem;
+    /* Skip layout/paint/image-decode for rows scrolled out of view.
+       contain-intrinsic-size estimates the row height while off-screen; keep it
+       close to the real height so alphabet jumps (scrollToLetter) land accurately. */
+    content-visibility: auto;
+    contain-intrinsic-size: 0 36px;
+}
+
+/* content-visibility:auto implies paint containment, which clips an open row
+   menu to the row box (only its top few px show). Release containment on the
+   one row whose dropdown is open. */
+.browser-item:has(.dropdown-menu.active) {
+    content-visibility: visible;
+    contain: none;
 }
 
 .browser-item .item-icon {
@@ -1627,6 +1642,11 @@ p.subtitle {
         width: 24px;
         height: 24px;
         opacity: 0.9;
+    }
+
+    /* Taller rows on narrow screens (larger padding + title) — match the estimate. */
+    .browser-item {
+        contain-intrinsic-size: 0 52px;
     }
 }
 

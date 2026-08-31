@@ -36,7 +36,7 @@ import {
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
 import crypto from 'crypto';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -853,6 +853,130 @@ app.get('/api/proxy-image', async (req, res) => {
     } catch (err) {
         console.warn(`[PROXY] Failed to fetch image from ${url}:`, err.code || err.message);
         res.status(502).send('Failed to fetch image from remote device'); // 502 Bad Gateway is more appropriate
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Image thumbnail cache — the file browser was loading full-resolution photos
+// (often several MB / tens of megapixels) just to paint a 24px list icon or a
+// ~130px grid tile, which made scrolling photo folders very slow. This serves a
+// small, cached JPEG instead. Falls back to the original image whenever the
+// source isn't a local file, ffmpeg isn't installed, or conversion fails, so it
+// can never make the browser worse than before.
+// ---------------------------------------------------------------------------
+const thumbCacheDir = path.join(baseDataDir, 'cache', 'thumbs');
+fs.mkdirSync(thumbCacheDir, { recursive: true });
+const thumbLocalRoot = path.join(baseDataDir, 'local');
+
+let ffmpegUnavailable = false;
+const thumbInflight = new Map();          // cacheFile -> Promise (dedupe concurrent requests)
+let thumbActive = 0;
+const thumbWaiters = [];
+const THUMB_MAX_CONCURRENT = 4;           // cap ffmpeg processes for a big folder
+
+// Probe once at startup so we can skip straight to redirect if ffmpeg is missing.
+execAsync('ffmpeg -version').catch(() => {
+    ffmpegUnavailable = true;
+    console.warn('[THUMB] ffmpeg not found on PATH — photo browser will use full-size images (slower). Install ffmpeg for fast thumbnails.');
+});
+
+function runThumbTask(task) {
+    return new Promise((resolve, reject) => {
+        const start = () => {
+            thumbActive++;
+            task().then(resolve, reject).finally(() => {
+                thumbActive--;
+                if (thumbWaiters.length) thumbWaiters.shift()();
+            });
+        };
+        if (thumbActive < THUMB_MAX_CONCURRENT) start();
+        else thumbWaiters.push(start);
+    });
+}
+
+function generateThumb(srcPath, destPath, width) {
+    return new Promise((resolve, reject) => {
+        const tmp = path.join(thumbCacheDir, crypto.randomBytes(8).toString('hex') + '.jpg');
+        const proc = spawn('ffmpeg', [
+            '-hide_banner', '-loglevel', 'error',
+            '-i', srcPath,
+            '-map_metadata', '-1',
+            '-vf', `scale='min(${width},iw)':-2`,
+            '-frames:v', '1',
+            '-q:v', '5',
+            '-y', tmp
+        ], { windowsHide: true });
+
+        let stderr = '';
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('error', err => {
+            if (err.code === 'ENOENT') ffmpegUnavailable = true;
+            fs.promises.unlink(tmp).catch(() => {});
+            reject(err);
+        });
+        proc.on('close', code => {
+            if (code === 0) {
+                fs.promises.rename(tmp, destPath).then(resolve, reject);
+            } else {
+                fs.promises.unlink(tmp).catch(() => {});
+                reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(0, 200)}`));
+            }
+        });
+    });
+}
+
+app.get('/api/thumb', async (req, res) => {
+    const rawUri = req.query.uri;
+    if (!rawUri) return res.status(400).send('Missing uri');
+
+    let width = parseInt(req.query.w, 10) || 400;
+    width = Math.max(80, Math.min(1024, width));
+
+    // Map the request back to a file inside the local media root.
+    let relPath = null;
+    const marker = '/local-files/';
+    const markerIdx = rawUri.indexOf(marker);
+    if (markerIdx !== -1) {
+        try { relPath = decodeURIComponent(rawUri.slice(markerIdx + marker.length)); }
+        catch { relPath = rawUri.slice(markerIdx + marker.length); }
+    }
+
+    // Remote DLNA image, or ffmpeg not available → just hand back the original.
+    if (relPath === null || ffmpegUnavailable) return res.redirect(302, rawUri);
+
+    const srcPath = path.resolve(thumbLocalRoot, relPath);
+    if (srcPath !== thumbLocalRoot && !srcPath.startsWith(thumbLocalRoot + path.sep)) {
+        return res.status(403).send('Forbidden');
+    }
+
+    let stat;
+    try { stat = await fs.promises.stat(srcPath); }
+    catch { return res.redirect(302, rawUri); }
+
+    const key = crypto.createHash('md5')
+        .update(`${srcPath}|${width}|${stat.mtimeMs}|${stat.size}`)
+        .digest('hex');
+    const cacheFile = path.join(thumbCacheDir, key + '.jpg');
+
+    const sendCached = () => {
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        res.type('image/jpeg');
+        res.sendFile(cacheFile);
+    };
+
+    if (fs.existsSync(cacheFile)) return sendCached();
+
+    try {
+        if (!thumbInflight.has(cacheFile)) {
+            thumbInflight.set(cacheFile,
+                runThumbTask(() => generateThumb(srcPath, cacheFile, width))
+                    .finally(() => thumbInflight.delete(cacheFile)));
+        }
+        await thumbInflight.get(cacheFile);
+        return sendCached();
+    } catch (err) {
+        console.warn(`[THUMB] ${path.basename(srcPath)}: ${err.message}`);
+        return res.redirect(302, rawUri);   // fall back to the full-size original
     }
 });
 
@@ -2840,7 +2964,13 @@ app.post('/api/slideshow/set-date', async (req, res) => {
     const { url, date } = req.body;
     if (!url || !date) return res.status(400).json({ error: 'url and date required' });
 
-    const dateObj = new Date(date);
+    // Parse a bare YYYY-MM-DD as a local calendar day (midday to stay clear of any
+    // DST/offset edge) — `new Date('2026-08-14')` would be UTC midnight and could
+    // land on the previous day once writeJpegExifDate reads local components.
+    const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(date).trim());
+    const dateObj = ymd
+        ? new Date(+ymd[1], +ymd[2] - 1, +ymd[3], 12, 0, 0)
+        : new Date(date);
     if (isNaN(dateObj.getTime())) return res.status(400).json({ error: 'Invalid date' });
 
     // Resolve URL to a local file path
@@ -2867,37 +2997,138 @@ app.post('/api/slideshow/set-date', async (req, res) => {
     }
 
     try {
-        const imgBuffer = await fsp.readFile(filePath);
-        const imgData = imgBuffer.toString('binary');
-
-        const y = dateObj.getFullYear();
-        const mo = String(dateObj.getMonth() + 1).padStart(2, '0');
-        const d = String(dateObj.getDate()).padStart(2, '0');
-        const exifDate = `${y}:${mo}:${d} 00:00:00`;
-
-        let exifObj;
-        try { exifObj = piexif.load(imgData); }
-        catch (e) { exifObj = { '0th': {}, 'Exif': {}, 'GPS': {}, '1st': {} }; }
-
-        exifObj['0th'][piexif.ImageIFD.DateTime] = exifDate;
-        exifObj['Exif'][piexif.ExifIFD.DateTimeOriginal] = exifDate;
-        exifObj['Exif'][piexif.ExifIFD.DateTimeDigitized] = exifDate;
-
-        const exifBytes = piexif.dump(exifObj);
-        const newImgData = piexif.insert(exifBytes, imgData);
-        await fsp.writeFile(filePath, Buffer.from(newImgData, 'binary'));
+        const written = await writeJpegExifDate(filePath, dateObj);
 
         // Update in-memory cache so the change is reflected immediately
         if (screensaverCache.images) {
             const item = screensaverCache.images.find(img => (img.uri || img.res) === url);
-            if (item) item.year = `${y}-${mo}-${d}`;
+            if (item) item.year = written;
         }
 
-        console.log(`[SET-DATE] Updated EXIF date for ${filePath} to ${exifDate}`);
+        console.log(`[SET-DATE] Updated EXIF date for ${filePath} to ${written}`);
         res.json({ success: true });
     } catch (err) {
         console.error('[SET-DATE]', err);
         res.status(500).json({ error: err.message });
+    }
+});
+
+// Writes the capture-date EXIF fields (DateTime / DateTimeOriginal / DateTimeDigitized)
+// on a JPEG at 00:00:00 of the given day. Returns the date as "YYYY-MM-DD".
+async function writeJpegExifDate(filePath, dateObj) {
+    const imgData = (await fsp.readFile(filePath)).toString('binary');
+
+    const y = dateObj.getFullYear();
+    const mo = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    const exifDate = `${y}:${mo}:${d} 00:00:00`;
+
+    let exifObj;
+    try { exifObj = piexif.load(imgData); }
+    catch (e) { exifObj = { '0th': {}, 'Exif': {}, 'GPS': {}, '1st': {} }; }
+
+    exifObj['0th'][piexif.ImageIFD.DateTime] = exifDate;
+    exifObj['Exif'][piexif.ExifIFD.DateTimeOriginal] = exifDate;
+    exifObj['Exif'][piexif.ExifIFD.DateTimeDigitized] = exifDate;
+
+    const newImgData = piexif.insert(piexif.dump(exifObj), imgData);
+    await fsp.writeFile(filePath, Buffer.from(newImgData, 'binary'));
+    return `${y}-${mo}-${d}`;
+}
+
+// Sets a JPEG's capture date from a date found in its filename, but only when the
+// file has no EXIF date already. Resolves to a status object; only throws for
+// unexpected IO/EXIF-write errors (not for "not a jpeg" / "already dated" / "no
+// date in name"), so it can be looped over a whole folder.
+async function setJpegDateFromFilename(filePath) {
+    if (!['.jpg', '.jpeg'].includes(path.extname(filePath).toLowerCase())) {
+        return { status: 'not-jpeg' };
+    }
+
+    // Already has a capture date? Leave it untouched.
+    try {
+        const exifData = await exifr.parse(filePath, { ifd0: true });
+        const existing = exifData?.DateTimeOriginal || exifData?.CreateDate || exifData?.DateTimeDigitized;
+        if (existing) {
+            const d = new Date(existing);
+            return { status: 'already-set', existing: isNaN(d.getTime()) ? String(existing) : exifDateToWallClock(d).slice(0, 10) };
+        }
+    } catch (e) { /* no readable EXIF — fall through and set it */ }
+
+    const parsed = extractDateFromString(path.basename(filePath));
+    if (!parsed) return { status: 'no-match' };
+
+    const dateObj = new Date(+parsed.year, +(parsed.month || 1) - 1, +(parsed.day || 1), 12, 0, 0);
+    if (isNaN(dateObj.getTime())) return { status: 'no-match' };
+
+    const written = await writeJpegExifDate(filePath, dateObj);
+    return { status: 'set', date: written, precision: parsed.day ? 'day' : (parsed.month ? 'month' : 'year') };
+}
+
+// Photo burger menu (single file): derive the "created" date from the filename.
+app.post('/api/local/identify-picture-date-from-filename', express.json(), async (req, res) => {
+    const { uri } = req.body;
+    if (!uri) return res.status(400).json({ error: 'uri is required' });
+
+    // Resolve to a local file path
+    let filePath = null;
+    try {
+        const pathname = decodeURIComponent(new URL(uri).pathname);
+        if (pathname.startsWith('/local-files/')) {
+            const candidate = path.join(__dirname, 'local', pathname.replace('/local-files/', ''));
+            if (fs.existsSync(candidate)) filePath = candidate;
+        }
+    } catch (e) {
+        if (fs.existsSync(uri)) filePath = uri;
+    }
+    if (!filePath) return res.status(422).json({ error: "Only works for photos in this app's local library" });
+
+    try {
+        const r = await setJpegDateFromFilename(filePath);
+        if (r.status === 'not-jpeg') return res.status(422).json({ error: 'EXIF date editing is only supported for JPEG files' });
+        if (r.status === 'already-set') return res.json({ skipped: true, reason: 'already-set', existing: r.existing });
+        if (r.status === 'no-match') return res.json({ noMatch: true });
+
+        if (screensaverCache.images) {
+            const item = screensaverCache.images.find(img => (img.uri || img.res) === uri);
+            if (item) item.year = r.date;
+        }
+        console.log(`[IDENTIFY-DATE] ${filePath} -> ${r.date} (from filename)`);
+        res.json({ success: true, date: r.date, precision: r.precision });
+    } catch (err) {
+        console.error('[IDENTIFY-DATE]', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Photo folder burger menu: same, for every image in the folder (recursively).
+app.post('/api/local/identify-folder-picture-dates-from-filename', express.json(), async (req, res) => {
+    const { objectId } = req.body;
+    if (!objectId) return res.status(400).json({ error: 'objectId is required' });
+
+    const folderPath = path.join(__dirname, 'local', objectId);
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+        return res.status(404).json({ error: 'Folder not found' });
+    }
+
+    let set = 0, alreadySet = 0, noMatch = 0, notJpeg = 0, failed = 0;
+    try {
+        for await (const filePath of walkImages(folderPath)) {
+            try {
+                const r = await setJpegDateFromFilename(filePath);
+                if (r.status === 'set') { set++; console.log(`[IDENTIFY-DATE] ${filePath} -> ${r.date} (from filename)`); }
+                else if (r.status === 'already-set') alreadySet++;
+                else if (r.status === 'no-match') noMatch++;
+                else if (r.status === 'not-jpeg') notJpeg++;
+            } catch (e) {
+                failed++;
+                console.error(`[IDENTIFY-DATE] Failed on ${filePath}:`, e.message);
+            }
+        }
+        res.json({ success: true, set, alreadySet, noMatch, notJpeg, failed });
+    } catch (e) {
+        console.error('[IDENTIFY-DATE folder]', e);
+        res.status(500).json({ error: e.message });
     }
 });
 
@@ -3624,6 +3855,15 @@ process.on('SIGTERM', () => {
     process.exit(0);
 });
 
+// EXIF capture dates have no timezone; exifr returns them as a local-time Date.
+// Serialize as a timezone-less wall-clock string so JSON.stringify (which would
+// otherwise call toISOString() and shift into UTC) can't roll the day backwards.
+function exifDateToWallClock(d) {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return d;
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 async function getTrackMetadata(uri) {
     if (!uri) throw new Error('URI is required');
     const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(uri);
@@ -3655,7 +3895,7 @@ async function getTrackMetadata(uri) {
                         translateValues: true
                     });
                     if (exif) {
-                        if (exif.DateTimeOriginal) metadata.common.date = exif.DateTimeOriginal;
+                        if (exif.DateTimeOriginal) metadata.common.date = exifDateToWallClock(exif.DateTimeOriginal);
                         if (exif.latitude !== undefined) metadata.format.latitude = exif.latitude;
                         if (exif.longitude !== undefined) metadata.format.longitude = exif.longitude;
                         if (exif.Make) metadata.common.make = exif.Make;
@@ -3710,7 +3950,7 @@ async function getTrackMetadata(uri) {
                             translateValues: true
                         });
                         if (exif) {
-                            if (exif.DateTimeOriginal) metadata.common.date = exif.DateTimeOriginal;
+                            if (exif.DateTimeOriginal) metadata.common.date = exifDateToWallClock(exif.DateTimeOriginal);
                             if (exif.latitude !== undefined) metadata.format.latitude = exif.latitude;
                             if (exif.longitude !== undefined) metadata.format.longitude = exif.longitude;
                             if (exif.Make) metadata.common.make = exif.Make;
