@@ -1925,6 +1925,13 @@ function renderBrowser(items) {
                                     </svg>
                                     Reimport (Move to Tag Locations)
                                 </button>
+                                <button class="dropdown-item" onclick="identifyTracksFromFilename(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="11" cy="11" r="8"></circle>
+                                        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                    </svg>
+                                    Identify Tags from Filename
+                                </button>
                                 ` : ''}
                                 ` : ''}
                                 <button class="dropdown-item" onclick="syncFileTags(${index}, event)">
@@ -5388,6 +5395,7 @@ async function moveFolderToTagsLocation(index, event) {
 
         const parts = [`${data.moved} moved`];
         if (data.skipped) parts.push(`${data.skipped} already correct`);
+        if (data.duplicatesRemoved) parts.push(`${data.duplicatesRemoved} duplicates removed`);
         if (data.failed) parts.push(`${data.failed} failed`);
         showToast(`Reimported "${item.title}": ${parts.join(', ')}`, data.failed ? 'error' : 'success', 4000);
         if (data.failed && data.errors?.length) console.warn('[Reimport] Failures:', data.errors);
@@ -5399,6 +5407,51 @@ async function moveFolderToTagsLocation(index, event) {
     } catch (e) {
         console.error(e);
         showToast('Reimport failed: ' + e.message);
+    }
+}
+
+async function identifyTracksFromFilename(index, event) {
+    if (event) event.stopPropagation();
+
+    // Close the dropdown immediately
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    if (!confirm(`Scan "${item.title}" for mp3 files with missing Artist/Title/Album tags, guess artist/title from the filename, and confirm each guess against Discogs (requires internet and a Discogs token in Settings) before tagging? Files that already have tags are left untouched.`)) {
+        return;
+    }
+
+    try {
+        const res = await fetch('/api/local/identify-tags-from-filename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.id })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Unknown error');
+
+        const parts = [`${data.tagged || 0} tagged`];
+        if (data.alreadyTagged) parts.push(`${data.alreadyTagged} already tagged`);
+        if (data.noMatch) parts.push(`${data.noMatch} unclear filename`);
+        if (data.noResults) parts.push(`${data.noResults} not found on Discogs`);
+        if (data.noTrackMatch) parts.push(`${data.noTrackMatch} no matching track`);
+        if (data.ambiguous) parts.push(`${data.ambiguous} ambiguous match`);
+        if (data.lookupError) parts.push(`${data.lookupError} lookup errors`);
+        if (data.errors) parts.push(`${data.errors} failed`);
+        const hadProblems = data.errors || data.lookupError;
+        showToast(`Identify from filename in "${item.title}": ${parts.join(', ')}`, hadProblems ? 'error' : 'success', 5000);
+        if (data.tagged) console.log('[IDENTIFY-TAGS] Tagged:', data.details);
+
+        // Reload the current folder so newly-tagged titles/artists show up
+        if (browsePath && browsePath.length > 0 && selectedServerUdn) {
+            await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+        }
+    } catch (e) {
+        console.error(e);
+        showToast('Identify from filename failed: ' + e.message);
     }
 }
 

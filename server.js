@@ -3886,15 +3886,34 @@ app.get('/api/local/va-candidates', async (req, res) => {
 // Moves a single local audio file into <base>/<Artist>/<Album>/<file> per its embedded tags,
 // where <base> is assumed to be three levels up (.../Base/Artist/Album/File). Shared by the
 // single-file and whole-folder "move to tag location" endpoints below.
+// Walks upward from startDir, removing directories left empty by a move, and
+// stops at (without removing) baseDir itself.
+async function cleanupEmptyDirsUpTo(startDir, baseDir) {
+    let currentDir = startDir;
+    while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
+        try {
+            const remaining = await fs.promises.readdir(currentDir);
+            if (remaining.length === 0) {
+                await fs.promises.rmdir(currentDir);
+                currentDir = path.dirname(currentDir);
+            } else {
+                break;
+            }
+        } catch (e) {
+            break;
+        }
+    }
+}
+
 async function moveFileToTagLocation(localPath) {
     const localDir = path.join(__dirname, 'local');
 
     const metadata = await getTrackMetadata(localPath);
     const artist = metadata?.common?.artist;
-    const album = metadata?.common?.album;
+    const album = metadata?.common?.album || 'Unknown Album';
 
-    if (!artist || !album) {
-        return { success: false, error: 'Track must have both Artist and Album tags' };
+    if (!artist) {
+        return { success: false, error: 'Track must have an Artist tag' };
     }
 
     const safeArtist = artist.replace(/[<>:"/\\|?*]+/g, '_').trim();
@@ -3914,33 +3933,30 @@ async function moveFileToTagLocation(localPath) {
         return { success: false, alreadyCorrect: true, error: 'File is already in the correct folder.' };
     }
 
+    const sourceDir = path.dirname(localPath);
+    const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
+
     if (fs.existsSync(targetPath)) {
-        return { success: false, error: 'Target file already exists.' };
+        // Something's already sitting at the destination — if it's byte-identical to
+        // this file, this source copy is a redundant duplicate left over from a
+        // previous import, so remove it rather than leaving two copies of the same
+        // track lying around. Only if the content actually differs do we leave the
+        // source alone and report a conflict.
+        const [srcStat, dstStat] = await Promise.all([fs.promises.stat(localPath), fs.promises.stat(targetPath)]);
+        if (srcStat.size === dstStat.size && await hashFile(localPath) === await hashFile(targetPath)) {
+            await fs.promises.unlink(localPath);
+            await cleanupEmptyDirsUpTo(sourceDir, baseDir);
+            return { success: true, duplicateRemoved: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) };
+        }
+        return { success: false, error: 'A different file already exists at the target location.' };
     }
 
     if (!fs.existsSync(artistDir)) await fs.promises.mkdir(artistDir, { recursive: true });
     if (!fs.existsSync(targetAlbumDir)) await fs.promises.mkdir(targetAlbumDir, { recursive: true });
 
-    const sourceDir = path.dirname(localPath);
     await fs.promises.rename(localPath, targetPath);
+    await cleanupEmptyDirsUpTo(sourceDir, baseDir);
 
-    // Clean up empty directories
-    let currentDir = sourceDir;
-    while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
-        try {
-            const remaining = await fs.promises.readdir(currentDir);
-            if (remaining.length === 0) {
-                await fs.promises.rmdir(currentDir);
-                currentDir = path.dirname(currentDir);
-            } else {
-                break;
-            }
-        } catch (e) {
-            break;
-        }
-    }
-
-    const targetFolderId = targetAlbumDir.replace(localDir, '').replace(/\\/g, '/').replace(/^\//, '');
     return { success: true, targetFolderId, newUri: encodeURI((targetFolderId + '/' + fileName).replace(/\\/g, '/')) };
 }
 
@@ -3995,11 +4011,13 @@ app.post('/api/local/move-folder-to-tags', express.json(), async (req, res) => {
             return res.status(404).json({ error: 'Folder not found' });
         }
 
-        let moved = 0, skipped = 0, failed = 0;
+        let moved = 0, skipped = 0, failed = 0, duplicatesRemoved = 0;
         const errors = [];
         for await (const filePath of walkByExt(folderPath, AUDIO_EXTS)) {
             const result = await moveFileToTagLocation(filePath);
-            if (result.success) {
+            if (result.duplicateRemoved) {
+                duplicatesRemoved++;
+            } else if (result.success) {
                 moved++;
             } else if (result.alreadyCorrect) {
                 skipped++;
@@ -4009,8 +4027,8 @@ app.post('/api/local/move-folder-to-tags', express.json(), async (req, res) => {
             }
         }
 
-        terminalLog(`[MOVE-FOLDER-TO-TAGS] "${safeId}": moved ${moved}, skipped ${skipped}, failed ${failed}`);
-        res.json({ success: true, moved, skipped, failed, errors });
+        terminalLog(`[MOVE-FOLDER-TO-TAGS] "${safeId}": moved ${moved}, skipped ${skipped}, duplicates removed ${duplicatesRemoved}, failed ${failed}`);
+        res.json({ success: true, moved, skipped, duplicatesRemoved, failed, errors });
     } catch (err) {
         console.error('[MOVE-FOLDER-TO-TAGS] Error:', err);
         res.status(500).json({ error: err.message });
@@ -4604,6 +4622,537 @@ app.post('/api/local/update-tags', express.json(), async (req, res) => {
         }
     } catch (err) {
         console.error('[TAGS] Server error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Words that mean "this isn't real metadata" when found in an existing tag,
+// so they're treated the same as a blank/missing tag.
+const GENERIC_TAG_WORDS = new Set([
+    'unknown', 'unknown artist', 'unknown title', 'unknown album',
+    'untitled', 'track', 'audio', 'various', 'various artists', 'na', 'n/a'
+]);
+
+function isBlankTag(value) {
+    if (!value) return true;
+    const v = String(value).trim();
+    if (!v) return true;
+    return GENERIC_TAG_WORDS.has(v.toLowerCase());
+}
+
+// A trailing "Artist - Title - <this>" segment is only safe to peel off the title
+// when it reads as a version/edition qualifier rather than more of the title itself.
+const QUALIFIER_PATTERN = /\b(19|20)\d{2}\b|\bremaster(ed)?\b|\blive\b|\bacoustic\b|\bdemo\b|\bmono\b|\bstereo\b|\bradio edit\b|\bsingle version\b|\balbum version\b|\bbonus track\b|\bextended\b|\binstrumental\b|\breissue\b|\banniversary\b|\bdeluxe\b|\bedit\b|\bmix\b|\bversion\b/i;
+
+// Strip the file extension and a leading track number ("01 ", "01.", "01 - ", "(01) ").
+function stripExtAndTrackNumber(fileName) {
+    let base = fileName.replace(/\.[^.]+$/, '').trim();
+    if (!base) return '';
+    base = base.replace(/^\(?\d{1,3}\)?[\s._-]+/, '').trim();
+    return base;
+}
+
+// A leftover title with no separable artist can still be looked up on its own —
+// but only bother when it looks like an actual title, not noise.
+function extractTitleOnlyFromFilename(fileName) {
+    const base = stripExtAndTrackNumber(fileName);
+    if (!base || base.length < 3 || base.length > 80) return null;
+    if (/^\d+$/.test(base)) return null;
+    if (GENERIC_TAG_WORDS.has(base.toLowerCase())) return null;
+    return base;
+}
+
+// Try to confidently split a filename like "Artist - Title.mp3" (optionally
+// "Artist - Title - 2009 Remastered Version.mp3") into { artist, title, qualifier }.
+// Returns null whenever the split is ambiguous rather than guessing — callers should
+// only ever write tags when this returns a result.
+function guessArtistTitleFromFilename(fileName) {
+    const base = stripExtAndTrackNumber(fileName);
+    if (!base) return null;
+
+    let artist, title, qualifier = null;
+
+    // Preferred case: separator(s) clearly set off by spaces, e.g. "Artist - Title"
+    // or "Artist - Title - 2009 Remastered Version".
+    const spacedSeparators = base.match(/\s+[-–—]\s+/g);
+    if (spacedSeparators) {
+        const parts = base.split(/\s+[-–—]\s+/);
+        if (spacedSeparators.length === 1 && parts.length === 2) {
+            [artist, title] = parts;
+        } else if (spacedSeparators.length === 2 && parts.length === 3 && QUALIFIER_PATTERN.test(parts[2])) {
+            [artist, title, qualifier] = parts;
+        }
+    } else if (!/\s/.test(base) && base.includes('_')) {
+        // Underscore-as-space rip convention, e.g. "Pink_Floyd-Comfortably_Numb".
+        // Only confident when there's exactly one hyphen to split on.
+        const hyphenCount = (base.match(/-/g) || []).length;
+        if (hyphenCount === 1) {
+            const parts = base.split('-');
+            if (parts.length === 2) [artist, title] = parts.map(p => p.replace(/_/g, ' '));
+        }
+    }
+
+    if (!artist || !title) return null;
+    artist = artist.trim();
+    title = title.trim();
+    qualifier = qualifier ? qualifier.trim() : null;
+    if (!artist || !title) return null;
+    if (artist.length > 60 || title.length > 80) return null;
+    if (/^\d+$/.test(artist) || /^\d+$/.test(title)) return null;
+    if (GENERIC_TAG_WORDS.has(artist.toLowerCase()) || GENERIC_TAG_WORDS.has(title.toLowerCase())) return null;
+    if (artist.toLowerCase() === title.toLowerCase()) return null;
+
+    return { artist, title, qualifier };
+}
+
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// Be considerate of Discogs' rate limits (60/min with a token, 25/min without)
+// when we're firing off a whole folder's worth of lookups in a loop.
+let _lastDiscogsIdentifyCallAt = 0;
+async function discogsIdentifyRateLimit() {
+    const wait = _lastDiscogsIdentifyCallAt + 1100 - Date.now();
+    if (wait > 0) await sleep(wait);
+    _lastDiscogsIdentifyCallAt = Date.now();
+}
+
+// Pull the leading track number off a filename ("01 - ...", "(3) ...") so it can be
+// cross-checked against a candidate release's actual tracklist position.
+function extractLeadingTrackNumber(fileName) {
+    const base = fileName.replace(/\.[^.]+$/, '').trim();
+    const m = base.match(/^\(?(\d{1,3})\)?[\s._-]+/);
+    return m ? parseInt(m[1], 10) : null;
+}
+
+// Two candidates "agree" for corroboration purposes if they're the same underlying
+// work — which on Discogs means the same master_id (the canonical release a country's/
+// format's/reissue's individual pressings all share), not the same exact release ID.
+// A song's Discogs pressings are almost always split across several release IDs
+// (US pressing, UK pressing, a 2009 reissue, ...) that all point at one master_id, so
+// grouping by raw release ID would make cross-track corroboration rarely fire.
+function discogsGroupKey(c) {
+    return c.masterId ? `m:${c.masterId}` : `r:${c.releaseId}`;
+}
+
+// Search Discogs for releases containing a track with this title (optionally
+// narrowed by a known/guessed artist), then fetch each candidate release's full
+// tracklist to find the actual matching track and its position.
+// Returns { error, candidates } where candidates is [{ releaseId, masterId, artist,
+// album, title, trackNumber, year }] (empty when nothing usable was found) and error
+// is null on success or one of:
+//   'lookup-error'    — the Discogs request itself failed (network/timeout/rate-limit)
+//   'no-results'      — Discogs has nothing matching that title at all
+//   'no-track-match'  — releases came back, but none actually contained the track
+async function searchDiscogsCandidates({ artist = null, title }) {
+    const token = settings.discogsToken;
+    if (!token || !title) return { error: 'lookup-error', candidates: [] };
+
+    let results;
+    try {
+        await discogsIdentifyRateLimit();
+        const params = { track: title, type: 'release', token, per_page: 25 };
+        if (artist) params.artist = artist;
+        console.log(`[IDENTIFY-TAGS] Discogs search: track="${title}"${artist ? ` artist="${artist}"` : ''}`);
+        const resp = await axios.get('https://api.discogs.com/database/search', {
+            params,
+            headers: { 'User-Agent': 'AMMUI/1.0 (DLNA media browser)' },
+            timeout: 8000
+        });
+        const allResults = resp.data?.results || [];
+        console.log(`[IDENTIFY-TAGS]   -> ${allResults.length} result(s) (of ${resp.data?.pagination?.items ?? '?'} total): ${allResults.slice(0, 6).map(r => `"${r.title}"`).join(', ')}`);
+
+        // We're identifying which *album* a track belongs to, so singles (7"/12"/
+        // digital singles) don't count even if the track appears on one — Discogs'
+        // search results already carry the format, so this is filtered before
+        // spending a request fetching any of them.
+        const isSingle = r => Array.isArray(r.format) && r.format.some(f => /single/i.test(f));
+        results = allResults.filter(r => !isSingle(r));
+        const droppedCount = allResults.length - results.length;
+        if (droppedCount) console.log(`[IDENTIFY-TAGS]   -> dropped ${droppedCount} single(s), ${results.length} album candidate(s) remain`);
+    } catch (e) {
+        console.warn(`[IDENTIFY-TAGS] Discogs search failed for "${title}":`, e.message);
+        return { error: 'lookup-error', candidates: [] };
+    }
+    if (!results.length) return { error: 'no-results', candidates: [] };
+
+    const normalize = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const targetTitle = normalize(title);
+
+    const candidates = [];
+    let releaseLookupFailed = false;
+    for (const r of results.slice(0, 12)) {
+        try {
+            await discogsIdentifyRateLimit();
+            const relResp = await axios.get(`https://api.discogs.com/releases/${r.id}`, {
+                params: { token },
+                headers: { 'User-Agent': 'AMMUI/1.0 (DLNA media browser)' },
+                timeout: 8000
+            });
+            const rel = relResp.data;
+
+            // Some singles aren't labeled "Single" in the search result's format list
+            // (a 7" with 2-3 tracks, say) — a short tracklist is a more reliable tell
+            // that this isn't the album we're after.
+            const trackEntries = (rel.tracklist || []).filter(t => t.type_ === 'track' || !t.type_);
+            if (trackEntries.length < 6) {
+                console.log(`[IDENTIFY-TAGS]   release ${r.id} "${rel.title}": skipped (only ${trackEntries.length} track(s) — looks like a single/EP, not an album)`);
+                continue;
+            }
+
+            const idx = trackEntries.findIndex(t => normalize(t.title) === targetTitle);
+            if (idx === -1) {
+                console.log(`[IDENTIFY-TAGS]   release ${r.id} "${rel.title}" (${rel.artists?.[0]?.name}): no matching track in tracklist [${trackEntries.map(t => t.title).join(', ')}]`);
+                continue;
+            }
+            const track = trackEntries[idx];
+
+            const releaseArtist = rel.artists?.[0]?.name?.replace(/\s*\(\d+\)$/, '').trim(); // Discogs suffixes same-named artists with "(2)" etc.
+            if (!releaseArtist || /^various$/i.test(releaseArtist)) {
+                console.log(`[IDENTIFY-TAGS]   release ${r.id} "${rel.title}": skipped (no usable artist credit)`);
+                continue;
+            }
+
+            // Bare vinyl side markers ("A", "B") carry no track number on Discogs —
+            // fall back to the track's position in the tracklist, same convention
+            // already used by the album-tracklist lookup elsewhere in this app.
+            const { trackNumber: parsedTrackNumber } = parseDiscogsPosition(track.position);
+            const trackNumber = parsedTrackNumber || (idx + 1);
+
+            console.log(`[IDENTIFY-TAGS]   release ${r.id} "${rel.title}" by ${releaseArtist}: matched "${track.title}" @ position "${track.position}" (track ${trackNumber}), master_id=${r.master_id || 'none'}`);
+            candidates.push({ releaseId: r.id, masterId: r.master_id || null, artist: releaseArtist, album: rel.title, title: track.title, trackNumber, year: rel.year });
+        } catch (e) {
+            console.warn(`[IDENTIFY-TAGS] Discogs release lookup failed for ${r.id}:`, e.message);
+            releaseLookupFailed = true;
+        }
+    }
+    if (!candidates.length) return { error: releaseLookupFailed ? 'lookup-error' : 'no-track-match', candidates: [] };
+    return { error: null, candidates };
+}
+
+// Among a track's raw candidates, pick the artist that clearly dominates — not
+// necessarily unanimous, since Discogs often surfaces one unrelated/self-uploaded
+// result alongside several genuine regional pressings of the real release. Confident
+// only when the leading artist has at least double the support of its closest rival
+// (or there's no rival at all); a genuine toss-up (e.g. a common title covered by two
+// well-documented artists) correctly returns null.
+function pickDominantArtist(candidates) {
+    const counts = new Map();
+    for (const c of candidates) {
+        const key = c.artist.toLowerCase();
+        counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    const [topKey, topCount] = sorted[0];
+    const runnerUpCount = sorted[1]?.[1] || 0;
+    if (runnerUpCount > 0 && topCount < runnerUpCount * 2) return null;
+    return candidates.find(c => c.artist.toLowerCase() === topKey).artist;
+}
+
+// Resolve one track's own candidate list in isolation (no help from sibling
+// tracks) — used as a fallback when nothing in the folder corroborates any of this
+// track's candidate releases.
+function resolveCandidatesAlone(candidates, { expectedTrackNumber = null, qualifier = null } = {}) {
+    const resultArtist = pickDominantArtist(candidates);
+    if (!resultArtist) {
+        console.log(`[IDENTIFY-TAGS]   no dominant artist among: ${candidates.map(c => c.artist).join(', ')}`);
+        return null;
+    }
+
+    let pool = candidates.filter(c => c.artist.toLowerCase() === resultArtist.toLowerCase());
+
+    // Prefer whichever of this artist's own candidates land at the filename's implied
+    // track position — a tie-breaker for choosing the right album, never something
+    // that should override which artist was picked above.
+    if (expectedTrackNumber) {
+        const atPosition = pool.filter(c => c.trackNumber === expectedTrackNumber);
+        if (atPosition.length) pool = atPosition;
+    }
+
+    const resultTitle = pool[0].title;
+
+    let distinctAlbums = new Set(pool.map(c => c.album));
+    if (distinctAlbums.size > 1 && qualifier) {
+        const yearMatch = qualifier.match(/(19|20)\d{2}/);
+        if (yearMatch) {
+            const narrowed = pool.filter(c => String(c.year) === yearMatch[0]);
+            if (narrowed.length) {
+                pool = narrowed;
+                distinctAlbums = new Set(pool.map(c => c.album));
+            }
+        }
+    }
+    const album = distinctAlbums.size === 1 ? pool[0].album : null;
+
+    console.log(`[IDENTIFY-TAGS]   resolved alone: artist="${resultArtist}" title="${resultTitle}" album=${album ? `"${album}"` : '(none — ambiguous)'}`);
+    return { artist: resultArtist, title: resultTitle, album };
+}
+
+function newIdentifySummary() {
+    return {
+        tagged: 0, alreadyTagged: 0, noMatch: 0,
+        noResults: 0, noTrackMatch: 0, ambiguous: 0, lookupError: 0,
+        errors: 0, details: []
+    };
+}
+
+async function identifySingleFileFromFilename(filePath) {
+    const fileName = path.basename(filePath);
+    const existing = NodeID3.read(filePath) || {};
+    const needsArtist = isBlankTag(existing.artist);
+    const needsTitle = isBlankTag(existing.title);
+    const needsAlbum = isBlankTag(existing.album);
+    if (!needsArtist && !needsTitle && !needsAlbum) return { status: 'already-tagged' };
+
+    let searchArtist = null, searchTitle, qualifier = null, trackNumber = null;
+    if (needsArtist || needsTitle) {
+        const guess = guessArtistTitleFromFilename(fileName);
+        searchTitle = guess ? guess.title : extractTitleOnlyFromFilename(fileName);
+        if (!searchTitle) {
+            console.log(`[IDENTIFY-TAGS] "${fileName}": no usable title could be parsed from the filename — skipping`);
+            return { status: 'no-match' };
+        }
+        searchArtist = guess?.artist || null;
+        qualifier = guess?.qualifier || null;
+        trackNumber = extractLeadingTrackNumber(fileName);
+    } else {
+        // Artist and title are already tagged — look the recording up anyway,
+        // purely to try to fill in a missing album.
+        searchArtist = existing.artist;
+        searchTitle = existing.title;
+    }
+
+    console.log(`[IDENTIFY-TAGS] "${fileName}": searching for title="${searchTitle}"${searchArtist ? ` artist="${searchArtist}"` : ''}${trackNumber ? ` (filename implies track ${trackNumber})` : ''}`);
+    const { error, candidates } = await searchDiscogsCandidates({ artist: searchArtist, title: searchTitle });
+    if (!candidates.length) {
+        console.log(`[IDENTIFY-TAGS] "${fileName}": no usable candidates (${error || 'no-results'})`);
+        return { status: error || 'no-results' };
+    }
+
+    const confirmed = resolveCandidatesAlone(candidates, { expectedTrackNumber: trackNumber, qualifier });
+    if (!confirmed) {
+        console.log(`[IDENTIFY-TAGS] "${fileName}": ambiguous, leaving untagged`);
+        return { status: 'ambiguous' };
+    }
+
+    const update = {};
+    if (needsArtist) update.artist = confirmed.artist;
+    if (needsTitle) update.title = confirmed.title;
+    if (needsAlbum && confirmed.album) update.album = confirmed.album;
+    if (Object.keys(update).length === 0) return { status: 'no-track-match' };
+
+    const success = NodeID3.update(update, filePath);
+    if (success !== true) throw new Error('NodeID3 failed to write tags');
+    return {
+        status: 'tagged',
+        artist: update.artist ?? existing.artist,
+        title: update.title ?? existing.title,
+        album: update.album
+    };
+}
+
+// Identify every mp3 directly inside one folder together, rather than file by file.
+// A folder is rarely just one stray track off an album — it's almost always several
+// tracks from the same release — so every pending track is looked up on Discogs
+// first, and any release that comes up as a candidate for two or more different
+// filenames in the folder is trusted as the folder's album even if a given track's
+// own search alone would have been too ambiguous to act on.
+async function identifyTracksInDirectory(dirPath, mp3Files) {
+    const summary = newIdentifySummary();
+    const pending = [];
+
+    for (const file of mp3Files) {
+        const fullPath = path.join(dirPath, file.name);
+        const existing = NodeID3.read(fullPath) || {};
+        const needsArtist = isBlankTag(existing.artist);
+        const needsTitle = isBlankTag(existing.title);
+        const needsAlbum = isBlankTag(existing.album);
+        if (!needsArtist && !needsTitle && !needsAlbum) {
+            summary.alreadyTagged++;
+            continue;
+        }
+
+        let searchArtist = null, searchTitle, qualifier = null, trackNumber = null;
+        if (needsArtist || needsTitle) {
+            const guess = guessArtistTitleFromFilename(file.name);
+            searchTitle = guess ? guess.title : extractTitleOnlyFromFilename(file.name);
+            if (!searchTitle) {
+                summary.noMatch++;
+                continue;
+            }
+            searchArtist = guess?.artist || null;
+            qualifier = guess?.qualifier || null;
+            trackNumber = extractLeadingTrackNumber(file.name);
+        } else {
+            searchArtist = existing.artist;
+            searchTitle = existing.title;
+        }
+
+        pending.push({ fileName: file.name, fullPath, existing, needsArtist, needsTitle, needsAlbum, searchArtist, searchTitle, trackNumber, qualifier });
+    }
+
+    if (!pending.length) return summary;
+
+    console.log(`[IDENTIFY-TAGS] Folder "${path.basename(dirPath)}": ${pending.length} track(s) to identify: ${pending.map(p => `"${p.fileName}" (title="${p.searchTitle}"${p.trackNumber ? `, track ${p.trackNumber}` : ''})`).join('; ')}`);
+
+    // Pass 1: look every pending track up before deciding anything.
+    const lookups = [];
+    for (const p of pending) {
+        const { error, candidates } = await searchDiscogsCandidates({ artist: p.searchArtist, title: p.searchTitle });
+        lookups.push({ p, error, candidates });
+    }
+
+    // Pass 2: tally which underlying Discogs release (by master_id, so different
+    // regional pressings of the same single/album count as the same album) each
+    // pending track's candidates point at. Each file contributes at most one vote
+    // per album — otherwise a single file whose own search happens to surface five
+    // regional pressings of the correct album would look like "5 tracks agree" on
+    // its own. A "strong" vote additionally has a candidate whose tracklist position
+    // matches the track number implied by that file's own filename.
+    const releaseVotes = new Map(); // groupKey -> { count, strongCount, sample }
+    for (const { p, candidates } of lookups) {
+        const groupsInThisFile = new Map(); // groupKey -> { isStrong, sample }
+        for (const c of candidates) {
+            const key = discogsGroupKey(c);
+            const isStrong = !!(p.trackNumber && c.trackNumber === p.trackNumber);
+            const existing = groupsInThisFile.get(key);
+            groupsInThisFile.set(key, { isStrong: existing?.isStrong || isStrong, sample: existing?.sample || c });
+        }
+        for (const [key, { isStrong, sample }] of groupsInThisFile) {
+            const v = releaseVotes.get(key) || { count: 0, strongCount: 0, sample };
+            v.count++;
+            if (isStrong) v.strongCount++;
+            releaseVotes.set(key, v);
+        }
+    }
+
+    if (releaseVotes.size) {
+        console.log(`[IDENTIFY-TAGS] Folder "${path.basename(dirPath)}": album votes — ` +
+            [...releaseVotes.entries()].map(([key, v]) => `${v.sample.artist} - "${v.sample.album}" (${key}): ${v.count} file(s), ${v.strongCount} at matching position`).join(' | '));
+    }
+
+    let winningGroupKey = null;
+    let winningVotes = null;
+    for (const [key, v] of releaseVotes) {
+        if (v.count < 2) continue; // need corroboration from at least 2 different filenames
+        if (!winningVotes || v.strongCount > winningVotes.strongCount ||
+            (v.strongCount === winningVotes.strongCount && v.count > winningVotes.count)) {
+            winningGroupKey = key;
+            winningVotes = v;
+        }
+    }
+    if (winningGroupKey) {
+        console.log(`[IDENTIFY-TAGS] Folder "${path.basename(dirPath)}": corroborated album = ${winningVotes.sample.artist} - "${winningVotes.sample.album}" (${winningVotes.count} tracks agree)`);
+    } else {
+        console.log(`[IDENTIFY-TAGS] Folder "${path.basename(dirPath)}": no album corroborated by 2+ tracks — each track will be judged on its own`);
+    }
+
+    // Pass 3: tag each pending track — preferring the folder's corroborated album
+    // when this track appears on it, falling back to judging the track alone.
+    for (const { p, error, candidates } of lookups) {
+        let confirmed = null;
+        let via = null;
+
+        if (winningGroupKey) {
+            const match = candidates.find(c => discogsGroupKey(c) === winningGroupKey);
+            if (match) {
+                confirmed = { artist: match.artist, title: match.title, album: match.album };
+                via = 'folder corroboration';
+            }
+        }
+
+        if (!confirmed && candidates.length) {
+            confirmed = resolveCandidatesAlone(candidates, { expectedTrackNumber: p.trackNumber, qualifier: p.qualifier });
+            if (confirmed) via = 'resolved alone';
+        }
+
+        if (!confirmed) {
+            if (!candidates.length) {
+                if (error === 'no-track-match') summary.noTrackMatch++;
+                else if (error === 'lookup-error') summary.lookupError++;
+                else summary.noResults++;
+            } else {
+                summary.ambiguous++;
+            }
+            console.log(`[IDENTIFY-TAGS] "${p.fileName}": not confirmed (${candidates.length ? 'ambiguous' : (error || 'no-results')})`);
+            continue;
+        }
+
+        const update = {};
+        if (p.needsArtist) update.artist = confirmed.artist;
+        if (p.needsTitle) update.title = confirmed.title;
+        if (p.needsAlbum && confirmed.album) update.album = confirmed.album;
+        if (Object.keys(update).length === 0) {
+            summary.noTrackMatch++;
+            console.log(`[IDENTIFY-TAGS] "${p.fileName}": confirmed via ${via} but nothing left to fill in`);
+            continue;
+        }
+
+        try {
+            const success = NodeID3.update(update, p.fullPath);
+            if (success !== true) throw new Error('NodeID3 failed to write tags');
+            summary.tagged++;
+            summary.details.push({
+                file: p.fileName,
+                artist: update.artist ?? p.existing.artist,
+                title: update.title ?? p.existing.title,
+                album: update.album
+            });
+            console.log(`[IDENTIFY-TAGS] "${p.fileName}": tagged via ${via} -> artist="${update.artist ?? p.existing.artist}" title="${update.title ?? p.existing.title}"${update.album ? ` album="${update.album}"` : ''}`);
+        } catch (e) {
+            console.warn(`[IDENTIFY-TAGS] Failed to write tags for ${p.fileName}: ${e.message}`);
+            summary.errors++;
+        }
+    }
+
+    return summary;
+}
+
+async function identifyDirectoryFromFilenames(dirPath) {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const subdirs = entries.filter(e => e.isDirectory());
+    const mp3Files = entries.filter(e => e.isFile() && path.extname(e.name).toLowerCase() === '.mp3');
+
+    const summary = await identifyTracksInDirectory(dirPath, mp3Files);
+
+    for (const dir of subdirs) {
+        const sub = await identifyDirectoryFromFilenames(path.join(dirPath, dir.name));
+        for (const key of Object.keys(summary)) {
+            if (key !== 'details') summary[key] += sub[key];
+        }
+        summary.details.push(...sub.details);
+    }
+
+    return summary;
+}
+
+app.post('/api/local/identify-tags-from-filename', express.json(), async (req, res) => {
+    const { id } = req.body;
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    if (!settings.discogsToken) {
+        return res.status(400).json({ error: 'Add a Discogs token in Settings first — it\'s needed to confirm filename guesses before tagging.' });
+    }
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        const targetPath = path.join(localDir, safeId);
+
+        if (!targetPath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(targetPath)) return res.status(404).json({ error: 'Target not found' });
+
+        const stats = fs.statSync(targetPath);
+        if (stats.isDirectory()) {
+            terminalLog(`[IDENTIFY-TAGS] Scanning folder for filename-based tags: ${targetPath}`);
+            const summary = await identifyDirectoryFromFilenames(targetPath);
+            res.json({ success: true, ...summary });
+        } else if (path.extname(targetPath).toLowerCase() === '.mp3') {
+            const result = await identifySingleFileFromFilename(targetPath);
+            res.json({ success: true, ...result });
+        } else {
+            res.status(400).json({ error: 'Not an mp3 file' });
+        }
+    } catch (err) {
+        console.error('[IDENTIFY-TAGS] Server error:', err);
         res.status(500).json({ error: err.message });
     }
 });
