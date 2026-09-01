@@ -36,13 +36,14 @@ import {
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
 import crypto from 'crypto';
-import { exec, spawn } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 const piexif = _require('piexifjs');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // setupLocalDlna will be called after settings are loaded below
 
@@ -75,6 +76,13 @@ const port = 3000;
 // Ensure directories exist
 if (!fs.existsSync(path.join(baseDataDir, 'uploads'))) fs.mkdirSync(path.join(baseDataDir, 'uploads'), { recursive: true });
 if (!fs.existsSync(path.join(baseDataDir, 'local'))) fs.mkdirSync(path.join(baseDataDir, 'local'), { recursive: true });
+
+// Scaffold the three library categories as sibling folders so the local media
+// server always exposes music / pictures / videos side by side.
+for (const sub of ['music', 'pictures', 'videos']) {
+    const dir = path.join(baseDataDir, 'local', sub);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
 const logsDir = path.join(baseDataDir, 'logs');
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
@@ -126,6 +134,7 @@ function saveDevices() {
 
 let settings = {
     discogsToken: '',
+    acoustidKey: '',
     s3: {
         endpoint: '',
         region: 'auto',
@@ -156,6 +165,7 @@ let s3SyncStatus = {
 
 function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
+    settings.acoustidKey = getSetting('acoustidKey', '');
     settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
     settings.deviceName = getSetting('deviceName', 'AMMUI');
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
@@ -167,6 +177,7 @@ function loadSettings() {
 
 function saveSettings() {
     setSetting('discogsToken', settings.discogsToken);
+    setSetting('acoustidKey', settings.acoustidKey);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
     setSetting('screensaver', settings.screensaver);
@@ -878,6 +889,15 @@ const THUMB_MAX_CONCURRENT = 4;           // cap ffmpeg processes for a big fold
 execAsync('ffmpeg -version').catch(() => {
     ffmpegUnavailable = true;
     console.warn('[THUMB] ffmpeg not found on PATH — photo browser will use full-size images (slower). Install ffmpeg for fast thumbnails.');
+});
+
+// fpcalc (Chromaprint) is needed to generate the acoustic fingerprint the
+// AcoustID lookup requires. Probe once so the "Identify with AcoustID" button
+// can fail early with a helpful message instead of a cryptic spawn error.
+let fpcalcUnavailable = false;
+execAsync('fpcalc -version').catch(() => {
+    fpcalcUnavailable = true;
+    console.warn('[ACOUSTID] fpcalc not found on PATH — "Identify with AcoustID" will be unavailable. Install Chromaprint (fpcalc) to enable it.');
 });
 
 function runThumbTask(task) {
@@ -1617,6 +1637,21 @@ app.post('/api/settings/discogs', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/settings/acoustid', (req, res) => {
+    const key = settings.acoustidKey || '';
+    const hasKey = key.length > 0;
+    const maskedKey = hasKey ? key.substring(0, 4) + '****************' : '';
+    res.json({ hasKey, maskedKey });
+});
+
+app.post('/api/settings/acoustid', express.json(), (req, res) => {
+    const { key } = req.body;
+    settings.acoustidKey = key || '';
+    saveSettings();
+    console.log(`AcoustID API key ${key ? 'updated' : 'removed'} on server.`);
+    res.json({ success: true });
+});
+
 app.get('/api/settings/s3', (req, res) => {
     const s3 = { ...settings.s3 };
     // Mask secret
@@ -1682,12 +1717,30 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         console.log(`Processing upload: ${req.file.originalname}`);
         const ext = path.extname(req.file.originalname).toLowerCase();
         const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.heic', '.webp'];
+        const videoExtensions = ['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi'];
         const isImage = imageExtensions.includes(ext);
+        const isVideo = videoExtensions.includes(ext);
 
         let artist = 'Unknown Artist';
         let album = 'Unknown Album';
         let title = path.basename(req.file.originalname, ext);
         let targetSubDir = 'music';
+
+        // Videos are their own library category — a flat local/videos folder, kept
+        // out of the photo tree entirely.
+        if (isVideo) {
+            const videoDir = path.join(__dirname, 'local', 'videos');
+            if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
+
+            const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+            const targetPath = path.join(videoDir, `${safeTitle}${ext}`);
+
+            fs.copyFileSync(req.file.path, targetPath);
+            fs.unlinkSync(req.file.path);
+
+            console.log(`Uploaded and saved: ${targetPath}`);
+            return res.json({ success: true, path: targetPath, title, type: 'video' });
+        }
 
         if (isImage) {
             targetSubDir = 'photos';
@@ -1764,11 +1817,13 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
     try {
         const ext = path.extname(req.file.originalname).toLowerCase();
         const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif']);
+        const videoExts = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi']);
         const audioExts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus']);
         const isImage = imageExts.has(ext);
+        const isVideo = videoExts.has(ext);
         const isAudio = audioExts.has(ext);
 
-        if (!isImage && !isAudio) {
+        if (!isImage && !isVideo && !isAudio) {
             fs.unlinkSync(req.file.path);
             return res.json({ success: true, skipped: true, reason: 'unsupported type' });
         }
@@ -1776,16 +1831,22 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
         const localDir = path.join(__dirname, 'local');
         const filename = req.file.originalname;
 
-        if (isImage) {
+        if (isImage || isVideo) {
+            // Images go in the date-based picture tree; videos get the same
+            // date foldering but under their own local/videos root so they stay a
+            // separate library category. detectPictureDate falls back to filename /
+            // folder-name dates when there's no readable EXIF, which is what we want
+            // for phone/WhatsApp names.
+            const rootSub = isVideo ? 'videos' : 'pictures';
             const hintSegments = relativePath.split(/[/\\]/).reverse();
             const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments, useBirthtime: false });
 
             let finalDir;
             if (!detected) {
-                finalDir = path.join(localDir, 'pictures', 'unknown-date');
+                finalDir = path.join(localDir, rootSub, 'unknown-date');
             } else {
                 const { year, month } = detected;
-                finalDir = path.join(localDir, 'pictures', year, month ?? '01');
+                finalDir = path.join(localDir, rootSub, year, month ?? '01');
             }
             if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
@@ -1796,7 +1857,7 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
             }
 
             fs.renameSync(req.file.path, finalPath);
-            return res.json({ success: true, filename, type: 'image', year: detected?.year, month: detected?.month });
+            return res.json({ success: true, filename, type: isVideo ? 'video' : 'image', year: detected?.year, month: detected?.month });
 
         } else {
             let artist = 'Unknown Artist';
@@ -5398,7 +5459,7 @@ app.post('/api/local/identify-tags-from-filename', express.json(), async (req, r
 });
 
 app.post('/api/local/write-tags', express.json(), async (req, res) => {
-    const { uri, artist, album, albumartist } = req.body;
+    const { uri, artist, album, albumartist, title, year } = req.body;
     if (!uri) return res.status(400).json({ error: 'uri is required' });
 
     try {
@@ -5414,6 +5475,8 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
         if (artist !== undefined) tags.artist = artist;
         if (album !== undefined) tags.album = album;
         if (albumartist !== undefined) tags.performerInfo = albumartist; // TPE2
+        if (title !== undefined) tags.title = title;
+        if (year !== undefined) tags.year = year === null ? '' : String(year);
 
         const success = NodeID3.update(tags, filePath);
         if (success !== true) throw new Error('NodeID3 failed to write tags');
@@ -5421,6 +5484,98 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('[WRITE-TAGS]', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Identify a track via its acoustic fingerprint (Chromaprint/fpcalc) and the
+// AcoustID web service. Returns a best-guess {title, artist, album, year} for the
+// client to pre-fill the editable fields with — nothing is written to the file here.
+app.post('/api/local/acoustid-identify', express.json(), async (req, res) => {
+    const { uri } = req.body;
+    if (!uri) return res.status(400).json({ error: 'uri is required' });
+    if (!settings.acoustidKey) {
+        return res.status(400).json({ error: 'Add an AcoustID API key in Settings → Integrations first.' });
+    }
+    if (fpcalcUnavailable) {
+        return res.status(400).json({ error: 'fpcalc (Chromaprint) is not installed on the server. Install it and restart to use AcoustID.' });
+    }
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const url = new URL(uri);
+        const relPath = decodeURIComponent(url.pathname).replace('/local-files/', '');
+        const filePath = path.join(localDir, path.normalize(relPath).replace(/^(\.\.(\/|\\|$))+/, ''));
+        if (!filePath.startsWith(localDir)) return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+
+        // 1. Fingerprint the audio. Use fpcalc's default KEY=VALUE output rather
+        // than -json so older Chromaprint builds work too.
+        let fingerprint, duration;
+        try {
+            const { stdout } = await execFileAsync('fpcalc', [filePath], { maxBuffer: 4 * 1024 * 1024 });
+            fingerprint = (stdout.match(/^FINGERPRINT=(.+)$/m) || [])[1]?.trim();
+            duration = Math.round(parseFloat((stdout.match(/^DURATION=([\d.]+)/m) || [])[1]));
+        } catch (e) {
+            console.warn('[ACOUSTID] fpcalc failed:', e.message);
+            return res.status(502).json({ error: 'Could not fingerprint this file' });
+        }
+        if (!fingerprint || !duration) return res.status(502).json({ error: 'fpcalc returned an empty fingerprint' });
+
+        // 2. Look it up. POST (form-encoded) so long fingerprints don't blow the URL length limit.
+        const form = new URLSearchParams();
+        form.set('client', settings.acoustidKey);
+        form.set('meta', 'recordings releasegroups releases');
+        form.set('duration', String(duration));
+        form.set('fingerprint', fingerprint);
+
+        const resp = await axios.post('https://api.acoustid.org/v2/lookup', form.toString(), {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'AMMUI/1.0 (+https://github.com/abbeytek/ammui)'
+            },
+            timeout: 15000
+        });
+
+        if (resp.data.status !== 'ok') {
+            return res.status(502).json({ error: `AcoustID: ${resp.data.error?.message || 'lookup failed'}` });
+        }
+
+        const SCORE_MIN = 0.5;
+        const results = (resp.data.results || []).filter(r => (r.score || 0) >= SCORE_MIN && r.recordings?.length);
+        results.sort((a, b) => (b.score || 0) - (a.score || 0));
+        const best = results[0];
+        if (!best) {
+            terminalLog(`[ACOUSTID] ${path.basename(filePath)} → no confident match`);
+            return res.json({ match: false });
+        }
+
+        const rec = best.recordings.find(r => r.title) || best.recordings[0];
+        const artist = (rec.artists || []).map(a => a.name).join(', ') || null;
+
+        const rgs = rec.releasegroups || [];
+        const rg = rgs.find(g => (g.type || '').toLowerCase() === 'album') || rgs[0] || null;
+        const album = rg ? rg.title : null;
+
+        let year = null;
+        for (const rel of (rec.releases || [])) {
+            const y = rel.date?.year;
+            if (y && (!year || y < year)) year = y;
+        }
+
+        terminalLog(`[ACOUSTID] ${path.basename(filePath)} → "${rec.title}" / "${artist}" (score ${best.score.toFixed(2)})`);
+
+        res.json({
+            match: true,
+            score: best.score,
+            title: rec.title || null,
+            artist,
+            album,
+            year,
+            recordingId: rec.id || null
+        });
+    } catch (err) {
+        console.error('[ACOUSTID]', err.message);
         res.status(500).json({ error: err.message });
     }
 });

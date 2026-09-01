@@ -14,8 +14,10 @@ A web based home hub. Plays music and shows family photos, great if you have a l
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Build local media library - Download/Tag/Organise music/photos. Served over DLNA.
 * Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (album art)
-* Set home folders for Music Browsing, Photo Browsing and Slideshow.
+* Browse the media library as Music, Photos or Videos, each with its own home folder.
+* Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
+* Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
 
 <img src="images/ammui-desktop-mode.png" />
 
@@ -68,6 +70,12 @@ You could also have this running on a headless linux/windows box with, say, tabl
     sudo apt-get install ffmpeg
     ```
     or just download/install the package on Windows.
+
+4. Optional: Install Chromaprint (`fpcalc`) for "Identify with AcoustID".
+    ```bash
+    sudo apt-get install libchromaprint-tools
+    ```
+    or on Windows download the Chromaprint build and put `fpcalc.exe` on your PATH. Then add a free AcoustID API key under Settings → Integrations.
 
 ### Usage
 

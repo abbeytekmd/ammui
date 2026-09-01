@@ -1832,6 +1832,36 @@ p.subtitle {
     transform: scale(1.1);
 }
 
+/* Play overlay on video thumbnails in the browser */
+.video-badge {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 3px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    pointer-events: none;
+}
+
+.playlist-items.grid-view .video-badge {
+    width: 34px;
+    height: 34px;
+    padding: 7px;
+}
+
+.playlist-items.grid-view .video-badge svg {
+    width: 100%;
+    height: 100%;
+    opacity: 1;
+}
+
 
 .browser-item.file .item-icon {
     color: var(--accent);
@@ -3693,6 +3723,36 @@ p.subtitle {
 .metadata-save-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+/* AcoustID identify bar in the file info modal */
+.acoustid-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 0 0 0.85rem;
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.acoustid-status {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.acoustid-status-ok {
+    color: #4ade80;
+}
+
+.acoustid-status-warn {
+    color: #fbbf24;
+}
+
+/* A field pre-filled from an AcoustID suggestion, pending the user's Save */
+.metadata-edit-input.metadata-suggested {
+    border-color: #4ade80;
+    background: rgba(74, 222, 128, 0.12);
 }
 
 /* Tags Styles */

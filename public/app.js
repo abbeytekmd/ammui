@@ -106,7 +106,7 @@ let currentLyrics = null; // { lines: [{time, text}] } or null when unavailable/
 let lyricsTrackKey = ''; // artist|title|album for the track currentLyrics was fetched for
 let lyricsActiveLineIndex = -1;
 const artworkOverrides = new Map(JSON.parse(localStorage.getItem('artworkOverrides') || '[]')); // uri → manually chosen url, persisted across refreshes
-let browseScrollPositions = {}; // Store scroll position by folder ID
+let browseScrollPositions = {}; // folder ID → { top, anchorIndex, anchorDelta } scroll anchor
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 2;
 let currentInfoUri = null;
@@ -176,6 +176,10 @@ let pendingCastIndex = null;
 
 function isImageItem(item) {
     return item && item.type === 'item' && ((item.class && item.class.includes('imageItem')) || (item.protocolInfo && item.protocolInfo.includes('image/')));
+}
+
+function isVideoItem(item) {
+    return item && item.type === 'item' && ((item.class && item.class.includes('videoItem')) || (item.protocolInfo && item.protocolInfo.includes('video/')));
 }
 
 // Parse a loose date string (dc:date / EXIF date from the media server) to a ms
@@ -398,7 +402,7 @@ function normalizeTitle(s) {
 }
 
 async function enrichWithDiscogs(items) {
-    const audioTracks = items.filter(i => i.type === 'item' && !isImageItem(i));
+    const audioTracks = items.filter(i => i.type === 'item' && !isImageItem(i) && !isVideoItem(i));
     if (audioTracks.length === 0) return;
     if (audioTracks.some(t => t.trackNumber > 0)) return; // already have track numbers
 
@@ -450,6 +454,13 @@ function updateBreadcrumbs() {
                     <path d="M9 18V5l12-2v13"></path>
                     <circle cx="6" cy="18" r="3"></circle>
                     <circle cx="18" cy="16" r="3"></circle>
+                </svg>
+            ` : mode === 'video' ? `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                    <line x1="8" y1="21" x2="16" y2="21"></line>
+                    <line x1="12" y1="17" x2="12" y2="21"></line>
+                    <path d="M10 8l5 3-5 3V8z" fill="currentColor"></path>
                 </svg>
             ` : `
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -555,7 +566,7 @@ async function enterFolder(id, title) {
 function saveCurrentScrollPosition() {
     if (browsePath.length > 0 && browserItems) {
         const currentFolder = browsePath[browsePath.length - 1];
-        browseScrollPositions[currentFolder.id] = browserItems.scrollTop;
+        browseScrollPositions[currentFolder.id] = captureScrollAnchor();
 
         // Prune any saved positions that are no longer in our current path
         // (Ensures we only remember "parents" of where we are going)
@@ -568,6 +579,69 @@ function saveCurrentScrollPosition() {
 
         console.log(`[DEBUG] Saved scroll for parent ${currentFolder.title}. Cache size: ${Object.keys(browseScrollPositions).length}`);
     }
+}
+
+// Records both the raw scrollTop and the top-most visible row (by its stable
+// data-item-index) plus how far that row is scrolled past the top edge. The row
+// anchor is what survives `content-visibility: auto`: after a re-render the
+// off-screen row heights are only estimates, so the pixel value alone drifts.
+function captureScrollAnchor() {
+    const top = browserItems.scrollTop;
+    const contTop = browserItems.getBoundingClientRect().top;
+    let anchorIndex = null;
+    let anchorDelta = 0;
+    for (const el of browserItems.children) {
+        if (!el.classList || !el.classList.contains('browser-item')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.bottom > contTop + 1) {
+            anchorIndex = el.dataset.itemIndex != null ? Number(el.dataset.itemIndex) : null;
+            anchorDelta = r.top - contTop; // <= 0 once the row is partly scrolled off
+            break;
+        }
+    }
+    return { top, anchorIndex, anchorDelta };
+}
+
+// Re-seeks the saved position over a handful of animation frames. Pass 0 jumps
+// to the old pixel offset so the right region renders for real; later passes
+// nudge scrollTop by the gap between where the anchor row actually sits and
+// where it should sit, converging once its neighbours have firmed up. Any user
+// scroll/keypress aborts the correction so we never fight the user.
+function restoreScrollAnchor(saved) {
+    const target = (typeof saved === 'number') ? { top: saved, anchorIndex: null, anchorDelta: 0 } : saved;
+    let pass = 0;
+    let cancelled = false;
+    const onUser = () => { cancelled = true; cleanup(); };
+    const cleanup = () => {
+        browserItems.removeEventListener('wheel', onUser);
+        browserItems.removeEventListener('touchstart', onUser);
+        browserItems.removeEventListener('keydown', onUser);
+    };
+    browserItems.addEventListener('wheel', onUser, { passive: true });
+    browserItems.addEventListener('touchstart', onUser, { passive: true });
+    browserItems.addEventListener('keydown', onUser);
+
+    const run = () => {
+        if (cancelled) return;
+        if (pass === 0 || target.anchorIndex == null) {
+            browserItems.scrollTop = target.top || 0;
+        } else {
+            const el = browserItems.querySelector(`.browser-item[data-item-index="${target.anchorIndex}"]`);
+            if (el) {
+                const contTop = browserItems.getBoundingClientRect().top;
+                const diff = (el.getBoundingClientRect().top - contTop) - (target.anchorDelta || 0);
+                if (Math.abs(diff) > 0.5) browserItems.scrollTop += diff;
+            } else {
+                browserItems.scrollTop = target.top || 0;
+            }
+        }
+        if (++pass < 6) {
+            requestAnimationFrame(run);
+        } else {
+            cleanup();
+        }
+    };
+    requestAnimationFrame(run);
 }
 
 async function addToPlaylist(uri, title, artist, album, duration, protocolInfo, albumArtUrl, autoSwitch = true, pathStr = '') {
@@ -1315,7 +1389,9 @@ async function addAllToPlaylist() {
 }
 
 async function playAll() {
-    const tracks = currentBrowserItems.filter(item => item.type === 'item' && !isImageItem(item));
+    // In Videos mode, videos are the things we cast/queue; everywhere else they're excluded.
+    const inVideoMode = currentBrowserMode === 'video';
+    const tracks = currentBrowserItems.filter(item => item.type === 'item' && !isImageItem(item) && (inVideoMode || !isVideoItem(item)));
     const images = currentBrowserItems.filter(item => isImageItem(item));
     const containers = currentBrowserItems.filter(item => item.type === 'container');
 
@@ -1628,21 +1704,26 @@ async function executeBrowserFind() {
 }
 
 function updateBrowserControls(items) {
-    const tracks = items.filter(item => item.type === 'item' && !isImageItem(item));
+    const tracks = items.filter(item => item.type === 'item' && !isImageItem(item) && !isVideoItem(item));
     const images = items.filter(item => isImageItem(item));
+    const videos = items.filter(item => isVideoItem(item));
 
     const btnPlayAll = document.getElementById('btn-play-all');
     const btnAddAll = document.getElementById('btn-add-all');
     const btnToggleView = document.getElementById('btn-toggle-view');
 
+    const inPhotoMode = currentBrowserMode === 'photo';
+    const inVideoMode = currentBrowserMode === 'video';
+
     const showMusicControls = tracks.length > 0;
     const hasContainers = items.some(item => item.type === 'container');
-    const showPhotoControls = images.length > 0 || (currentBrowserMode === 'photo' && hasContainers);
-
-    const inPhotoMode = currentBrowserMode === 'photo';
+    const showPhotoControls = images.length > 0 || (inPhotoMode && hasContainers);
+    const showVideoControls = videos.length > 0;
+    // Grid/list toggle applies to both thumbnail-based categories.
+    const showGridToggle = images.length > 0 || videos.length > 0 || ((inPhotoMode || inVideoMode) && hasContainers);
 
     if (btnPlayAll) {
-        const canPlay = inPhotoMode ? showPhotoControls : showMusicControls;
+        const canPlay = inPhotoMode ? showPhotoControls : inVideoMode ? showVideoControls : showMusicControls;
         btnPlayAll.classList.toggle('disabled', !canPlay);
         const label = btnPlayAll.querySelector('.btn-label');
         if (label) {
@@ -1652,13 +1733,14 @@ function updateBrowserControls(items) {
     }
     if (btnAddAll) {
         btnAddAll.style.display = inPhotoMode ? 'none' : '';
-        if (!inPhotoMode) btnAddAll.classList.toggle('disabled', !showMusicControls);
+        if (inVideoMode) btnAddAll.classList.toggle('disabled', !showVideoControls);
+        else if (!inPhotoMode) btnAddAll.classList.toggle('disabled', !showMusicControls);
     }
 
     if (btnToggleView) {
-        btnToggleView.style.display = inPhotoMode ? '' : 'none';
-        if (inPhotoMode) {
-            btnToggleView.classList.toggle('disabled', !showPhotoControls);
+        btnToggleView.style.display = (inPhotoMode || inVideoMode) ? '' : 'none';
+        if (inPhotoMode || inVideoMode) {
+            btnToggleView.classList.toggle('disabled', !showGridToggle);
             const label = document.getElementById('label-view-mode');
             const svgGrid = document.getElementById('svg-view-grid');
             const svgList = document.getElementById('svg-view-list');
@@ -1677,11 +1759,11 @@ function updateBrowserControls(items) {
     // Filter Set Home buttons based on current mode
     const btnSetMusic = document.getElementById('btn-set-music-home');
     const btnSetPhoto = document.getElementById('btn-set-photo-home');
-    const divSetMusic = null;
-    const divSetPhoto = null;
+    const btnSetVideo = document.getElementById('btn-set-video-home');
 
     if (btnSetMusic) btnSetMusic.style.display = (currentBrowserMode === 'music') ? 'flex' : 'none';
     if (btnSetPhoto) btnSetPhoto.style.display = (currentBrowserMode === 'photo') ? 'flex' : 'none';
+    if (btnSetVideo) btnSetVideo.style.display = (currentBrowserMode === 'video') ? 'flex' : 'none';
 
     // Filter Screensaver button (only for photos)
     const btnSetSS = document.getElementById('btn-set-screensaver');
@@ -1697,12 +1779,12 @@ function updateBrowserControls(items) {
     if (showDeleteSelected) updatePhotoSelectionUI();
 
     const btnPlayTag = document.getElementById('btn-play-tag');
-    if (btnPlayTag) btnPlayTag.style.display = inPhotoMode ? 'none' : '';
+    if (btnPlayTag) btnPlayTag.style.display = (inPhotoMode || inVideoMode) ? 'none' : '';
 
     // Show/hide the entire menu button if no actions available
     const menuBtn = document.getElementById('btn-browser-menu');
     if (menuBtn) {
-        const hasActions = (currentBrowserMode === 'music' || currentBrowserMode === 'photo');
+        const hasActions = (currentBrowserMode === 'music' || currentBrowserMode === 'photo' || currentBrowserMode === 'video');
         menuBtn.style.display = hasActions ? 'flex' : 'none';
     }
 
@@ -1727,6 +1809,16 @@ function updateBrowserControls(items) {
 function renderBrowser(items) {
     selectedPhotos.clear();
     updatePhotoSelectionUI();
+
+    // Each library category shows only its own media type (plus folders for navigation).
+    // Music: audio only · Photos: images only · Videos: videos only.
+    if (currentBrowserMode === 'photo') {
+        items = items.filter(i => i.type === 'container' || isImageItem(i));
+    } else if (currentBrowserMode === 'video') {
+        items = items.filter(i => i.type === 'container' || isVideoItem(i));
+    } else {
+        items = items.filter(i => i.type === 'container' || (i.type === 'item' && !isImageItem(i) && !isVideoItem(i)));
+    }
 
     // Sort items: folders first, then alphabetically ignoring case
     items.sort((a, b) => {
@@ -1763,18 +1855,15 @@ function renderBrowser(items) {
 
     currentBrowserItems = items;
 
-    // Check if folder contains images
-    const hasImages = items.some(item =>
-        (item.class && item.class.includes('imageItem')) ||
-        (item.protocolInfo && item.protocolInfo.includes('image/'))
-    );
+    // Check if folder contains images or videos (both are grid-friendly thumbnails)
+    const hasImages = items.some(item => isImageItem(item) || isVideoItem(item));
 
-    // Force list view if no images are present
+    // Force list view if no images/videos are present
     const effectiveViewMode = hasImages ? browserViewMode : 'list';
 
     // Restore scroll position
     const currentId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
-    const savedScrollTop = browseScrollPositions[currentId] || 0;
+    const savedScroll = browseScrollPositions[currentId] || null;
 
     updateBrowserControls(items);
     updateHomeButtons();
@@ -1798,7 +1887,10 @@ function renderBrowser(items) {
     }
 
     if (items.length === 0) {
-        browserItems.innerHTML = '<div class="empty-state">Folder is empty</div>';
+        const emptyMsg = currentBrowserMode === 'photo' ? 'No photos in this folder'
+            : currentBrowserMode === 'video' ? 'No videos in this folder'
+            : 'Folder is empty';
+        browserItems.innerHTML = `<div class="empty-state">${emptyMsg}</div>`;
         return;
     }
 
@@ -1831,16 +1923,23 @@ function renderBrowser(items) {
 
         let icon = '';
         let thumbUrl = item.albumArtUrl || (isImage ? item.uri : null);
-        // Route local photos through the server-side thumbnailer so scrolling a
+        // Local videos have no artwork of their own — grab a poster frame from the
+        // same thumbnailer (ffmpeg decodes the first frame for images and video alike).
+        if (!thumbUrl && isVideo && (item.uri || '').includes('/local-files/')) {
+            thumbUrl = item.uri;
+        }
+        // Route local photos/videos through the server-side thumbnailer so scrolling a
         // folder doesn't download/decode full-resolution originals for each tile.
-        if (isImage && thumbUrl && thumbUrl.includes('/local-files/')) {
+        if ((isImage || isVideo) && thumbUrl && thumbUrl.includes('/local-files/')) {
             thumbUrl = `/api/thumb?w=400&uri=${encodeURIComponent(thumbUrl)}`;
         }
         if (thumbUrl) {
             const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
             const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
-            icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}>`;
+            const onErr = isVideo ? ' onerror="this.hidden=true"' : '';
+            icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}>`;
+            if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
         }
 
 
@@ -2058,11 +2157,11 @@ function renderBrowser(items) {
         `;
     }).join('');
 
-    // Restore scroll position after DOM update
-    if (savedScrollTop > 0) {
-        setTimeout(() => {
-            browserItems.scrollTop = savedScrollTop;
-        }, 10);
+    // Restore scroll position after DOM update. Rows use `content-visibility: auto`,
+    // so off-screen heights are only `contain-intrinsic-size` estimates until they
+    // scroll into view — a single scrollTop assignment lands several rows off.
+    if (savedScroll && ((savedScroll.top || 0) > 0 || savedScroll.anchorIndex != null)) {
+        restoreScrollAnchor(savedScroll);
     } else {
         browserItems.scrollTop = 0;
     }
@@ -2467,6 +2566,48 @@ async function saveDiscogsToken() {
             await loadDiscogsToken();
         } else {
             throw new Error('Failed to save token');
+        }
+    } catch (err) {
+        console.error('Save settings error:', err);
+        showToast('Failed to save settings to server');
+    }
+}
+
+async function loadAcoustidKey() {
+    try {
+        const res = await fetch('/api/settings/acoustid');
+        if (res.ok) {
+            const data = await res.json();
+            const keyInput = document.getElementById('acoustid-key-input');
+            if (keyInput) {
+                keyInput.value = data.maskedKey || '';
+                keyInput.dataset.loaded = '1';
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load AcoustID key status:', e);
+    }
+}
+
+async function saveAcoustidKey() {
+    const keyInput = document.getElementById('acoustid-key-input');
+    if (!keyInput) return;
+    const key = keyInput.value.trim();
+    // The masked placeholder loaded from the server means nothing changed
+    if (key.includes('****')) return;
+
+    try {
+        const response = await fetch('/api/settings/acoustid', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+
+        if (response.ok) {
+            showToast(key ? 'AcoustID key saved' : 'AcoustID key removed', 'success', 2000);
+            await loadAcoustidKey();
+        } else {
+            throw new Error('Failed to save key');
         }
     } catch (err) {
         console.error('Save settings error:', err);
@@ -3074,6 +3215,7 @@ function openManageModal() {
         renderManageDevices();
         manageModal.style.display = 'flex';
         loadDiscogsToken();
+        loadAcoustidKey();
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
         if (s3Enabled) startS3StatusPolling();
         loadLocalStats();
@@ -3946,6 +4088,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             <div class="browser-mode-radios" onclick="event.stopPropagation()">
                 <label><input type="radio" name="browser-mode" value="music" onchange="switchBrowserMode('music')"> Music</label>
                 <label><input type="radio" name="browser-mode" value="photo" onchange="switchBrowserMode('photo')"> Photos</label>
+                <label><input type="radio" name="browser-mode" value="video" onchange="switchBrowserMode('video')"> Videos</label>
             </div>` : ''}
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
@@ -4045,7 +4188,9 @@ async function setHome(type = 'music') {
     localStorage.setItem(`serverHomeLocations_${type}`, JSON.stringify(homeLocations));
 
     // Visual feedback
-    const btnId = type === 'music' ? 'btn-set-music-home' : 'btn-set-photo-home';
+    const btnId = type === 'music' ? 'btn-set-music-home'
+        : type === 'video' ? 'btn-set-video-home'
+        : 'btn-set-photo-home';
     const btn = document.getElementById(btnId);
     if (btn) {
         const originalContent = btn.innerHTML;
@@ -4190,9 +4335,11 @@ async function goHome(type = 'music') {
 function updateHomeButtons() {
     const btnSetMusicHome = document.getElementById('btn-set-music-home');
     const btnSetPhotoHome = document.getElementById('btn-set-photo-home');
+    const btnSetVideoHome = document.getElementById('btn-set-video-home');
     const btnSetScreensaver = document.getElementById('btn-set-screensaver');
     const btnGoMusicHome = document.getElementById('btn-go-music-home');
     const btnGoPhotoHome = document.getElementById('btn-go-photo-home');
+    const btnGoVideoHome = document.getElementById('btn-go-video-home');
 
     if (!selectedServerUdn) return;
 
@@ -4218,6 +4365,7 @@ function updateHomeButtons() {
 
     const isAtMusicHome = checkHome('music');
     const isAtPhotoHome = checkHome('photo');
+    const isAtVideoHome = checkHome('video');
     const isAtScreensaver = currentFolder && screensaverConfig &&
         screensaverConfig.serverUdn === selectedServerUdn &&
         screensaverConfig.objectId === currentFolder.id;
@@ -4242,6 +4390,16 @@ function updateHomeButtons() {
         }
     }
 
+    if (btnSetVideoHome) {
+        if (isAtVideoHome) {
+            btnSetVideoHome.classList.add('disabled');
+            btnSetVideoHome.title = "Already Video Home";
+        } else {
+            btnSetVideoHome.classList.remove('disabled');
+            btnSetVideoHome.title = "Set as Video Home";
+        }
+    }
+
     if (btnSetScreensaver) {
         if (isAtScreensaver) {
             btnSetScreensaver.classList.add('disabled');
@@ -4260,6 +4418,11 @@ function updateHomeButtons() {
     if (btnGoPhotoHome) {
         if (isAtPhotoHome) btnGoPhotoHome.classList.add('disabled');
         else btnGoPhotoHome.classList.remove('disabled');
+    }
+
+    if (btnGoVideoHome) {
+        if (isAtVideoHome) btnGoVideoHome.classList.add('disabled');
+        else btnGoVideoHome.classList.remove('disabled');
     }
 }
 
@@ -4634,7 +4797,10 @@ async function handleFileUpload(event) {
         }
 
         const result = await response.json();
-        showToast(`Successfully uploaded: ${result.title} by ${result.artist}`, 'success');
+        const uploadedMsg = (result.type === 'photo' || result.type === 'video')
+            ? `Uploaded ${result.type}: ${result.title}`
+            : `Successfully uploaded: ${result.title} by ${result.artist}`;
+        showToast(uploadedMsg, 'success');
 
         // Refresh current folder if we are browsing local server
         if (selectedServerUdn === LOCAL_SERVER_UDN) {
@@ -4680,16 +4846,17 @@ async function handleFolderUpload(event) {
 
     const audioExts = new Set(['.mp3', '.wav', '.flac', '.m4a', '.aac', '.ogg', '.opus']);
     const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic', '.heif', '.tiff', '.tif']);
+    const videoExts = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi']);
 
     const eligible = files.filter(f => {
         const dot = f.name.lastIndexOf('.');
         if (dot === -1) return false;
         const ext = f.name.slice(dot).toLowerCase();
-        return audioExts.has(ext) || imageExts.has(ext);
+        return audioExts.has(ext) || imageExts.has(ext) || videoExts.has(ext);
     });
 
     if (!eligible.length) {
-        showToast('No supported audio or image files found in the selected folder', 'warning');
+        showToast('No supported audio, image or video files found in the selected folder', 'warning');
         return;
     }
 
@@ -5228,6 +5395,17 @@ async function openFileInfoModal(trackData) {
         (trackData.protocolInfo && trackData.protocolInfo.includes('image/')) ||
         (embeddedMeta && embeddedMeta.format && embeddedMeta.format.isImage);
 
+    // "Identify with AcoustID" only applies to local audio files
+    const acoustidBar = document.getElementById('acoustid-bar');
+    if (acoustidBar) {
+        const showAcoustid = !isImage && trackData.uri && trackData.uri.includes('/local-files/');
+        acoustidBar.style.display = showAcoustid ? 'flex' : 'none';
+        const acoustidBtn = document.getElementById('acoustid-btn');
+        if (acoustidBtn) { acoustidBtn.disabled = false; acoustidBtn.textContent = 'Identify with AcoustID'; }
+        const acoustidStatus = document.getElementById('acoustid-status');
+        if (acoustidStatus) { acoustidStatus.textContent = ''; acoustidStatus.className = 'acoustid-status'; }
+    }
+
     // If we have resolution string from server, parse it for display
     if (trackData.resolution && typeof trackData.resolution === 'string') {
         const parts = trackData.resolution.split('x');
@@ -5366,8 +5544,11 @@ async function openFileInfoModal(trackData) {
             const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name mismatch">!</div>' : '';
 
             const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
-            const isEditable = (f.label === 'Artist' || f.label === 'Album Artist' || f.label === 'Album' || f.label === 'Created') && isLocalFile;
-            const editField = f.label === 'Artist' ? 'artist' : f.label === 'Album Artist' ? 'albumartist' : 'album';
+            const editFieldMap = { 'Title': 'title', 'Artist': 'artist', 'Album Artist': 'albumartist', 'Album': 'album', 'Year': 'year' };
+            const isEditable = ((f.label in editFieldMap) || f.label === 'Created') && isLocalFile;
+            const editField = editFieldMap[f.label];
+            // "Copy to all tracks in this folder" only makes sense for album-level fields
+            const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist';
 
             let editCell;
             if (!isEditable) {
@@ -5398,7 +5579,7 @@ async function openFileInfoModal(trackData) {
                 editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
                        <input class="metadata-edit-input" data-field="${editField}" value="${(eValRaw || '').toString().replace(/"/g, '&quot;')}" placeholder="Enter ${f.label.toLowerCase()}..." />
                        <button class="metadata-save-btn" onclick="saveTrackTag('${editField}', this)">Save</button>
-                       <button class="metadata-save-btn metadata-copy-folder-btn" onclick="copyTagToFolderAll('${editField}', this)" title="Copy to all tracks in this folder">All</button>
+                       ${canCopyToFolder ? `<button class="metadata-save-btn metadata-copy-folder-btn" onclick="copyTagToFolderAll('${editField}', this)" title="Copy to all tracks in this folder">All</button>` : ''}
                    </div>`;
             }
 
@@ -5892,6 +6073,7 @@ async function saveTrackTag(field, btn) {
         }
         btn.textContent = 'Saved!';
         btn.style.color = '#4ade80';
+        input.classList.remove('metadata-suggested');
         setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
     } catch (e) {
         btn.textContent = 'Error';
@@ -5899,6 +6081,71 @@ async function saveTrackTag(field, btn) {
         setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
         showToast(`Failed to save ${field}: ${e.message}`, 'error');
     }
+}
+
+// Fingerprint the current track and ask AcoustID what it is. On a confident
+// match the suggested values are dropped into the editable Title/Artist/Album/Year
+// fields (highlighted) for the user to review and Save — nothing is written here.
+async function identifyWithAcoustid() {
+    const btn = document.getElementById('acoustid-btn');
+    const statusEl = document.getElementById('acoustid-status');
+    if (!btn || !currentInfoUri) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Identifying…';
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'acoustid-status'; }
+
+    try {
+        const res = await fetch('/api/local/acoustid-identify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: currentInfoUri })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Lookup failed');
+
+        if (!data.match) {
+            if (statusEl) {
+                statusEl.textContent = 'No confident match found';
+                statusEl.classList.add('acoustid-status-warn');
+            }
+            return;
+        }
+
+        const filled = applyAcoustidSuggestion(data);
+        const pct = Math.round((data.score || 0) * 100);
+        if (statusEl) {
+            statusEl.textContent = filled
+                ? `Match ${pct}% — review the highlighted fields and Save`
+                : `Match ${pct}%, but no new values to suggest`;
+            statusEl.classList.add(filled ? 'acoustid-status-ok' : 'acoustid-status-warn');
+        }
+    } catch (e) {
+        if (statusEl) {
+            statusEl.textContent = e.message;
+            statusEl.classList.add('acoustid-status-warn');
+        }
+        showToast('AcoustID: ' + e.message, 'error', 4000);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Identify with AcoustID';
+    }
+}
+
+function applyAcoustidSuggestion(s) {
+    const values = { title: s.title, artist: s.artist, album: s.album, year: s.year };
+    let filled = 0;
+    for (const [field, val] of Object.entries(values)) {
+        if (val === undefined || val === null || val === '') continue;
+        const input = document.querySelector(`#track-metadata-list .metadata-edit-input[data-field="${field}"]`);
+        if (!input) continue;
+        input.value = val;
+        input.classList.add('metadata-suggested');
+        const cell = input.closest('.metadata-editable-cell');
+        if (cell) cell.classList.add('metadata-suggested-cell');
+        filled++;
+    }
+    return filled > 0;
 }
 
 async function savePhotoDate(btn) {

@@ -175,10 +175,10 @@
                                 </svg>
                                 <span class="btn-label" data-mobile="">Upload</span>
                             </button>
-                            <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*"
+                            <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*,video/*"
                                 onchange="handleFileUpload(event)">
                             <button id="btn-upload-folder" onclick="triggerFolderUpload()" class="btn-control"
-                                title="Upload a folder of photos or music to local server">
+                                title="Upload a folder of photos, videos or music to local server">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
                                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -233,6 +233,17 @@
                                                 <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                                                 <circle cx="8.5" cy="8.5" r="1.5"></circle>
                                                 <polyline points="21 15 16 10 5 21"></polyline>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-video-home" onclick="setHome('video')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                                                <path d="M10 8l5 3-5 3V8z" fill="currentColor"></path>
                                             </svg>
                                             Set Home
                                         </button>
@@ -589,6 +600,20 @@
                                     yours here</a>.</p>
                         </div>
 
+                        <div class="settings-group" style="margin-top: 1.5rem;">
+                            <label for="acoustid-key-input">AcoustID API Key</label>
+                            <div class="input-with-button">
+                                <input type="password" id="acoustid-key-input"
+                                    placeholder="Enter your AcoustID application API key"
+                                    autocomplete="off">
+                                <button class="btn-control btn-small primary" onclick="saveAcoustidKey()">Save</button>
+                            </div>
+                            <p class="settings-hint">Powers "Identify with AcoustID" in the file info panel. Requires the
+                                <code>fpcalc</code> (Chromaprint) tool installed on the server. <a
+                                    href="https://acoustid.org/new-application" target="_blank" rel="noopener">Get a
+                                    key here</a>.</p>
+                        </div>
+
                         <div class="settings-group" style="margin-top: 2rem;">
                             <div class="settings-header-row">
                                 <label>S3 Cloud Sync</label>
@@ -735,6 +760,12 @@
                         <line x1="6" y1="6" x2="18" y2="18"></line>
                     </svg>
                 </button>
+            </div>
+            <div id="acoustid-bar" class="acoustid-bar" style="display: none;">
+                <button class="btn-control ghost btn-small" id="acoustid-btn" onclick="identifyWithAcoustid()">
+                    Identify with AcoustID
+                </button>
+                <span id="acoustid-status" class="acoustid-status"></span>
             </div>
             <div id="track-metadata-list" class="metadata-list">
                 <!-- Metadata items will be injected here -->
