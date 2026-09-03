@@ -4274,6 +4274,7 @@ input:checked+.slider:before {
     background: #000;
     z-index: 9999;
     display: none;
+    overflow: hidden;
     align-items: center;
     justify-content: center;
     opacity: 0;
@@ -4315,21 +4316,28 @@ input:checked+.slider:before {
 
 
 
+/*
+ * Panorama pan: animate transform (compositor-only) instead of object-position
+ * (which repaints the whole image every frame and crawls on a Raspberry Pi).
+ * The image is laid out at full height / natural width so it overflows the
+ * viewport, and we slide it by half the overflow in each direction.
+ */
 @keyframes panoramaPanLR {
-    0%   { object-position: 0% 50%; }
-    100% { object-position: 100% 50%; }
+    from { transform: rotate(var(--ss-rotation, 0deg)) translateX(var(--pano-shift, 0px)); }
+    to   { transform: rotate(var(--ss-rotation, 0deg)) translateX(calc(-1 * var(--pano-shift, 0px))); }
 }
 
 @keyframes panoramaPanRL {
-    0%   { object-position: 100% 50%; }
-    100% { object-position: 0% 50%; }
+    from { transform: rotate(var(--ss-rotation, 0deg)) translateX(calc(-1 * var(--pano-shift, 0px))); }
+    to   { transform: rotate(var(--ss-rotation, 0deg)) translateX(var(--pano-shift, 0px)); }
 }
 
 .screensaver-img.panorama {
-    width: 100%;
+    width: auto;
     height: 100%;
-    object-fit: cover;
-    object-position: 0% 50%;
+    max-width: none;
+    object-fit: fill;
+    will-change: transform;
 }
 
 
