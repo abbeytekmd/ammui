@@ -72,7 +72,8 @@ const browserBreadcrumbs = document.getElementById('browser-breadcrumbs');
 
 const serverModal = document.getElementById('server-modal');
 const rendererModal = document.getElementById('renderer-modal');
-const manageModal = document.getElementById('manage-modal');
+const serverSettingsModal = document.getElementById('server-settings-modal');
+const clientSettingsModal = document.getElementById('client-settings-modal');
 const aboutModal = document.getElementById('about-modal');
 const manageRendererList = document.getElementById('manage-renderer-list');
 const manageServerList = document.getElementById('manage-server-list');
@@ -310,7 +311,7 @@ async function fetchDevices() {
             renderDevices();
 
             // Also refresh the management UI if it's currently open
-            if (manageModal && manageModal.style.display === 'flex') {
+            if (clientSettingsModal && clientSettingsModal.style.display === 'flex') {
                 renderManageDevices();
             }
         }
@@ -326,7 +327,7 @@ async function selectServer(udn) {
     localStorage.setItem('selectedServerUdn', udn);
     closeServerModal();
     renderDevices();
-    document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === currentBrowserMode; });
+    updateBrowserModeTabs();
     updateLocalOnlyUI();
 
     if (window.innerWidth <= 1100) {
@@ -1938,8 +1939,13 @@ function renderBrowser(items) {
             const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
             const onErr = isVideo ? ' onerror="this.hidden=true"' : '';
-            icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}>`;
+            // Panoramas have no stored dimensions, so flag them once the thumbnail
+            // decodes (the thumbnailer preserves aspect ratio, so naturalWidth /
+            // naturalHeight matches the original photo's ratio).
+            const onLoad = isImage ? ' onload="if(this.naturalWidth>this.naturalHeight*2.2)this.nextElementSibling.hidden=false"' : '';
+            icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}${onLoad}>`;
             if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
+            if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg></span>';
         }
 
 
@@ -3210,10 +3216,9 @@ function closeRendererModal() {
     rendererModal.style.display = 'none';
 }
 
-function openManageModal() {
-    if (manageModal) {
-        renderManageDevices();
-        manageModal.style.display = 'flex';
+function openServerSettingsModal() {
+    if (serverSettingsModal) {
+        serverSettingsModal.style.display = 'flex';
         loadDiscogsToken();
         loadAcoustidKey();
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
@@ -3222,12 +3227,33 @@ function openManageModal() {
     }
 }
 
-function closeManageModal() {
-    if (manageModal) {
-        manageModal.style.display = 'none';
+function closeServerSettingsModal() {
+    if (serverSettingsModal) {
+        serverSettingsModal.style.display = 'none';
         stopS3StatusPolling();
+    }
+}
+
+function openClientSettingsModal() {
+    if (clientSettingsModal) {
+        renderManageDevices();
+        clientSettingsModal.style.display = 'flex';
+    }
+}
+
+function closeClientSettingsModal() {
+    if (clientSettingsModal) {
+        clientSettingsModal.style.display = 'none';
         stopAirPlayScan(); // Ensure scan stops when modal closes
     }
+}
+
+function openAboutModal() {
+    if (aboutModal) aboutModal.style.display = 'flex';
+}
+
+function closeAboutModal() {
+    if (aboutModal) aboutModal.style.display = 'none';
 }
 
 const playTagModal = document.getElementById('play-tag-modal');
@@ -3360,19 +3386,22 @@ async function playTag(tagName) {
     }
 }
 
-function switchSettingsTab(tab) {
+function switchSettingsTab(tab, btnEl) {
+    const modalContent = btnEl?.closest('.modal-content');
+    if (!modalContent) return;
+
     // Stop scanning if switching away from airplay
-    const currentTab = document.querySelector('.settings-tab.active')?.textContent.trim().toLowerCase();
+    const currentTab = modalContent.querySelector('.settings-tab.active')?.textContent.trim().toLowerCase();
     if (currentTab === 'airplay' && tab.toLowerCase() !== 'airplay') {
         stopAirPlayScan();
     }
 
     // Update tab buttons
-    document.querySelectorAll('.settings-tab').forEach(btn => {
+    modalContent.querySelectorAll('.settings-tab').forEach(btn => {
         btn.classList.toggle('active', btn.textContent.trim().toLowerCase() === tab.toLowerCase());
     });
     // Update panels
-    document.querySelectorAll('.settings-panel').forEach(panel => {
+    modalContent.querySelectorAll('.settings-panel').forEach(panel => {
         panel.classList.toggle('active', panel.id === `settings-${tab}`);
     });
 
@@ -3890,6 +3919,8 @@ function renderDevices() {
         }
     }
 
+    updateBrowserModeTabs();
+
     // Populate Modal Lists
     updateModalDeviceLists();
 }
@@ -4084,12 +4115,6 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
                 ` : ''}
             </div>
             ${asServer ? `<div class="media-library-label">Media Library</div>` : ''}
-            ${(asServer && isStatic) ? `
-            <div class="browser-mode-radios" onclick="event.stopPropagation()">
-                <label><input type="radio" name="browser-mode" value="music" onchange="switchBrowserMode('music')"> Music</label>
-                <label><input type="radio" name="browser-mode" value="photo" onchange="switchBrowserMode('photo')"> Photos</label>
-                <label><input type="radio" name="browser-mode" value="video" onchange="switchBrowserMode('video')"> Videos</label>
-            </div>` : ''}
             ${transportHtml ? `
                 <div class="card-transport-wrapper">
                     ${transportHtml}
@@ -4258,6 +4283,19 @@ async function setScreensaver() {
 }
 
 
+// Highlight the active Music/Photos/Videos tab and show the bar only when a
+// media server is available to browse.
+function updateBrowserModeTabs() {
+    const bar = document.getElementById('library-mode-tabs');
+    if (!bar) return;
+    const hasServer = !!selectedServerUdn &&
+        (currentDevices || []).some(d => d.udn === selectedServerUdn && d.isServer);
+    bar.hidden = !hasServer;
+    bar.querySelectorAll('.lib-tab').forEach(tab => {
+        tab.classList.toggle('active', tab.dataset.mode === currentBrowserMode);
+    });
+}
+
 async function switchBrowserMode(mode) {
     if (selectedServerUdn) {
         saveLastPath(); // Save current path for old mode
@@ -4266,8 +4304,10 @@ async function switchBrowserMode(mode) {
     currentBrowserMode = mode;
     localStorage.setItem('currentBrowserMode', mode);
 
-    // Update radio UI
-    document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === mode; });
+    updateBrowserModeTabs();
+
+    // On the single-column layout, a tab tap should also bring the browser forward.
+    if (window.innerWidth <= 1100) switchView('browser');
 
     if (selectedServerUdn) {
         // Load path for new mode
@@ -4499,7 +4539,7 @@ async function init() {
             // Set initial mode UI
             const mode = localStorage.getItem('currentBrowserMode') || 'music';
             currentBrowserMode = mode;
-            document.querySelectorAll('input[name="browser-mode"]').forEach(r => { r.checked = r.value === mode; });
+            updateBrowserModeTabs();
 
             // Prioritize last browsed path, then home location, then root
             let lastPaths = {};
@@ -4559,6 +4599,15 @@ function toggleBrowserMenu(event) {
     if (dropdown) {
         dropdown.classList.toggle('active');
     }
+}
+
+function toggleLogoMenu(event) {
+    if (event) event.stopPropagation();
+    const dropdown = document.getElementById('logo-dropdown');
+    if (!dropdown) return;
+    const wasActive = dropdown.classList.contains('active');
+    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
+    if (!wasActive) dropdown.classList.add('active');
 }
 
 init();
@@ -4765,12 +4814,71 @@ function triggerUpload() {
     if (input) input.click();
 }
 
+function openUploadFileModal(name) {
+    const modal = document.getElementById('upload-file-modal');
+    if (!modal) return;
+    const bar = document.getElementById('upload-file-bar');
+    if (bar) {
+        bar.classList.remove('indeterminate');
+        bar.style.width = '0%';
+    }
+    const title = document.getElementById('upload-file-title');
+    if (title) title.textContent = 'Uploading…';
+    const current = document.getElementById('upload-file-current');
+    if (current) current.textContent = name;
+    modal.style.display = 'flex';
+}
+
+function updateUploadFileModal(fraction, uploadComplete) {
+    const bar = document.getElementById('upload-file-bar');
+    const title = document.getElementById('upload-file-title');
+    const current = document.getElementById('upload-file-current');
+    if (uploadComplete || fraction >= 1) {
+        // Bytes are all sent; the server is still parsing metadata / writing the file.
+        if (bar) bar.classList.add('indeterminate');
+        if (title) title.textContent = 'Almost done…';
+        if (current) current.textContent = 'Processing on server…';
+    } else {
+        const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+        if (bar) bar.style.width = pct + '%';
+        if (title) title.textContent = `Uploading… ${pct}%`;
+    }
+}
+
+function closeUploadFileModal() {
+    const modal = document.getElementById('upload-file-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+// POST a FormData with real upload-progress reporting. fetch() can't report
+// request-body progress, so single-file uploads use XHR instead.
+function uploadWithProgress(url, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.upload.onprogress = (e) => {
+            if (e.lengthComputable) onProgress(e.loaded / e.total, false);
+        };
+        xhr.upload.onload = () => onProgress(1, true);
+        xhr.onload = () => {
+            let data = {};
+            try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
+            if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+            else reject(new Error(data.error || `Upload failed (${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error('Network error during upload'));
+        xhr.send(formData);
+    });
+}
+
 async function handleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
     const btn = document.getElementById('btn-upload');
     const originalContent = btn ? btn.innerHTML : '';
+
+    openUploadFileModal(file.name);
 
     try {
         if (btn) {
@@ -4786,17 +4894,8 @@ async function handleFileUpload(event) {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await fetch('/api/upload', {
-            method: 'POST',
-            body: formData
-        });
+        const result = await uploadWithProgress('/api/upload', formData, updateUploadFileModal);
 
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.error || 'Upload failed');
-        }
-
-        const result = await response.json();
         const uploadedMsg = (result.type === 'photo' || result.type === 'video')
             ? `Uploaded ${result.type}: ${result.title}`
             : `Successfully uploaded: ${result.title} by ${result.artist}`;
@@ -4811,6 +4910,7 @@ async function handleFileUpload(event) {
         console.error('Upload error:', err);
         showToast(`Upload failed: ${err.message}`);
     } finally {
+        closeUploadFileModal();
         if (btn) {
             btn.classList.remove('disabled');
             btn.innerHTML = originalContent;
@@ -6810,8 +6910,10 @@ async function fetchGeneralSettings() {
 }
 
 function updateUIWithDeviceName() {
-    const h1 = document.querySelector('.header-main h1');
-    if (h1) h1.textContent = currentDeviceName;
+    const label = document.getElementById('device-name-label');
+    if (label) label.textContent = currentDeviceName;
+    const logoBtn = document.getElementById('btn-logo-menu');
+    if (logoBtn) logoBtn.title = currentDeviceName;
     document.title = `${currentDeviceName}`;
 }
 

@@ -2244,9 +2244,9 @@ app.get('/api/download-job/:id', (req, res) => {
 
 app.get('/api/local-stats', async (req, res) => {
     const musicDir = path.join(baseDataDir, 'local', 'music');
-    const photosDir = path.join(baseDataDir, 'local', 'photos');
-    const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.wma', '.aiff', '.alac']);
-    const imageExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.heic']);
+    const photosDir = path.join(baseDataDir, 'local', 'pictures');
+    const audioExts = AUDIO_EXTS;
+    const imageExts = IMAGE_EXTS;
 
     async function walkDir(dir, extSet) {
         let count = 0, bytes = 0;

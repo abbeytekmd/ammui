@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=16">
+    <link rel="stylesheet" href="style.css?v=18">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -16,14 +16,44 @@
 <body>
     <div class="container">
         <div class="top-bar">
-            <header>
-                <div class="header-main">
-                    <div class="logo-group" onclick="openAboutModal()" style="cursor: pointer;"
-                        title="About Abbeytek Media Machine">
-                        <img src="/amm-icon.png" alt="AMM Logo" class="header-logo">
-                        <h1>AMMUI</h1>
-                    </div>
-                    <button id="btn-start-slideshow" onclick="manualStartSlideshow()" class="btn-control ghost"
+            <nav id="library-mode-tabs" class="library-mode-tabs" hidden>
+                <button type="button" class="lib-tab" data-mode="music" onclick="switchBrowserMode('music')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <path d="M9 18V5l12-2v13"></path>
+                        <circle cx="6" cy="18" r="3"></circle>
+                        <circle cx="18" cy="16" r="3"></circle>
+                    </svg>
+                    <span>Music</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="photo" onclick="switchBrowserMode('photo')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                        <path d="M21 15l-5-5L5 21"></path>
+                    </svg>
+                    <span>Photos</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="video" onclick="switchBrowserMode('video')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                    <span>Videos</span>
+                </button>
+            </nav>
+
+            <div class="menu-container logo-menu">
+                <button id="btn-logo-menu" class="btn-control logo-btn" onclick="toggleLogoMenu(event)"
+                    title="Menu">
+                    <img src="/amm-icon.png" alt="AMM Logo" class="header-logo">
+                </button>
+                <div id="logo-dropdown" class="dropdown-menu logo-dropdown">
+                    <div id="device-name-label" class="dropdown-label">AMMUI</div>
+                    <button id="btn-start-slideshow" onclick="manualStartSlideshow()" class="dropdown-item"
                         title="Start photo slideshow">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
@@ -31,9 +61,9 @@
                             <line x1="8" y1="21" x2="16" y2="21"></line>
                             <line x1="12" y1="17" x2="12" y2="21"></line>
                         </svg>
-                        <span class="btn-label">Slideshow</span>
+                        Slideshow
                     </button>
-                    <button id="btn-show-stats" onclick="openStatsModal()" class="btn-control ghost"
+                    <button id="btn-show-stats" onclick="openStatsModal()" class="dropdown-item"
                         title="Show playback statistics">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
@@ -41,39 +71,55 @@
                             <line x1="12" y1="20" x2="12" y2="4"></line>
                             <line x1="6" y1="20" x2="6" y2="14"></line>
                         </svg>
-                        <span class="btn-label">Stats</span>
+                        Stats
                     </button>
-                    <button id="btn-manage-devices" onclick="openManageModal()" class="btn-control ghost"
-                        title="Settings for saved devices">
+                    <button id="btn-server-settings" onclick="openServerSettingsModal()" class="dropdown-item"
+                        title="Server settings: general, integrations, updates">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                         </svg>
-                        <span class="btn-label">Settings</span>
+                        Server Settings
                     </button>
-                    <button id="btn-show-console" onclick="openConsoleModal()" class="btn-control ghost"
+                    <button id="btn-client-settings" onclick="openClientSettingsModal()" class="dropdown-item"
+                        title="Client settings: servers, players, AirPlay">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                            <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                            <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                        </svg>
+                        Client Settings
+                    </button>
+                    <button id="btn-show-console" onclick="openConsoleModal()" class="dropdown-item"
                         title="Show application logs">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <polyline points="4 17 10 11 4 5"></polyline>
                             <line x1="12" y1="19" x2="20" y2="19"></line>
                         </svg>
-                        <span class="btn-label">Console</span>
+                        Console
+                    </button>
+                    <div class="dropdown-divider"></div>
+                    <button id="btn-about" onclick="openAboutModal()" class="dropdown-item"
+                        title="About Abbeytek Media Machine">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="16" x2="12" y2="12"></line>
+                            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                        </svg>
+                        About AMMUI
                     </button>
                 </div>
-            </header>
-
-
+            </div>
         </div>
 
         <main class="main-layout">
             <!-- Left Column: Media Library & Folders -->
             <div class="column browser-column">
                 <section class="device-section">
-                    <div class="section-header">
-                        <h2>Libraries</h2>
-                        <span id="server-count" class="badge">0 active</span>
-                    </div>
                     <div id="server-list" class="device-list">
                         <div class="empty-state">Searching for Media Libraries...</div>
                     </div>
@@ -83,7 +129,7 @@
                     <div class="header-controls">
                         <div class="browser-control-group">
                             <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
-                                class="btn-control disabled btn-play-green"
+                                class="btn-control disabled btn-play-green btn-action-lg"
                                 title="Clear and play all tracks">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -91,7 +137,7 @@
                                 </svg>
                                 <span class="btn-label" data-mobile="All">Play All</span>
                             </button>
-                            <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled"
+                            <button id="btn-add-all" onclick="addAllToPlaylist()" class="btn-control disabled btn-action-lg"
                                 title="Queue all tracks on view">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -99,7 +145,7 @@
                                 </svg>
                                 <span class="btn-label" data-mobile="All">Queue All</span>
                             </button>
-                            <button id="btn-play-tag" onclick="openPlayTagModal()" class="btn-control btn-play-green"
+                            <button id="btn-play-tag" onclick="openPlayTagModal()" class="btn-control btn-play-green btn-action-lg"
                                 title="Play items by tag">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2">
@@ -274,10 +320,6 @@
             <!-- Right Column: Players & Playlist -->
             <div class="column player-column active">
                 <section class="device-section">
-                    <div class="section-header">
-                        <h2>Players</h2>
-                        <span id="renderer-count" class="badge">0 active</span>
-                    </div>
                     <div id="device-list" class="device-list">
                         <div class="empty-state">Searching for Players...</div>
                     </div>
@@ -445,13 +487,13 @@
         </div>
     </div>
 
-    <div id="manage-modal" class="modal-overlay" style="display: none;">
+    <div id="server-settings-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content manage-modal-content">
             <div class="modal-header">
                 <div class="modal-title-group">
-                    <h2>Settings</h2>
+                    <h2>Server Settings</h2>
                 </div>
-                <button class="btn-close" onclick="closeManageModal()">
+                <button class="btn-close" onclick="closeServerSettingsModal()">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -460,12 +502,9 @@
                 </button>
             </div>
             <div class="settings-tabs">
-                <button class="settings-tab active" onclick="switchSettingsTab('general')">General</button>
-                <button class="settings-tab" onclick="switchSettingsTab('servers')">Servers</button>
-                <button class="settings-tab" onclick="switchSettingsTab('players')">Players</button>
-                <button class="settings-tab" onclick="switchSettingsTab('airplay')">AirPlay</button>
-                <button class="settings-tab" onclick="switchSettingsTab('integrations')">Integrations</button>
-                <button class="settings-tab" onclick="switchSettingsTab('updates')">Updates</button>
+                <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
+                <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
+                <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-general" class="settings-panel active">
@@ -533,54 +572,6 @@
                             <input type="file" id="import-tags-input" accept="application/json"
                                 style="display:none" onchange="importTags(event)">
                         </div>
-                    </div>
-                </div>
-                <div id="settings-players" class="settings-panel">
-                    <div class="manage-section">
-                        <div class="settings-header-row">
-                            <h3>Players</h3>
-                            <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
-                                title="Search for more players">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <circle cx="11" cy="11" r="8"></circle>
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                </svg>
-                                Seek
-                            </button>
-                        </div>
-                        <div id="manage-renderer-list" class="manage-device-list"></div>
-                    </div>
-                </div>
-                <div id="settings-servers" class="settings-panel">
-                    <div class="manage-section">
-                        <div class="settings-header-row">
-                            <h3>Media Servers</h3>
-                            <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
-                                title="Search for more servers">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <circle cx="11" cy="11" r="8"></circle>
-                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-                                </svg>
-                                Seek
-                            </button>
-                        </div>
-                        <div id="manage-server-list" class="manage-device-list"></div>
-                    </div>
-                </div>
-                <div id="settings-airplay" class="settings-panel">
-                    <div class="manage-section">
-                        <div class="settings-header-row">
-                            <h3>AirPlay Devices</h3>
-                            <div id="airplay-status-indicator" class="status-indicator">
-                                <span class="dot"></span>
-                                Scanning...
-                            </div>
-                        </div>
-                        <p class="settings-hint">AirPlay devices are discovered automatically while you are viewing this
-                            tab.</p>
-                        <div id="manage-airplay-list" class="manage-device-list"></div>
                     </div>
                 </div>
                 <div id="settings-integrations" class="settings-panel">
@@ -709,6 +700,78 @@
                                 Runs <code>git pull</code> in the application directory, then restarts the server.
                             </p>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="client-settings-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content manage-modal-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Client Settings</h2>
+                </div>
+                <button class="btn-close" onclick="closeClientSettingsModal()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-tabs">
+                <button class="settings-tab active" onclick="switchSettingsTab('servers', this)">Servers</button>
+                <button class="settings-tab" onclick="switchSettingsTab('players', this)">Players</button>
+                <button class="settings-tab" onclick="switchSettingsTab('airplay', this)">AirPlay</button>
+            </div>
+            <div class="manage-list-container">
+                <div id="settings-servers" class="settings-panel active">
+                    <div class="manage-section">
+                        <div class="settings-header-row">
+                            <h3>Media Servers</h3>
+                            <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
+                                title="Search for more servers">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                Seek
+                            </button>
+                        </div>
+                        <div id="manage-server-list" class="manage-device-list"></div>
+                    </div>
+                </div>
+                <div id="settings-players" class="settings-panel">
+                    <div class="manage-section">
+                        <div class="settings-header-row">
+                            <h3>Players</h3>
+                            <button class="btn-control btn-seek" onclick="triggerDiscovery(this)"
+                                title="Search for more players">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                Seek
+                            </button>
+                        </div>
+                        <div id="manage-renderer-list" class="manage-device-list"></div>
+                    </div>
+                </div>
+                <div id="settings-airplay" class="settings-panel">
+                    <div class="manage-section">
+                        <div class="settings-header-row">
+                            <h3>AirPlay Devices</h3>
+                            <div id="airplay-status-indicator" class="status-indicator">
+                                <span class="dot"></span>
+                                Scanning...
+                            </div>
+                        </div>
+                        <p class="settings-hint">AirPlay devices are discovered automatically while you are viewing this
+                            tab.</p>
+                        <div id="manage-airplay-list" class="manage-device-list"></div>
                     </div>
                 </div>
             </div>
@@ -920,6 +983,21 @@
             <div class="modal-footer">
                 <div id="upload-folder-stats" class="download-progress-stats"></div>
                 <button id="upload-folder-close" class="btn-modal-close" onclick="closeUploadFolderModal()" disabled>Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Single File Upload Progress Modal -->
+    <div id="upload-file-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content download-progress-modal-content">
+            <div class="modal-header">
+                <h3 id="upload-file-title">Uploading&hellip;</h3>
+            </div>
+            <div class="download-progress-body">
+                <div class="download-progress-bar-wrap">
+                    <div id="upload-file-bar"></div>
+                </div>
+                <div id="upload-file-current" class="download-progress-current"></div>
             </div>
         </div>
     </div>
@@ -1216,7 +1294,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=17"></script>
+    <script src="app.js?v=18"></script>
     <script src="slideshow.js?v=1"></script>
 </body>
 
