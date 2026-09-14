@@ -1625,19 +1625,34 @@ function selectPlaylistItem(id) {
 }
 
 
+// Rows use `content-visibility: auto`, so an off-screen row's height is only a
+// `contain-intrinsic-size` estimate until it has actually scrolled into view.
+// On a long list, a one-shot scrollTop computed from those estimates lands
+// well off from the real row (usually short of it, since it's the first jump
+// there). Re-measure the row's real position over a few frames — like
+// restoreScrollAnchor — so it converges once the browser has laid out the
+// rows it's now scrolled past.
 function scrollToLetter(letter) {
     const el = document.getElementById(`letter-${letter}`);
-    if (el) {
-        // Find the scrollable container
-        const container = document.getElementById('browser-items');
-        if (container) {
-            const topPos = el.offsetTop - container.offsetTop;
-            container.scrollTo({
-                top: topPos,
-                behavior: 'auto'
-            });
+    const container = document.getElementById('browser-items');
+    if (!el || !container) return;
+    const anchorIndex = el.dataset.itemIndex != null ? el.dataset.itemIndex : null;
+
+    let pass = 0;
+    const run = () => {
+        const target = anchorIndex != null
+            ? container.querySelector(`.browser-item[data-item-index="${anchorIndex}"]`)
+            : el;
+        if (target) {
+            const contTop = container.getBoundingClientRect().top;
+            const diff = target.getBoundingClientRect().top - contTop;
+            if (Math.abs(diff) > 0.5) container.scrollTop += diff;
         }
-    }
+        if (++pass < 8) {
+            requestAnimationFrame(run);
+        }
+    };
+    requestAnimationFrame(run);
 }
 
 function toggleBrowserView() {
@@ -1878,8 +1893,18 @@ function renderBrowser(items) {
             .map(i => i.title[0].toUpperCase())
         )];
 
+        // Files (not folders) get queued/played in disc/track-number order, which can
+        // diverge from alphabetical order for tagged albums. When that happens the
+        // A-Z jump bar would point at the wrong spot (or make same-letter items
+        // beyond the first appear "missing"), so only show it when the file portion
+        // of the list is actually in alphabetical order.
+        const fileTitles = items.filter(i => i.type !== 'container').map(i => String(i.title || ''));
+        const filesAreAlphabetical = fileTitles.every((title, idx) =>
+            idx === 0 || fileTitles[idx - 1].localeCompare(title, undefined, { numeric: true, sensitivity: 'base' }) <= 0
+        );
+
         // Photos are ordered by date, so an A–Z jump bar would be misleading.
-        if (effectiveViewMode === 'list' && !currentBrowserFindText && !hasImages) {
+        if (effectiveViewMode === 'list' && !currentBrowserFindText && !hasImages && filesAreAlphabetical) {
             alphabetScroll.classList.add('visible');
             renderAlphabet();
         } else {
@@ -1904,15 +1929,31 @@ function renderBrowser(items) {
 
     const pathStr = browsePath.map(p => p.title).filter(t => t !== 'Root').join(' / ');
 
-    let lastLetter = null;
+    // Folders always sort before files, so a letter can occur in two separate
+    // groups (e.g. folder "Cave" and file "Cherry.mp3" both start with C).
+    // Pick one jump target per letter, preferring the file occurrence — folders
+    // sit at the top of the list and are already visible without scrolling, so
+    // jumping to the (much earlier) folder instead of the file made the bar
+    // look like it was scrolling to "somewhere much earlier in the list".
+    // Falls back to the folder occurrence for folder-only listings (e.g. an
+    // A-Z list of artist folders with no loose files).
+    const letterTargetIndex = new Map();
+    items.forEach((item, idx) => {
+        const letter = (item.title || '')[0].toUpperCase();
+        if (!/^[A-Z]$/.test(letter)) return;
+        const existingIdx = letterTargetIndex.get(letter);
+        if (existingIdx === undefined || (items[existingIdx].type === 'container' && item.type !== 'container')) {
+            letterTargetIndex.set(letter, idx);
+        }
+    });
+
     browserItems.innerHTML = items.map((item, index) => {
         const isContainer = item.type === 'container';
         const firstLetter = (item.title || '')[0].toUpperCase();
         let letterIdAttr = '';
 
-        if (effectiveViewMode === 'list' && /^[A-Z]$/.test(firstLetter) && firstLetter !== lastLetter) {
+        if (effectiveViewMode === 'list' && /^[A-Z]$/.test(firstLetter) && letterTargetIndex.get(firstLetter) === index) {
             letterIdAttr = `id="letter-${firstLetter}"`;
-            lastLetter = firstLetter;
         }
 
         const isImage = (item.class && item.class.includes('imageItem')) ||
@@ -1938,12 +1979,17 @@ function renderBrowser(items) {
             const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
             const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
-            const onErr = isVideo ? ' onerror="this.hidden=true"' : '';
+            // Folder art is a best-effort lookup (cover file or embedded tag on the first
+            // track) — fall back to the plain folder icon (and the compact box size)
+            // if nothing was actually found.
+            const onErr = isContainer ? ' onerror="this.style.display=\'none\'; this.nextElementSibling.style.removeProperty(\'display\'); this.parentElement.classList.remove(\'has-thumb\');"'
+                : isVideo ? ' onerror="this.hidden=true; this.parentElement.classList.remove(\'has-thumb\');"' : '';
             // Panoramas have no stored dimensions, so flag them once the thumbnail
             // decodes (the thumbnailer preserves aspect ratio, so naturalWidth /
             // naturalHeight matches the original photo's ratio).
             const onLoad = isImage ? ' onload="if(this.naturalWidth>this.naturalHeight*2.2)this.nextElementSibling.hidden=false"' : '';
             icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}${onLoad}>`;
+            if (isContainer) icon += '<svg class="folder-art-fallback" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
             if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
             if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg></span>';
         }
@@ -1987,7 +2033,7 @@ function renderBrowser(items) {
                     isVideo ?
                         `handleVideoClick('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', ${index})` :
                         `playTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', '${escJs(pathStr)}')`}">
-                <div class="item-icon">${icon}</div>
+                <div class="item-icon${thumbUrl ? ' has-thumb' : ''}">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}</div>
                 </div>
@@ -3314,7 +3360,7 @@ function updateCastDeviceList() {
 
     modalCastList.innerHTML = renderers.map(device => {
         const isSelected = (device.udn === selectedRendererUdn);
-        const displayName = device.customName || device.friendlyName;
+        const displayName = getDeviceDisplayName(device);
         const iconHtml = `<div class="modal-device-icon">${getDeviceIcon(device, false, 24)}</div>`;
 
         return `
@@ -3430,7 +3476,7 @@ function renderManageDevices() {
         const isLocallyDisabled = isLocalDisabled(device.udn);
         const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
 
-        const displayName = device.customName || device.friendlyName;
+        const displayName = getDeviceDisplayName(device);
         const iconHtml = `<div class="manage-item-icon">${getDeviceIcon(device, role === 'server', 24)}</div>`;
 
         let statusTags = [];
@@ -3568,7 +3614,7 @@ function startRename(udn) {
     const device = currentDevices.find(d => d.udn === udn);
     if (!device) return;
 
-    const currentName = device.customName || device.friendlyName;
+    const currentName = getDeviceDisplayName(device);
 
     nameRow.innerHTML = `
         <input type="text" class="manage-name-input" id="input-${udn.replace(/:/g, '-')}" value="${currentName.replace(/"/g, '&quot;')}" onkeydown="handleRenameKey(event, '${udn}')">
@@ -3925,6 +3971,15 @@ function renderDevices() {
     updateModalDeviceLists();
 }
 
+function getDeviceDisplayName(device) {
+    const raw = device.customName || device.friendlyName || '';
+    // Some devices (e.g. an unconfigured Sonos speaker) advertise their name as
+    // "192.168.0.70 - Sonos Play:5" — move the IP to the end in brackets instead
+    // of showing it first.
+    const match = raw.match(/^(\d{1,3}(?:\.\d{1,3}){3})\s*-\s*(.+)$/);
+    return match ? `${match[2]} (${match[1]})` : raw;
+}
+
 function getDeviceIcon(device, asServer, size = 32) {
     if (device.iconUrl) {
         const isExternal = device.iconUrl.startsWith('http');
@@ -4009,7 +4064,7 @@ function renderModalDeviceItem(device, asServer) {
     const isSelected = asServer ? (device.udn === selectedServerUdn) : (device.udn === selectedRendererUdn);
     const clickAction = asServer ? `selectServer('${device.udn}')` : `selectDevice('${device.udn}')`;
 
-    const displayName = device.customName || device.friendlyName;
+    const displayName = getDeviceDisplayName(device);
     const iconHtml = `<div class="modal-device-icon">${getDeviceIcon(device, asServer, 24)}</div>`;
 
     return `
@@ -4104,22 +4159,24 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
             </div>
             <div class="device-info">
                 <div class="device-name-container">
-                    <div class="device-name">${device.customName || device.friendlyName}</div>
+                    <div class="device-name">${getDeviceDisplayName(device)}</div>
                     <div class="device-protocol-label">${device.protocol || (device.isAirPlay ? 'AirPlay' : (device.isSonos ? 'Sonos' : 'DLNA'))}</div>
                 </div>
                 ${(!asServer && isStatic) ? `
-                    <div class="device-now-playing" id="card-now-playing">
-                        <div class="card-track-title"></div>
-                        <div class="card-track-artist-album"></div>
+                    <div class="card-info-row">
+                        <div class="device-now-playing" id="card-now-playing">
+                            <div class="card-track-title"></div>
+                            <div class="card-track-artist-album"></div>
+                        </div>
+                        ${transportHtml ? `
+                            <div class="card-transport-wrapper">
+                                ${transportHtml}
+                            </div>
+                        ` : ''}
                     </div>
                 ` : ''}
             </div>
             ${asServer ? `<div class="media-library-label">Media Library</div>` : ''}
-            ${transportHtml ? `
-                <div class="card-transport-wrapper">
-                    ${transportHtml}
-                </div>
-            ` : ''}
         </div>
     `;
 }

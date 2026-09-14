@@ -207,7 +207,7 @@ function findCaseInsensitivePath(parent, name) {
 loadDevices();
 loadSettings();
 airplayManager = new AirPlayManager(devices, saveDevices);
-setupLocalDlna(app, port, settings.deviceName);
+setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl });
 
 // Manually inject the local server into the devices map on startup
 // so it's always available even if SSDP discovery is slow or blocked.

@@ -82,7 +82,7 @@
                         Server Settings
                     </button>
                     <button id="btn-client-settings" onclick="openClientSettingsModal()" class="dropdown-item"
-                        title="Client settings: servers, players, AirPlay">
+                        title="Devices: servers, players, AirPlay">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                             stroke-width="2">
                             <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
@@ -90,7 +90,7 @@
                             <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
                             <line x1="12" y1="20" x2="12.01" y2="20"></line>
                         </svg>
-                        Client Settings
+                        Devices
                     </button>
                     <button id="btn-show-console" onclick="openConsoleModal()" class="dropdown-item"
                         title="Show application logs">
@@ -126,6 +126,83 @@
                 </section>
 
                 <div id="browser-container" class="playlist-container">
+                    <div class="section-header">
+                        <div class="header-group">
+                            <div class="breadcrumb-header">
+                                <div id="browser-breadcrumbs" class="breadcrumbs">
+                                    <!-- Breadcrumbs will go here -->
+                                </div>
+                                <div class="menu-container">
+                                    <button id="btn-browser-up" class="btn-control" onclick="goUpFolder()"
+                                        title="Go Up One Folder" style="margin-right: 0.25rem;">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                            stroke-linejoin="round">
+                                            <polyline points="18 15 12 9 6 15"></polyline>
+                                        </svg>
+                                    </button>
+                                    <button id="btn-browser-menu" class="btn-control" onclick="toggleBrowserMenu(event)"
+                                        title="More Library Actions">
+                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                            stroke="currentColor" stroke-width="2">
+                                            <line x1="3" y1="12" x2="21" y2="12"></line>
+                                            <line x1="3" y1="6" x2="21" y2="6"></line>
+                                            <line x1="3" y1="18" x2="21" y2="18"></line>
+                                        </svg>
+                                    </button>
+                                    <div id="browser-menu-dropdown" class="dropdown-menu">
+                                        <button id="btn-set-music-home" onclick="setHome('music')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <path d="M9 18V5l12-2v13"></path>
+                                                <circle cx="6" cy="18" r="3"></circle>
+                                                <circle cx="18" cy="16" r="3"></circle>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-photo-home" onclick="setHome('photo')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                                <polyline points="21 15 16 10 5 21"></polyline>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-video-home" onclick="setHome('video')"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                                                <path d="M10 8l5 3-5 3V8z" fill="currentColor"></path>
+                                            </svg>
+                                            Set Home
+                                        </button>
+                                        <button id="btn-set-screensaver" onclick="setScreensaver()"
+                                            class="dropdown-item">
+                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                                stroke="currentColor" stroke-width="2">
+                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                                            </svg>
+                                            Set Screensaver
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="browser-content-wrapper">
+                        <div id="browser-items" class="playlist-items">
+                            <div class="empty-state">Select a server to browse folders</div>
+                        </div>
+                        <div id="alphabet-scroll" class="alphabet-scroll"></div>
+                    </div>
                     <div class="header-controls">
                         <div class="browser-control-group">
                             <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
@@ -236,83 +313,6 @@
                             <input type="file" id="upload-folder-input" style="display: none;" webkitdirectory multiple
                                 onchange="handleFolderUpload(event)">
                         </div>
-                    </div>
-                    <div class="section-header">
-                        <div class="header-group">
-                            <div class="breadcrumb-header">
-                                <div id="browser-breadcrumbs" class="breadcrumbs">
-                                    <!-- Breadcrumbs will go here -->
-                                </div>
-                                <div class="menu-container">
-                                    <button id="btn-browser-up" class="btn-control" onclick="goUpFolder()"
-                                        title="Go Up One Folder" style="margin-right: 0.25rem;">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                            stroke-linejoin="round">
-                                            <polyline points="18 15 12 9 6 15"></polyline>
-                                        </svg>
-                                    </button>
-                                    <button id="btn-browser-menu" class="btn-control" onclick="toggleBrowserMenu(event)"
-                                        title="More Library Actions">
-                                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2">
-                                            <line x1="3" y1="12" x2="21" y2="12"></line>
-                                            <line x1="3" y1="6" x2="21" y2="6"></line>
-                                            <line x1="3" y1="18" x2="21" y2="18"></line>
-                                        </svg>
-                                    </button>
-                                    <div id="browser-menu-dropdown" class="dropdown-menu">
-                                        <button id="btn-set-music-home" onclick="setHome('music')"
-                                            class="dropdown-item">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                                stroke="currentColor" stroke-width="2">
-                                                <path d="M9 18V5l12-2v13"></path>
-                                                <circle cx="6" cy="18" r="3"></circle>
-                                                <circle cx="18" cy="16" r="3"></circle>
-                                            </svg>
-                                            Set Home
-                                        </button>
-                                        <button id="btn-set-photo-home" onclick="setHome('photo')"
-                                            class="dropdown-item">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                                stroke="currentColor" stroke-width="2">
-                                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                                                <polyline points="21 15 16 10 5 21"></polyline>
-                                            </svg>
-                                            Set Home
-                                        </button>
-                                        <button id="btn-set-video-home" onclick="setHome('video')"
-                                            class="dropdown-item">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                                stroke="currentColor" stroke-width="2">
-                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                                                <line x1="8" y1="21" x2="16" y2="21"></line>
-                                                <line x1="12" y1="17" x2="12" y2="21"></line>
-                                                <path d="M10 8l5 3-5 3V8z" fill="currentColor"></path>
-                                            </svg>
-                                            Set Home
-                                        </button>
-                                        <button id="btn-set-screensaver" onclick="setScreensaver()"
-                                            class="dropdown-item">
-                                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                                stroke="currentColor" stroke-width="2">
-                                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                                                <line x1="8" y1="21" x2="16" y2="21"></line>
-                                                <line x1="12" y1="17" x2="12" y2="21"></line>
-                                            </svg>
-                                            Set Screensaver
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="browser-content-wrapper">
-                        <div id="browser-items" class="playlist-items">
-                            <div class="empty-state">Select a server to browse folders</div>
-                        </div>
-                        <div id="alphabet-scroll" class="alphabet-scroll"></div>
                     </div>
                 </div>
             </div>
@@ -710,7 +710,7 @@
         <div class="modal-content manage-modal-content">
             <div class="modal-header">
                 <div class="modal-title-group">
-                    <h2>Client Settings</h2>
+                    <h2>Devices</h2>
                 </div>
                 <button class="btn-close" onclick="closeClientSettingsModal()">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

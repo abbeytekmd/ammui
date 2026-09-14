@@ -266,14 +266,15 @@ p.subtitle {
 }
 
 .device-card.is-static {
+    --icon-size: 130px;
     padding: 0 1.5rem 0 0;
     align-items: stretch;
-    min-height: 130px;
+    min-height: var(--icon-size);
 }
 
 .device-card.is-static .device-icon {
-    width: 130px;
-    height: auto;
+    width: var(--icon-size);
+    height: var(--icon-size);
     border-radius: 0;
     margin: 0;
 }
@@ -288,16 +289,11 @@ p.subtitle {
 .device-card.is-static .card-transport-wrapper {
     display: flex;
     align-items: center;
-    padding-right: 0.5rem;
     flex-shrink: 0;
 }
 
 .device-card.is-static.server-card {
-    min-height: 70px;
-}
-
-.device-card.is-static.server-card .device-icon {
-    width: 70px;
+    --icon-size: 70px;
 }
 
 .device-card.is-static.server-card .device-info {
@@ -387,16 +383,25 @@ p.subtitle {
     gap: 1rem;
 }
 
-.device-now-playing {
-    display: none;
+.card-info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
     margin-top: 0.75rem;
     padding-top: 0.5rem;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.device-now-playing {
+    display: none;
+    min-width: 0;
     pointer-events: none;
 }
 
 .device-now-playing.visible {
     display: block;
+    flex: 1;
 }
 
 .card-track-title {
@@ -418,7 +423,7 @@ p.subtitle {
 }
 
 @media (max-width: 1100px) {
-    .device-now-playing {
+    .card-info-row {
         margin-top: 0.4rem;
         padding-top: 0.4rem;
         border-top-color: rgba(255, 255, 255, 0.05);
@@ -434,11 +439,7 @@ p.subtitle {
     }
 
     .device-card.is-static {
-        min-height: 100px;
-    }
-
-    .device-card.is-static .device-icon {
-        width: 100px;
+        --icon-size: 100px;
     }
 
     .device-card.is-static .device-info {
@@ -674,6 +675,12 @@ p.subtitle {
     align-items: center;
     gap: 0.75rem;
     margin-left: auto;
+}
+
+#browser-container .header-controls {
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--card-border);
 }
 
 .transport-group,
@@ -1661,6 +1668,13 @@ p.subtitle {
     flex-shrink: 0;
 }
 
+/* Rows with an actual thumbnail (folder/album art, photo, video) get a bigger
+   preview than the plain vector icons — folders without art stay compact. */
+.browser-item .item-icon.has-thumb {
+    width: 68px;
+    height: 68px;
+}
+
 .browser-item .item-title {
     font-size: 0.9rem;
 }
@@ -1688,6 +1702,11 @@ p.subtitle {
         width: 24px;
         height: 24px;
         opacity: 0.9;
+    }
+
+    .browser-item .item-icon.has-thumb {
+        width: 64px;
+        height: 64px;
     }
 
     /* Taller rows on narrow screens (larger padding + title) — match the estimate. */
@@ -3275,7 +3294,6 @@ p.subtitle {
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    margin-left: auto;
 }
 
 /* Settings & Integrations */
@@ -5522,7 +5540,7 @@ input:checked+.slider:before {
     #browser-container .header-controls {
         display: flex;
         justify-content: center;
-        margin-bottom: 0.5rem;
+        margin-top: 0.5rem;
     }
 
     #playlist-container .position-control-wrapper {
