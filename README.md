@@ -18,7 +18,8 @@ A web based home hub. Plays music and shows family photos, great if you have a l
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
 * Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
-* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key in Settings; the optional `yt-dlp` tool lets videos with embedding disabled play locally too).
+* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key in Settings; the optional `yt-dlp` tool (plus ffmpeg) lets videos with embedding disabled play locally too).
+* View server and browser logs from the menu (Logs), filtered by type (YOUTUBE, DEBUG, DEVICES, UPLOAD, and so on) to help track down problems.
 
 <img src="images/ammui-desktop-mode.png" />
 
@@ -47,6 +48,66 @@ You could also have this running on a headless linux/windows box with, say, tabl
 * Download buttons on music and photos from other servers to add a copy to the local server.
 * Sync all local music and photo files to S3.
 
+## Managing your music library
+
+Your local library lives in the `local/music` folder on the server, organised as `Artist/Album/Track`. Everything is served over DLNA, so folder names and file tags both matter: players show the tags, while the folders decide where a track sits. Most of the tools below exist to keep those two in agreement.
+
+Browse the local server in **Music** mode to see the commands. Most of them are on the local server only.
+
+### Getting music in
+
+* **Upload** (toolbar): add a single file. **Upload Folder**: add a whole folder of music, photos or videos. Music is filed into `Artist/Album/Title` using the file's tags, falling back to `Unknown Artist` / `Unknown Album` when tags are missing. Supported: mp3, flac, m4a, aac, wav, ogg and opus.
+* **Download** (row menu, on a track or folder from another media server): copies it into the local library. Folders download in the background with a progress window, and files that already exist are skipped.
+* **Import a folder by hand**: copy music straight into `local/music` and use **Reimport** (below) to tidy it up.
+
+### Folder menu (the ☰ button on each row)
+
+| Command | What it does |
+|---|---|
+| **Build Album** | Gathers scattered tracks that share an album title (for example a compilation split across artist folders), lets you tick which ones to include and choose the artist folder (`Various Artists` or one of the existing artists, or your own name), then moves them into one album folder. |
+| **Rename** | Renames the folder. If a folder with that name already exists you're asked whether to merge into it. |
+| **Merge Into** | Moves everything in this folder into another folder alongside it (pick from the suggestions or type a new name), for example to combine `The Beatles` and `Beatles`. |
+| **Reimport (Move to Tag Locations)** | Moves every track in the folder to `Artist/Album` folders that match its own tags, as a fresh import would. Exact duplicates are removed, and a different file already at the destination is left alone and reported as a failure. Empty folders left behind are cleaned up. |
+| **Identify Tags from Filename** | For files with missing or generic tags (blank, "Unknown", "Track"), guesses artist and title from the file name and confirms the guess against Discogs before writing the tags. Files that already have tags are untouched. Needs a Discogs token in Settings. |
+| **Sync File Tags** | Writes the folder names into the files: the album folder becomes the Album tag and the artist folder becomes the Artist tag, for every audio file inside. Use it after you've renamed or merged folders. This is the opposite direction to Reimport. |
+| **Delete** | Permanently deletes the file or folder from the library. There is no recycle bin for music. |
+| **Download** | Only appears for other servers' content (see above). |
+
+On a single track the menu also offers **Sync File Tags**, **Delete**, and, when the file's folder doesn't match its tags, **Move to Tag Location** (moves just that file, as Reimport does for a folder).
+
+### File information panel (the ⓘ button on a track)
+
+The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagree with its tags, which is the cue to fix one or the other. The panel shows the file's metadata and, for local files, lets you edit it:
+
+* **Title, Artist, Album Artist, Album, Year**: edit a field and press **Save** to write it into the file.
+* **All** (next to Artist, Album Artist and Album): copies that value to every track in the same folder.
+* **Identify with AcoustID**: fingerprints the audio and looks it up on AcoustID. On a confident match it fills in Title/Artist/Album/Year, highlighted for you to review before saving. Nothing is written until you press Save. Needs an AcoustID key in Settings and `fpcalc` installed.
+* **Tags / favourite**: label a track with your own tags, which can then be played from the Play Tag button. Favourite is a reserved tag.
+
+### Album art
+
+Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cover.png`, `album.jpg` or `artwork.jpg` in the same folder, then a picture embedded in the file, then an automatic Discogs search by artist and album (needs a Discogs token in Settings). If a track still has no art, or the wrong one, use the **Retry album art** button on the slideshow's music bar to search Discogs by artist and album yourself and pick a replacement.
+
+### Menu and settings commands
+
+* **Set Home** (top of the browser, ☰): remember this folder as the starting point for Music browsing. It also sets where **Build Album** puts new albums.
+* **Logs** (logo menu): see what a command did and why it failed, filtered by type (for example `IDENTIFY`, `TAGS`, `UPLOAD`).
+* **Stats** (logo menu): playback statistics for your library.
+* **Server Settings → General → Local Library**: file counts and sizes for what is stored on the server.
+* **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
+* **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key, and **S3 Cloud Sync**.
+* **S3 Cloud Sync → Sync Now / View Log**: copies the local music and photos to an S3 bucket as a backup. View Log shows the result of the last sync.
+
+### A typical clean-up
+
+1. **Upload** or copy the new music in.
+2. On folders with untagged tracks, run **Identify Tags from Filename**, or open a track's ⓘ and **Identify with AcoustID**.
+3. Run **Reimport** on the folder so tracks land in the right `Artist/Album` folders.
+4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
+5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
+6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
+7. **Export Tags** and **Sync Now** to keep a backup.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -66,7 +127,7 @@ You could also have this running on a headless linux/windows box with, say, tabl
     npm install
     ```
 
-3. Optional: Install ffmpeg for Airplay support.
+3. Optional: Install ffmpeg for Airplay support, photo/video thumbnails and local playback of YouTube videos.
     ```bash
     sudo apt-get install ffmpeg
     ```
@@ -82,7 +143,7 @@ You could also have this running on a headless linux/windows box with, say, tabl
     ```bash
     sudo apt-get install yt-dlp
     ```
-    or on Windows download `yt-dlp.exe` and put it on your PATH.
+    or on Windows download `yt-dlp.exe` and put it on your PATH. ffmpeg (step 3) is also required for this: the video is copied and the audio re-encoded to AAC on the fly, as YouTube's Opus audio could drop out partway through playback.
 
 ### Usage
 
@@ -95,6 +156,10 @@ You could also have this running on a headless linux/windows box with, say, tabl
     ```
     http://localhost:3000
     ```
+
+### Logs
+
+Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
 
 ## ⚙️ Built With
 

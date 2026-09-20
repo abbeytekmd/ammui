@@ -4283,35 +4283,23 @@ app.get('/api/youtube/candidates', async (req, res) => {
 // YouTube has largely retired pre-combined video+audio files, so most videos only offer
 // separate video-only and audio-only streams that need merging — bestvideo+bestaudio asks
 // yt-dlp to grab both and mux them with ffmpeg (falling back to a single combined format
-// on the rare video that still has one). The merge is forced to Matroska: unlike mp4,
-// which normally needs a final seek-back to write its metadata atom, mkv can be muxed as
-// a pure forward stream, so it pipes to the HTTP response cleanly with no temp file.
+// on the rare video that still has one). yt-dlp's stdout is a forward-only Matroska stream,
+// which we then pass through our own ffmpeg to copy the video and re-encode the audio to
+// AAC in fragmented mp4: YouTube's Opus-in-Matroska live stream could make the browser drop
+// the audio track mid-playback while video carried on.
 const YOUTUBE_STREAM_FORMAT = 'bestvideo+bestaudio/best';
-const YOUTUBE_MERGE_FORMAT = 'mkv';
-const YOUTUBE_CONTENT_TYPES = { mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska' };
 
-app.get('/api/youtube/stream/:videoId', async (req, res) => {
+app.get('/api/youtube/stream/:videoId', (req, res) => {
     const { videoId } = req.params;
     if (!/^[\w-]{6,20}$/.test(videoId)) return res.status(400).json({ error: 'Invalid video id' });
     if (ytDlpUnavailable) return res.status(503).json({ error: 'yt-dlp is not installed on the server.' });
+    if (ffmpegUnavailable) return res.status(503).json({ error: 'ffmpeg is not installed on the server.' });
 
     const url = `https://www.youtube.com/watch?v=${videoId}`;
 
-    // Ask yt-dlp what container it'll actually produce before streaming — a video that
-    // still has a pre-combined format available skips the merge and keeps its own
-    // extension (often mp4), so the Content-Type needs to match rather than assuming mkv.
-    let contentType = YOUTUBE_CONTENT_TYPES[YOUTUBE_MERGE_FORMAT];
-    try {
-        const { stdout } = await execAsync(`yt-dlp -f "${YOUTUBE_STREAM_FORMAT}" --merge-output-format ${YOUTUBE_MERGE_FORMAT} --print ext --no-playlist --no-warnings "${url}"`);
-        const ext = stdout.trim();
-        if (YOUTUBE_CONTENT_TYPES[ext]) contentType = YOUTUBE_CONTENT_TYPES[ext];
-    } catch (err) {
-        console.warn(`[YOUTUBE STREAM] Could not resolve format for ${videoId}, defaulting to ${YOUTUBE_MERGE_FORMAT}:`, err.message);
-    }
-
-    const proc = spawn('yt-dlp', [
+    const ytdlp = spawn('yt-dlp', [
         '-f', YOUTUBE_STREAM_FORMAT,
-        '--merge-output-format', YOUTUBE_MERGE_FORMAT,
+        '--merge-output-format', 'mkv',
         '-o', '-',
         '--no-playlist',
         '--no-part',
@@ -4323,36 +4311,63 @@ app.get('/api/youtube/stream/:videoId', async (req, res) => {
         '--fragment-retries', 'infinite',
         url
     ]);
+    const ffmpeg = spawn('ffmpeg', [
+        '-loglevel', 'error',
+        '-i', 'pipe:0',
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-f', 'mp4',
+        'pipe:1'
+    ]);
 
-    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Type', 'video/mp4');
+    ytdlp.stdout.pipe(ffmpeg.stdin);
     // Once the browser's buffer is full, a plain pipe applies backpressure all the way
     // back to yt-dlp/ffmpeg, which stalls their YouTube connections until they time out —
     // playback then freezes a couple of minutes in. A big intermediate buffer lets yt-dlp
     // keep downloading ahead of playback instead of blocking on the client.
     const buffer = new PassThrough({ highWaterMark: 256 * 1024 * 1024 });
-    proc.stdout.pipe(buffer).pipe(res);
+    ffmpeg.stdout.pipe(buffer).pipe(res);
+
+    const killAll = () => {
+        if (!ytdlp.killed) ytdlp.kill('SIGKILL');
+        if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+    };
     res.on('close', () => buffer.destroy());
 
-    let stderr = '';
-    proc.stderr.on('data', d => { stderr += d.toString(); });
+    let ytdlpErr = '', ffmpegErr = '';
+    ytdlp.stderr.on('data', d => { ytdlpErr += d.toString(); });
+    ffmpeg.stderr.on('data', d => { ffmpegErr += d.toString(); });
+    // ffmpeg closing its stdin early (e.g. client left) shouldn't crash the process.
+    ffmpeg.stdin.on('error', () => {});
 
-    proc.on('error', err => {
-        console.error('[YOUTUBE STREAM] Failed to start yt-dlp:', err.message);
-        if (!res.headersSent) res.status(500).json({ error: 'Failed to start yt-dlp' });
-    });
+    const fail = (what, err) => {
+        console.error(`[YOUTUBE STREAM] Failed to start ${what}:`, err.message);
+        if (!res.headersSent) res.status(500).json({ error: `Failed to start ${what}` });
+        killAll();
+    };
+    ytdlp.on('error', err => fail('yt-dlp', err));
+    ffmpeg.on('error', err => fail('ffmpeg', err));
 
-    proc.on('close', code => {
+    ytdlp.on('close', code => {
         if (code !== 0 && code !== null) {
-            console.warn(`[YOUTUBE STREAM] yt-dlp exited ${code} for ${videoId}: ${stderr.trim().slice(-300)}`);
+            console.warn(`[YOUTUBE STREAM] yt-dlp exited ${code} for ${videoId}: ${ytdlpErr.trim().slice(-300)}`);
         }
-        // If headers were already sent, stdout.pipe(res) already ended the response when
-        // the process's stdout closed — nothing left to do here but report a clean failure.
-        if (!res.headersSent) res.status(502).json({ error: 'yt-dlp failed to fetch the video' });
+    });
+    ffmpeg.on('close', code => {
+        if (code !== 0 && code !== null) {
+            console.warn(`[YOUTUBE STREAM] ffmpeg exited ${code} for ${videoId}: ${ffmpegErr.trim().slice(-300)}`);
+        }
+        killAll();
+        // If headers were already sent, the pipe already ended the response when ffmpeg's
+        // stdout closed — nothing left to do here but report a clean failure.
+        if (!res.headersSent) res.status(502).json({ error: 'Failed to fetch the video' });
     });
 
     // Client disconnected (closed the modal, seeked away) — stop the download immediately
     // rather than letting yt-dlp keep pulling a stream nobody's reading.
-    req.on('close', () => { if (!proc.killed) proc.kill('SIGKILL'); });
+    req.on('close', killAll);
 });
 
 app.post('/api/file-tags', (req, res) => {

@@ -18,21 +18,28 @@
         return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
     }
 
+    // Same idea as the server's categorize(): the leading "[TAG]" names the log type.
+    function categorizeLog(message) {
+        const tag = /^\s*\[([^\]]{1,40})\]/.exec(message);
+        if (!tag) return 'GENERAL';
+        const name = tag[1].trim().toUpperCase();
+        return name.startsWith('YOUTUBE') ? 'YOUTUBE' : name.replace(/\s+/g, '-');
+    }
+    window.categorizeLog = categorizeLog;
+
     function captureLog(type, source, ...args) {
         const timestamp = getTimestamp();
         const message = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : arg).join(' ');
 
-        // Don't log DEBUG messages to the app console modal
-        if (message.includes('[DEBUG]')) return;
-
-        window.appLogs.push({ type, timestamp, message, source });
+        const category = categorizeLog(message);
+        window.appLogs.push({ type, timestamp, message, source, category });
         if (window.appLogs.length > MAX_LOGS) {
             window.appLogs.shift();
         }
 
         const consoleList = document.getElementById('console-log-list');
         if (consoleList && document.getElementById('console-modal').style.display === 'flex') {
-            appendLogToUI({ type, timestamp, message, source });
+            appendLogToUI({ type, timestamp, message, source, category });
         }
     }
 
@@ -5578,6 +5585,7 @@ async function fetchServerLogs() {
         if (newLogs.length > 0) {
             newLogs.forEach(log => {
                 log.source = 'SERVER';
+                if (!log.category) log.category = categorizeLog(log.message);
                 window.appLogs.push(log);
                 if (window.appLogs.length > 1000) window.appLogs.shift();
 
@@ -5768,10 +5776,42 @@ function closeConsoleModal() {
     }
 }
 
+// Log type filter: 'ALL' shows everything except DEBUG (which is noisy), otherwise one category.
+let consoleLogFilter = 'ALL';
+try { consoleLogFilter = localStorage.getItem('consoleLogFilter') || 'ALL'; } catch (e) { }
+const knownLogCategories = new Set();
+
+function logMatchesFilter(log) {
+    if (consoleLogFilter === 'ALL') return log.category !== 'DEBUG';
+    return log.category === consoleLogFilter;
+}
+
+function updateLogFilterOptions() {
+    const select = document.getElementById('console-log-filter');
+    if (!select) return;
+    const counts = new Map();
+    window.appLogs.forEach(l => counts.set(l.category, (counts.get(l.category) || 0) + 1));
+    // Keep the chosen type listed even when it currently has no entries.
+    if (consoleLogFilter !== 'ALL' && !counts.has(consoleLogFilter)) counts.set(consoleLogFilter, 0);
+    const cats = [...counts.keys()].sort();
+    select.innerHTML = '<option value="ALL">All types (except DEBUG)</option>' +
+        cats.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)} (${counts.get(c)})</option>`).join('');
+    select.value = consoleLogFilter;
+    knownLogCategories.clear();
+    cats.forEach(c => knownLogCategories.add(c));
+}
+
+function setConsoleLogFilter(value) {
+    consoleLogFilter = value || 'ALL';
+    try { localStorage.setItem('consoleLogFilter', consoleLogFilter); } catch (e) { }
+    renderLogs();
+}
+
 function renderLogs() {
     const container = document.getElementById('console-log-list');
     if (!container) return;
 
+    updateLogFilterOptions();
     container.innerHTML = '';
     // Sort all logs by timestamp before rendering
     const allLogs = [...window.appLogs].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -5782,10 +5822,14 @@ function appendLogToUI(log) {
     const container = document.getElementById('console-log-list');
     if (!container) return;
 
+    // A brand-new type shows up in the picker straight away.
+    if (!knownLogCategories.has(log.category)) updateLogFilterOptions();
+    if (!logMatchesFilter(log)) return;
+
     const entry = document.createElement('div');
     entry.className = `log-entry log-${log.type}`;
     const sourceClass = log.source === 'SERVER' ? 'source-server' : 'source-client';
-    entry.innerHTML = `<span class="log-time">[${log.timestamp}]</span> <span class="log-source ${sourceClass}">${log.source}</span> <span class="log-msg">${log.message}</span>`;
+    entry.innerHTML = `<span class="log-time">[${log.timestamp}]</span> <span class="log-source ${sourceClass}">${log.source}</span> <span class="log-cat">${escapeHtml(log.category || 'GENERAL')}</span> <span class="log-msg">${escapeHtml(String(log.message))}</span>`;
     container.appendChild(entry);
 
     container.scrollTop = container.scrollHeight;
