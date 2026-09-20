@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=18">
+    <link rel="stylesheet" href="style.css?v=20">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -605,6 +605,23 @@
                                     key here</a>.</p>
                         </div>
 
+                        <div class="settings-group" style="margin-top: 1.5rem;">
+                            <label for="youtube-key-input">YouTube API Key</label>
+                            <div class="input-with-button">
+                                <input type="password" id="youtube-key-input"
+                                    placeholder="Enter your YouTube Data API v3 key"
+                                    autocomplete="off">
+                                <button class="btn-control btn-small primary" onclick="saveYoutubeKey()">Save</button>
+                            </div>
+                            <p class="settings-hint">Shows a "Video" button next to tracks that have a matching video on
+                                YouTube, to play in the browser. Results are cached, but the free API quota is small
+                                (~100 lookups/day). <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com"
+                                    target="_blank" rel="noopener">Get a key here</a>.
+                                Some videos have embedding disabled by their owner — if the
+                                <code>yt-dlp</code> tool is installed on the server, those still play locally
+                                (extracted on the fly, not cached); otherwise they open on youtube.com instead.</p>
+                        </div>
+
                         <div class="settings-group" style="margin-top: 2rem;">
                             <div class="settings-header-row">
                                 <label>S3 Cloud Sync</label>
@@ -926,11 +943,42 @@
         </div>
     </div>
 
+    <!-- Video Candidate Picker Modal -->
+    <div id="video-picker-modal" class="modal-overlay" style="display: none;" onclick="if (event.target === this) closeVideoPicker()">
+        <div class="modal-content video-picker-content">
+            <div class="modal-header">
+                <h2 id="video-picker-title">Choose a video</h2>
+                <button class="btn-close" onclick="closeVideoPicker()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div id="video-picker-list" class="video-picker-list"></div>
+        </div>
+    </div>
+
     <!-- Video Player Modal -->
     <div id="video-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content video-modal-content">
             <div class="modal-header">
-                <h2 id="video-modal-title">Video Player</h2>
+                <div class="video-modal-title-group">
+                    <h2 id="video-modal-title">Video Player</h2>
+                    <a id="video-modal-yt-link" class="video-modal-yt-link" href="#" target="_blank" rel="noopener" style="display: none;">Watch on YouTube ↗</a>
+                </div>
+                <div class="video-modal-volume" id="video-modal-volume" style="display: none;">
+                    <button class="btn-control ghost" id="video-modal-mute-btn" onclick="toggleLocalVideoMute()" title="Mute">
+                        <svg id="video-modal-volume-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                        </svg>
+                    </button>
+                    <input type="range" id="video-modal-volume-slider" min="0" max="100" value="100"
+                        oninput="setLocalVideoVolume(this.value)" title="Volume">
+                </div>
                 <button class="btn-close" onclick="closeVideoModal()">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -943,6 +991,14 @@
                 <video id="video-player" controls preload="auto" playsinline>
                     Your browser does not support the video tag.
                 </video>
+                <iframe id="youtube-player" style="display: none;" frameborder="0"
+                    allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+            </div>
+            <div class="video-modal-seek" id="video-modal-seek" style="display: none;">
+                <span id="video-modal-time-current">0:00</span>
+                <input type="range" id="video-modal-seek-slider" min="0" max="1000" value="0" step="1"
+                    title="Seek">
+                <span id="video-modal-time-total">0:00</span>
             </div>
         </div>
     </div>
@@ -1294,7 +1350,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=18"></script>
+    <script src="app.js?v=20"></script>
     <script src="slideshow.js?v=1"></script>
 </body>
 

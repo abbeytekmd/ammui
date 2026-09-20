@@ -89,6 +89,11 @@ let selectedServerUdn = localStorage.getItem('selectedServerUdn');
 let browsePath = [{ id: '0', title: 'Root' }];
 let currentBrowserMode = localStorage.getItem('currentBrowserMode') || 'music';
 let currentBrowserItems = [];
+let browserRenderSeq = 0; // bumped on every renderBrowser() call, so stale async video lookups can be dropped
+const youtubeVideoCache = new Map(); // "artist|title" → { videoId, embeddable } | null (no match found)
+let youtubeApiKeyMissing = false; // set once the server reports no key configured, to stop hammering it this session
+let ytDlpAvailable = false; // set from the first /api/youtube/video response; lets non-embeddable videos still play locally
+let localVideoVolume = parseFloat(localStorage.getItem('localVideoVolume') || '1'); // 0–1, remembered across visits since local playback can come in much louder than expected
 let currentPlaylistItems = [];
 let currentTrackId = null;
 let currentTransportState = 'Stopped';
@@ -1823,6 +1828,7 @@ function updateBrowserControls(items) {
 }
 
 function renderBrowser(items) {
+    const renderSeq = ++browserRenderSeq;
     selectedPhotos.clear();
     updatePhotoSelectionUI();
 
@@ -1926,6 +1932,7 @@ function renderBrowser(items) {
     } else {
         browserItems.classList.remove('grid-view');
     }
+    browserItems.classList.toggle('photo-mode', currentBrowserMode === 'photo');
 
     const pathStr = browsePath.map(p => p.title).filter(t => t !== 'Root').join(' / ');
 
@@ -1991,7 +1998,7 @@ function renderBrowser(items) {
             icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}${onLoad}>`;
             if (isContainer) icon += '<svg class="folder-art-fallback" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
             if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
-            if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg></span>';
+            if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg><span class="pano-badge-label">PANO</span></span>';
         }
 
 
@@ -2061,6 +2068,15 @@ function renderBrowser(items) {
                         </svg>
                     </button>
                     ` : `
+                    ${!isImage && !isVideo ? `
+                    <button class="btn-control ghost youtube-video-btn" style="display: none;" data-item-uri="${escJs(item.uri)}" onclick="event.stopPropagation(); playYoutubeVideoFromBrowser(${index})" title="Watch the video for this track on YouTube">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="2" y="4" width="20" height="16" rx="3"></rect>
+                            <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none"></path>
+                        </svg>
+                        <span class="btn-label" data-mobile="">Video</span>
+                    </button>
+                    ` : ''}
                     <button class="btn-control queue-btn" onclick="event.stopPropagation(); addToPlaylist('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', false, '${escJs(pathStr)}')" title="Add to queue">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M12 5v14M5 12h14"></path>
@@ -2226,6 +2242,237 @@ function renderBrowser(items) {
             setTimeout(executeBrowserFind, 10);
         }
     }
+
+    checkYoutubeVideosForItems(items, renderSeq);
+}
+
+// Looks up, for each visible audio track, whether a matching video exists on YouTube,
+// revealing a "Video" button on the row when one is found. Runs a few lookups at a time
+// (rather than all at once) to keep a big folder from firing dozens of requests together,
+// and everything is cached server-side so repeat visits to a folder cost nothing.
+async function checkYoutubeVideosForItems(items, renderSeq) {
+    if (youtubeApiKeyMissing) return;
+
+    const audioItems = items
+        .map((item, index) => ({ item, index }))
+        .filter(({ item }) => item.type === 'item' && !isImageItem(item) && !isVideoItem(item) && item.title);
+
+    if (audioItems.length === 0) return;
+
+    const CONCURRENCY = 3;
+    let cursor = 0;
+    const worker = async () => {
+        while (cursor < audioItems.length) {
+            const { item, index } = audioItems[cursor++];
+            if (renderSeq !== browserRenderSeq) return; // folder changed under us — abandon
+            if (youtubeApiKeyMissing) return; // another worker just found out there's no key — stop wasting requests
+            await checkYoutubeVideoForItem(item, index, renderSeq);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, audioItems.length) }, worker));
+}
+
+async function checkYoutubeVideoForItem(item, index, renderSeq) {
+    const cacheKey = `${item.artist || ''}|${item.title}`;
+    if (youtubeVideoCache.has(cacheKey)) {
+        applyYoutubeButtonState(item.uri, index, renderSeq, youtubeVideoCache.get(cacheKey));
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/youtube/video?artist=${encodeURIComponent(item.artist || '')}&title=${encodeURIComponent(item.title)}`);
+        if (res.status === 400) {
+            // No API key configured server-side — stop trying for the rest of this session
+            youtubeApiKeyMissing = true;
+            return;
+        }
+        if (res.ok) {
+            const data = await res.json();
+            if (data.ytDlpAvailable) ytDlpAvailable = true;
+            const result = { videoId: data.videoId, embeddable: data.embeddable !== false };
+            youtubeVideoCache.set(cacheKey, result);
+            applyYoutubeButtonState(item.uri, index, renderSeq, result);
+        } else {
+            youtubeVideoCache.set(cacheKey, null);
+        }
+    } catch (e) {
+        console.warn('[YOUTUBE] Video check failed:', e);
+    }
+}
+
+function applyYoutubeButtonState(uri, index, renderSeq, result) {
+    if (!result || !result.videoId) return;
+    if (renderSeq !== browserRenderSeq) return; // the folder shown has since changed
+    const row = browserItems.querySelector(`.playlist-item[data-item-index="${index}"]`);
+    if (!row) return;
+    const btn = row.querySelector('.youtube-video-btn');
+    if (!btn || btn.dataset.itemUri !== uri) return;
+    btn.dataset.videoId = result.videoId;
+    btn.dataset.embeddable = result.embeddable ? '1' : '0';
+    // YouTube's own "embeddable" flag only reflects whether embedding is disabled
+    // globally — it says nothing about a per-domain allow/block list some creators set
+    // in Studio, which isn't exposed by the API at all, so a video can report embeddable
+    // and still refuse our iframe. yt-dlp bypasses that entirely by pulling the real
+    // stream, so prefer it whenever it's installed rather than trusting the flag.
+    if (ytDlpAvailable) {
+        btn.title = 'Watch this track\'s video (played locally via yt-dlp)';
+    } else if (!result.embeddable) {
+        btn.title = 'Watch this track\'s video on YouTube (opens in a new tab)';
+    }
+    btn.style.display = '';
+}
+
+function playYoutubeVideoFromBrowser(index) {
+    const row = browserItems.querySelector(`.playlist-item[data-item-index="${index}"]`);
+    const btn = row && row.querySelector('.youtube-video-btn');
+    const videoId = btn && btn.dataset.videoId;
+    if (!videoId) return;
+    const item = currentBrowserItems[index];
+
+    // Offer every candidate the search found; the button's own videoId (top hit) is the
+    // fallback if the candidate lookup fails or only finds one.
+    openVideoPicker(item, { videoId, embeddable: btn.dataset.embeddable !== '0' });
+}
+
+function playYoutubeCandidate(videoId, embeddable, title) {
+    if (ytDlpAvailable) {
+        openVideoModal(`/api/youtube/stream/${encodeURIComponent(videoId)}`, title);
+        return;
+    }
+
+    if (!embeddable) {
+        window.open(`https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`, '_blank', 'noopener');
+        return;
+    }
+
+    openYoutubeModal(videoId, title);
+}
+
+async function openVideoPicker(item, fallback) {
+    const title = item ? item.title : 'Video Player';
+    const modal = document.getElementById('video-picker-modal');
+    const list = document.getElementById('video-picker-list');
+    if (!modal || !list) return playYoutubeCandidate(fallback.videoId, fallback.embeddable, title);
+
+    const status = msg => {
+        list.innerHTML = '';
+        const el = document.createElement('div');
+        el.className = 'video-picker-status';
+        el.textContent = msg;
+        list.appendChild(el);
+    };
+
+    document.getElementById('video-picker-title').textContent = `Choose a video — ${title}`;
+    status('Searching…');
+    modal.style.display = 'flex';
+    const seq = ++videoPickerSeq;
+
+    let candidates = [];
+    try {
+        const res = await fetch(`/api/youtube/candidates?artist=${encodeURIComponent(item?.artist || '')}&title=${encodeURIComponent(item?.title || '')}`);
+        if (res.ok) {
+            const data = await res.json();
+            if (data.ytDlpAvailable) ytDlpAvailable = true;
+            candidates = data.candidates || [];
+        }
+    } catch (e) {
+        console.warn('[YOUTUBE] Candidate lookup failed:', e);
+    }
+    if (seq !== videoPickerSeq) return; // picker was closed or reopened meanwhile
+
+    if (candidates.length <= 1) {
+        // Nothing to choose between — skip the menu and play straight away.
+        closeVideoPicker();
+        const only = candidates[0];
+        if (only) playYoutubeCandidate(only.videoId, only.embeddable !== false, title);
+        else playYoutubeCandidate(fallback.videoId, fallback.embeddable, title);
+        return;
+    }
+
+    list.innerHTML = '';
+    for (const c of candidates) list.appendChild(buildVideoPickerCard(c, title));
+}
+
+function buildVideoPickerCard(c, trackTitle) {
+    const card = document.createElement('div');
+    card.className = 'video-picker-card';
+
+    const preview = document.createElement('div');
+    preview.className = 'video-picker-preview';
+    preview.title = 'Click to play';
+    const img = document.createElement('img');
+    img.src = c.thumbnail;
+    img.alt = '';
+    img.loading = 'lazy';
+    preview.appendChild(img);
+    preview.onclick = () => {
+        closeVideoPicker();
+        playYoutubeCandidate(c.videoId, c.embeddable !== false, trackTitle);
+    };
+
+    const info = document.createElement('div');
+    info.className = 'video-picker-info';
+    const t = document.createElement('div');
+    t.className = 'vp-title';
+    t.textContent = c.title;
+    const ch = document.createElement('div');
+    ch.className = 'vp-channel';
+    ch.textContent = c.channel;
+    info.append(t, ch);
+
+    const actions = document.createElement('div');
+    actions.className = 'video-picker-actions';
+    const play = document.createElement('button');
+    play.className = 'btn-control';
+    play.textContent = 'Play';
+    play.onclick = () => {
+        closeVideoPicker();
+        playYoutubeCandidate(c.videoId, c.embeddable !== false, trackTitle);
+    };
+    actions.appendChild(play);
+
+    card.append(preview, info, actions);
+    return card;
+}
+
+function closeVideoPicker() {
+    videoPickerSeq++;
+    const modal = document.getElementById('video-picker-modal');
+    if (modal) modal.style.display = 'none';
+    const list = document.getElementById('video-picker-list');
+    if (list) list.innerHTML = '';
+}
+
+let videoPickerSeq = 0;
+
+function openYoutubeModal(videoId, title = 'Video Player') {
+    if (!videoId) return;
+    const modal = document.getElementById('video-modal');
+    const video = document.getElementById('video-player');
+    const iframe = document.getElementById('youtube-player');
+    const titleEl = document.getElementById('video-modal-title');
+    const ytLink = document.getElementById('video-modal-yt-link');
+    if (!modal || !iframe) return;
+
+    console.log(`[YOUTUBE] Playing video ${videoId} locally in browser`);
+    if (titleEl) titleEl.textContent = title;
+    if (ytLink) {
+        ytLink.href = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+        ytLink.style.display = '';
+    }
+
+    // Stop whatever's currently playing so the video's audio doesn't compete with it.
+    if (video) { video.pause(); video.src = ''; }
+    if (selectedRendererUdn && currentTransportState === 'Playing') transportAction('pause');
+
+    video.style.display = 'none';
+    iframe.style.display = '';
+    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1`;
+    modal.style.display = 'flex';
+
+    // The embedded YouTube player has its own volume control built in, so hide ours.
+    const volumeGroup = document.getElementById('video-modal-volume');
+    if (volumeGroup) volumeGroup.style.display = 'none';
 }
 
 async function fetchPlaylist(udn) {
@@ -2667,6 +2914,50 @@ async function saveAcoustidKey() {
     }
 }
 
+async function loadYoutubeKey() {
+    try {
+        const res = await fetch('/api/settings/youtube');
+        if (res.ok) {
+            const data = await res.json();
+            const keyInput = document.getElementById('youtube-key-input');
+            if (keyInput) {
+                keyInput.value = data.maskedKey || '';
+                keyInput.dataset.loaded = '1';
+            }
+            // A key was added/removed since the page loaded — let per-track checks re-run.
+            youtubeApiKeyMissing = !data.hasKey;
+        }
+    } catch (e) {
+        console.warn('Failed to load YouTube key status:', e);
+    }
+}
+
+async function saveYoutubeKey() {
+    const keyInput = document.getElementById('youtube-key-input');
+    if (!keyInput) return;
+    const key = keyInput.value.trim();
+    // The masked placeholder loaded from the server means nothing changed
+    if (key.includes('****')) return;
+
+    try {
+        const response = await fetch('/api/settings/youtube', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+
+        if (response.ok) {
+            showToast(key ? 'YouTube key saved' : 'YouTube key removed', 'success', 2000);
+            await loadYoutubeKey();
+        } else {
+            throw new Error('Failed to save key');
+        }
+    } catch (err) {
+        console.error('Save settings error:', err);
+        showToast('Failed to save settings to server');
+    }
+}
+
 function showPlayerArt(url) {
     if (!selectedRendererUdn) return;
     const safeUdn = selectedRendererUdn.replace(/:/g, '-');
@@ -2725,18 +3016,83 @@ function openVideoModal(url, title = 'Video Player') {
     if (!url) return;
     const modal = document.getElementById('video-modal');
     const video = document.getElementById('video-player');
+    const iframe = document.getElementById('youtube-player');
     const titleEl = document.getElementById('video-modal-title');
+    const ytLink = document.getElementById('video-modal-yt-link');
 
     if (modal && video) {
         console.log(`[VIDEO] Playing locally: ${url}`);
         if (titleEl) titleEl.textContent = title;
+        if (ytLink) ytLink.style.display = 'none';
 
+        if (iframe) { iframe.src = ''; iframe.style.display = 'none'; }
+        video.style.display = '';
         video.src = url;
+        video.volume = localVideoVolume;
         modal.style.display = 'flex';
         video.play().catch(err => {
             console.warn('[VIDEO] Auto-play failed:', err);
         });
+
+        // Local playback (including a yt-dlp-streamed video) has no built-in volume UI
+        // on some devices (tablets in particular often hide it from native controls),
+        // and can come in a lot louder than expected — so give it an explicit control.
+        const volumeGroup = document.getElementById('video-modal-volume');
+        if (volumeGroup) volumeGroup.style.display = '';
+        syncLocalVideoVolumeUI();
+
+        const seekGroup = document.getElementById('video-modal-seek');
+        if (seekGroup) seekGroup.style.display = '';
+        setupVideoSeekBar(video);
     }
+}
+
+function formatVideoTime(seconds) {
+    if (!isFinite(seconds) || seconds < 0) return '0:00';
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = String(s % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+// The slider works in 0–1000 steps of the duration. While the thumb is held we stop
+// following timeupdate (so it doesn't fight the drag) and only seek on release, which
+// avoids hammering the server with a range request per pixel of movement.
+function setupVideoSeekBar(video) {
+    const slider = document.getElementById('video-modal-seek-slider');
+    const cur = document.getElementById('video-modal-time-current');
+    const tot = document.getElementById('video-modal-time-total');
+    if (!slider || !cur || !tot) return;
+
+    let dragging = false;
+    const seekable = () => isFinite(video.duration) && video.duration > 0;
+
+    const refresh = () => {
+        const ok = seekable();
+        slider.disabled = !ok;
+        tot.textContent = ok ? formatVideoTime(video.duration) : '--:--';
+        if (!dragging) {
+            cur.textContent = formatVideoTime(video.currentTime);
+            slider.value = ok ? Math.round((video.currentTime / video.duration) * 1000) : 0;
+        }
+    };
+
+    video.ontimeupdate = refresh;
+    video.onloadedmetadata = refresh;
+    video.ondurationchange = refresh;
+    video.onemptied = refresh;
+
+    slider.oninput = () => {
+        dragging = true;
+        if (seekable()) cur.textContent = formatVideoTime((slider.value / 1000) * video.duration);
+    };
+    slider.onchange = () => {
+        if (seekable()) video.currentTime = (slider.value / 1000) * video.duration;
+        dragging = false;
+    };
+
+    refresh();
 }
 
 async function handleVideoClick(uri, title, artist, album, duration, protocolInfo, index) {
@@ -2789,13 +3145,67 @@ async function handleVideoClick(uri, title, artist, album, duration, protocolInf
 function closeVideoModal() {
     const modal = document.getElementById('video-modal');
     const video = document.getElementById('video-player');
+    const iframe = document.getElementById('youtube-player');
+    const ytLink = document.getElementById('video-modal-yt-link');
+    const volumeGroup = document.getElementById('video-modal-volume');
     if (modal) {
         modal.style.display = 'none';
         if (video) {
             video.pause();
             video.src = "";
+            video.style.display = '';
         }
+        if (iframe) {
+            iframe.src = ''; // clears the src so the embedded video actually stops
+            iframe.style.display = 'none';
+        }
+        if (ytLink) ytLink.style.display = 'none';
+        if (volumeGroup) volumeGroup.style.display = 'none';
+        const seekGroup = document.getElementById('video-modal-seek');
+        if (seekGroup) seekGroup.style.display = 'none';
     }
+}
+
+// Reflects video.volume/muted onto the slider and mute icon — called whenever local
+// playback starts, so the control always matches what's actually about to play.
+function syncLocalVideoVolumeUI() {
+    const video = document.getElementById('video-player');
+    const slider = document.getElementById('video-modal-volume-slider');
+    if (!video || !slider) return;
+    slider.value = video.muted ? 0 : Math.round(video.volume * 100);
+    updateLocalVideoVolumeIcon(video.muted || video.volume === 0);
+}
+
+function setLocalVideoVolume(value) {
+    const video = document.getElementById('video-player');
+    if (!video) return;
+    const volume = Math.max(0, Math.min(100, parseInt(value, 10) || 0)) / 100;
+    video.muted = false;
+    video.volume = volume;
+    localVideoVolume = volume;
+    localStorage.setItem('localVideoVolume', String(volume));
+    updateLocalVideoVolumeIcon(volume === 0);
+}
+
+function toggleLocalVideoMute() {
+    const video = document.getElementById('video-player');
+    const slider = document.getElementById('video-modal-volume-slider');
+    if (!video) return;
+    video.muted = !video.muted;
+    if (slider) slider.value = video.muted ? 0 : Math.round(video.volume * 100);
+    updateLocalVideoVolumeIcon(video.muted);
+}
+
+function updateLocalVideoVolumeIcon(isMuted) {
+    const icon = document.getElementById('video-modal-volume-icon');
+    const btn = document.getElementById('video-modal-mute-btn');
+    if (!icon) return;
+    // Swap the two "sound wave" paths out entirely when muted, rather than just hiding
+    // them, so screen readers/the title attribute stay in sync with what's shown.
+    icon.innerHTML = isMuted
+        ? '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><line x1="23" y1="9" x2="17" y2="15"></line><line x1="17" y1="9" x2="23" y2="15"></line>'
+        : '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path><path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>';
+    if (btn) btn.title = isMuted ? 'Unmute' : 'Mute';
 }
 
 // updateModalTrackInfo removed
@@ -3267,6 +3677,7 @@ function openServerSettingsModal() {
         serverSettingsModal.style.display = 'flex';
         loadDiscogsToken();
         loadAcoustidKey();
+        loadYoutubeKey();
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
         if (s3Enabled) startS3StatusPolling();
         loadLocalStats();

@@ -32,11 +32,14 @@ import {
     markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
+    getCachedYoutubeVideo, setCachedYoutubeVideo,
+    getCachedYoutubeCandidates, setCachedYoutubeCandidates,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
 import crypto from 'crypto';
 import { exec, execFile, spawn } from 'child_process';
+import { PassThrough } from 'stream';
 import { promisify } from 'util';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -135,6 +138,7 @@ function saveDevices() {
 let settings = {
     discogsToken: '',
     acoustidKey: '',
+    youtubeApiKey: '',
     s3: {
         endpoint: '',
         region: 'auto',
@@ -166,6 +170,7 @@ let s3SyncStatus = {
 function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
     settings.acoustidKey = getSetting('acoustidKey', '');
+    settings.youtubeApiKey = getSetting('youtubeApiKey', '');
     settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
     settings.deviceName = getSetting('deviceName', 'AMMUI');
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
@@ -178,6 +183,7 @@ function loadSettings() {
 function saveSettings() {
     setSetting('discogsToken', settings.discogsToken);
     setSetting('acoustidKey', settings.acoustidKey);
+    setSetting('youtubeApiKey', settings.youtubeApiKey);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
     setSetting('screensaver', settings.screensaver);
@@ -898,6 +904,15 @@ let fpcalcUnavailable = false;
 execAsync('fpcalc -version').catch(() => {
     fpcalcUnavailable = true;
     console.warn('[ACOUSTID] fpcalc not found on PATH — "Identify with AcoustID" will be unavailable. Install Chromaprint (fpcalc) to enable it.');
+});
+
+// yt-dlp lets us play YouTube videos that have embedding disabled by extracting the
+// real stream instead of relying on the (blocked) iframe embed player. Probe once so
+// the frontend knows whether to offer local playback or just fall back to a new tab.
+let ytDlpUnavailable = false;
+execAsync('yt-dlp --version').catch(() => {
+    ytDlpUnavailable = true;
+    console.warn('[YOUTUBE] yt-dlp not found on PATH — non-embeddable videos will open on youtube.com instead of playing locally. Install yt-dlp to enable local playback for those.');
 });
 
 function runThumbTask(task) {
@@ -1649,6 +1664,21 @@ app.post('/api/settings/acoustid', express.json(), (req, res) => {
     settings.acoustidKey = key || '';
     saveSettings();
     console.log(`AcoustID API key ${key ? 'updated' : 'removed'} on server.`);
+    res.json({ success: true });
+});
+
+app.get('/api/settings/youtube', (req, res) => {
+    const key = settings.youtubeApiKey || '';
+    const hasKey = key.length > 0;
+    const maskedKey = hasKey ? key.substring(0, 4) + '****************' : '';
+    res.json({ hasKey, maskedKey });
+});
+
+app.post('/api/settings/youtube', express.json(), (req, res) => {
+    const { key } = req.body;
+    settings.youtubeApiKey = key || '';
+    saveSettings();
+    console.log(`YouTube API key ${key ? 'updated' : 'removed'} on server.`);
     res.json({ success: true });
 });
 
@@ -2405,7 +2435,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                 }
             } else if (mode === 'recent') {
                 const cutoff = new Date();
-                cutoff.setMonth(cutoff.getMonth() - 1);
+                cutoff.setDate(cutoff.getDate() - 7);
                 imagesToUse = imagesToUse.filter(img => {
                     const d = getImageDate(img);
                     return d && d >= cutoff;
@@ -2622,7 +2652,7 @@ app.get('/api/slideshow/list', async (req, res) => {
         }
     } else if (mode === 'recent') {
         const cutoff = new Date();
-        cutoff.setMonth(cutoff.getMonth() - 1);
+        cutoff.setDate(cutoff.getDate() - 7);
         images = images.filter(img => {
             const d = getImageDate(img);
             return d && d >= cutoff;
@@ -4119,6 +4149,212 @@ app.get('/api/lyrics', async (req, res) => {
     }
 });
 
+// Looks up an official/music video for a track via the YouTube Data API (search.list,
+// restricted to videoCategoryId 10 = Music so results skew toward the real video over
+// random covers/reactions). Results are cached forever in youtube_video_cache since the
+// free API quota is small (100 units per search, 10k units/day by default).
+//
+// Always takes the top (most relevant) search result rather than hunting for an
+// embeddable candidate — non-embeddable videos still play fine via the yt-dlp stream
+// endpoint (see /api/youtube/stream), so relevance wins over embeddability. We still
+// check embeddable status (videos.list, ~1 unit — cheap next to the 100-unit search)
+// purely so the frontend knows whether to use the iframe player or the yt-dlp fallback.
+async function findYoutubeVideo(artist, title) {
+    const query = `${artist} ${title}`.trim();
+    const searchResp = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+        params: {
+            part: 'snippet',
+            q: query,
+            type: 'video',
+            videoCategoryId: 10,
+            maxResults: 1,
+            key: settings.youtubeApiKey
+        },
+        timeout: 10000
+    });
+    const videoId = searchResp.data?.items?.[0]?.id?.videoId;
+    if (!videoId) return null;
+
+    // The embeddable check is a nice-to-have (picks iframe vs. the yt-dlp fallback) —
+    // never let it failing (quota, a transient error, whatever) hide a video that the
+    // search above already successfully found.
+    let embeddable = false;
+    try {
+        const statusResp = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
+            params: { part: 'status', id: videoId, key: settings.youtubeApiKey },
+            timeout: 10000
+        });
+        embeddable = !!statusResp.data?.items?.[0]?.status?.embeddable;
+    } catch (err) {
+        console.warn('[YOUTUBE] Embeddable check failed, assuming non-embeddable:', err.response?.data?.error?.message || err.message);
+    }
+    return { videoId, embeddable };
+}
+
+app.get('/api/youtube/video', async (req, res) => {
+    const { artist, title } = req.query;
+    if (!artist || !title) return res.status(400).json({ error: 'artist and title are required' });
+
+    const cached = getCachedYoutubeVideo(artist, title);
+    if (cached) {
+        if (!cached.found) return res.status(404).json({ error: 'No video found' });
+        return res.json({ videoId: cached.videoId, embeddable: cached.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'cache' });
+    }
+
+    if (!settings.youtubeApiKey) {
+        return res.status(400).json({ error: 'Add a YouTube API key in Settings → Integrations first.' });
+    }
+
+    try {
+        const result = await findYoutubeVideo(artist, title);
+        if (!result) {
+            setCachedYoutubeVideo(artist, title, { found: false });
+            return res.status(404).json({ error: 'No video found' });
+        }
+        setCachedYoutubeVideo(artist, title, { videoId: result.videoId, embeddable: result.embeddable, found: true });
+        res.json({ videoId: result.videoId, embeddable: result.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'youtube' });
+    } catch (err) {
+        console.error('[YOUTUBE] Search failed:', err.response?.data?.error?.message || err.message);
+        res.status(502).json({ error: 'YouTube search failed' });
+    }
+});
+
+// Returns several search results for a track so the user can pick which video to play.
+// Cached forever like the single-result lookup (a search costs 100 quota units).
+app.get('/api/youtube/candidates', async (req, res) => {
+    const { artist, title } = req.query;
+    if (!title) return res.status(400).json({ error: 'title is required' });
+
+    const cached = getCachedYoutubeCandidates(artist, title);
+    if (cached) return res.json({ candidates: cached, ytDlpAvailable: !ytDlpUnavailable });
+
+    if (!settings.youtubeApiKey) {
+        return res.status(400).json({ error: 'Add a YouTube API key in Settings → Integrations first.' });
+    }
+
+    try {
+        const searchResp = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+            params: {
+                part: 'snippet',
+                q: `${artist || ''} ${title}`.trim(),
+                type: 'video',
+                videoCategoryId: 10,
+                maxResults: 6,
+                key: settings.youtubeApiKey
+            },
+            timeout: 10000
+        });
+        // search.list returns HTML-escaped titles; the client renders them as text.
+        const unescape = s => (s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
+        const candidates = (searchResp.data?.items || [])
+            .filter(i => i.id?.videoId)
+            .map(i => ({
+                videoId: i.id.videoId,
+                title: unescape(i.snippet?.title),
+                channel: unescape(i.snippet?.channelTitle),
+                thumbnail: i.snippet?.thumbnails?.medium?.url || `https://i.ytimg.com/vi/${i.id.videoId}/mqdefault.jpg`
+            }));
+
+        // Same best-effort embeddable check as findYoutubeVideo, one batched call for all.
+        try {
+            const statusResp = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
+                params: { part: 'status', id: candidates.map(c => c.videoId).join(','), key: settings.youtubeApiKey },
+                timeout: 10000
+            });
+            const status = new Map((statusResp.data?.items || []).map(v => [v.id, !!v.status?.embeddable]));
+            for (const c of candidates) c.embeddable = status.get(c.videoId) ?? false;
+        } catch (err) {
+            for (const c of candidates) c.embeddable = false;
+        }
+
+        if (candidates.length) setCachedYoutubeCandidates(artist, title, candidates);
+        res.json({ candidates, ytDlpAvailable: !ytDlpUnavailable });
+    } catch (err) {
+        console.error('[YOUTUBE] Candidate search failed:', err.response?.data?.error?.message || err.message);
+        res.status(502).json({ error: 'YouTube search failed' });
+    }
+});
+
+// Streams a YouTube video's actual media (via yt-dlp) straight through to the response,
+// with no server-side caching — each request re-invokes yt-dlp. This is only needed for
+// videos the embed player refuses (see findYoutubeVideo above): embedding is a YouTube
+// player restriction, not a restriction on the underlying stream, so extracting it with
+// yt-dlp and playing it through our own <video> element sidesteps the block entirely.
+// YouTube has largely retired pre-combined video+audio files, so most videos only offer
+// separate video-only and audio-only streams that need merging — bestvideo+bestaudio asks
+// yt-dlp to grab both and mux them with ffmpeg (falling back to a single combined format
+// on the rare video that still has one). The merge is forced to Matroska: unlike mp4,
+// which normally needs a final seek-back to write its metadata atom, mkv can be muxed as
+// a pure forward stream, so it pipes to the HTTP response cleanly with no temp file.
+const YOUTUBE_STREAM_FORMAT = 'bestvideo+bestaudio/best';
+const YOUTUBE_MERGE_FORMAT = 'mkv';
+const YOUTUBE_CONTENT_TYPES = { mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska' };
+
+app.get('/api/youtube/stream/:videoId', async (req, res) => {
+    const { videoId } = req.params;
+    if (!/^[\w-]{6,20}$/.test(videoId)) return res.status(400).json({ error: 'Invalid video id' });
+    if (ytDlpUnavailable) return res.status(503).json({ error: 'yt-dlp is not installed on the server.' });
+
+    const url = `https://www.youtube.com/watch?v=${videoId}`;
+
+    // Ask yt-dlp what container it'll actually produce before streaming — a video that
+    // still has a pre-combined format available skips the merge and keeps its own
+    // extension (often mp4), so the Content-Type needs to match rather than assuming mkv.
+    let contentType = YOUTUBE_CONTENT_TYPES[YOUTUBE_MERGE_FORMAT];
+    try {
+        const { stdout } = await execAsync(`yt-dlp -f "${YOUTUBE_STREAM_FORMAT}" --merge-output-format ${YOUTUBE_MERGE_FORMAT} --print ext --no-playlist --no-warnings "${url}"`);
+        const ext = stdout.trim();
+        if (YOUTUBE_CONTENT_TYPES[ext]) contentType = YOUTUBE_CONTENT_TYPES[ext];
+    } catch (err) {
+        console.warn(`[YOUTUBE STREAM] Could not resolve format for ${videoId}, defaulting to ${YOUTUBE_MERGE_FORMAT}:`, err.message);
+    }
+
+    const proc = spawn('yt-dlp', [
+        '-f', YOUTUBE_STREAM_FORMAT,
+        '--merge-output-format', YOUTUBE_MERGE_FORMAT,
+        '-o', '-',
+        '--no-playlist',
+        '--no-part',
+        '--quiet',
+        '--no-warnings',
+        // Chunked requests dodge YouTube's throttling/expiry of long single connections.
+        '--http-chunk-size', '10M',
+        '--retries', 'infinite',
+        '--fragment-retries', 'infinite',
+        url
+    ]);
+
+    res.setHeader('Content-Type', contentType);
+    // Once the browser's buffer is full, a plain pipe applies backpressure all the way
+    // back to yt-dlp/ffmpeg, which stalls their YouTube connections until they time out —
+    // playback then freezes a couple of minutes in. A big intermediate buffer lets yt-dlp
+    // keep downloading ahead of playback instead of blocking on the client.
+    const buffer = new PassThrough({ highWaterMark: 256 * 1024 * 1024 });
+    proc.stdout.pipe(buffer).pipe(res);
+    res.on('close', () => buffer.destroy());
+
+    let stderr = '';
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+
+    proc.on('error', err => {
+        console.error('[YOUTUBE STREAM] Failed to start yt-dlp:', err.message);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to start yt-dlp' });
+    });
+
+    proc.on('close', code => {
+        if (code !== 0 && code !== null) {
+            console.warn(`[YOUTUBE STREAM] yt-dlp exited ${code} for ${videoId}: ${stderr.trim().slice(-300)}`);
+        }
+        // If headers were already sent, stdout.pipe(res) already ended the response when
+        // the process's stdout closed — nothing left to do here but report a clean failure.
+        if (!res.headersSent) res.status(502).json({ error: 'yt-dlp failed to fetch the video' });
+    });
+
+    // Client disconnected (closed the modal, seeked away) — stop the download immediately
+    // rather than letting yt-dlp keep pulling a stream nobody's reading.
+    req.on('close', () => { if (!proc.killed) proc.kill('SIGKILL'); });
+});
+
 app.post('/api/file-tags', (req, res) => {
     const { uri, tags } = req.body;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
@@ -4706,11 +4942,14 @@ app.post('/api/local/move-va', async (req, res) => {
             }
         }
 
-        // Clean up empty directories that an album might have left behind (and their parents)
+        // Clean up empty directories that an album might have left behind (and their parents).
+        // Source files can live anywhere in the library, not just under the target baseDir
+        // (e.g. targetBaseFolder is the configured music home, unrelated to where a candidate
+        // track was found), so the climb has to be bounded by the actual library root instead.
         for (const startDir of parentDirsToCheck) {
             let currentDir = startDir;
-            // Don't accidentally wipe out the local root or the base music home
-            while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
+            // Don't accidentally wipe out the local root itself
+            while (currentDir && currentDir.length > localDir.length && currentDir.startsWith(localDir)) {
                 try {
                     const remaining = await fs.promises.readdir(currentDir);
                     if (remaining.length === 0) {

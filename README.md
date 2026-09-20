@@ -18,6 +18,7 @@ A web based home hub. Plays music and shows family photos, great if you have a l
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
 * Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
+* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key in Settings; the optional `yt-dlp` tool lets videos with embedding disabled play locally too).
 
 <img src="images/ammui-desktop-mode.png" />
 
@@ -76,6 +77,12 @@ You could also have this running on a headless linux/windows box with, say, tabl
     sudo apt-get install libchromaprint-tools
     ```
     or on Windows download the Chromaprint build and put `fpcalc.exe` on your PATH. Then add a free AcoustID API key under Settings → Integrations.
+
+5. Optional: Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) so YouTube videos that have embedding disabled can still play locally (in the "Video" button on a track) instead of opening on youtube.com.
+    ```bash
+    sudo apt-get install yt-dlp
+    ```
+    or on Windows download `yt-dlp.exe` and put it on your PATH.
 
 ### Usage
 
