@@ -1,37 +1,34 @@
 # UI for an Abbeytek Media Machine (AMMUI)
 
-A web based home hub. Plays music and shows family photos, great if you have a large mp3 and/or photo collection.
+A web based home hub with DLNA server, player and controller. Plays music and shows family photos, great if you have a large mp3 and/or photo collection.
+* Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
+* Right side of the screen - playback device: DLNA player, Sonos, Airplay
 
-* Play music from your own server: Subsonic, MiniDLNA, etc.
-* Import mp3s to the local server and play from there.
-* Show a slideshow of your photos without adverts and without the need to upload them to the web
-* Support for wifi music players : Gen 1 Sonos Players, Airplay, DLNA
-* No subscriptions, No tracking, No adverts
+<img src="images/ammui-desktop-mode.png" />
 
 ## Features
 
 * Send music to local players (Sonos and DLNA players. Some Airplay support - ffmepg must be installed on the host machine)
 * Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
-* Build local media library - Download/Tag/Organise music/photos. Served over DLNA.
-* Display a slideshow of photos from a local server. Modes are: All, On this day, Favorites, Music (album art)
+* Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent (photos from this month and last month), Music (album art of playing track)
 * Browse the media library as Music, Photos or Videos, each with its own home folder.
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
+* Watch a track's music video on YouTube, right from the track list. Tracks with a video show a Video button. Videos are found automatically by indexing each artist's YouTube channel once (a small, capped number of API calls per artist, then everything is stored locally); if one is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results (needs a YouTube API key in Settings; the optional `yt-dlp` tool and ffmpeg).
+
+## Local Media Server
+
+* Build local media library - Download/Tag/Organise music/photos. Served over DLNA.
 * Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
-* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key in Settings; the optional `yt-dlp` tool (plus ffmpeg) lets videos with embedding disabled play locally too).
 * View server and browser logs from the menu (Logs), filtered by type (YOUTUBE, DEBUG, DEVICES, UPLOAD, and so on) to help track down problems.
 
-<img src="images/ammui-desktop-mode.png" />
-
-This UI forms part of a standalone product, the Abbeytek Media Machine, which is basically an embedded device with DLNA player software onboard. Adding this UI makes it an all in one server/player you can just drop onto your network.
-
-You could also have this running on a headless linux/windows box with, say, tablets running the UI in Chrome.
+I have this running on a headless linux box and I run the UI from a Samsung tablet, my work PC, a Raspberry PI 5 connected to a 15" display and as a centrepiece to the house, I bought an old DELL All-In-One (Optiplex 3011) off ebay for 60 quid with Win10/Chrome.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
 * Go back to the last picture in the slideshow in case you just missed it.
-* Quick pause and volume controls for current music player, if active.
+* Overlay pause and volume controls for current music player, if active.
 * Photo date and device used info is shown if available.
 * Photos with location data present will show a small map overlay. Click on map to show larger view. 
 
@@ -46,7 +43,7 @@ You could also have this running on a headless linux/windows box with, say, tabl
 ## Local DLNA Server
 * Upload button to upload tracks and photos from local disk.
 * Download buttons on music and photos from other servers to add a copy to the local server.
-* Sync all local music and photo files to S3.
+* Sync all local music and photo files to S3 compatible storage (I use Wasabi).
 
 ## Managing your music library
 
@@ -108,6 +105,10 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
 7. **Export Tags** and **Sync Now** to keep a backup.
 
+### Logs
+
+Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -156,10 +157,6 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
     ```
     http://localhost:3000
     ```
-
-### Logs
-
-Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
 
 ## ⚙️ Built With
 

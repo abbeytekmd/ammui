@@ -98,7 +98,6 @@ let currentBrowserMode = localStorage.getItem('currentBrowserMode') || 'music';
 let currentBrowserItems = [];
 let browserRenderSeq = 0; // bumped on every renderBrowser() call, so stale async video lookups can be dropped
 const youtubeVideoCache = new Map(); // "artist|title" → { videoId, embeddable } | null (no match found)
-let youtubeApiKeyMissing = false; // set once the server reports no key configured, to stop hammering it this session
 let ytDlpAvailable = false; // set from the first /api/youtube/video response; lets non-embeddable videos still play locally
 let localVideoVolume = parseFloat(localStorage.getItem('localVideoVolume') || '1'); // 0–1, remembered across visits since local playback can come in much louder than expected
 let currentPlaylistItems = [];
@@ -123,6 +122,7 @@ let browseScrollPositions = {}; // folder ID → { top, anchorIndex, anchorDelta
 let rendererFailureCount = 0;
 const MAX_RENDERER_FAILURES = 2;
 let currentInfoUri = null;
+let currentInfoTrack = null;
 let currentFileTags = [];
 let allLibraryTags = [];
 let isRendererOffline = false;
@@ -2253,13 +2253,12 @@ function renderBrowser(items) {
     checkYoutubeVideosForItems(items, renderSeq);
 }
 
-// Looks up, for each visible audio track, whether a matching video exists on YouTube,
-// revealing a "Video" button on the row when one is found. Runs a few lookups at a time
-// (rather than all at once) to keep a big folder from firing dozens of requests together,
-// and everything is cached server-side so repeat visits to a folder cost nothing.
+// Asks the server, for each visible audio track, for a matching video, revealing a "Video"
+// button on the row when there is one. The server answers from its local database, and
+// for an artist it hasn't seen yet it indexes that artist's YouTube channel once (see
+// /api/youtube/video). Videos can also be picked by hand in the File Information modal.
+// Runs a few lookups at a time to keep a big folder from firing dozens of requests together.
 async function checkYoutubeVideosForItems(items, renderSeq) {
-    if (youtubeApiKeyMissing) return;
-
     const audioItems = items
         .map((item, index) => ({ item, index }))
         .filter(({ item }) => item.type === 'item' && !isImageItem(item) && !isVideoItem(item) && item.title);
@@ -2272,7 +2271,6 @@ async function checkYoutubeVideosForItems(items, renderSeq) {
         while (cursor < audioItems.length) {
             const { item, index } = audioItems[cursor++];
             if (renderSeq !== browserRenderSeq) return; // folder changed under us — abandon
-            if (youtubeApiKeyMissing) return; // another worker just found out there's no key — stop wasting requests
             await checkYoutubeVideoForItem(item, index, renderSeq);
         }
     };
@@ -2288,11 +2286,6 @@ async function checkYoutubeVideoForItem(item, index, renderSeq) {
 
     try {
         const res = await fetch(`/api/youtube/video?artist=${encodeURIComponent(item.artist || '')}&title=${encodeURIComponent(item.title)}`);
-        if (res.status === 400) {
-            // No API key configured server-side — stop trying for the rest of this session
-            youtubeApiKeyMissing = true;
-            return;
-        }
         if (res.ok) {
             const data = await res.json();
             if (data.ytDlpAvailable) ytDlpAvailable = true;
@@ -2336,9 +2329,7 @@ function playYoutubeVideoFromBrowser(index) {
     if (!videoId) return;
     const item = currentBrowserItems[index];
 
-    // Offer every candidate the search found; the button's own videoId (top hit) is the
-    // fallback if the candidate lookup fails or only finds one.
-    openVideoPicker(item, { videoId, embeddable: btn.dataset.embeddable !== '0' });
+    playYoutubeCandidate(videoId, btn.dataset.embeddable !== '0', item ? item.title : 'Video Player');
 }
 
 function playYoutubeCandidate(videoId, embeddable, title) {
@@ -2355,11 +2346,13 @@ function playYoutubeCandidate(videoId, embeddable, title) {
     openYoutubeModal(videoId, title);
 }
 
-async function openVideoPicker(item, fallback) {
+// Searches YouTube for the track and lets the user pick a video; the pick is stored in the
+// local database (so the browser's Video button appears for it) and then played.
+async function openVideoPicker(item) {
     const title = item ? item.title : 'Video Player';
     const modal = document.getElementById('video-picker-modal');
     const list = document.getElementById('video-picker-list');
-    if (!modal || !list) return playYoutubeCandidate(fallback.videoId, fallback.embeddable, title);
+    if (!modal || !list || !item || !item.title) return;
 
     const status = msg => {
         list.innerHTML = '';
@@ -2375,32 +2368,60 @@ async function openVideoPicker(item, fallback) {
     const seq = ++videoPickerSeq;
 
     let candidates = [];
+    let errorMsg = '';
     try {
-        const res = await fetch(`/api/youtube/candidates?artist=${encodeURIComponent(item?.artist || '')}&title=${encodeURIComponent(item?.title || '')}`);
+        const res = await fetch(`/api/youtube/candidates?artist=${encodeURIComponent(item.artist || '')}&title=${encodeURIComponent(item.title)}`);
+        const data = await res.json().catch(() => ({}));
         if (res.ok) {
-            const data = await res.json();
             if (data.ytDlpAvailable) ytDlpAvailable = true;
             candidates = data.candidates || [];
+        } else {
+            errorMsg = data.error || 'Video search failed';
         }
     } catch (e) {
         console.warn('[YOUTUBE] Candidate lookup failed:', e);
+        errorMsg = 'Video search failed';
     }
     if (seq !== videoPickerSeq) return; // picker was closed or reopened meanwhile
 
-    if (candidates.length <= 1) {
-        // Nothing to choose between — skip the menu and play straight away.
-        closeVideoPicker();
-        const only = candidates[0];
-        if (only) playYoutubeCandidate(only.videoId, only.embeddable !== false, title);
-        else playYoutubeCandidate(fallback.videoId, fallback.embeddable, title);
-        return;
-    }
+    if (candidates.length === 0) return status(errorMsg || 'No videos found');
 
     list.innerHTML = '';
-    for (const c of candidates) list.appendChild(buildVideoPickerCard(c, title));
+    for (const c of candidates) list.appendChild(buildVideoPickerCard(c, item));
 }
 
-function buildVideoPickerCard(c, trackTitle) {
+async function selectYoutubeVideo(item, c) {
+    try {
+        const res = await fetch('/api/youtube/select', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ artist: item.artist || '', title: item.title, videoId: c.videoId, embeddable: c.embeddable !== false })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save');
+    } catch (e) {
+        showToast('Could not save video: ' + e.message, 'error', 4000);
+        return;
+    }
+    const result = { videoId: c.videoId, embeddable: c.embeddable !== false };
+    youtubeVideoCache.set(`${item.artist || ''}|${item.title}`, result);
+    // Reveal/refresh the Video button on any matching row currently in the browser.
+    browserItems.querySelectorAll('.youtube-video-btn').forEach(btn => {
+        if (btn.dataset.itemUri === item.uri) {
+            btn.dataset.videoId = result.videoId;
+            btn.dataset.embeddable = result.embeddable ? '1' : '0';
+            btn.style.display = '';
+        }
+    });
+    showToast('Video saved', 'success', 2000);
+}
+
+function buildVideoPickerCard(c, item) {
+    const trackTitle = item.title;
+    const choose = () => {
+        closeVideoPicker();
+        selectYoutubeVideo(item, c);
+        playYoutubeCandidate(c.videoId, c.embeddable !== false, trackTitle);
+    };
     const card = document.createElement('div');
     card.className = 'video-picker-card';
 
@@ -2412,10 +2433,7 @@ function buildVideoPickerCard(c, trackTitle) {
     img.alt = '';
     img.loading = 'lazy';
     preview.appendChild(img);
-    preview.onclick = () => {
-        closeVideoPicker();
-        playYoutubeCandidate(c.videoId, c.embeddable !== false, trackTitle);
-    };
+    preview.onclick = choose;
 
     const info = document.createElement('div');
     info.className = 'video-picker-info';
@@ -2431,11 +2449,8 @@ function buildVideoPickerCard(c, trackTitle) {
     actions.className = 'video-picker-actions';
     const play = document.createElement('button');
     play.className = 'btn-control';
-    play.textContent = 'Play';
-    play.onclick = () => {
-        closeVideoPicker();
-        playYoutubeCandidate(c.videoId, c.embeddable !== false, trackTitle);
-    };
+    play.textContent = 'Select & Play';
+    play.onclick = choose;
     actions.appendChild(play);
 
     card.append(preview, info, actions);
@@ -2931,8 +2946,6 @@ async function loadYoutubeKey() {
                 keyInput.value = data.maskedKey || '';
                 keyInput.dataset.loaded = '1';
             }
-            // A key was added/removed since the page loaded — let per-track checks re-run.
-            youtubeApiKeyMissing = !data.hasKey;
         }
     } catch (e) {
         console.warn('Failed to load YouTube key status:', e);
@@ -5853,6 +5866,7 @@ async function openFileInfoModal(trackData) {
     if (!modal || !container) return;
 
     currentInfoUri = trackData.uri;
+    currentInfoTrack = trackData;
     currentFileTags = [];
     updateFileFavUI();
     renderFileTags();
@@ -6018,6 +6032,14 @@ async function openFileInfoModal(trackData) {
         if (acoustidStatus) { acoustidStatus.textContent = ''; acoustidStatus.className = 'acoustid-status'; }
     }
 
+    // Manual video lookup applies to any titled audio track
+    const videoBar = document.getElementById('video-lookup-bar');
+    if (videoBar) {
+        const isVideo = (trackData.class && trackData.class.includes('videoItem')) ||
+            (trackData.protocolInfo && trackData.protocolInfo.includes('video/'));
+        videoBar.style.display = (!isImage && !isVideo && trackData.title) ? 'flex' : 'none';
+    }
+
     // If we have resolution string from server, parse it for display
     if (trackData.resolution && typeof trackData.resolution === 'string') {
         const parts = trackData.resolution.split('x');
@@ -6079,7 +6101,9 @@ async function openFileInfoModal(trackData) {
     // Decide whether the folder-derived artist reflects the Artist tag or the Album Artist tag,
     // so it's shown alongside whichever one it actually corresponds to
     let folderArtistRow = 'Artist';
-    if (folderMeta.artist) {
+    // The same check that turns the info icon red, so we can highlight its cause below
+    const folderReasons = getFolderMismatchReasons(trackData);
+    if (folderMeta.artist && !folderReasons.artist) {
         const nf = normalizeForComparison(folderMeta.artist);
         const artistMatches = !!nf && (nf === normalizeForComparison(trackData.artist) || nf === normalizeForComparison(getEmbeddedValue('common.artist')));
         const albumArtistMatches = !!nf && (nf === normalizeForComparison(trackData.albumArtist) || nf === normalizeForComparison(getEmbeddedValue('common.albumartist')));
@@ -6141,19 +6165,18 @@ async function openFileInfoModal(trackData) {
                 folderVal = folderMeta.album;
             }
 
+            // Highlight exactly what makes the info icon red: a folder artist that matches
+            // neither Artist nor Album Artist, or a folder album that differs from Album.
             if (folderValRaw) {
-                const nf = normalizeForComparison(folderValRaw);
-                const ns = normalizeForComparison(sValRaw);
-                const ne = normalizeForComparison(eValRaw);
-                // Highlight if folder value differs from either source
-                if ((ns && nf !== ns) || (ne && nf !== ne)) {
-                    isFolderMismatch = true;
-                    hasFolderMismatch = true;
-                }
+                isFolderMismatch = f.label === 'Album' ? folderReasons.album : folderReasons.artist;
+                if (isFolderMismatch) hasFolderMismatch = true;
             }
+            const causesRedIcon = (folderReasons.artist && (f.label === 'Artist' || f.label === 'Album Artist'))
+                || (folderReasons.album && f.label === 'Album');
 
             const folderMismatchClass = isFolderMismatch ? 'mismatch' : '';
-            const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name mismatch">!</div>' : '';
+            const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name doesn\'t match the tags — this is why the info icon is red">!</div>' : '';
+            const serverCauseClass = causesRedIcon && sValRaw ? 'mismatch' : '';
 
             const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
             const editFieldMap = { 'Title': 'title', 'Artist': 'artist', 'Album Artist': 'albumartist', 'Album': 'album', 'Year': 'year' };
@@ -6197,7 +6220,7 @@ async function openFileInfoModal(trackData) {
 
             rowsContainer.innerHTML += `
                 <div class="metadata-cell metadata-label-cell">${f.label}</div>
-                <div class="metadata-cell metadata-value-cell ${mismatchClass}">${sVal}</div>
+                <div class="metadata-cell metadata-value-cell ${mismatchClass || serverCauseClass}">${sVal}</div>
                 ${editCell}
                 <div class="metadata-cell metadata-value-cell tertiary ${folderMismatchClass}">${folderVal}${folderMismatchIcon}</div>
             `;
@@ -6938,16 +6961,27 @@ async function copyTagToFolderAll(field, btn) {
  * conflicts with its Media Server metadata. Returns true if so.
  */
 function detectFolderMismatch(item) {
-    if (!item || !item.uri) return false;
+    const r = getFolderMismatchReasons(item);
+    return r.artist || r.album;
+}
+
+/**
+ * Says which of Artist / Album is making a track conflict with its folder path. The
+ * folder artist is accepted if it matches either the Artist or the Album Artist.
+ * Shared by the red info icon and the highlighting in the File Information modal.
+ */
+function getFolderMismatchReasons(item) {
+    const none = { artist: false, album: false };
+    if (!item || !item.uri) return none;
     // Only meaningful for audio files
     const isAudio = !(item.class && (item.class.includes('imageItem') || item.class.includes('videoItem') || item.class.includes('container')));
-    if (!isAudio) return false;
+    if (!isAudio) return none;
 
     try {
         const uriPath = decodeURIComponent(new URL(item.uri).pathname);
         const cleanPath = uriPath.replace(/^\/local-files\//, '').replace(/^\//, '');
         const parts = cleanPath.split('/').filter(p => p);
-        if (parts.length < 3) return false;
+        if (parts.length < 3) return none;
 
         const folderArtist = parts[parts.length - 3];
         const folderAlbum = parts[parts.length - 2];
@@ -6961,9 +6995,9 @@ function detectFolderMismatch(item) {
             && normFolderArtist !== norm(item.albumArtist);
         const albumMismatch = item.album && norm(folderAlbum) && norm(folderAlbum) !== norm(item.album);
 
-        return !!(artistMismatch || albumMismatch);
+        return { artist: !!artistMismatch, album: !!albumMismatch };
     } catch (e) {
-        return false;
+        return none;
     }
 }
 

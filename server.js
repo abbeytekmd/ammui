@@ -34,6 +34,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
+    getArtistChannel, setArtistChannel, countChannelLookupsSince, saveChannelVideos, getChannelVideos,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -1959,6 +1960,13 @@ app.post('/api/delete', express.json(), async (req, res) => {
     }
 });
 
+// "Recent" slideshow mode: everything from the current and previous calendar months,
+// i.e. from midnight on the 1st of last month onwards.
+function getRecentCutoff() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth() - 1, 1);
+}
+
 // Extract the best available date from a cached image item.
 // Returns a Date object or null. Checks dc:date field, then folder path, then title.
 function getImageDate(img) {
@@ -2434,8 +2442,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                     return res.status(404).json({ error: 'No images found for this day' });
                 }
             } else if (mode === 'recent') {
-                const cutoff = new Date();
-                cutoff.setDate(cutoff.getDate() - 7);
+                const cutoff = getRecentCutoff();
                 imagesToUse = imagesToUse.filter(img => {
                     const d = getImageDate(img);
                     return d && d >= cutoff;
@@ -2651,8 +2658,7 @@ app.get('/api/slideshow/list', async (req, res) => {
             return res.status(404).json({ error: 'No images found for this day' });
         }
     } else if (mode === 'recent') {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - 7);
+        const cutoff = getRecentCutoff();
         images = images.filter(img => {
             const d = getImageDate(img);
             return d && d >= cutoff;
@@ -4149,74 +4155,186 @@ app.get('/api/lyrics', async (req, res) => {
     }
 });
 
-// Looks up an official/music video for a track via the YouTube Data API (search.list,
-// restricted to videoCategoryId 10 = Music so results skew toward the real video over
-// random covers/reactions). Results are cached forever in youtube_video_cache since the
-// free API quota is small (100 units per search, 10k units/day by default).
-//
-// Always takes the top (most relevant) search result rather than hunting for an
-// embeddable candidate — non-embeddable videos still play fine via the yt-dlp stream
-// endpoint (see /api/youtube/stream), so relevance wins over embeddability. We still
-// check embeddable status (videos.list, ~1 unit — cheap next to the 100-unit search)
-// purely so the frontend knows whether to use the iframe player or the yt-dlp fallback.
-async function findYoutubeVideo(artist, title) {
-    const query = `${artist} ${title}`.trim();
-    const searchResp = await axios.get('https://www.googleapis.com/youtube/v3/search', {
-        params: {
-            part: 'snippet',
-            q: query,
-            type: 'video',
-            videoCategoryId: 10,
-            maxResults: 1,
-            key: settings.youtubeApiKey
-        },
-        timeout: 10000
-    });
-    const videoId = searchResp.data?.items?.[0]?.id?.videoId;
-    if (!videoId) return null;
+// ─── Automatic video lookup ─────────────────────────────────────────────────
+// A per-track search.list costs 100 quota units (10k/day by default), so instead we work
+// per artist: find their channel once (one search), read the channel's whole uploads
+// playlist (1 unit per 50 videos) plus each video's embeddable flag (1 unit per 50), and
+// keep every upload in the local database. Any track by that artist — visible or not —
+// is then matched against the stored list for free, and the result is cached per track.
+const YT_API = 'https://www.googleapis.com/youtube/v3';
+const YT_MAX_UPLOADS = 1000;                // cap per channel (20 pages)
+const YT_MAX_CHANNEL_SEARCHES_PER_DAY = 60; // 6000 of the 10k daily units, leaving headroom
+let youtubeQuotaBlockedUntil = 0;
+const youtubeChannelJobs = new Map();       // artist → in-flight promise, so parallel tracks share one lookup
 
-    // The embeddable check is a nice-to-have (picks iframe vs. the yt-dlp fallback) —
-    // never let it failing (quota, a transient error, whatever) hide a video that the
-    // search above already successfully found.
-    let embeddable = false;
+class YoutubeBudgetError extends Error { }
+
+function youtubeApiError(err) {
+    const reason = err.response?.data?.error?.errors?.[0]?.reason;
+    if (reason === 'quotaExceeded' || reason === 'dailyLimitExceeded' || reason === 'rateLimitExceeded') {
+        youtubeQuotaBlockedUntil = Date.now() + 60 * 60 * 1000;
+        console.warn('[YOUTUBE] API quota exhausted — automatic lookups paused for an hour');
+        return new YoutubeBudgetError('YouTube quota exhausted');
+    }
+    return err;
+}
+
+const ytNorm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+// Reduces a video/track title to comparable words: drops bracketed bits, "official video"
+// style noise and the artist's own name ("Artist - Song" → "song").
+function ytCleanTitle(title, artist) {
+    let t = ytNorm(title).replace(/[([{][^)\]}]*[)\]}]/g, ' ');
+    const a = ytNorm(artist).trim();
+    if (a) t = t.split(a).join(' ');
+    t = t.replace(/\b(official|music|lyric|lyrics|video|audio|hd|hq|4k|remastered|remaster|visualizer)\b/g, ' ');
+    return t.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function matchTrackToVideos(artist, title, videos) {
+    const want = ytCleanTitle(title, artist);
+    if (want.length < 2) return null;
+    let best = null;
+    for (const v of videos) {
+        const got = ytCleanTitle(v.title, artist);
+        let score;
+        if (got === want) score = 0;
+        else if (` ${got} `.includes(` ${want} `)) score = 1 + got.length / 1000; // title appears as whole words
+        else continue;
+        if (!best || score < best.score) best = { score, video: v };
+    }
+    return best ? best.video : null;
+}
+
+async function resolveArtistChannel(artist) {
+    const known = getArtistChannel(artist);
+    if (known) return known.found ? known.channelId : null;
+
+    const startOfDay = new Date();
+    startOfDay.setUTCHours(0, 0, 0, 0);
+    if (countChannelLookupsSince(startOfDay.getTime()) >= YT_MAX_CHANNEL_SEARCHES_PER_DAY) {
+        throw new YoutubeBudgetError('Daily channel-search budget used up');
+    }
+
+    let items;
     try {
-        const statusResp = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
-            params: { part: 'status', id: videoId, key: settings.youtubeApiKey },
+        const resp = await axios.get(`${YT_API}/search`, {
+            params: { part: 'snippet', q: artist, type: 'channel', maxResults: 5, key: settings.youtubeApiKey },
             timeout: 10000
         });
-        embeddable = !!statusResp.data?.items?.[0]?.status?.embeddable;
-    } catch (err) {
-        console.warn('[YOUTUBE] Embeddable check failed, assuming non-embeddable:', err.response?.data?.error?.message || err.message);
+        items = resp.data?.items || [];
+    } catch (err) { throw youtubeApiError(err); }
+
+    // Only trust a channel whose name contains the artist (or "ArtistVEVO" etc.) —
+    // otherwise we'd attach fan channels or unrelated ones.
+    const na = ytNorm(artist).replace(/[^a-z0-9]/g, '');
+    const hit = items.find(i => {
+        const nc = ytNorm(i.snippet?.channelTitle).replace(/[^a-z0-9]/g, '');
+        return na && nc && (nc.includes(na) || (nc.length >= 4 && na.includes(nc)));
+    });
+    const channelId = hit?.id?.channelId || hit?.snippet?.channelId || null;
+    setArtistChannel(artist, channelId, !!channelId);
+    console.log(`[YOUTUBE] Channel for "${artist}": ${channelId ? hit.snippet.channelTitle : 'none found'}`);
+    return channelId;
+}
+
+async function ingestChannelUploads(channelId) {
+    if (getChannelVideos(channelId).length > 0) return;
+    try {
+        // A channel's uploads playlist id is its channel id with the "UC" prefix swapped
+        // for "UU", which saves a channels.list call.
+        const uploadsId = 'UU' + channelId.slice(2);
+        const videos = [];
+        let pageToken;
+        while (videos.length < YT_MAX_UPLOADS) {
+            const resp = await axios.get(`${YT_API}/playlistItems`, {
+                params: { part: 'snippet', playlistId: uploadsId, maxResults: 50, pageToken, key: settings.youtubeApiKey },
+                timeout: 10000
+            });
+            for (const i of resp.data?.items || []) {
+                const videoId = i.snippet?.resourceId?.videoId;
+                if (videoId && i.snippet.title !== 'Private video' && i.snippet.title !== 'Deleted video') {
+                    videos.push({ videoId, title: i.snippet.title, embeddable: false });
+                }
+            }
+            pageToken = resp.data?.nextPageToken;
+            if (!pageToken) break;
+        }
+
+        // Embeddable flag (iframe vs. yt-dlp fallback) — best effort, 50 videos per unit.
+        for (let i = 0; i < videos.length; i += 50) {
+            const batch = videos.slice(i, i + 50);
+            try {
+                const resp = await axios.get(`${YT_API}/videos`, {
+                    params: { part: 'status', id: batch.map(v => v.videoId).join(','), key: settings.youtubeApiKey },
+                    timeout: 10000
+                });
+                const status = new Map((resp.data?.items || []).map(v => [v.id, !!v.status?.embeddable]));
+                for (const v of batch) v.embeddable = status.get(v.videoId) ?? false;
+            } catch (err) {
+                if (youtubeApiError(err) instanceof YoutubeBudgetError) throw err;
+            }
+        }
+        saveChannelVideos(channelId, videos);
+        console.log(`[YOUTUBE] Stored ${videos.length} uploads for channel ${channelId}`);
+    } catch (err) { throw err instanceof YoutubeBudgetError ? err : youtubeApiError(err); }
+}
+
+// Makes sure the artist's channel uploads are in the database; returns them.
+function loadArtistVideos(artist) {
+    const key = artist.trim().toLowerCase();
+    if (!youtubeChannelJobs.has(key)) {
+        const job = (async () => {
+            const channelId = await resolveArtistChannel(artist);
+            if (!channelId) return [];
+            await ingestChannelUploads(channelId);
+            return getChannelVideos(channelId);
+        })().finally(() => youtubeChannelJobs.delete(key));
+        youtubeChannelJobs.set(key, job);
     }
-    return { videoId, embeddable };
+    return youtubeChannelJobs.get(key);
 }
 
 app.get('/api/youtube/video', async (req, res) => {
     const { artist, title } = req.query;
     if (!artist || !title) return res.status(400).json({ error: 'artist and title are required' });
 
+    const respond = v => res.json({ videoId: v.videoId, embeddable: v.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'cache' });
+
     const cached = getCachedYoutubeVideo(artist, title);
     if (cached) {
-        if (!cached.found) return res.status(404).json({ error: 'No video found' });
-        return res.json({ videoId: cached.videoId, embeddable: cached.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'cache' });
+        if (!cached.found || !cached.videoId) return res.status(404).json({ error: 'No video stored' });
+        return respond(cached);
     }
 
-    if (!settings.youtubeApiKey) {
-        return res.status(400).json({ error: 'Add a YouTube API key in Settings → Integrations first.' });
+    if (!settings.youtubeApiKey || Date.now() < youtubeQuotaBlockedUntil) {
+        return res.status(404).json({ error: 'No video stored' });
     }
 
     try {
-        const result = await findYoutubeVideo(artist, title);
-        if (!result) {
+        const videos = await loadArtistVideos(artist);
+        const match = matchTrackToVideos(artist, title, videos);
+        if (!match) {
             setCachedYoutubeVideo(artist, title, { found: false });
             return res.status(404).json({ error: 'No video found' });
         }
-        setCachedYoutubeVideo(artist, title, { videoId: result.videoId, embeddable: result.embeddable, found: true });
-        res.json({ videoId: result.videoId, embeddable: result.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'youtube' });
+        setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable, found: true });
+        respond(match);
     } catch (err) {
-        console.error('[YOUTUBE] Search failed:', err.response?.data?.error?.message || err.message);
-        res.status(502).json({ error: 'YouTube search failed' });
+        // Budget/quota problems and API errors aren't cached, so the track is retried later.
+        if (!(err instanceof YoutubeBudgetError)) console.error('[YOUTUBE] Automatic lookup failed:', err.response?.data?.error?.message || err.message);
+        res.status(404).json({ error: 'No video stored' });
     }
+});
+
+// Stores the video the user picked for a track in the local database.
+app.post('/api/youtube/select', express.json(), (req, res) => {
+    const { artist, title, videoId, embeddable } = req.body || {};
+    if (!title || typeof videoId !== 'string' || !/^[\w-]{6,20}$/.test(videoId)) {
+        return res.status(400).json({ error: 'title and a valid videoId are required' });
+    }
+    setCachedYoutubeVideo(artist || '', title, { videoId, embeddable: embeddable !== false, found: true });
+    res.json({ success: true });
 });
 
 // Returns several search results for a track so the user can pick which video to play.
@@ -4255,7 +4373,7 @@ app.get('/api/youtube/candidates', async (req, res) => {
                 thumbnail: i.snippet?.thumbnails?.medium?.url || `https://i.ytimg.com/vi/${i.id.videoId}/mqdefault.jpg`
             }));
 
-        // Same best-effort embeddable check as findYoutubeVideo, one batched call for all.
+        // Best-effort embeddable check (iframe vs. yt-dlp fallback), one batched call for all.
         try {
             const statusResp = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
                 params: { part: 'status', id: candidates.map(c => c.videoId).join(','), key: settings.youtubeApiKey },
@@ -4270,14 +4388,15 @@ app.get('/api/youtube/candidates', async (req, res) => {
         if (candidates.length) setCachedYoutubeCandidates(artist, title, candidates);
         res.json({ candidates, ytDlpAvailable: !ytDlpUnavailable });
     } catch (err) {
-        console.error('[YOUTUBE] Candidate search failed:', err.response?.data?.error?.message || err.message);
-        res.status(502).json({ error: 'YouTube search failed' });
+        const reason = err.response?.data?.error?.message || err.message;
+        console.error('[YOUTUBE] Candidate search failed:', reason);
+        res.status(502).json({ error: `YouTube search failed: ${reason}` });
     }
 });
 
 // Streams a YouTube video's actual media (via yt-dlp) straight through to the response,
 // with no server-side caching — each request re-invokes yt-dlp. This is only needed for
-// videos the embed player refuses (see findYoutubeVideo above): embedding is a YouTube
+// videos the embed player refuses: embedding is a YouTube
 // player restriction, not a restriction on the underlying stream, so extracting it with
 // yt-dlp and playing it through our own <video> element sidesteps the block entirely.
 // YouTube has largely retired pre-combined video+audio files, so most videos only offer
