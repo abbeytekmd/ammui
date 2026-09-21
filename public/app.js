@@ -1677,6 +1677,13 @@ function toggleBrowserView() {
 let currentBrowserFindText = '';
 let currentBrowserRecursiveItems = null;
 let currentBrowserRecursiveFolderId = null;
+let browserFindSeq = 0;
+let browserFindTimer = null;
+
+function onBrowserFindInput() {
+    clearTimeout(browserFindTimer);
+    browserFindTimer = setTimeout(executeBrowserFind, 300);
+}
 
 function toggleBrowserFind() {
     const input = document.getElementById('input-browser-find');
@@ -1696,34 +1703,36 @@ async function executeBrowserFind() {
     const currentFolderId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
 
     if (!currentBrowserFindText || input.style.display === 'none') {
+        browserFindSeq++;
         currentBrowserRecursiveItems = null;
         currentBrowserRecursiveFolderId = null;
         await browse(selectedServerUdn, currentFolderId);
         return;
     }
 
-    if (currentBrowserRecursiveFolderId !== currentFolderId || !currentBrowserRecursiveItems) {
-        browserItems.innerHTML = '<div class="loading">Searching recursively... This may take a moment.</div>';
-        try {
-            const res = await fetch(`/api/browse-recursive/${encodeURIComponent(selectedServerUdn)}?objectId=${encodeURIComponent(currentFolderId)}`);
-            if (res.ok) {
-                const data = await res.json();
-                currentBrowserRecursiveItems = data.items || [];
-                currentBrowserRecursiveFolderId = currentFolderId;
-            } else {
-                throw new Error('Failed to fetch recursive items');
-            }
-        } catch (e) {
-            console.error('Recursive search error:', e);
-            browserItems.innerHTML = `<div class="error">Search failed: ${e.message}</div>`;
-            return;
-        }
+    // The server answers from its library index (title, artist and album, every word must match).
+    // Only the very first search on a server has to build that index, which can take a while.
+    const seq = ++browserFindSeq;
+    const slowNotice = setTimeout(() => {
+        if (seq === browserFindSeq) browserItems.innerHTML = '<div class="loading">Building the search index for this server (first search only)... This may take a while.</div>';
+    }, 1500);
+    let filtered;
+    try {
+        const res = await fetch(`/api/library-index/${encodeURIComponent(selectedServerUdn)}/search?q=${encodeURIComponent(currentBrowserFindText)}&objectId=${encodeURIComponent(currentFolderId)}`);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Search request failed');
+        const data = await res.json();
+        if (seq !== browserFindSeq) return; // a newer search superseded this one
+        filtered = data.items || [];
+        currentBrowserRecursiveItems = filtered;
+        currentBrowserRecursiveFolderId = currentFolderId;
+    } catch (e) {
+        if (seq !== browserFindSeq) return;
+        console.error('Search error:', e);
+        browserItems.innerHTML = `<div class="error">Search failed: ${e.message}</div>`;
+        return;
+    } finally {
+        clearTimeout(slowNotice);
     }
-
-    const filtered = currentBrowserRecursiveItems.filter(item => {
-        const title = (item.title || '').toLowerCase();
-        return title.includes(currentBrowserFindText);
-    });
 
     renderBrowser(filtered);
 
@@ -5814,22 +5823,41 @@ function toggleSSDPRow(rowId) {
 
 // ─── Database Stats ──────────────────────────────────────────────────────────
 
+let dbStatsRefreshTimer = null;
+
 function closeDbStatsModal() {
+    clearTimeout(dbStatsRefreshTimer);
     const modal = document.getElementById('db-stats-modal');
     if (modal) modal.style.display = 'none';
 }
 
-async function openDbStatsModal() {
+function openDbStatsModalIfVisible() {
+    const modal = document.getElementById('db-stats-modal');
+    if (modal && modal.style.display !== 'none') openDbStatsModal(true);
+}
+
+async function rebuildLibraryIndex(udn) {
+    try {
+        await fetch(`/api/library-index/${encodeURIComponent(udn)}/rebuild`, { method: 'POST' });
+    } catch (e) { console.error('Rebuild index failed:', e); }
+    openDbStatsModal(true);
+}
+
+async function openDbStatsModal(refresh = false) {
     const modal = document.getElementById('db-stats-modal');
     const body = document.getElementById('db-stats-body');
     if (!modal || !body) return;
     modal.style.display = 'flex';
-    body.innerHTML = '<div class="empty-state">Loading...</div>';
+    if (!refresh) body.innerHTML = '<div class="empty-state">Loading...</div>';
     try {
-        const res = await fetch('/api/db-stats');
+        const [res, idxRes] = await Promise.all([fetch('/api/db-stats'), fetch('/api/library-index/status')]);
         const d = await res.json();
         if (!res.ok) throw new Error(d.error || res.statusText);
+        d.indexServers = idxRes.ok ? (await idxRes.json()).servers : [];
         body.innerHTML = renderDbStats(d);
+        // Keep the panel current while an index is being built
+        clearTimeout(dbStatsRefreshTimer);
+        if (d.indexServers.some(sv => sv.building)) dbStatsRefreshTimer = setTimeout(openDbStatsModalIfVisible, 3000);
     } catch (e) {
         body.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(e.message)}</div>`;
     }
@@ -5886,6 +5914,19 @@ function renderDbStats(d) {
         ['Channels not found', num(o.youtube.channelsMissing)],
     ]]);
 
+    const ago = (ts) => {
+        const m = Math.round((Date.now() - ts) / 60000);
+        return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 2880 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+    };
+    const indexRows = (d.indexServers || []).map(sv => `
+        <tr>
+            <td>${escapeHtml(sv.name || sv.udn)}</td>
+            <td class="db-stats-num">${sv.meta ? num(sv.meta.item_count) : '—'}</td>
+            <td class="db-stats-num">${sv.building ? 'Building...' : sv.meta ? ago(sv.meta.built_at) : 'Not built'}</td>
+            <td class="db-stats-num"><button class="btn-control ghost btn-small" ${sv.building ? 'disabled' : ''}
+                onclick="rebuildLibraryIndex('${escapeHtml(sv.udn)}')">${sv.meta ? 'Rebuild' : 'Build'}</button></td>
+        </tr>`).join('');
+
     const kv = (rows) => rows.map(([k, v]) =>
         `<div class="db-stat-item"><span class="db-stat-label">${escapeHtml(k)}</span><span class="db-stat-value">${escapeHtml(String(v))}</span></div>`).join('');
 
@@ -5904,6 +5945,13 @@ function renderDbStats(d) {
             <thead><tr><th>Table</th><th>Contents</th><th class="db-stats-num">Rows</th><th class="db-stats-num">Size</th></tr></thead>
             <tbody>${tableRows}</tbody>
         </table>
+        ${indexRows ? `
+            <div class="db-stats-section-title">Search index</div>
+            <table class="ssdp-table db-stats-table">
+                <thead><tr><th>Media server</th><th class="db-stats-num">Items</th><th class="db-stats-num">Built</th><th></th></tr></thead>
+                <tbody>${indexRows}</tbody>
+            </table>
+            <div class="db-stats-desc" style="font-size:0.75rem;margin-top:0.4rem">Find searches this index. It refreshes daily and after uploads or deletes on the local library.</div>` : ''}
         ${sections.map(([title, rows]) => `
             <div class="db-stats-section-title">${escapeHtml(title)}</div>
             <div class="db-stats-grid">${kv(rows)}</div>`).join('')}

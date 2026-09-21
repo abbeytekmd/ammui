@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
+import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
 import sonos from 'sonos';
 import fs from 'fs';
 import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
@@ -34,7 +35,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, getLibraryIndexMeta, searchLibraryIndex,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -215,6 +216,26 @@ loadDevices();
 loadSettings();
 airplayManager = new AirPlayManager(devices, saveDevices);
 setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl });
+
+// Most recently seen device with this UDN (a device can appear under several locations).
+function findDeviceByUdn(udn) {
+    return Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+}
+
+// Anything the UI does that adds, removes or moves files in the local library makes the
+// local search index stale, so schedule a rebuild once the request has succeeded.
+app.use('/api', (req, res, next) => {
+    const changesLibrary = req.method === 'POST' &&
+        (/^\/(upload|upload-local-file|delete)$/.test(req.path) || req.path.startsWith('/local/'));
+    if (changesLibrary) {
+        res.on('finish', () => {
+            if (res.statusCode < 400) markDirty(SERVER_UDN, findDeviceByUdn);
+        });
+    }
+    next();
+});
 
 // Manually inject the local server into the devices map on startup
 // so it's always available even if SSDP discovery is slow or blocked.
@@ -1126,6 +1147,47 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
         console.error('Insert failed:', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+// Find-as-you-type backed by the library index. The first search on a server builds the
+// index (one full crawl); after that it is a database query.
+app.get('/api/library-index/:udn/search', async (req, res) => {
+    const { udn } = req.params;
+    const { q = '', objectId = '0' } = req.query;
+
+    try {
+        if (!getLibraryIndexMeta(udn)) {
+            const device = findDeviceByUdn(udn);
+            if (!device) return res.status(404).json({ error: 'Device not found' });
+            await buildIndex(device, 'first search');
+        }
+        const { items, truncated } = searchLibraryIndex(udn, String(q), String(objectId));
+        const meta = getLibraryIndexMeta(udn);
+        res.json({ items, truncated, builtAt: meta?.built_at || null, itemCount: meta?.item_count || 0 });
+    } catch (err) {
+        console.error('Library index search failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/library-index/:udn/rebuild', (req, res) => {
+    const device = findDeviceByUdn(req.params.udn);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    buildIndex(device, 'manual rebuild').catch(() => { });
+    res.status(202).json({ success: true, building: true });
+});
+
+app.get('/api/library-index/status', (req, res) => {
+    const servers = Array.from(devices.values())
+        .filter(d => d.isServer)
+        .filter((d, i, all) => all.findIndex(o => o.udn === d.udn) === i)
+        .map(d => ({
+            udn: d.udn,
+            name: d.friendlyName,
+            building: isBuilding(d.udn),
+            meta: getLibraryIndexMeta(d.udn),
+        }));
+    res.json({ servers });
 });
 
 app.get('/api/browse-recursive/:udn', async (req, res) => {
@@ -3935,6 +3997,12 @@ app.post('/api/updates/apply', (req, res) => {
 });
 
 app.listen(port, () => {
+    startIndexScheduler(findDeviceByUdn);
+    // Index the local library in the background so the first search is already fast.
+    setTimeout(() => {
+        const local = findDeviceByUdn(SERVER_UDN);
+        if (local && !getLibraryIndexMeta(SERVER_UDN)) buildIndex(local, 'startup').catch(() => { });
+    }, 10000);
     console.log(`AMMUI server listening at http://localhost:${port}`);
 });
 
