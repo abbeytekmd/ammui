@@ -90,9 +90,25 @@ const modalCastList = document.getElementById('modal-cast-list');
 const floatingBtn = document.getElementById('floating-nav-btn');
 const navBtnLabel = document.getElementById('nav-btn-label');
 
+// Until the user sets their own, the local server's home folders are its three created folders.
+function applyDefaultLocalHomes() {
+    const defaults = { music: 'music', photo: 'pictures', video: 'videos' };
+    for (const [type, folder] of Object.entries(defaults)) {
+        try {
+            const key = `serverHomeLocations_${type}`;
+            // Music homes may still live under the pre-per-type key; don't shadow them
+            const homes = JSON.parse(localStorage.getItem(key) || (type === 'music' && localStorage.getItem('serverHomeLocations')) || '{}');
+            if (homes[LOCAL_SERVER_UDN]) continue;
+            homes[LOCAL_SERVER_UDN] = [{ id: '0', title: 'Root' }, { id: folder, title: folder }];
+            localStorage.setItem(key, JSON.stringify(homes));
+        } catch (e) { }
+    }
+}
+
 let currentDevices = [];
 let selectedRendererUdn = localStorage.getItem('selectedRendererUdn');
 let selectedServerUdn = localStorage.getItem('selectedServerUdn');
+applyDefaultLocalHomes();
 let browsePath = [{ id: '0', title: 'Root' }];
 let currentBrowserMode = localStorage.getItem('currentBrowserMode') || 'music';
 let currentBrowserItems = [];
@@ -4441,8 +4457,14 @@ function renderDevices() {
             // Ensure we have a valid selection if servers are available
             const serverExists = servers.some(s => s.udn === selectedServerUdn);
             if (!selectedServerUdn || !serverExists) {
-                selectedServerUdn = servers[0].udn;
-                browse(selectedServerUdn, '0');
+                const local = servers.find(s => s.udn === LOCAL_SERVER_UDN);
+                if (local) {
+                    // Default to the local media server, opening at its home folder
+                    selectServer(local.udn);
+                } else {
+                    selectedServerUdn = servers[0].udn;
+                    browse(selectedServerUdn, '0');
+                }
             }
 
             const activeServer = servers.find(s => s.udn === selectedServerUdn) || servers[0];

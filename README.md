@@ -14,7 +14,7 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Browse the media library as Music, Photos or Videos, each with its own home folder.
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
-* Watch a track's music video on YouTube, right from the track list. Each track shows a Video button: solid when a video is known, dashed ("Video?") when not yet searched (click to search now), or struck through ("No video") when searched and nothing was found (click to choose one). Opening a folder first checks the local database; anything still missing is then searched by paging through that artist's YouTube uploads just until the track turns up, storing every page so other albums by the artist are matched without further API calls; if one is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results (needs a YouTube API key in Settings; the optional `yt-dlp` tool and ffmpeg).
+* Watch a track's music video on YouTube, right from the track list (see [Music Videos](#music-videos)).
 
 ## Local Media Server
 
@@ -44,6 +44,14 @@ I have this running on a headless linux box and I run the UI from a Samsung tabl
 * Upload button to upload tracks and photos from local disk.
 * Download buttons on music and photos from other servers to add a copy to the local server.
 * Sync all local music and photo files to S3 compatible storage (I use Wasabi).
+
+## Music Videos
+Watch a track's music video on YouTube, right from the track list.
+
+* Each track shows a Video button: solid when a video is known, dashed ("Video?") when not yet searched (click to search now), or struck through ("No video") when searched and nothing was found (click to choose one).
+* Opening a folder first checks the local database. Anything still missing is then searched by paging through that artist's YouTube uploads just until the track turns up, storing every page so other albums by the artist are matched without further API calls.
+* If a video is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results.
+* Needs a YouTube API key in Settings. The optional `yt-dlp` tool and ffmpeg allow videos with embedding disabled to play locally (see Getting Started).
 
 ## Managing your music library
 
@@ -81,6 +89,17 @@ The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagr
 * **Identify with AcoustID**: fingerprints the audio and looks it up on AcoustID. On a confident match it fills in Title/Artist/Album/Year, highlighted for you to review before saving. Nothing is written until you press Save. Needs an AcoustID key in Settings and `fpcalc` installed.
 * **Tags / favourite**: label a track with your own tags, which can then be played from the Play Tag button. Favourite is a reserved tag.
 
+### A typical clean-up
+
+1. **Upload** or copy the new music in.
+2. On folders with untagged tracks, run **Identify Tags from Filename**, or open a track's ⓘ and **Identify with AcoustID**.
+3. Run **Reimport** on the folder so tracks land in the right `Artist/Album` folders.
+4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
+5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
+6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
+7. **Export Tags** and **Sync Now** to keep a backup.
+
+
 ### Album art
 
 Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cover.png`, `album.jpg` or `artwork.jpg` in the same folder, then a picture embedded in the file, then an automatic Discogs search by artist and album (needs a Discogs token in Settings). If a track still has no art, or the wrong one, use the **Retry album art** button on the slideshow's music bar to search Discogs by artist and album yourself and pick a replacement.
@@ -94,16 +113,6 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 * **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
 * **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key, and **S3 Cloud Sync**.
 * **S3 Cloud Sync → Sync Now / View Log**: copies the local music and photos to an S3 bucket as a backup. View Log shows the result of the last sync.
-
-### A typical clean-up
-
-1. **Upload** or copy the new music in.
-2. On folders with untagged tracks, run **Identify Tags from Filename**, or open a track's ⓘ and **Identify with AcoustID**.
-3. Run **Reimport** on the folder so tracks land in the right `Artist/Album` folders.
-4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
-5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
-6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
-7. **Export Tags** and **Sync Now** to keep a backup.
 
 ### Logs
 

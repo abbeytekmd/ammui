@@ -30,7 +30,7 @@ import {
     saveAllDevices, getAllDevices,
     getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getUrisByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted,
+    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted, normalizePhotoKey,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -79,13 +79,13 @@ const app = express();
 const port = 3000;
 
 // Ensure directories exist
-if (!fs.existsSync(path.join(baseDataDir, 'uploads'))) fs.mkdirSync(path.join(baseDataDir, 'uploads'), { recursive: true });
-if (!fs.existsSync(path.join(baseDataDir, 'local'))) fs.mkdirSync(path.join(baseDataDir, 'local'), { recursive: true });
+if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
+if (!fs.existsSync(path.join(__dirname, 'local'))) fs.mkdirSync(path.join(__dirname, 'local'), { recursive: true });
 
 // Scaffold the three library categories as sibling folders so the local media
 // server always exposes music / pictures / videos side by side.
 for (const sub of ['music', 'pictures', 'videos']) {
-    const dir = path.join(baseDataDir, 'local', sub);
+    const dir = path.join(__dirname, 'local', sub);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
@@ -176,6 +176,10 @@ function loadSettings() {
     settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
     settings.deviceName = getSetting('deviceName', 'AMMUI');
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
+    // Default the slideshow to the local server's pictures folder until the user picks another
+    if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
+        settings.screensaver = { serverUdn: SERVER_UDN, objectId: 'pictures', pathName: 'pictures' };
+    }
     settings.manualRotations = getAllPhotoRotations();
     settings.deletedPhotos = getAllDeletedPhotos();
     settings.fileTags = getAllFileTags();
@@ -316,7 +320,7 @@ async function syncToS3() {
             forcePathStyle: false
         });
 
-        const localDir = path.join(baseDataDir, 'local');
+        const localDir = path.join(__dirname, 'local');
         if (!fs.existsSync(localDir)) return;
 
         const allFiles = [];
@@ -905,7 +909,7 @@ app.get('/api/proxy-image', async (req, res) => {
 // ---------------------------------------------------------------------------
 const thumbCacheDir = path.join(baseDataDir, 'cache', 'thumbs');
 fs.mkdirSync(thumbCacheDir, { recursive: true });
-const thumbLocalRoot = path.join(baseDataDir, 'local');
+const thumbLocalRoot = path.join(__dirname, 'local');
 
 let ffmpegUnavailable = false;
 const thumbInflight = new Map();          // cacheFile -> Promise (dedupe concurrent requests)
@@ -2343,8 +2347,8 @@ app.get('/api/download-job/:id', (req, res) => {
 });
 
 app.get('/api/local-stats', async (req, res) => {
-    const musicDir = path.join(baseDataDir, 'local', 'music');
-    const photosDir = path.join(baseDataDir, 'local', 'pictures');
+    const musicDir = path.join(__dirname, 'local', 'music');
+    const photosDir = path.join(__dirname, 'local', 'pictures');
     const audioExts = AUDIO_EXTS;
     const imageExts = IMAGE_EXTS;
 
@@ -2426,7 +2430,7 @@ async function refreshScreensaverCache(device, objectId) {
             );
             if (!isImage) return false;
             const url = i.uri || i.res;
-            return !settings.deletedPhotos[url];
+            return !settings.deletedPhotos[normalizePhotoKey(url)];
         });
 
         screensaverCache.images = images;
@@ -2589,7 +2593,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                         if (containers.length === 0 || Math.random() > 0.4) {
                             const candidate = images[randomInt(images.length)];
                             const url = candidate.uri || candidate.res;
-                            if (!settings.deletedPhotos[url]) {
+                            if (!settings.deletedPhotos[normalizePhotoKey(url)]) {
                                 foundImage = candidate;
                                 foundImage.folderId = currentId;
                                 foundImage.folderTitle = currentTitle;
@@ -2704,7 +2708,7 @@ app.get('/api/slideshow/list', async (req, res) => {
 
     let images = screensaverCache.images.filter(img => {
         const url = img.uri || img.res;
-        return !settings.deletedPhotos[url];
+        return !settings.deletedPhotos[normalizePhotoKey(url)];
     });
 
     if (mode === 'onThisDay') {
@@ -2767,7 +2771,7 @@ app.post('/api/slideshow/delete', (req, res) => {
     if (!url) return res.status(400).json({ error: 'URL required' });
 
     markPhotoDeleted(url);
-    settings.deletedPhotos[url] = true;
+    settings.deletedPhotos[normalizePhotoKey(url)] = true;
 
     // Also remove from current cache if present
     if (screensaverCache.images && screensaverCache.images.length > 0) {
