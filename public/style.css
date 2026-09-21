@@ -5870,3 +5870,62 @@ input:checked+.slider:before {
 @keyframes yt-pulse {
     50% { opacity: 0.3; }
 }
+
+/* Database Stats modal */
+.db-stats-body {
+    padding: 1rem 1.5rem 1.5rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.db-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 0.5rem;
+}
+
+.db-stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.6rem 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+}
+
+.db-stat-label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.db-stat-value {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.db-stats-section-title {
+    margin: 1.25rem 0 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.db-stats-table .db-stats-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.db-stats-desc {
+    color: var(--text-muted);
+}
+
+.db-stats-path {
+    margin-top: 1.25rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    word-break: break-all;
+}

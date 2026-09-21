@@ -5812,6 +5812,104 @@ function toggleSSDPRow(rowId) {
     if (chevron) chevron.textContent = isOpen ? '\u25BA' : '\u25BC';
 }
 
+// ─── Database Stats ──────────────────────────────────────────────────────────
+
+function closeDbStatsModal() {
+    const modal = document.getElementById('db-stats-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function openDbStatsModal() {
+    const modal = document.getElementById('db-stats-modal');
+    const body = document.getElementById('db-stats-body');
+    if (!modal || !body) return;
+    modal.style.display = 'flex';
+    body.innerHTML = '<div class="empty-state">Loading...</div>';
+    try {
+        const res = await fetch('/api/db-stats');
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || res.statusText);
+        body.innerHTML = renderDbStats(d);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderDbStats(d) {
+    const fmtBytes = (n) => {
+        if (n == null) return '—';
+        const u = ['B', 'KB', 'MB', 'GB'];
+        let i = 0;
+        while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+        return `${n.toFixed(i ? 1 : 0)} ${u[i]}`;
+    };
+    const num = (n) => Number(n || 0).toLocaleString();
+    const date = (s) => { const t = new Date(s); return isNaN(t) ? '—' : t.toLocaleDateString(); };
+    const rowsOf = (name) => d.tables.find(t => t.name === name)?.rows;
+    const f = d.file, o = d.overview || {};
+    const totalRows = d.tables.reduce((a, t) => a + t.rows, 0);
+
+    const facts = [
+        ['Database size', fmtBytes(f.dbBytes) + (f.walBytes ? ` (+ ${fmtBytes(f.walBytes)} WAL)` : '')],
+        ['Tables', num(d.tables.length)],
+        ['Total rows', num(totalRows)],
+        ['Free space', fmtBytes(f.freePages * f.pageSize)],
+        ['SQLite', f.sqliteVersion],
+    ];
+    const sections = [];
+    if (o.history) sections.push(['Play history', [
+        ['Plays', num(rowsOf('play_history'))],
+        ['Unique tracks', num(o.history.tracks)],
+        ['Artists', num(o.history.artists)],
+        ['Albums', num(o.history.albums)],
+        ['First play', o.history.first ? date(o.history.first) : '—'],
+        ['Last play', o.history.last ? date(o.history.last) : '—'],
+    ]]);
+    if (o.tags) sections.push(['Tags', [
+        ['Distinct tags', num(o.tags.distinctTags)],
+        ['Tagged files', num(o.tags.taggedFiles)],
+    ]]);
+    if (o.art) sections.push(['Album art', [
+        ['Images cached', num(rowsOf('album_art'))],
+        ['Image data', fmtBytes(o.art.bytes)],
+    ]]);
+    if (o.lyrics) sections.push(['Lyrics', [
+        ['Found', num(o.lyrics.found)],
+        ['With synced lyrics', num(o.lyrics.synced)],
+        ['Not found', num(o.lyrics.missing)],
+    ]]);
+    if (o.youtube) sections.push(['YouTube', [
+        ['Videos matched', num(o.youtube.videosFound)],
+        ['Videos not found', num(o.youtube.videosMissing)],
+        ['Artist channels', num(o.youtube.channelsFound)],
+        ['Channels fully indexed', num(o.youtube.channelsComplete)],
+        ['Channels not found', num(o.youtube.channelsMissing)],
+    ]]);
+
+    const kv = (rows) => rows.map(([k, v]) =>
+        `<div class="db-stat-item"><span class="db-stat-label">${escapeHtml(k)}</span><span class="db-stat-value">${escapeHtml(String(v))}</span></div>`).join('');
+
+    const tableRows = [...d.tables].sort((a, b) => b.rows - a.rows).map(t => `
+        <tr>
+            <td>${escapeHtml(t.name)}</td>
+            <td class="db-stats-desc">${escapeHtml(t.description)}</td>
+            <td class="db-stats-num">${num(t.rows)}</td>
+            <td class="db-stats-num">${fmtBytes(t.bytes)}</td>
+        </tr>`).join('');
+
+    return `
+        <div class="db-stats-grid">${kv(facts)}</div>
+        <div class="db-stats-section-title">Tables</div>
+        <table class="ssdp-table db-stats-table">
+            <thead><tr><th>Table</th><th>Contents</th><th class="db-stats-num">Rows</th><th class="db-stats-num">Size</th></tr></thead>
+            <tbody>${tableRows}</tbody>
+        </table>
+        ${sections.map(([title, rows]) => `
+            <div class="db-stats-section-title">${escapeHtml(title)}</div>
+            <div class="db-stats-grid">${kv(rows)}</div>`).join('')}
+        <div class="db-stats-path">${escapeHtml(f.path)}</div>`;
+}
+
 function openConsoleModal() {
     const modal = document.getElementById('console-modal');
     if (modal) {

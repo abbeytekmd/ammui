@@ -34,7 +34,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -6153,6 +6153,14 @@ app.get('/api/logs', (req, res) => {
         };
     }
     res.json({ logs: serverLogs, ssdp: ssdpData });
+});
+
+app.get('/api/db-stats', (req, res) => {
+    try {
+        res.json(getDbStats());
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 app.post('/api/logs/clear', (req, res) => {
