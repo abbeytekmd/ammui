@@ -5853,6 +5853,25 @@ input:checked+.slider:before {
     border-style: dashed;
 }
 
+/* Official video from the artist's own channel */
+.youtube-video-btn.yt-official {
+    border-color: #f5b301;
+    color: #f5b301;
+}
+
+/* Hand-picked or other-channel video: half-filled star */
+.youtube-video-btn.yt-official-half {
+    border-color: #f5b301;
+}
+
+.yt-star.half {
+    background: linear-gradient(90deg, #f5b301 50%, currentColor 50%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+}
+
 .youtube-video-btn.yt-none {
     opacity: 0.4;
 }

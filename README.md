@@ -14,7 +14,7 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Browse the media library as Music, Photos or Videos, each with its own home folder.
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
-* Watch a track's music video on YouTube, right from the track list (see [Music Videos](#music-videos)).
+* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key - see [Music Videos](#music-videos)).
 
 ## Local Media Server
 
@@ -46,12 +46,18 @@ I have this running on a headless linux box and I run the UI from a Samsung tabl
 * Sync all local music and photo files to S3 compatible storage (I use Wasabi).
 
 ## Music Videos
-Watch a track's music video on YouTube, right from the track list.
+Watch a track's music video on YouTube, right from the track list. When the video ends, the player closes by itself.
 
-* Each track shows a Video button: solid when a video is known, dashed ("Video?") when not yet searched (click to search now), or struck through ("No video") when searched and nothing was found (click to choose one).
-* Opening a folder first checks the local database. Anything still missing is then searched by paging through that artist's YouTube uploads just until the track turns up, storing every page so other albums by the artist are matched without further API calls.
+> **A YouTube API key is required.** Without one nothing can be looked up, so tracks that haven't already been matched show no Video button. Create a free key in the Google Cloud console (enable the "YouTube Data API v3"), then paste it in **Settings → Integrations**. See [How music video matching works](#how-music-video-matching-works) for the details and quota limits.
+
+### The Video button
+* Solid: a video is known. Dashed ("Video?"): not searched yet (click to search now). Struck through ("No video"): searched and nothing was found (click to choose one).
+* A gold star on the button shows how likely the video is to be the real thing:
+  * **Full star** - found on the artist's own channel and it isn't a lyric, audio, visualiser, live, cover or remix upload.
+  * **Half star** - a video from another channel that is titled "Official Video", or one you picked by hand from the search results.
+  * **No star** - anything else, such as a lyric video or a live cut. It still plays.
 * If a video is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results.
-* Needs a YouTube API key in Settings. The optional `yt-dlp` tool and ffmpeg allow videos with embedding disabled to play locally (see Getting Started).
+* The optional `yt-dlp` tool and ffmpeg let videos with embedding disabled play locally (see Getting Started).
 
 ## Managing your music library
 
@@ -117,6 +123,26 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 ### Logs
 
 Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
+
+## How music video matching works
+
+This describes what happens behind the Video button (see [Music Videos](#music-videos) for what the button shows).
+
+**Requires a YouTube API key** in Settings → Integrations. All lookups use the YouTube Data API. Without a key no searching happens, so tracks that haven't already been matched show no Video button.
+
+### How a video is found
+1. The local database is checked first. Matches are remembered, so a folder you have opened before costs nothing.
+2. Otherwise the artist's YouTube channel is located once (a channel called "... - Topic" is skipped, as it only holds audio). Its uploads are read 50 at a time, just until the track turns up, and every page is stored so other albums by the artist match without more API calls.
+3. If the only match on that channel is a live, audio or lyric cut, the rest of the channel is read to look for a better one.
+4. If the artist's channel has no proper video, YouTube is searched for the track and a result is used only if its title says "Official Video" (or "Official Music Video"), it is the right song and it isn't a lyric, audio or live cut. That is marked with a half star. If nothing qualifies, the live/audio/lyric match from step 3 is used unstarred, or the track is marked "No video".
+
+### Fixing a wrong or missing video
+* Open the track's File Information and choose "Find video on YouTube" to pick from the search results. Your choice is saved and gets a half star.
+* In the Database Stats dialog (menu), the YouTube section has a **Re-match non-official videos** button. It forgets every matched video that has no star, so they are looked up again the next time you browse (stored channel uploads are reused, but a track that needs the "Official Video" search uses quota as described below). Starred videos, including ones you picked by hand, are kept.
+
+### Quota and limits
+* A channel search or a whole-of-YouTube search costs 100 of YouTube's 10,000 daily quota units; reading a page of uploads costs only a unit or two. Channel searches are capped at 60 a day and the "Official Video" searches at 30 a day, so a large library may take a few days to fill in. Tracks that hit a cap stay dashed and are retried later.
+* If YouTube reports its quota is used up, automatic lookups pause for an hour.
 
 ## 🚀 Getting Started
 

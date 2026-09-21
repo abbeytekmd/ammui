@@ -35,7 +35,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, getLibraryIndexMeta, searchLibraryIndex,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -4263,6 +4263,8 @@ function ytCleanTitle(title, artist) {
     return t.replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+const YT_NOT_OFFICIAL_RE = /\b(lyrics?|audio|visuali[sz]er|live|cover|karaoke|remix|reaction|fan[- ]?made)\b/i;
+
 function matchTrackToVideos(artist, title, videos) {
     const want = ytCleanTitle(title, artist);
     if (want.length < 2) return null;
@@ -4273,6 +4275,8 @@ function matchTrackToVideos(artist, title, videos) {
         if (got === want) score = 0;
         else if (` ${got} `.includes(` ${want} `)) score = 1 + got.length / 1000; // title appears as whole words
         else continue;
+        // Stills-with-audio, lyric videos, live cuts etc. lose ties to a real video, but still beat no match
+        if (YT_NOT_OFFICIAL_RE.test(v.title || '')) score += 0.5;
         if (!best || score < best.score) best = { score, video: v };
     }
     return best ? best.video : null;
@@ -4300,10 +4304,14 @@ async function resolveArtistChannel(artist) {
     // Only trust a channel whose name contains the artist (or "ArtistVEVO" etc.) —
     // otherwise we'd attach fan channels or unrelated ones.
     const na = ytNorm(artist).replace(/[^a-z0-9]/g, '');
-    const hit = items.find(i => {
+    // Auto-generated "Artist - Topic" channels only hold audio-only tracks (and usually just
+    // some of the catalogue), never the official videos, so skip them; prefer an exact name.
+    const candidates = items.filter(i => !/-\s*topic\s*$/i.test(i.snippet?.channelTitle || ''));
+    const matches = candidates.filter(i => {
         const nc = ytNorm(i.snippet?.channelTitle).replace(/[^a-z0-9]/g, '');
         return na && nc && (nc.includes(na) || (nc.length >= 4 && na.includes(nc)));
     });
+    const hit = matches.find(i => ytNorm(i.snippet?.channelTitle).replace(/[^a-z0-9]/g, '') === na) || matches[0];
     const channelId = hit?.id?.channelId || hit?.snippet?.channelId || null;
     setArtistChannel(artist, channelId, !!channelId);
     console.log(`[YOUTUBE] Channel for "${artist}": ${channelId ? hit.snippet.channelTitle : 'none found'}`);
@@ -4365,20 +4373,33 @@ async function ingestNextUploadsPage(artist, channelId) {
 // the channel's uploads have been read to the end (or the artist has no channel).
 function lookupTrackInDb(artist, title) {
     const cached = getCachedYoutubeVideo(artist, title);
-    if (cached) {
+    // A weak match (live/audio/lyric cut) found before the channel was fully read isn't final:
+    // the real video may be on a page not stored yet, so re-evaluate instead of trusting it.
+    const chan = cached && cached.found && !cached.official ? getArtistChannel(artist) : null;
+    const weakAndChannelOpen = !!chan && chan.found && !chan.uploadsDone && !!settings.youtubeApiKey;
+    if (cached && !weakAndChannelOpen) {
         return cached.found && cached.videoId
-            ? { status: 'found', videoId: cached.videoId, embeddable: cached.embeddable }
+            ? { status: 'found', videoId: cached.videoId, embeddable: cached.embeddable, official: cached.official }
             : { status: 'none' };
     }
     const channel = getArtistChannel(artist);
     if (!channel) return { status: 'unsearched' };
-    if (!channel.found) return { status: 'none' };
+    // With no artist channel, or once its uploads are exhausted, the last resort is a
+    // whole-of-YouTube search for an "official video" (see searchTrackOnline). It's only
+    // final ("none") once that has been tried, or if there's no API key to do it with.
+    if (!channel.found) return settings.youtubeApiKey ? { status: 'unsearched' } : { status: 'none' };
     const match = matchTrackToVideos(artist, title, getChannelVideos(channel.channelId));
     if (match) {
-        setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable, found: true });
-        return { status: 'found', videoId: match.videoId, embeddable: match.embeddable };
+        // Matched from the artist's own channel, and not a lyric/audio/live/etc. upload
+        const official = YT_NOT_OFFICIAL_RE.test(match.title || '') ? 0 : 2;
+        // Weak match (live/audio/lyric cut): hold it back until a better one has been looked for —
+        // the rest of the channel's uploads, then an "official video" on another channel. The
+        // weak match is only saved by searchTrackOnline once that has been tried.
+        if (!official && settings.youtubeApiKey) return { status: 'unsearched' };
+        setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable, found: true, official });
+        return { status: 'found', videoId: match.videoId, embeddable: match.embeddable, official };
     }
-    if (channel.uploadsDone) {
+    if (channel.uploadsDone && !settings.youtubeApiKey) {
         setCachedYoutubeVideo(artist, title, { found: false });
         return { status: 'none' };
     }
@@ -4390,12 +4411,51 @@ function lookupTrackInDb(artist, title) {
 // later tracks by the same artist are usually answered from the database alone.
 async function searchTrackOnline(artist, title) {
     const channelId = await resolveArtistChannel(artist);
-    if (!channelId) return lookupTrackInDb(artist, title);
-    for (;;) {
-        const res = lookupTrackInDb(artist, title);
-        if (res.status !== 'unsearched') return res;
-        await ingestNextUploadsPage(artist, channelId);
+    if (channelId) {
+        for (;;) {
+            const res = lookupTrackInDb(artist, title);
+            if (res.status !== 'unsearched') return res;
+            if (getArtistChannel(artist)?.uploadsDone) break;
+            await ingestNextUploadsPage(artist, channelId);
+        }
     }
+    const weak = channelId ? matchTrackToVideos(artist, title, getChannelVideos(channelId)) : null;
+    return fallbackOfficialVideoSearch(artist, title, weak);
+}
+
+// Last resort when the artist's own channel has no match: search all of YouTube and accept a
+// result only if it's titled as an "official video" and is the right song. Marked half-star.
+// A search costs 100 quota units, so it has its own daily cap; running out (or a quota
+// error) leaves the track unsearched so it's retried later. The outcome is cached either way.
+const YT_MAX_FALLBACK_SEARCHES_PER_DAY = 30;
+const YT_OFFICIAL_VIDEO_RE = /\bofficial\s+(music\s+)?video\b/i;
+
+async function fallbackOfficialVideoSearch(artist, title, weak = null) {
+    let candidates = getCachedYoutubeCandidates(artist, title);
+    if (!candidates) {
+        const today = new Date().toISOString().slice(0, 10);
+        const used = getSetting('ytFallbackSearches', {}) || {};
+        const count = used.day === today ? used.count : 0;
+        if (count >= YT_MAX_FALLBACK_SEARCHES_PER_DAY) throw new YoutubeBudgetError('Daily fallback-search budget used up');
+        try {
+            candidates = await fetchYoutubeCandidates(artist, title);
+        } catch (err) { throw youtubeApiError(err); }
+        setSetting('ytFallbackSearches', { day: today, count: count + 1 });
+    }
+    const eligible = candidates.filter(c => YT_OFFICIAL_VIDEO_RE.test(c.title || '') && !YT_NOT_OFFICIAL_RE.test(c.title || ''));
+    const match = matchTrackToVideos(artist, title, eligible);
+    if (!match) {
+        // No official video elsewhere: settle for the artist channel's weak (live/audio/lyric) match, unstarred
+        if (weak) {
+            setCachedYoutubeVideo(artist, title, { videoId: weak.videoId, embeddable: weak.embeddable, found: true, official: 0 });
+            return { status: 'found', videoId: weak.videoId, embeddable: weak.embeddable, official: 0 };
+        }
+        setCachedYoutubeVideo(artist, title, { found: false });
+        return { status: 'none' };
+    }
+    setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable !== false, found: true, official: 1 });
+    console.log(`[YOUTUBE] Fallback: "${artist} - ${title}" -> ${match.title} (${match.channel})`);
+    return { status: 'found', videoId: match.videoId, embeddable: match.embeddable !== false, official: 1 };
 }
 
 // Searches for the same artist run one at a time so tracks share each page instead of
@@ -4434,11 +4494,15 @@ app.get('/api/youtube/video', async (req, res) => {
 
 // Stores the video the user picked for a track in the local database.
 app.post('/api/youtube/select', express.json(), (req, res) => {
-    const { artist, title, videoId, embeddable } = req.body || {};
+    const { artist, title, videoId, embeddable, channel, videoTitle } = req.body || {};
     if (!title || typeof videoId !== 'string' || !/^[\w-]{6,20}$/.test(videoId)) {
         return res.status(400).json({ error: 'title and a valid videoId are required' });
     }
-    setCachedYoutubeVideo(artist || '', title, { videoId, embeddable: embeddable !== false, found: true });
+    const na = ytNorm(artist).replace(/[^a-z0-9]/g, '');
+    const nc = ytNorm(channel).replace(/[^a-z0-9]/g, '');
+    const ownChannel = !!na && !!nc && !/-\s*topic\s*$/i.test(channel || '') && (nc.includes(na) || (nc.length >= 4 && na.includes(nc)));
+    const official = ownChannel && !YT_NOT_OFFICIAL_RE.test(videoTitle || '') ? 2 : 1;
+    setCachedYoutubeVideo(artist || '', title, { videoId, embeddable: embeddable !== false, found: true, official }); // hand-picked: full star only if it's the artist's own channel and not a lyric/audio/live cut, else half
     res.json({ success: true });
 });
 
@@ -4456,6 +4520,19 @@ app.get('/api/youtube/candidates', async (req, res) => {
     }
 
     try {
+        const candidates = await fetchYoutubeCandidates(artist, title);
+        res.json({ candidates, ytDlpAvailable: !ytDlpUnavailable });
+    } catch (err) {
+        const reason = err.response?.data?.error?.message || err.message;
+        console.error('[YOUTUBE] Candidate search failed:', reason);
+        res.status(502).json({ error: `YouTube search failed: ${reason}` });
+    }
+});
+
+// Runs and caches a YouTube search for a track (several results with channel and embeddable
+// info). Costs 100 quota units. Throws the raw axios error on failure.
+async function fetchYoutubeCandidates(artist, title) {
+    {
         const searchResp = await axios.get('https://www.googleapis.com/youtube/v3/search', {
             params: {
                 part: 'snippet',
@@ -4491,13 +4568,9 @@ app.get('/api/youtube/candidates', async (req, res) => {
         }
 
         if (candidates.length) setCachedYoutubeCandidates(artist, title, candidates);
-        res.json({ candidates, ytDlpAvailable: !ytDlpUnavailable });
-    } catch (err) {
-        const reason = err.response?.data?.error?.message || err.message;
-        console.error('[YOUTUBE] Candidate search failed:', reason);
-        res.status(502).json({ error: `YouTube search failed: ${reason}` });
+        return candidates;
     }
-});
+}
 
 // Streams a YouTube video's actual media (via yt-dlp) straight through to the response,
 // with no server-side caching — each request re-invokes yt-dlp. This is only needed for
@@ -6230,6 +6303,14 @@ app.get('/api/logs', (req, res) => {
 app.get('/api/db-stats', (req, res) => {
     try {
         res.json(getDbStats());
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/youtube/clear-non-official', (req, res) => {
+    try {
+        res.json({ success: true, cleared: clearNonOfficialYoutubeMatches() });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }

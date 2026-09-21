@@ -2334,7 +2334,7 @@ async function checkYoutubeVideoForItem(item, index, renderSeq, search) {
         const data = await res.json();
         if (data.ytDlpAvailable) ytDlpAvailable = true;
         youtubeCanSearch = !!data.canSearch;
-        const result = { status: data.status, videoId: data.videoId, embeddable: data.embeddable !== false };
+        const result = { status: data.status, videoId: data.videoId, embeddable: data.embeddable !== false, official: data.official || 0 };
         youtubeVideoCache.set(cacheKey, result);
         applyYoutubeButtonState(item.uri, index, renderSeq, result);
     } catch (e) {
@@ -2347,11 +2347,17 @@ function setYoutubeButtonState(btn, result) {
     btn.dataset.ytState = state;
     btn.classList.toggle('yt-unsearched', state === 'unsearched');
     btn.classList.toggle('yt-none', state === 'none');
+    const official = state === 'found' ? (result.official || 0) : 0; // 0 none, 1 half star, 2 full star
+    btn.classList.toggle('yt-official', official === 2);
+    btn.classList.toggle('yt-official-half', official === 1);
     const label = btn.querySelector('.btn-label');
     if (state === 'found') {
         btn.dataset.videoId = result.videoId;
         btn.dataset.embeddable = result.embeddable ? '1' : '0';
-        if (label) label.textContent = 'Video';
+        if (label) {
+            if (official) label.innerHTML = `Video <span class="yt-star${official === 1 ? ' half' : ''}">★</span>`;
+            else label.textContent = 'Video';
+        }
         // YouTube's own "embeddable" flag only reflects whether embedding is disabled
         // globally — it says nothing about a per-domain allow/block list some creators set
         // in Studio, which isn't exposed by the API at all, so a video can report embeddable
@@ -2360,6 +2366,8 @@ function setYoutubeButtonState(btn, result) {
         if (ytDlpAvailable) btn.title = 'Watch this track\'s video (played locally via yt-dlp)';
         else if (!result.embeddable) btn.title = 'Watch this track\'s video on YouTube (opens in a new tab)';
         else btn.title = 'Watch the video for this track on YouTube';
+        if (official === 2) btn.title = "Official video from the artist's channel — " + btn.title;
+        else if (official === 1) btn.title = 'Probably official (chosen by hand or from another channel) — ' + btn.title;
     } else if (state === 'unsearched') {
         delete btn.dataset.videoId;
         if (label) label.textContent = 'Video?';
@@ -2470,14 +2478,14 @@ async function selectYoutubeVideo(item, c) {
         const res = await fetch('/api/youtube/select', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ artist: item.artist || '', title: item.title, videoId: c.videoId, embeddable: c.embeddable !== false })
+            body: JSON.stringify({ artist: item.artist || '', title: item.title, videoId: c.videoId, embeddable: c.embeddable !== false, channel: c.channel, videoTitle: c.title })
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to save');
     } catch (e) {
         showToast('Could not save video: ' + e.message, 'error', 4000);
         return;
     }
-    const result = { status: 'found', videoId: c.videoId, embeddable: c.embeddable !== false };
+    const result = { status: 'found', videoId: c.videoId, embeddable: c.embeddable !== false, official: 1 };
     youtubeVideoCache.set(youtubeCacheKey(item), result);
     // Reveal/refresh the Video button on any matching row currently in the browser.
     browserItems.querySelectorAll('.youtube-video-btn').forEach(btn => {
@@ -2538,6 +2546,17 @@ function closeVideoPicker() {
 
 let videoPickerSeq = 0;
 
+// YouTube's iframe API reports state changes by postMessage; state 0 means the video ended.
+window.addEventListener('message', (e) => {
+    if (e.origin !== 'https://www.youtube.com' || typeof e.data !== 'string') return;
+    try {
+        const msg = JSON.parse(e.data);
+        const state = msg.event === 'onStateChange' ? msg.info
+            : msg.event === 'infoDelivery' ? msg.info?.playerState : undefined;
+        if (state === 0) closeVideoModal();
+    } catch (err) { }
+});
+
 function openYoutubeModal(videoId, title = 'Video Player') {
     if (!videoId) return;
     const modal = document.getElementById('video-modal');
@@ -2560,7 +2579,11 @@ function openYoutubeModal(videoId, title = 'Video Player') {
 
     video.style.display = 'none';
     iframe.style.display = '';
-    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1`;
+    iframe.src = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&enablejsapi=1`;
+    // Subscribe to player events once loaded so we can close the box when the video ends
+    iframe.onload = () => {
+        try { iframe.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1 }), 'https://www.youtube.com'); } catch (e) { }
+    };
     modal.style.display = 'flex';
 
     // The embedded YouTube player has its own volume control built in, so hide ours.
@@ -3120,6 +3143,7 @@ function openVideoModal(url, title = 'Video Player') {
         video.style.display = '';
         video.src = url;
         video.volume = localVideoVolume;
+        video.onended = closeVideoModal;
         modal.style.display = 'flex';
         video.play().catch(err => {
             console.warn('[VIDEO] Auto-play failed:', err);
@@ -5865,6 +5889,20 @@ async function rebuildLibraryIndex(udn) {
     openDbStatsModal(true);
 }
 
+async function clearNonOfficialVideos() {
+    if (!confirm('Forget all matched videos that are not starred? Hand-picked videos are kept. They will re-match from the stored channel uploads and use no YouTube API quota.')) return;
+    try {
+        const res = await fetch('/api/youtube/clear-non-official', { method: 'POST' });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || res.statusText);
+        youtubeVideoCache.clear();
+        showToast(`Cleared ${d.cleared} video matches`, 'success', 3000);
+    } catch (e) {
+        showToast('Failed to clear: ' + e.message, 'error', 4000);
+    }
+    openDbStatsModal(true);
+}
+
 async function openDbStatsModal(refresh = false) {
     const modal = document.getElementById('db-stats-modal');
     const body = document.getElementById('db-stats-body');
@@ -5976,7 +6014,9 @@ function renderDbStats(d) {
             <div class="db-stats-desc" style="font-size:0.75rem;margin-top:0.4rem">Find searches this index. It refreshes daily and after uploads or deletes on the local library.</div>` : ''}
         ${sections.map(([title, rows]) => `
             <div class="db-stats-section-title">${escapeHtml(title)}</div>
-            <div class="db-stats-grid">${kv(rows)}</div>`).join('')}
+            <div class="db-stats-grid">${kv(rows)}</div>
+            ${title === 'YouTube' ? `<div style="margin-top:0.5rem"><button class="btn-control ghost btn-small" onclick="clearNonOfficialVideos()"
+                title="Forget matched videos that are not official so they re-match (no API quota used)">Re-match non-official videos</button></div>` : ''}`).join('')}
         <div class="db-stats-path">${escapeHtml(f.path)}</div>`;
 }
 
