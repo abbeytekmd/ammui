@@ -34,7 +34,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, countChannelLookupsSince, saveChannelVideos, getChannelVideos,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
@@ -4157,15 +4157,14 @@ app.get('/api/lyrics', async (req, res) => {
 
 // ─── Automatic video lookup ─────────────────────────────────────────────────
 // A per-track search.list costs 100 quota units (10k/day by default), so instead we work
-// per artist: find their channel once (one search), read the channel's whole uploads
-// playlist (1 unit per 50 videos) plus each video's embeddable flag (1 unit per 50), and
-// keep every upload in the local database. Any track by that artist — visible or not —
-// is then matched against the stored list for free, and the result is cached per track.
+// per artist: find their channel once (one search), then read its uploads playlist a page
+// at a time (1 unit per 50 videos, plus 1 for their embeddable flags) only until the wanted
+// track turns up. Every page is kept in the local database along with how far we got, so
+// other tracks by that artist are matched for free and reading resumes where it stopped.
 const YT_API = 'https://www.googleapis.com/youtube/v3';
 const YT_MAX_UPLOADS = 1000;                // cap per channel (20 pages)
 const YT_MAX_CHANNEL_SEARCHES_PER_DAY = 60; // 6000 of the 10k daily units, leaving headroom
 let youtubeQuotaBlockedUntil = 0;
-const youtubeChannelJobs = new Map();       // artist → in-flight promise, so parallel tracks share one lookup
 
 class YoutubeBudgetError extends Error { }
 
@@ -4184,7 +4183,8 @@ const ytNorm = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCa
 // Reduces a video/track title to comparable words: drops bracketed bits, "official video"
 // style noise and the artist's own name ("Artist - Song" → "song").
 function ytCleanTitle(title, artist) {
-    let t = ytNorm(title).replace(/[([{][^)\]}]*[)\]}]/g, ' ');
+    // Apostrophes (straight or curly) are removed rather than spaced, so "Don't" matches "Dont".
+    let t = ytNorm(title).replace(/['’‘`´]/g, '').replace(/[([{][^)\]}]*[)\]}]/g, ' ');
     const a = ytNorm(artist).trim();
     if (a) t = t.split(a).join(' ');
     t = t.replace(/\b(official|music|lyric|lyrics|video|audio|hd|hq|4k|remastered|remaster|visualizer)\b/g, ' ');
@@ -4238,93 +4238,126 @@ async function resolveArtistChannel(artist) {
     return channelId;
 }
 
-async function ingestChannelUploads(channelId) {
-    if (getChannelVideos(channelId).length > 0) return;
+// Reads ONE more page (50) of the artist's uploads into the database, resuming from the
+// stored page token, and returns the new videos. Marks the channel finished on the last page.
+async function ingestNextUploadsPage(artist, channelId) {
+    const state = getArtistChannel(artist);
+    if (!state || state.uploadsDone) return [];
+    if (getChannelVideos(channelId).length >= YT_MAX_UPLOADS) {
+        setChannelProgress(artist, null, true);
+        return [];
+    }
     try {
         // A channel's uploads playlist id is its channel id with the "UC" prefix swapped
         // for "UU", which saves a channels.list call.
         const uploadsId = 'UU' + channelId.slice(2);
+        const resp = await axios.get(`${YT_API}/playlistItems`, {
+            params: { part: 'snippet', playlistId: uploadsId, maxResults: 50, pageToken: state.nextPageToken || undefined, key: settings.youtubeApiKey },
+            timeout: 10000
+        });
         const videos = [];
-        let pageToken;
-        while (videos.length < YT_MAX_UPLOADS) {
-            const resp = await axios.get(`${YT_API}/playlistItems`, {
-                params: { part: 'snippet', playlistId: uploadsId, maxResults: 50, pageToken, key: settings.youtubeApiKey },
-                timeout: 10000
-            });
-            for (const i of resp.data?.items || []) {
-                const videoId = i.snippet?.resourceId?.videoId;
-                if (videoId && i.snippet.title !== 'Private video' && i.snippet.title !== 'Deleted video') {
-                    videos.push({ videoId, title: i.snippet.title, embeddable: false });
-                }
+        for (const i of resp.data?.items || []) {
+            const videoId = i.snippet?.resourceId?.videoId;
+            if (videoId && i.snippet.title !== 'Private video' && i.snippet.title !== 'Deleted video') {
+                videos.push({ videoId, title: i.snippet.title, embeddable: false });
             }
-            pageToken = resp.data?.nextPageToken;
-            if (!pageToken) break;
         }
 
-        // Embeddable flag (iframe vs. yt-dlp fallback) — best effort, 50 videos per unit.
-        for (let i = 0; i < videos.length; i += 50) {
-            const batch = videos.slice(i, i + 50);
+        // Embeddable flag (iframe vs. yt-dlp fallback) — best effort, 1 unit for the page.
+        if (videos.length) {
             try {
-                const resp = await axios.get(`${YT_API}/videos`, {
-                    params: { part: 'status', id: batch.map(v => v.videoId).join(','), key: settings.youtubeApiKey },
+                const st = await axios.get(`${YT_API}/videos`, {
+                    params: { part: 'status', id: videos.map(v => v.videoId).join(','), key: settings.youtubeApiKey },
                     timeout: 10000
                 });
-                const status = new Map((resp.data?.items || []).map(v => [v.id, !!v.status?.embeddable]));
-                for (const v of batch) v.embeddable = status.get(v.videoId) ?? false;
+                const status = new Map((st.data?.items || []).map(v => [v.id, !!v.status?.embeddable]));
+                for (const v of videos) v.embeddable = status.get(v.videoId) ?? false;
             } catch (err) {
                 if (youtubeApiError(err) instanceof YoutubeBudgetError) throw err;
             }
         }
         saveChannelVideos(channelId, videos);
-        console.log(`[YOUTUBE] Stored ${videos.length} uploads for channel ${channelId}`);
-    } catch (err) { throw err instanceof YoutubeBudgetError ? err : youtubeApiError(err); }
-}
-
-// Makes sure the artist's channel uploads are in the database; returns them.
-function loadArtistVideos(artist) {
-    const key = artist.trim().toLowerCase();
-    if (!youtubeChannelJobs.has(key)) {
-        const job = (async () => {
-            const channelId = await resolveArtistChannel(artist);
-            if (!channelId) return [];
-            await ingestChannelUploads(channelId);
-            return getChannelVideos(channelId);
-        })().finally(() => youtubeChannelJobs.delete(key));
-        youtubeChannelJobs.set(key, job);
+        const next = resp.data?.nextPageToken || null;
+        setChannelProgress(artist, next, !next);
+        console.log(`[YOUTUBE] Stored ${videos.length} uploads for ${artist}${next ? '' : ' (all read)'}`);
+        return videos;
+    } catch (err) {
+        // A channel with no uploads playlist (404) has nothing to read.
+        if (err.response?.status === 404) { setChannelProgress(artist, null, true); return []; }
+        throw err instanceof YoutubeBudgetError ? err : youtubeApiError(err);
     }
-    return youtubeChannelJobs.get(key);
 }
 
+// Looks a track up without touching the API: the per-track cache first, then whatever
+// uploads of the artist's channel are already stored. A miss is only final ("none") once
+// the channel's uploads have been read to the end (or the artist has no channel).
+function lookupTrackInDb(artist, title) {
+    const cached = getCachedYoutubeVideo(artist, title);
+    if (cached) {
+        return cached.found && cached.videoId
+            ? { status: 'found', videoId: cached.videoId, embeddable: cached.embeddable }
+            : { status: 'none' };
+    }
+    const channel = getArtistChannel(artist);
+    if (!channel) return { status: 'unsearched' };
+    if (!channel.found) return { status: 'none' };
+    const match = matchTrackToVideos(artist, title, getChannelVideos(channel.channelId));
+    if (match) {
+        setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable, found: true });
+        return { status: 'found', videoId: match.videoId, embeddable: match.embeddable };
+    }
+    if (channel.uploadsDone) {
+        setCachedYoutubeVideo(artist, title, { found: false });
+        return { status: 'none' };
+    }
+    return { status: 'unsearched' };
+}
+
+// Searches the API for a track: resolves the artist's channel (once), then pages through
+// their uploads until the track turns up or the list runs out. Every page read is stored, so
+// later tracks by the same artist are usually answered from the database alone.
+async function searchTrackOnline(artist, title) {
+    const channelId = await resolveArtistChannel(artist);
+    if (!channelId) return lookupTrackInDb(artist, title);
+    for (;;) {
+        const res = lookupTrackInDb(artist, title);
+        if (res.status !== 'unsearched') return res;
+        await ingestNextUploadsPage(artist, channelId);
+    }
+}
+
+// Searches for the same artist run one at a time so tracks share each page instead of
+// racing to read the same ones.
+const youtubeArtistQueues = new Map();
+function queueArtistSearch(artist, title) {
+    const key = artist.trim().toLowerCase();
+    const prev = youtubeArtistQueues.get(key) || Promise.resolve();
+    const job = prev.catch(() => { }).then(() => searchTrackOnline(artist, title));
+    const tail = job.catch(() => { });
+    youtubeArtistQueues.set(key, tail);
+    tail.then(() => { if (youtubeArtistQueues.get(key) === tail) youtubeArtistQueues.delete(key); });
+    return job;
+}
+
+// ?search=1 is the online pass; without it only the local database is consulted.
+// Response: { status: 'found' | 'unsearched' | 'none', videoId?, embeddable?, canSearch, ytDlpAvailable }
 app.get('/api/youtube/video', async (req, res) => {
     const { artist, title } = req.query;
     if (!artist || !title) return res.status(400).json({ error: 'artist and title are required' });
 
-    const respond = v => res.json({ videoId: v.videoId, embeddable: v.embeddable, ytDlpAvailable: !ytDlpUnavailable, source: 'cache' });
+    const canSearch = !!settings.youtubeApiKey && Date.now() >= youtubeQuotaBlockedUntil;
+    const reply = r => res.json({ ...r, canSearch, ytDlpAvailable: !ytDlpUnavailable });
 
-    const cached = getCachedYoutubeVideo(artist, title);
-    if (cached) {
-        if (!cached.found || !cached.videoId) return res.status(404).json({ error: 'No video stored' });
-        return respond(cached);
-    }
-
-    if (!settings.youtubeApiKey || Date.now() < youtubeQuotaBlockedUntil) {
-        return res.status(404).json({ error: 'No video stored' });
-    }
-
-    try {
-        const videos = await loadArtistVideos(artist);
-        const match = matchTrackToVideos(artist, title, videos);
-        if (!match) {
-            setCachedYoutubeVideo(artist, title, { found: false });
-            return res.status(404).json({ error: 'No video found' });
+    let result = lookupTrackInDb(artist, title);
+    if (result.status === 'unsearched' && req.query.search === '1' && canSearch) {
+        try {
+            result = await queueArtistSearch(artist, title);
+        } catch (err) {
+            // Budget/quota problems and API errors aren't cached, so the track is retried later.
+            if (!(err instanceof YoutubeBudgetError)) console.error('[YOUTUBE] Automatic lookup failed:', err.response?.data?.error?.message || err.message);
         }
-        setCachedYoutubeVideo(artist, title, { videoId: match.videoId, embeddable: match.embeddable, found: true });
-        respond(match);
-    } catch (err) {
-        // Budget/quota problems and API errors aren't cached, so the track is retried later.
-        if (!(err instanceof YoutubeBudgetError)) console.error('[YOUTUBE] Automatic lookup failed:', err.response?.data?.error?.message || err.message);
-        res.status(404).json({ error: 'No video stored' });
     }
+    reply(result);
 });
 
 // Stores the video the user picked for a track in the local database.

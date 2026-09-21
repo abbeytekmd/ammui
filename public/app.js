@@ -97,7 +97,8 @@ let browsePath = [{ id: '0', title: 'Root' }];
 let currentBrowserMode = localStorage.getItem('currentBrowserMode') || 'music';
 let currentBrowserItems = [];
 let browserRenderSeq = 0; // bumped on every renderBrowser() call, so stale async video lookups can be dropped
-const youtubeVideoCache = new Map(); // "artist|title" → { videoId, embeddable } | null (no match found)
+const youtubeVideoCache = new Map(); // "artist|title" → { status: 'found'|'unsearched'|'none', videoId, embeddable }
+let youtubeCanSearch = false; // server has a YouTube API key (and quota), so unsearched tracks can be searched online
 let ytDlpAvailable = false; // set from the first /api/youtube/video response; lets non-embeddable videos still play locally
 let localVideoVolume = parseFloat(localStorage.getItem('localVideoVolume') || '1'); // 0–1, remembered across visits since local playback can come in much louder than expected
 let currentPlaylistItems = [];
@@ -2036,6 +2037,8 @@ function renderBrowser(items) {
         }
 
         const escJs = (s) => (s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        // For plain HTML attribute values (data-*), where a backslash would be kept literally
+        const escAttr = (s) => (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
 
         return `
@@ -2076,7 +2079,7 @@ function renderBrowser(items) {
                     </button>
                     ` : `
                     ${!isImage && !isVideo ? `
-                    <button class="btn-control ghost youtube-video-btn" style="display: none;" data-item-uri="${escJs(item.uri)}" onclick="event.stopPropagation(); playYoutubeVideoFromBrowser(${index})" title="Watch the video for this track on YouTube">
+                    <button class="btn-control ghost youtube-video-btn" style="display: none;" data-yt-state="" data-item-uri="${escAttr(item.uri)}" onclick="event.stopPropagation(); playYoutubeVideoFromBrowser(${index})" title="Watch the video for this track on YouTube">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <rect x="2" y="4" width="20" height="16" rx="3"></rect>
                             <path d="M10 9l5 3-5 3V9z" fill="currentColor" stroke="none"></path>
@@ -2253,11 +2256,14 @@ function renderBrowser(items) {
     checkYoutubeVideosForItems(items, renderSeq);
 }
 
-// Asks the server, for each visible audio track, for a matching video, revealing a "Video"
-// button on the row when there is one. The server answers from its local database, and
-// for an artist it hasn't seen yet it indexes that artist's YouTube channel once (see
-// /api/youtube/video). Videos can also be picked by hand in the File Information modal.
-// Runs a few lookups at a time to keep a big folder from firing dozens of requests together.
+// Video lookup for the visible audio tracks, in two passes. Pass 1 asks the server to check
+// its local database only (no API use); each row's Video button then shows one of three
+// states: found (normal), not searched yet (dashed, click to search now), or searched with
+// nothing found (struck through, click to pick one by hand). Pass 2, when a YouTube API key
+// is set, searches online for the tracks still unsearched: the server reads the artist's
+// uploads a page at a time until each track is found or the list runs out, storing every
+// page so later tracks and albums by that artist are answered from the database.
+// Videos can also be picked by hand in the File Information modal.
 async function checkYoutubeVideosForItems(items, renderSeq) {
     const audioItems = items
         .map((item, index) => ({ item, index }))
@@ -2265,69 +2271,113 @@ async function checkYoutubeVideosForItems(items, renderSeq) {
 
     if (audioItems.length === 0) return;
 
-    const CONCURRENCY = 3;
-    let cursor = 0;
-    const worker = async () => {
-        while (cursor < audioItems.length) {
-            const { item, index } = audioItems[cursor++];
-            if (renderSeq !== browserRenderSeq) return; // folder changed under us — abandon
-            await checkYoutubeVideoForItem(item, index, renderSeq);
-        }
+    // Runs `fn` over the list a few at a time so a big folder doesn't fire dozens of requests together.
+    const runPool = async (list, concurrency, fn) => {
+        let cursor = 0;
+        const worker = async () => {
+            while (cursor < list.length) {
+                if (renderSeq !== browserRenderSeq) return; // folder changed under us — abandon
+                await fn(list[cursor++]);
+            }
+        };
+        await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
     };
-    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, audioItems.length) }, worker));
+
+    await runPool(audioItems, 4, ({ item, index }) => checkYoutubeVideoForItem(item, index, renderSeq, false));
+    if (renderSeq !== browserRenderSeq || !youtubeCanSearch) return;
+
+    const pending = audioItems.filter(({ item }) => youtubeVideoCache.get(youtubeCacheKey(item))?.status === 'unsearched');
+    await runPool(pending, 2, ({ item, index }) => checkYoutubeVideoForItem(item, index, renderSeq, true));
 }
 
-async function checkYoutubeVideoForItem(item, index, renderSeq) {
-    const cacheKey = `${item.artist || ''}|${item.title}`;
-    if (youtubeVideoCache.has(cacheKey)) {
-        applyYoutubeButtonState(item.uri, index, renderSeq, youtubeVideoCache.get(cacheKey));
+const youtubeCacheKey = item => `${item.artist || ''}|${item.title}`;
+
+// Looks one track up (database only, or with the online search) and updates its row.
+// 'found' and 'none' are settled and remembered for the session; 'unsearched' is not, so it
+// is asked again on the next visit (more of the artist's uploads may be stored by then).
+async function checkYoutubeVideoForItem(item, index, renderSeq, search) {
+    const cacheKey = youtubeCacheKey(item);
+    const known = youtubeVideoCache.get(cacheKey);
+    if (known && known.status !== 'unsearched') {
+        applyYoutubeButtonState(item.uri, index, renderSeq, known);
         return;
     }
 
     try {
-        const res = await fetch(`/api/youtube/video?artist=${encodeURIComponent(item.artist || '')}&title=${encodeURIComponent(item.title)}`);
-        if (res.ok) {
-            const data = await res.json();
-            if (data.ytDlpAvailable) ytDlpAvailable = true;
-            const result = { videoId: data.videoId, embeddable: data.embeddable !== false };
-            youtubeVideoCache.set(cacheKey, result);
-            applyYoutubeButtonState(item.uri, index, renderSeq, result);
-        } else {
-            youtubeVideoCache.set(cacheKey, null);
-        }
+        const res = await fetch(`/api/youtube/video?artist=${encodeURIComponent(item.artist || '')}&title=${encodeURIComponent(item.title)}${search ? '&search=1' : ''}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ytDlpAvailable) ytDlpAvailable = true;
+        youtubeCanSearch = !!data.canSearch;
+        const result = { status: data.status, videoId: data.videoId, embeddable: data.embeddable !== false };
+        youtubeVideoCache.set(cacheKey, result);
+        applyYoutubeButtonState(item.uri, index, renderSeq, result);
     } catch (e) {
         console.warn('[YOUTUBE] Video check failed:', e);
     }
 }
 
+function setYoutubeButtonState(btn, result) {
+    const state = result.status;
+    btn.dataset.ytState = state;
+    btn.classList.toggle('yt-unsearched', state === 'unsearched');
+    btn.classList.toggle('yt-none', state === 'none');
+    const label = btn.querySelector('.btn-label');
+    if (state === 'found') {
+        btn.dataset.videoId = result.videoId;
+        btn.dataset.embeddable = result.embeddable ? '1' : '0';
+        if (label) label.textContent = 'Video';
+        // YouTube's own "embeddable" flag only reflects whether embedding is disabled
+        // globally — it says nothing about a per-domain allow/block list some creators set
+        // in Studio, which isn't exposed by the API at all, so a video can report embeddable
+        // and still refuse our iframe. yt-dlp bypasses that entirely by pulling the real
+        // stream, so prefer it whenever it's installed rather than trusting the flag.
+        if (ytDlpAvailable) btn.title = 'Watch this track\'s video (played locally via yt-dlp)';
+        else if (!result.embeddable) btn.title = 'Watch this track\'s video on YouTube (opens in a new tab)';
+        else btn.title = 'Watch the video for this track on YouTube';
+    } else if (state === 'unsearched') {
+        delete btn.dataset.videoId;
+        if (label) label.textContent = 'Video?';
+        btn.title = 'Not searched for a video yet — click to search now';
+    } else {
+        delete btn.dataset.videoId;
+        if (label) label.textContent = 'No video';
+        btn.title = 'No video found — click to choose one manually';
+    }
+    btn.style.display = '';
+}
+
 function applyYoutubeButtonState(uri, index, renderSeq, result) {
-    if (!result || !result.videoId) return;
+    if (!result || !result.status) return;
     if (renderSeq !== browserRenderSeq) return; // the folder shown has since changed
     const row = browserItems.querySelector(`.playlist-item[data-item-index="${index}"]`);
     if (!row) return;
     const btn = row.querySelector('.youtube-video-btn');
     if (!btn || btn.dataset.itemUri !== uri) return;
-    btn.dataset.videoId = result.videoId;
-    btn.dataset.embeddable = result.embeddable ? '1' : '0';
-    // YouTube's own "embeddable" flag only reflects whether embedding is disabled
-    // globally — it says nothing about a per-domain allow/block list some creators set
-    // in Studio, which isn't exposed by the API at all, so a video can report embeddable
-    // and still refuse our iframe. yt-dlp bypasses that entirely by pulling the real
-    // stream, so prefer it whenever it's installed rather than trusting the flag.
-    if (ytDlpAvailable) {
-        btn.title = 'Watch this track\'s video (played locally via yt-dlp)';
-    } else if (!result.embeddable) {
-        btn.title = 'Watch this track\'s video on YouTube (opens in a new tab)';
-    }
-    btn.style.display = '';
+    // Without an API key an unsearched track can never be resolved, so don't tease it.
+    if (result.status === 'unsearched' && !youtubeCanSearch) return;
+    setYoutubeButtonState(btn, result);
 }
 
 function playYoutubeVideoFromBrowser(index) {
     const row = browserItems.querySelector(`.playlist-item[data-item-index="${index}"]`);
     const btn = row && row.querySelector('.youtube-video-btn');
-    const videoId = btn && btn.dataset.videoId;
-    if (!videoId) return;
     const item = currentBrowserItems[index];
+    if (!btn || !item) return;
+
+    // Not searched yet: search this track now. Searched and nothing found: pick by hand.
+    if (btn.dataset.ytState === 'unsearched') {
+        btn.classList.add('yt-searching');
+        checkYoutubeVideoForItem(item, index, browserRenderSeq, true).finally(() => btn.classList.remove('yt-searching'));
+        return;
+    }
+    if (btn.dataset.ytState === 'none') {
+        openVideoPicker(item);
+        return;
+    }
+
+    const videoId = btn.dataset.videoId;
+    if (!videoId) return;
 
     playYoutubeCandidate(videoId, btn.dataset.embeddable !== '0', item ? item.title : 'Video Player');
 }
@@ -2402,15 +2452,11 @@ async function selectYoutubeVideo(item, c) {
         showToast('Could not save video: ' + e.message, 'error', 4000);
         return;
     }
-    const result = { videoId: c.videoId, embeddable: c.embeddable !== false };
-    youtubeVideoCache.set(`${item.artist || ''}|${item.title}`, result);
+    const result = { status: 'found', videoId: c.videoId, embeddable: c.embeddable !== false };
+    youtubeVideoCache.set(youtubeCacheKey(item), result);
     // Reveal/refresh the Video button on any matching row currently in the browser.
     browserItems.querySelectorAll('.youtube-video-btn').forEach(btn => {
-        if (btn.dataset.itemUri === item.uri) {
-            btn.dataset.videoId = result.videoId;
-            btn.dataset.embeddable = result.embeddable ? '1' : '0';
-            btn.style.display = '';
-        }
+        if (btn.dataset.itemUri === item.uri) setYoutubeButtonState(btn, result);
     });
     showToast('Video saved', 'success', 2000);
 }

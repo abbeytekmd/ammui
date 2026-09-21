@@ -5847,3 +5847,26 @@ input:checked+.slider:before {
         box-shadow: none !important;
     }
 }
+/* Video button states: unsearched (dashed) and searched-with-no-result (struck through) */
+.youtube-video-btn.yt-unsearched {
+    opacity: 0.55;
+    border-style: dashed;
+}
+
+.youtube-video-btn.yt-none {
+    opacity: 0.4;
+}
+
+.youtube-video-btn.yt-none .btn-label {
+    text-decoration: line-through;
+}
+
+.youtube-video-btn.yt-searching {
+    opacity: 0.8;
+    pointer-events: none;
+    animation: yt-pulse 1s ease-in-out infinite;
+}
+
+@keyframes yt-pulse {
+    50% { opacity: 0.3; }
+}

@@ -14,7 +14,7 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Browse the media library as Music, Photos or Videos, each with its own home folder.
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
-* Watch a track's music video on YouTube, right from the track list. Tracks with a video show a Video button. Videos are found automatically by indexing each artist's YouTube channel once (a small, capped number of API calls per artist, then everything is stored locally); if one is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results (needs a YouTube API key in Settings; the optional `yt-dlp` tool and ffmpeg).
+* Watch a track's music video on YouTube, right from the track list. Each track shows a Video button: solid when a video is known, dashed ("Video?") when not yet searched (click to search now), or struck through ("No video") when searched and nothing was found (click to choose one). Opening a folder first checks the local database; anything still missing is then searched by paging through that artist's YouTube uploads just until the track turns up, storing every page so other albums by the artist are matched without further API calls; if one is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results (needs a YouTube API key in Settings; the optional `yt-dlp` tool and ffmpeg).
 
 ## Local Media Server
 
