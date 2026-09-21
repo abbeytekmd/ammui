@@ -2245,6 +2245,15 @@ function renderBrowser(items) {
                                     Delete
                                 </button>
                             ` : ''}
+                            ${isContainer && currentBrowserMode === 'music' ? `
+                            <button class="dropdown-item" onclick="openWikipediaAlbum(${index}, event)" title="Show this album's Wikipedia page, if there is one">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                                </svg>
+                                Wikipedia
+                            </button>
+                            ` : ''}
                             <button class="dropdown-item" onclick="event.stopPropagation(); ${isContainer ? `downloadFolder('${selectedServerUdn}', '${escJs(item.id)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.albumArtist)}')` : `downloadTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.albumArtist)}')`}" title="Download to local media library">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -2534,6 +2543,41 @@ function buildVideoPickerCard(c, item) {
 
     card.append(preview, info, actions);
     return card;
+}
+
+async function openWikipediaAlbum(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    // The album folder sits inside an artist folder, so the artist is the folder we're browsing
+    const parent = browsePath.length > 1 ? browsePath[browsePath.length - 1].title : '';
+    const artist = item.albumArtist || item.artist || parent;
+    const album = item.album || item.title;
+
+    showToast(`Looking up "${album}" on Wikipedia...`, 'info', 2000);
+    try {
+        const res = await fetch(`/api/wikipedia/album?artist=${encodeURIComponent(artist || '')}&album=${encodeURIComponent(album)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (!data.found) { showToast(`No Wikipedia page found for "${album}"`, 'info', 3000); return; }
+
+        document.getElementById('wikipedia-modal-title').textContent = data.title;
+        const link = document.getElementById('wikipedia-modal-link');
+        link.href = data.url;
+        document.getElementById('wikipedia-modal-frame').src = data.embedUrl;
+        document.getElementById('wikipedia-modal').style.display = 'flex';
+    } catch (e) {
+        showToast('Wikipedia lookup failed: ' + e.message, 'error', 4000);
+    }
+}
+
+function closeWikipediaModal() {
+    const modal = document.getElementById('wikipedia-modal');
+    if (modal) modal.style.display = 'none';
+    const frame = document.getElementById('wikipedia-modal-frame');
+    if (frame) frame.src = 'about:blank';
 }
 
 function closeVideoPicker() {
@@ -6333,6 +6377,8 @@ async function openFileInfoModal(trackData) {
                 { label: 'Artist', sKey: 'artist', eKey: 'common.artist' },
                 { label: 'Album Artist', sKey: 'albumArtist', eKey: 'common.albumartist' },
                 { label: 'Album', sKey: 'album', eKey: 'common.album' },
+                { label: 'Track No.', sKey: 'trackNumber', eKey: 'common.track.no' },
+                { label: 'Track Count', sKey: '', eKey: 'common.track.of' },
                 { label: 'Year', sKey: 'year', eKey: 'common.year' },
                 { label: 'Genre', sKey: 'genre', eKey: 'common.genre' }
             ]
@@ -6433,11 +6479,11 @@ async function openFileInfoModal(trackData) {
             const serverCauseClass = causesRedIcon && sValRaw ? 'mismatch' : '';
 
             const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
-            const editFieldMap = { 'Title': 'title', 'Artist': 'artist', 'Album Artist': 'albumartist', 'Album': 'album', 'Year': 'year' };
+            const editFieldMap = { 'Title': 'title', 'Artist': 'artist', 'Album Artist': 'albumartist', 'Album': 'album', 'Track No.': 'trackno', 'Track Count': 'trackof', 'Year': 'year' };
             const isEditable = ((f.label in editFieldMap) || f.label === 'Created') && isLocalFile;
             const editField = editFieldMap[f.label];
             // "Copy to all tracks in this folder" only makes sense for album-level fields
-            const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist';
+            const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist' || editField === 'trackof';
 
             let editCell;
             if (!isEditable) {
@@ -6935,10 +6981,20 @@ async function deletePhotoFromBrowser(index, event) {
     }
 }
 
+let fileInfoEdited = false; // a tag was saved while the panel was open
+
 function closeFileInfoModal() {
     const modal = document.getElementById('track-info-modal');
     if (modal) {
         modal.style.display = 'none';
+    }
+    // Tags may have changed (e.g. track number, which sets the listing order), so redraw the
+    // track list from the updated items; the scroll position is kept.
+    if (fileInfoEdited) {
+        fileInfoEdited = false;
+        const findActive = !!document.getElementById('input-browser-find')?.value;
+        const shown = findActive && currentBrowserRecursiveItems && currentBrowserRecursiveItems.length ? currentBrowserRecursiveItems : currentBrowserItems;
+        if (shown && shown.length) renderBrowser(shown);
     }
 }
 
@@ -6963,6 +7019,13 @@ async function saveTrackTag(field, btn) {
         btn.textContent = 'Saved!';
         btn.style.color = '#4ade80';
         input.classList.remove('metadata-suggested');
+        // Keep the browser's copy of the track in step, so the Media Server column and the
+        // row show the new value when the panel is reopened (the list was loaded before the edit)
+        if (currentInfoTrack) {
+            const itemKey = { title: 'title', artist: 'artist', albumartist: 'albumArtist', album: 'album', year: 'year', trackno: 'trackNumber' }[field];
+            if (itemKey) currentInfoTrack[itemKey] = field === 'trackno' ? (parseInt(value, 10) || 0) : value;
+        }
+        fileInfoEdited = true;
         setTimeout(() => { btn.textContent = 'Save'; btn.style.color = ''; btn.disabled = false; }, 2000);
     } catch (e) {
         btn.textContent = 'Error';

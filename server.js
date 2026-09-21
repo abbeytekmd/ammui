@@ -199,11 +199,25 @@ function saveSettings() {
 
 // loadStats(); // Migrated to DB
 
+// Names used on disk can't hold characters Windows forbids (the library is shared with a
+// Windows machine). Those are swapped for the fullwidth lookalike (? -> ？) so
+// "What Is Love?" still reads correctly; / and \ have no lookalike and become _.
+const FILENAME_LOOKALIKES = { '<': '＜', '>': '＞', ':': '：', '"': '＂', '|': '｜', '?': '？', '*': '＊' };
+function safeName(s) {
+    return String(s).replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
+}
+// What earlier versions saved: every forbidden character replaced by _
+function legacySafeName(s) {
+    return String(s).replace(/[<>:"/\\|?*]/g, '_');
+}
+
 function findCaseInsensitivePath(parent, name) {
     if (!fs.existsSync(parent)) return path.join(parent, name);
     try {
         const files = fs.readdirSync(parent);
-        const match = files.find(f => f.toLowerCase() === name.toLowerCase());
+        // Also accept a folder saved under the old "_" naming, so an existing album isn't split in two
+        const wanted = [name.toLowerCase(), legacySafeName(name).toLowerCase()];
+        const match = files.find(f => f.toLowerCase() === wanted[0]) || files.find(f => f.toLowerCase() === wanted[1]);
         if (match) {
             const fullPath = path.join(parent, match);
             if (fs.statSync(fullPath).isDirectory()) {
@@ -1829,7 +1843,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             const videoDir = path.join(__dirname, 'local', 'videos');
             if (!fs.existsSync(videoDir)) fs.mkdirSync(videoDir, { recursive: true });
 
-            const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+            const safeTitle = safeName(title);
             const targetPath = path.join(videoDir, `${safeTitle}${ext}`);
 
             fs.copyFileSync(req.file.path, targetPath);
@@ -1878,9 +1892,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             fs.mkdirSync(baseDir, { recursive: true });
         }
 
-        const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
-        const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
-        const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+        const safeArtist = safeName(artist);
+        const safeAlbum = safeName(album);
+        const safeTitle = safeName(title);
 
         const artistDir = findCaseInsensitivePath(baseDir, safeArtist);
         const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
@@ -1969,9 +1983,9 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
             } catch (e) { /* ignore */ }
 
             const musicDir = path.join(localDir, 'music');
-            const safeArtist = artist.replace(/[<>:"/\\|?*]/g, '_');
-            const safeAlbum = album.replace(/[<>:"/\\|?*]/g, '_');
-            const safeTitle = title.replace(/[<>:"/\\|?*]/g, '_');
+            const safeArtist = safeName(artist);
+            const safeAlbum = safeName(album);
+            const safeTitle = safeName(title);
 
             const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
             const targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
@@ -2112,7 +2126,7 @@ async function downloadFileHelper(uri, title, artist, album) {
     } catch (e) { }
 
     const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(ext);
-    const safeTitle = (title || (isImage ? 'Photo' : 'Track')).replace(/[<>:"/\\|?*]/g, '_');
+    const safeTitle = safeName(title || (isImage ? 'Photo' : 'Track'));
     const filename = `${safeTitle}${ext}`;
 
     let targetDir;
@@ -2128,8 +2142,8 @@ async function downloadFileHelper(uri, title, artist, album) {
         // `artist` here is expected to already be album-artist-first (callers pass
         // albumArtist || artist), so compilations land in one folder, not per-track.
         const musicDir = path.join(localDir, 'music');
-        const safeArtist = (artist || 'Unknown Artist').replace(/[<>:"/\\|?*]/g, '_');
-        const safeAlbum = (album || 'Unknown Album').replace(/[<>:"/\\|?*]/g, '_');
+        const safeArtist = safeName(artist || 'Unknown Artist');
+        const safeAlbum = safeName(album || 'Unknown Album');
         const artistDir = findCaseInsensitivePath(musicDir, safeArtist);
         targetDir = findCaseInsensitivePath(artistDir, safeAlbum);
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
@@ -4506,6 +4520,40 @@ app.post('/api/youtube/select', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+// Finds the English Wikipedia article for an album. The search is free-text, so a hit is only
+// accepted when its short description says it is an album-type release by this artist.
+app.get('/api/wikipedia/album', async (req, res) => {
+    const artist = (req.query.artist || '').toString().trim();
+    const album = (req.query.album || '').toString().replace(/\s*[(\[][^)\]]*[)\]]/g, '').trim();
+    if (!album) return res.status(400).json({ error: 'album is required' });
+
+    const norm = s => ytNorm(s).replace(/[^a-z0-9]/g, '');
+    try {
+        const resp = await axios.get('https://en.wikipedia.org/w/api.php', {
+            params: {
+                action: 'query', format: 'json', generator: 'search', gsrlimit: 8,
+                gsrsearch: `"${album}" ${artist} album`.trim(),
+                prop: 'description', origin: '*'
+            },
+            headers: { 'User-Agent': 'AMMUI/1.0 (https://github.com/abbeytekmd/ammui)' },
+            timeout: 10000
+        });
+        const pages = Object.values(resp.data?.query?.pages || {}).sort((a, b) => a.index - b.index);
+        const na = norm(artist), nalb = norm(album);
+        const hit = pages.find(p => {
+            const desc = norm(p.description);
+            const isAlbum = /(album|ep|soundtrack|mixtape|compilation|single)/i.test(p.description || '');
+            return isAlbum && norm(p.title).includes(nalb) && (!na || desc.includes(na));
+        });
+        if (!hit) return res.json({ found: false });
+        const slug = encodeURIComponent(hit.title.replace(/ /g, '_'));
+        res.json({ found: true, title: hit.title, description: hit.description || '', url: `https://en.wikipedia.org/wiki/${slug}`, embedUrl: `https://en.wikipedia.org/wiki/${slug}?useskin=minerva` }); // the compact skin suits a modal
+    } catch (err) {
+        console.error('[WIKIPEDIA] Lookup failed:', err.message);
+        res.status(502).json({ error: 'Wikipedia lookup failed: ' + err.message });
+    }
+});
+
 // Returns several search results for a track so the user can pick which video to play.
 // Cached forever like the single-result lookup (a search costs 100 quota units).
 app.get('/api/youtube/candidates', async (req, res) => {
@@ -4765,8 +4813,8 @@ async function moveFileToTagLocation(localPath) {
         return { success: false, error: 'Track must have an Artist tag' };
     }
 
-    const safeArtist = artist.replace(/[<>:"/\\|?*]+/g, '_').trim();
-    const safeAlbum = album.replace(/[<>:"/\\|?*]+/g, '_').trim();
+    const safeArtist = safeName(artist).trim();
+    const safeAlbum = safeName(album).trim();
     const fileName = path.basename(localPath);
 
     // Preserve the base folder (the folder containing the Artist folder)
@@ -4774,8 +4822,8 @@ async function moveFileToTagLocation(localPath) {
     const currentArtistDir = path.dirname(currentAlbumDir);
     const baseDir = path.dirname(currentArtistDir);
 
-    const artistDir = path.join(baseDir, safeArtist);
-    const targetAlbumDir = path.join(artistDir, safeAlbum);
+    const artistDir = findCaseInsensitivePath(baseDir, safeArtist);
+    const targetAlbumDir = findCaseInsensitivePath(artistDir, safeAlbum);
     const targetPath = path.join(targetAlbumDir, fileName);
 
     if (localPath.toLowerCase() === targetPath.toLowerCase()) {
@@ -6009,9 +6057,30 @@ app.post('/api/local/identify-tags-from-filename', express.json(), async (req, r
     }
 });
 
+// Many MP3s carry an old ID3v1 tag (last 128 bytes) alongside the ID3v2 one NodeID3 edits, and
+// readers such as music-metadata can prefer its stale values (e.g. the track number). Once the
+// ID3v2 tag has been rewritten, the v1 copy is redundant, so drop it.
+function stripId3v1(filePath) {
+    const fd = fs.openSync(filePath, 'r+');
+    try {
+        const size = fs.fstatSync(fd).size;
+        if (size <= 128) return false;
+        const buf = Buffer.alloc(3);
+        fs.readSync(fd, buf, 0, 3, size - 128);
+        if (buf.toString('latin1') !== 'TAG') return false;
+        fs.ftruncateSync(fd, size - 128);
+        return true;
+    } finally { fs.closeSync(fd); }
+}
+
 app.post('/api/local/write-tags', express.json(), async (req, res) => {
-    const { uri, artist, album, albumartist, title, year } = req.body;
+    const { uri, artist, album, albumartist, title, year, trackno, trackof } = req.body;
     if (!uri) return res.status(400).json({ error: 'uri is required' });
+    for (const v of [trackno, trackof]) {
+        if (v !== undefined && v !== null && !/^\d{0,4}$/.test(String(v).trim())) {
+            return res.status(400).json({ error: 'Track number and track count must be whole numbers' });
+        }
+    }
 
     try {
         const localDir = path.join(__dirname, 'local');
@@ -6028,9 +6097,19 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
         if (albumartist !== undefined) tags.performerInfo = albumartist; // TPE2
         if (title !== undefined) tags.title = title;
         if (year !== undefined) tags.year = year === null ? '' : String(year);
+        if (trackno !== undefined || trackof !== undefined) {
+            // Both live in one TRCK frame ("3/12"), so change one and keep the other as it is
+            const [curNo = '', curOf = ''] = String((NodeID3.read(filePath) || {}).trackNumber || '').split('/');
+            const no = trackno !== undefined ? String(trackno).trim() : curNo.trim();
+            const of = trackof !== undefined ? String(trackof).trim() : curOf.trim();
+            tags.trackNumber = !no && !of ? '' : !of ? no : `${no || 0}/${of}`;
+        }
+
+        if (Object.keys(tags).length === 0) return res.status(400).json({ error: 'No editable field was supplied' });
 
         const success = NodeID3.update(tags, filePath);
         if (success !== true) throw new Error('NodeID3 failed to write tags');
+        stripId3v1(filePath);
 
         res.json({ success: true });
     } catch (err) {
@@ -6134,7 +6213,8 @@ app.post('/api/local/acoustid-identify', express.json(), async (req, res) => {
 app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => {
     const { uri, field, value } = req.body;
     if (!uri || !field || value === undefined) return res.status(400).json({ error: 'uri, field, and value are required' });
-    if (!['artist', 'album', 'albumartist'].includes(field)) return res.status(400).json({ error: 'Invalid field' });
+    if (!['artist', 'album', 'albumartist', 'trackof'].includes(field)) return res.status(400).json({ error: 'Invalid field' });
+    if (field === 'trackof' && !/^\d{1,4}$/.test(String(value).trim())) return res.status(400).json({ error: 'Track count must be a whole number' });
 
     try {
         const localDir = path.join(__dirname, 'local');
@@ -6153,8 +6233,14 @@ app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => 
             if (!entry.isFile()) continue;
             if (!audioExts.has(path.extname(entry.name).toLowerCase())) continue;
             const target = path.join(folderPath, entry.name);
-            const result = NodeID3.update({ [tagKey]: value }, target);
-            if (result === true) updated++;
+            let tags = { [tagKey]: value };
+            if (field === 'trackof') {
+                // Set the total on every track but keep each track's own number
+                const [curNo = ''] = String((NodeID3.read(target) || {}).trackNumber || '').split('/');
+                tags = { trackNumber: `${curNo.trim() || 0}/${String(value).trim()}` };
+            }
+            const result = NodeID3.update(tags, target);
+            if (result === true) { stripId3v1(target); updated++; }
         }
 
         terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}`);
