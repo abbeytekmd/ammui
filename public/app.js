@@ -1860,6 +1860,13 @@ function updateBrowserControls(items) {
     }
 }
 
+// Title used for alphabetical ordering and the A-Z jump bar. In the music library a
+// leading "The " is ignored so e.g. "The Beatles" files under B rather than T.
+function browserSortTitle(item) {
+    const title = String(item.title || '');
+    return currentBrowserMode === 'music' ? title.replace(/^the\s+(?=\S)/i, '') : title;
+}
+
 function renderBrowser(items) {
     const renderSeq = ++browserRenderSeq;
     selectedPhotos.clear();
@@ -1895,8 +1902,8 @@ function renderBrowser(items) {
             if (da !== db) return da - db;
         }
 
-        const titleA = String(a.title || '');
-        const titleB = String(b.title || '');
+        const titleA = browserSortTitle(a);
+        const titleB = browserSortTitle(b);
 
         // Primary sort: case-insensitive, numeric-aware
         const result = titleA.localeCompare(titleB, undefined, { numeric: true, sensitivity: 'base' });
@@ -1928,8 +1935,9 @@ function renderBrowser(items) {
     if (alphabetScroll) {
         // Only consider items that start with a letter
         currentExistingLetters = [...new Set(items
-            .filter(i => i.title && /^[a-zA-Z]/.test(i.title))
-            .map(i => i.title[0].toUpperCase())
+            .map(browserSortTitle)
+            .filter(t => /^[a-zA-Z]/.test(t))
+            .map(t => t[0].toUpperCase())
         )];
 
         // Files (not folders) get queued/played in disc/track-number order, which can
@@ -1937,7 +1945,7 @@ function renderBrowser(items) {
         // A-Z jump bar would point at the wrong spot (or make same-letter items
         // beyond the first appear "missing"), so only show it when the file portion
         // of the list is actually in alphabetical order.
-        const fileTitles = items.filter(i => i.type !== 'container').map(i => String(i.title || ''));
+        const fileTitles = items.filter(i => i.type !== 'container').map(browserSortTitle);
         const filesAreAlphabetical = fileTitles.every((title, idx) =>
             idx === 0 || fileTitles[idx - 1].localeCompare(title, undefined, { numeric: true, sensitivity: 'base' }) <= 0
         );
@@ -1979,7 +1987,7 @@ function renderBrowser(items) {
     // A-Z list of artist folders with no loose files).
     const letterTargetIndex = new Map();
     items.forEach((item, idx) => {
-        const letter = (item.title || '')[0].toUpperCase();
+        const letter = (browserSortTitle(item)[0] || '').toUpperCase();
         if (!/^[A-Z]$/.test(letter)) return;
         const existingIdx = letterTargetIndex.get(letter);
         if (existingIdx === undefined || (items[existingIdx].type === 'container' && item.type !== 'container')) {
@@ -1989,7 +1997,7 @@ function renderBrowser(items) {
 
     browserItems.innerHTML = items.map((item, index) => {
         const isContainer = item.type === 'container';
-        const firstLetter = (item.title || '')[0].toUpperCase();
+        const firstLetter = (browserSortTitle(item)[0] || '').toUpperCase();
         let letterIdAttr = '';
 
         if (effectiveViewMode === 'list' && /^[A-Z]$/.test(firstLetter) && letterTargetIndex.get(firstLetter) === index) {
@@ -2874,7 +2882,7 @@ function syncLocalPlayback(status) {
             } catch (e) {}
             return currentTrack.uri;
         })();
-        video.src = resolvedUri;
+        video.src = isVideo ? browserPlayableVideoUrl(resolvedUri) : resolvedUri;
         video.setAttribute('data-track-id', status.trackId);
         video.setAttribute('data-is-local-player', 'true');
 
@@ -3170,8 +3178,16 @@ function hideAllPlayerArt() {
 
 // Custom artwork modal removed in favor of Screensaver Music Mode
 
+// Local library videos are played through the server's /api/video/playable, which hands
+// back the original file when the browser can decode it and an H.264 transcode when it
+// can't (e.g. HEVC phone videos, which otherwise play as sound over a black picture).
+function browserPlayableVideoUrl(uri) {
+    return uri && uri.includes('/local-files/') ? `/api/video/playable?uri=${encodeURIComponent(uri)}` : uri;
+}
+
 function openVideoModal(url, title = 'Video Player') {
     if (!url) return;
+    url = browserPlayableVideoUrl(url);
     const modal = document.getElementById('video-modal');
     const video = document.getElementById('video-player');
     const iframe = document.getElementById('youtube-player');
@@ -3188,6 +3204,14 @@ function openVideoModal(url, title = 'Video Player') {
         video.src = url;
         video.volume = localVideoVolume;
         video.onended = closeVideoModal;
+        // A file whose video codec the browser can't decode (e.g. HEVC/AV1) still plays
+        // its audio, just over a black picture — say so rather than leaving it a mystery.
+        video.onloadeddata = () => {
+            if (video.videoWidth === 0 && video.videoHeight === 0) {
+                console.warn(`[VIDEO] No decodable picture in ${url} — unsupported video codec?`);
+                showToast("This browser can't decode this video's picture (unsupported codec), so only the sound will play.", 'error', 6000);
+            }
+        };
         modal.style.display = 'flex';
         video.play().catch(err => {
             console.warn('[VIDEO] Auto-play failed:', err);

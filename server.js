@@ -1055,6 +1055,127 @@ app.get('/api/thumb', async (req, res) => {
     }
 });
 
+// ---------------------------------------------------------------------------
+// Browser-playable video. Phone videos (iPhone .mov especially) are usually HEVC,
+// which most browsers — Edge without Microsoft's paid HEVC extension, Firefox —
+// can't decode: the audio plays over a black picture. For a local file whose video
+// isn't H.264/VP8/VP9 this transcodes it to H.264 on the fly, streaming fragmented
+// mp4 straight away while also writing a normal (seekable) mp4 into a cache, so
+// later plays of the same file are instant. Anything else — remote URIs, files
+// that are already fine, ffmpeg/ffprobe missing — just redirects to the original.
+// ---------------------------------------------------------------------------
+const videoCacheDir = path.join(baseDataDir, 'cache', 'videos');
+fs.mkdirSync(videoCacheDir, { recursive: true });
+const BROWSER_VIDEO_CODECS = new Set(['h264', 'vp8', 'vp9']);
+const videoCodecCache = new Map();        // `${srcPath}|${mtimeMs}` -> codec name ('' if unknown)
+const videoTranscodesInflight = new Set(); // cache keys currently being written
+
+function probeVideoCodec(srcPath) {
+    return new Promise(resolve => {
+        const proc = spawn('ffprobe', [
+            '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', srcPath
+        ], { windowsHide: true });
+        let out = '';
+        proc.stdout.on('data', d => { out += d.toString(); });
+        proc.on('error', () => resolve(''));
+        proc.on('close', () => resolve(out.trim().split(/\s+/)[0] || ''));
+    });
+}
+
+app.get('/api/video/playable', async (req, res) => {
+    const rawUri = req.query.uri;
+    if (!rawUri) return res.status(400).send('Missing uri');
+
+    let relPath = null;
+    const marker = '/local-files/';
+    const markerIdx = rawUri.indexOf(marker);
+    if (markerIdx !== -1) {
+        try { relPath = decodeURIComponent(rawUri.slice(markerIdx + marker.length)); }
+        catch { relPath = rawUri.slice(markerIdx + marker.length); }
+    }
+    if (relPath === null || ffmpegUnavailable) return res.redirect(302, rawUri);
+
+    const srcPath = path.resolve(thumbLocalRoot, relPath);
+    if (srcPath !== thumbLocalRoot && !srcPath.startsWith(thumbLocalRoot + path.sep)) {
+        return res.status(403).send('Forbidden');
+    }
+
+    let stat;
+    try { stat = await fs.promises.stat(srcPath); }
+    catch { return res.redirect(302, rawUri); }
+
+    const key = crypto.createHash('md5').update(`${srcPath}|${stat.mtimeMs}|${stat.size}`).digest('hex');
+    const cacheName = key + '.mp4';
+    const cacheFile = path.join(videoCacheDir, cacheName);
+    if (fs.existsSync(cacheFile)) {
+        res.type('video/mp4');
+        return res.sendFile(cacheFile);
+    }
+
+    const probeKey = `${srcPath}|${stat.mtimeMs}`;
+    if (!videoCodecCache.has(probeKey)) videoCodecCache.set(probeKey, await probeVideoCodec(srcPath));
+    const codec = videoCodecCache.get(probeKey);
+    // Unknown codec (ffprobe missing/failed) or one browsers already play: use the original.
+    if (!codec || BROWSER_VIDEO_CODECS.has(codec)) return res.redirect(302, rawUri);
+
+    // Only one request writes a given cache file; a concurrent one just streams.
+    const writeCache = !videoTranscodesInflight.has(key);
+    const tmpName = `${key}.${crypto.randomBytes(4).toString('hex')}.tmp.mp4`;
+    const streamOpts = 'f=mp4:movflags=frag_keyframe+empty_moov+default_base_moof:onfail=ignore';
+    const outputs = writeCache
+        ? ['-f', 'tee', `[${streamOpts}]pipe\\:1|[f=mp4:movflags=+faststart]${tmpName}`]
+        : ['-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof', 'pipe:1'];
+    if (writeCache) videoTranscodesInflight.add(key);
+
+    console.log(`[VIDEO] Transcoding ${codec} -> h264 for browser: ${relPath}`);
+    const ffmpeg = spawn('ffmpeg', [
+        '-hide_banner', '-loglevel', 'error',
+        '-i', srcPath,
+        '-map', '0:v:0', '-map', '0:a:0?',
+        // Phone footage is often 4K; 1080p is plenty for the browser and far quicker to encode.
+        '-vf', "scale='min(1920,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '160k',
+        // The tee muxer doesn't ask the encoders for global headers the way the mp4 muxer
+        // does, so the streamed fragmented mp4's up-front moov would carry no avcC (SPS/PPS):
+        // browsers then play the audio but decode zero video frames. Force them on.
+        '-flags', '+global_header',
+        ...outputs
+    ], { cwd: videoCacheDir, windowsHide: true });
+
+    res.type('video/mp4');
+    ffmpeg.stdout.pipe(res);
+
+    let stderr = '';
+    ffmpeg.stderr.on('data', d => { stderr += d.toString(); });
+
+    // Viewer closed the video: stop sending, but let a cache-writing transcode finish
+    // (its output is just discarded) so the next play is instant and seekable.
+    res.on('close', () => {
+        ffmpeg.stdout.unpipe(res);
+        if (writeCache) ffmpeg.stdout.resume();
+        else if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
+    });
+
+    ffmpeg.on('error', err => {
+        console.error('[VIDEO] Failed to start ffmpeg:', err.message);
+        if (err.code === 'ENOENT') ffmpegUnavailable = true;
+        if (!res.headersSent) res.redirect(302, rawUri);
+    });
+    ffmpeg.on('close', code => {
+        if (!writeCache) return;
+        videoTranscodesInflight.delete(key);
+        const tmpPath = path.join(videoCacheDir, tmpName);
+        if (code === 0) {
+            fs.promises.rename(tmpPath, cacheFile).catch(() => fs.promises.unlink(tmpPath).catch(() => {}));
+        } else {
+            console.warn(`[VIDEO] ffmpeg exited ${code} for ${relPath}: ${stderr.trim().slice(-300)}`);
+            fs.promises.unlink(tmpPath).catch(() => {});
+        }
+    });
+});
+
 // Discogs tracklist lookup
 const discogsCache = new Map();
 
@@ -4632,7 +4753,11 @@ async function fetchYoutubeCandidates(artist, title) {
 // which we then pass through our own ffmpeg to copy the video and re-encode the audio to
 // AAC in fragmented mp4: YouTube's Opus-in-Matroska live stream could make the browser drop
 // the audio track mid-playback while video carried on.
-const YOUTUBE_STREAM_FORMAT = 'bestvideo+bestaudio/best';
+// The video is copied, not re-encoded, so its codec must be one every browser can decode:
+// plain "bestvideo" is usually AV1 or VP9, which many browsers/tablets (Edge without the
+// AV1 extension, iPads) can't play — the audio then plays over a black picture. H.264
+// (avc1) plays everywhere and YouTube offers it up to 1080p; fall back if it's missing.
+const YOUTUBE_STREAM_FORMAT = 'bestvideo[vcodec^=avc1]+bestaudio/best[vcodec^=avc1]/bestvideo+bestaudio/best';
 
 app.get('/api/youtube/stream/:videoId', (req, res) => {
     const { videoId } = req.params;
