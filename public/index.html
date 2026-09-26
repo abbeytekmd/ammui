@@ -852,16 +852,47 @@
                     </svg>
                 </button>
             </div>
-            <div id="acoustid-bar" class="acoustid-bar" style="display: none;">
-                <button class="btn-control ghost btn-small" id="acoustid-btn" onclick="identifyWithAcoustid()">
-                    Identify with AcoustID
-                </button>
+            <div id="info-actions" class="info-actions" style="display: none;">
+                <div id="acoustid-bar" class="info-action" style="display: none;">
+                    <button class="info-action-btn" id="acoustid-btn" onclick="identifyWithAcoustid()"
+                        title="Fingerprint the audio and look it up on AcoustID">
+                        <span class="info-action-icon info-action-icon-acoustid">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"></path>
+                                <path d="M14 13.12c0 2.38 0 6.38-1 8.88"></path>
+                                <path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"></path>
+                                <path d="M2 12a10 10 0 0 1 18-6"></path>
+                                <path d="M2 16h.01"></path>
+                                <path d="M21.8 16c.2-2 .131-5.354 0-6"></path>
+                                <path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"></path>
+                                <path d="M8.65 22c.21-.66.45-1.32.57-2"></path>
+                                <path d="M9 6.8a6 6 0 0 1 9 5.2v2"></path>
+                            </svg>
+                        </span>
+                        <span class="info-action-text">
+                            <span class="info-action-label" id="acoustid-btn-label">Identify track</span>
+                            <span class="info-action-sub">AcoustID fingerprint</span>
+                        </span>
+                    </button>
+                </div>
+                <div id="video-lookup-bar" class="info-action" style="display: none;">
+                    <button class="info-action-btn" onclick="openVideoPicker(currentInfoTrack)"
+                        title="Search YouTube and choose the video for this track">
+                        <span class="info-action-icon info-action-icon-video">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="2" y="4" width="20" height="16" rx="4"></rect>
+                                <polygon points="10 9 15 12 10 15 10 9" fill="currentColor"></polygon>
+                            </svg>
+                        </span>
+                        <span class="info-action-text">
+                            <span class="info-action-label">Choose video</span>
+                            <span class="info-action-sub">Search YouTube</span>
+                        </span>
+                    </button>
+                </div>
                 <span id="acoustid-status" class="acoustid-status"></span>
-            </div>
-            <div id="video-lookup-bar" class="acoustid-bar" style="display: none;">
-                <button class="btn-control ghost btn-small" onclick="openVideoPicker(currentInfoTrack)">
-                    Find video on YouTube
-                </button>
             </div>
             <div id="track-metadata-list" class="metadata-list">
                 <!-- Metadata items will be injected here -->

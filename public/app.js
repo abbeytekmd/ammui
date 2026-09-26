@@ -106,7 +106,18 @@ function applyDefaultLocalHomes() {
 }
 
 let currentDevices = [];
-let selectedRendererUdn = localStorage.getItem('selectedRendererUdn');
+// Each library section (music/photo/video) remembers its own player, so e.g. videos can
+// play directly in the browser while music goes to a remote speaker. Sections without a
+// choice of their own start from the player used before (the single, shared setting),
+// so picking a player for one section never changes what the others use.
+for (const mode of ['music', 'photo', 'video']) {
+    const shared = localStorage.getItem('selectedRendererUdn');
+    if (shared && !localStorage.getItem(`selectedRendererUdn_${mode}`)) {
+        localStorage.setItem(`selectedRendererUdn_${mode}`, shared);
+    }
+}
+let selectedRendererUdn = localStorage.getItem(`selectedRendererUdn_${localStorage.getItem('currentBrowserMode') || 'music'}`)
+    || localStorage.getItem('selectedRendererUdn');
 let selectedServerUdn = localStorage.getItem('selectedServerUdn');
 applyDefaultLocalHomes();
 let browsePath = [{ id: '0', title: 'Root' }];
@@ -399,9 +410,14 @@ async function selectServer(udn) {
     }
 }
 
-async function selectDevice(udn) {
+function rememberRenderer(udn) {
     selectedRendererUdn = udn;
     localStorage.setItem('selectedRendererUdn', udn);
+    localStorage.setItem(`selectedRendererUdn_${currentBrowserMode}`, udn);
+}
+
+async function selectDevice(udn, { fromModeSwitch = false } = {}) {
+    rememberRenderer(udn);
     closeRendererModal();
 
     // Reset offline state BEFORE rendering
@@ -412,7 +428,7 @@ async function selectDevice(udn) {
     renderDevices();
     updateTransportControls();
 
-    if (window.innerWidth <= 1100) {
+    if (window.innerWidth <= 1100 && !fromModeSwitch) {
         switchView('playlist');
     }
 
@@ -3983,8 +3999,7 @@ async function castToDevice(deviceUdn) {
     stopAirPlayScan();
 
     // Select the device
-    selectedRendererUdn = deviceUdn;
-    localStorage.setItem('selectedRendererUdn', selectedRendererUdn);
+    rememberRenderer(deviceUdn);
     renderDevices();
     closeCastModal();
 
@@ -4962,6 +4977,14 @@ async function switchBrowserMode(mode) {
     localStorage.setItem('currentBrowserMode', mode);
 
     updateBrowserModeTabs();
+
+    // Switch to the player this section last used, if it's still around.
+    const modeRenderer = localStorage.getItem(`selectedRendererUdn_${mode}`);
+    if (modeRenderer && modeRenderer !== selectedRendererUdn &&
+        currentDevices.some(d => d.udn === modeRenderer && d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn))) {
+        console.log(`[PLAYER] ${mode} section uses ${modeRenderer}`);
+        selectDevice(modeRenderer, { fromModeSwitch: true });
+    }
 
     // On the single-column layout, a tab tap should also bring the browser forward.
     if (window.innerWidth <= 1100) switchView('browser');
@@ -6349,7 +6372,9 @@ async function openFileInfoModal(trackData) {
         const showAcoustid = !isImage && trackData.uri && trackData.uri.includes('/local-files/');
         acoustidBar.style.display = showAcoustid ? 'flex' : 'none';
         const acoustidBtn = document.getElementById('acoustid-btn');
-        if (acoustidBtn) { acoustidBtn.disabled = false; acoustidBtn.textContent = 'Identify with AcoustID'; }
+        if (acoustidBtn) { acoustidBtn.disabled = false; acoustidBtn.classList.remove('is-busy'); }
+        const acoustidLabel = document.getElementById('acoustid-btn-label');
+        if (acoustidLabel) acoustidLabel.textContent = 'Identify track';
         const acoustidStatus = document.getElementById('acoustid-status');
         if (acoustidStatus) { acoustidStatus.textContent = ''; acoustidStatus.className = 'acoustid-status'; }
     }
@@ -6360,6 +6385,13 @@ async function openFileInfoModal(trackData) {
         const isVideo = (trackData.class && trackData.class.includes('videoItem')) ||
             (trackData.protocolInfo && trackData.protocolInfo.includes('video/'));
         videoBar.style.display = (!isImage && !isVideo && trackData.title) ? 'flex' : 'none';
+    }
+
+    // Hide the whole action row (and its divider) when neither action applies
+    const infoActions = document.getElementById('info-actions');
+    if (infoActions) {
+        const anyAction = [acoustidBar, videoBar].some(el => el && el.style.display !== 'none');
+        infoActions.style.display = anyAction ? 'flex' : 'none';
     }
 
     // If we have resolution string from server, parse it for display
@@ -7067,8 +7099,10 @@ async function identifyWithAcoustid() {
     const statusEl = document.getElementById('acoustid-status');
     if (!btn || !currentInfoUri) return;
 
+    const label = document.getElementById('acoustid-btn-label');
     btn.disabled = true;
-    btn.textContent = 'Identifying…';
+    btn.classList.add('is-busy');
+    if (label) label.textContent = 'Identifying…';
     if (statusEl) { statusEl.textContent = ''; statusEl.className = 'acoustid-status'; }
 
     try {
@@ -7104,7 +7138,8 @@ async function identifyWithAcoustid() {
         showToast('AcoustID: ' + e.message, 'error', 4000);
     } finally {
         btn.disabled = false;
-        btn.textContent = 'Identify with AcoustID';
+        btn.classList.remove('is-busy');
+        if (label) label.textContent = 'Identify track';
     }
 }
 

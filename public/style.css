@@ -4033,10 +4033,10 @@ p.subtitle {
     cursor: not-allowed;
 }
 
-/* AcoustID identify bar in the file info modal */
-.acoustid-bar {
+/* Action buttons (AcoustID identify, YouTube video choice) in the file info modal */
+.info-actions {
     display: flex;
-    align-items: center;
+    align-items: stretch;
     gap: 0.75rem;
     flex-wrap: wrap;
     margin: 0 0 0.85rem;
@@ -4044,9 +4044,95 @@ p.subtitle {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.info-action {
+    display: flex;
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.info-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.6rem 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+
+.info-action-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.info-action-btn:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.info-action-btn:disabled {
+    cursor: progress;
+    opacity: 0.75;
+}
+
+.info-action-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+}
+
+.info-action-icon-acoustid {
+    color: var(--primary);
+    background: rgba(99, 102, 241, 0.15);
+}
+
+.info-action-icon-video {
+    color: #ff4e45;
+    background: rgba(255, 78, 69, 0.14);
+}
+
+/* Fingerprint pulses while the lookup runs */
+.info-action-btn.is-busy .info-action-icon svg {
+    animation: info-action-pulse 1s ease-in-out infinite;
+}
+
+@keyframes info-action-pulse {
+    50% { opacity: 0.3; }
+}
+
+.info-action-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.info-action-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.info-action-sub {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
 .acoustid-status {
+    flex-basis: 100%;
     font-size: 0.8rem;
     color: var(--text-muted);
+}
+
+.acoustid-status:empty {
+    display: none;
 }
 
 .acoustid-status-ok {
