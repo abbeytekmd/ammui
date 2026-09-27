@@ -1964,6 +1964,10 @@ async function runVoiceCommand(transcripts) {
                 continue;
             }
 
+            // Music asked for by voice always goes to the Music section's player, not the one the
+            // Photos/Videos section uses — so switch there first (this also shows its playlist).
+            if (data.tracks && currentBrowserMode !== 'music') await switchBrowserMode('music');
+
             if (!data.tracks) {
                 await runVoiceControl(data);
             } else if (data.action === 'queue') {
@@ -5260,11 +5264,12 @@ async function switchBrowserMode(mode) {
     updateBrowserModeTabs();
 
     // Switch to the player this section last used, if it's still around.
+    let playerSwitch = null;
     const modeRenderer = localStorage.getItem(`selectedRendererUdn_${mode}`);
     if (modeRenderer && modeRenderer !== selectedRendererUdn &&
         currentDevices.some(d => d.udn === modeRenderer && d.isRenderer && !d.disabledPlayer && !isLocalDisabled(d.udn))) {
         console.log(`[PLAYER] ${mode} section uses ${modeRenderer}`);
-        selectDevice(modeRenderer, { fromModeSwitch: true });
+        playerSwitch = selectDevice(modeRenderer, { fromModeSwitch: true });
     }
 
     // On the single-column layout, a tab tap should also bring the browser forward.
@@ -5290,6 +5295,8 @@ async function switchBrowserMode(mode) {
             await goHome(mode);
         }
     }
+    // Callers that act on the player straight after (voice commands) need it fully selected.
+    await playerSwitch;
 }
 
 async function goHome(type = 'music') {
