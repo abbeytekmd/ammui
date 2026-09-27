@@ -1,6 +1,6 @@
-# UI for an Abbeytek Media Machine (AMMUI)
+# Media Hub (AMMUI)
 
-A web based home hub with DLNA server, player and controller. Plays music and shows family photos, great if you have a large mp3 and/or photo collection.
+A web based home hub with DLNA server, player and controller. Plays music and shows family photos and videos, great if you have a large mp3 and/or photo collection.
 * Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
 * Right side of the screen - playback device: DLNA player, Sonos, Airplay
 
@@ -113,10 +113,15 @@ Until a device trusts AMMUI's certificate, browsers show a "connection is not pr
 
 Each device only needs this once: when the server certificate is renewed it's signed by the same authority, so it stays trusted.
 
-### Notes
+## Build your own Media Hub
 
-* A browser keeps each address's settings separately, so the first time you open the HTTPS address you'll need to choose your player and server again.
-* On an HTTPS page, music and photos from other media servers (which only speak HTTP) are passed through AMMUI, so they still play and display.
+You need a machine for the server and one or more machines to run the UI. They can be the same machine or different ones.
+
+The server will store your media files so will need a lot of disk space. It can also transcode video when sending it to the UI so the more power it has, the better. It needs to be available when you need it so if you have a box that's on all day, a linux box or similar, that would be ideal.
+
+The UI ideally needs a nice big touchscreen. A 10inch or more tablet/Ipad, a raspberry pi with an external touchscreen monitor.
+
+Both in the same machine: An All-in-one touchscreen PC, an MS Surface, etc.
 
 ## Managing your music library
 
@@ -126,9 +131,8 @@ Browse the local server in **Music** mode to see the commands. Most of them are 
 
 ### Getting music in
 
-* **Upload** (toolbar): add a single file. **Upload Folder**: add a whole folder of music, photos or videos. Music is filed into `Artist/Album/Title` using the file's tags, falling back to `Unknown Artist` / `Unknown Album` when tags are missing. Supported: mp3, flac, m4a, aac, wav, ogg and opus.
+* **Upload** (toolbar): add a single file. **Upload Folder**: add a whole folder of music, photos or videos. Music is filed into `Artist/Album/Title` using the file's tags, falling back to `Unknown Artist` / `Unknown Album` when tags are missing. Supported: mp3, flac, m4a, aac, wav, ogg and opus. Photos and videos are files into `Year/Month` if a date can be determined from the file.
 * **Download** (row menu, on a track or folder from another media server): copies it into the local library. Folders download in the background with a progress window, and files that already exist are skipped.
-* **Import a folder by hand**: copy music straight into `local/music` and use **Reimport** (below) to tidy it up.
 
 ### Folder menu (the ☰ button on each row)
 
