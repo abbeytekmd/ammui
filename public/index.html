@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=21">
+    <link rel="stylesheet" href="style.css?v=22">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -1093,7 +1093,7 @@
                     <input type="range" id="video-modal-volume-slider" min="0" max="100" value="100"
                         oninput="setLocalVideoVolume(this.value)" title="Volume">
                 </div>
-                <button class="btn-close" onclick="closeVideoModal()">
+                <button class="btn-close" onclick="closeVideoModal(true)">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -1363,6 +1363,22 @@
                 <div class="ss-control-label">Fav</div>
             </div>
 
+            <!-- Fired on touchend rather than touchstart: browsers only count touchend as the user
+                 gesture that's allowed to start the microphone. -->
+            <div class="ss-control-item" id="ss-voice-item" onclick="toggleVoiceCommand()"
+                ontouchstart="event.preventDefault();"
+                ontouchend="toggleVoiceCommand(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                <button id="btn-ss-voice" class="btn-ss-voice" title="Voice command">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round">
+                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                    </svg>
+                </button>
+                <div class="ss-control-label">Voice</div>
+            </div>
+
             <div class="ss-control-item" onclick="deleteCurrentPhoto()"
                 ontouchstart="deleteCurrentPhoto(); event.preventDefault();"
                 ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
@@ -1489,7 +1505,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=26"></script>
     <script src="slideshow.js?v=3"></script>
 </body>
 

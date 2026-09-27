@@ -1847,6 +1847,8 @@ async function executeBrowserFind() {
 
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition = null;
+// No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's mic at all.
+if (!SpeechRecognitionImpl) document.getElementById('ss-voice-item')?.remove();
 
 function toggleVoiceCommand() {
     if (voiceRecognition) {
@@ -1873,7 +1875,8 @@ Switch to ${secureUrl} ?`)) {
         return;
     }
 
-    const btn = document.getElementById('btn-voice');
+    // The same handler serves the header mic and the slideshow's, so both show the listening state.
+    const btns = [document.getElementById('btn-voice'), document.getElementById('btn-ss-voice')].filter(Boolean);
     const rec = new SpeechRecognitionImpl();
     rec.lang = navigator.language || 'en-GB';
     rec.interimResults = false;
@@ -1888,11 +1891,11 @@ Switch to ${secureUrl} ?`)) {
     };
     rec.onend = () => {
         voiceRecognition = null;
-        btn?.classList.remove('listening');
+        btns.forEach(b => b.classList.remove('listening'));
     };
 
     voiceRecognition = rec;
-    btn?.classList.add('listening');
+    btns.forEach(b => b.classList.add('listening'));
     showToast('Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "stop", "volume 30"', 'info', 4000);
     rec.start();
 }
@@ -3144,6 +3147,11 @@ function syncLocalPlayback(status) {
         if (isVideo) {
             document.getElementById('video-modal').style.display = 'flex';
             document.getElementById('video-modal-title').textContent = currentTrack.title;
+            // Same explicit volume control as openVideoModal — native controls often hide it on tablets.
+            video.volume = localVideoVolume;
+            const volumeGroup = document.getElementById('video-modal-volume');
+            if (volumeGroup) volumeGroup.style.display = '';
+            syncLocalVideoVolumeUI();
         }
 
         if (status.transportState === 'Playing') {
@@ -3190,8 +3198,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         video.addEventListener('ended', () => {
             if (selectedRendererUdn === BROWSER_PLAYER_UDN) {
-                console.log("[LOCAL PLAYER] Track ended, jumping to next...");
-                transportAction('next');
+                // There's no server-side "next" — play the following item ourselves, or stop at the end
+                // of the playlist so the server doesn't stay "Playing" (a refresh would replay it).
+                const index = currentPlaylistItems.findIndex(item => item.id == currentTrackId);
+                const nextItem = index >= 0 ? currentPlaylistItems[index + 1] : null;
+                console.log(`[LOCAL PLAYER] Track ended, ${nextItem ? 'jumping to next' : 'end of playlist - stopping'}`);
+                if (nextItem) playPlaylistItem(nextItem.id, true, true);
+                else transportAction('stop');
             }
         });
     }
@@ -3593,9 +3606,18 @@ async function handleVideoClick(uri, title, artist, album, duration, protocolInf
     }
 }
 
-function closeVideoModal() {
+// userClosed is true only from the ✕ button (onended passes an Event, hence the strict check).
+function closeVideoModal(userClosed) {
     const modal = document.getElementById('video-modal');
     const video = document.getElementById('video-player');
+    // The Browser player's play state lives on the server, so closing the video must stop it
+    // there too — otherwise the next status poll or a page refresh starts it playing again.
+    if (userClosed === true && video && video.getAttribute('data-is-local-player') === 'true' &&
+        selectedRendererUdn === BROWSER_PLAYER_UDN) {
+        video.removeAttribute('data-track-id');
+        video.removeAttribute('data-is-local-player');
+        transportAction('stop');
+    }
     const iframe = document.getElementById('youtube-player');
     const ytLink = document.getElementById('video-modal-yt-link');
     const volumeGroup = document.getElementById('video-modal-volume');
@@ -4349,9 +4371,9 @@ function renderManageDevices() {
             <div class="manage-item ${isServerDisabled || isLocallyDisabled ? 'item-disabled' : ''} ${isActive ? 'item-active' : ''}">
                 ${iconHtml}
                 <div class="manage-item-info">
-                    <div class="manage-item-name-row" id="name-row-${device.udn?.replace(/:/g, '-')}">
+                    <div class="manage-item-name-row" id="name-row-${renameRowKey(device.udn, role)}">
                         <span class="manage-item-name">${displayName}</span>
-                        <button class="btn-rename" onclick="startRename('${device.udn}')" title="Rename device">
+                        <button class="btn-rename" onclick="startRename('${device.udn}', '${role}')" title="Rename device">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
                                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
@@ -4469,8 +4491,14 @@ async function deleteDevice(udn) {
 }
 
 
-function startRename(udn) {
-    const nameRow = document.getElementById(`name-row-${udn.replace(/:/g, '-')}`);
+// A device can be both a player and a server (Sonos is), so it's listed in both sections —
+// the role keeps each row's element ids distinct.
+function renameRowKey(udn, role) {
+    return `${role}-${(udn || '').replace(/:/g, '-')}`;
+}
+
+function startRename(udn, role) {
+    const nameRow = document.getElementById(`name-row-${renameRowKey(udn, role)}`);
     if (!nameRow) return;
 
     const device = currentDevices.find(d => d.udn === udn);
@@ -4479,19 +4507,19 @@ function startRename(udn) {
     const currentName = getDeviceDisplayName(device);
 
     nameRow.innerHTML = `
-        <input type="text" class="manage-name-input" id="input-${udn.replace(/:/g, '-')}" value="${currentName.replace(/"/g, '&quot;')}" onkeydown="handleRenameKey(event, '${udn}')">
-        <button class="btn-toggle btn-enable" onclick="saveRename('${udn}')" style="padding: 0.2rem 0.5rem">Save</button>
+        <input type="text" class="manage-name-input" id="input-${renameRowKey(udn, role)}" value="${currentName.replace(/"/g, '&quot;')}" onkeydown="handleRenameKey(event, '${udn}', '${role}')">
+        <button class="btn-toggle btn-enable" onclick="saveRename('${udn}', '${role}')" style="padding: 0.2rem 0.5rem">Save</button>
         <button class="btn-toggle btn-disable" onclick="cancelRename('${udn}')" style="padding: 0.2rem 0.5rem">Cancel</button>
     `;
 
-    const input = document.getElementById(`input-${udn.replace(/:/g, '-')}`);
+    const input = document.getElementById(`input-${renameRowKey(udn, role)}`);
     input.focus();
     input.select();
 }
 
-function handleRenameKey(event, udn) {
+function handleRenameKey(event, udn, role) {
     if (event.key === 'Enter') {
-        saveRename(udn);
+        saveRename(udn, role);
     } else if (event.key === 'Escape') {
         cancelRename(udn);
     }
@@ -4501,8 +4529,8 @@ function cancelRename(udn) {
     renderManageDevices();
 }
 
-async function saveRename(udn) {
-    const input = document.getElementById(`input-${udn.replace(/:/g, '-')}`);
+async function saveRename(udn, role) {
+    const input = document.getElementById(`input-${renameRowKey(udn, role)}`);
     if (!input) return;
 
     const newName = input.value.trim();
