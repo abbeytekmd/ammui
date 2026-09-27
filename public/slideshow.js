@@ -31,6 +31,7 @@ class Slideshow {
         this.resumeIndex = -1;
         this.resumeUrl = null;
         this.resumeMode = null;
+        this.listVersion = null; // server delete-version of this.items when it came from a Day/Recent/Favs list, else null
     }
 
     init() {
@@ -57,6 +58,7 @@ class Slideshow {
     async start(items = null, index = -1) {
         if (this.isActive) {
             if (items) {
+                this.listVersion = null;
                 this.items = items;
                 this.index = index;
                 await this.next();
@@ -74,6 +76,7 @@ class Slideshow {
         console.log('[SLIDESHOW] Starting...');
         this.isActive = true;
         this.lastStartTime = Date.now();
+        this.listVersion = null;
         this.items = items || [];
         this.index = index;
 
@@ -141,6 +144,7 @@ class Slideshow {
 
         try {
             let data;
+            if (this.items.length > 0 && this.listVersion !== null) await this.refreshListIfStale();
             if (this.items.length > 0) {
                 this.index = (this.index + 1) % this.items.length;
                 const item = this.items[this.index];
@@ -191,6 +195,7 @@ class Slideshow {
                     if (items.length > 0) {
                         clearTimeout(this._modeRetryTimer);
                         this.items = items;
+                        this.listVersion = Number(listRes.headers.get('X-Deleted-Version')) || 0;
                         if (this.resumeMode === this.mode) {
                             // Try to resume by URL so deleted items don't shift position
                             let resumePos = -1;
@@ -233,6 +238,35 @@ class Slideshow {
             this.resetInterval();
         } catch (e) {
             console.error('[SLIDESHOW] Next failed:', e);
+        }
+    }
+
+    // Another browser may have deleted photos since this Day/Recent/Favs list was fetched.
+    // If the server's delete counter has moved on, re-fetch the list and carry on from
+    // the photo currently on screen so the sequence isn't restarted.
+    async refreshListIfStale() {
+        try {
+            const vRes = await fetch('/api/slideshow/deleted-version');
+            if (!vRes.ok) return;
+            const { version } = await vRes.json();
+            if (version === this.listVersion) return;
+
+            const listRes = await fetch(`/api/slideshow/list?mode=${this.mode}`);
+            // 404 = nothing left in this mode; anything else (e.g. 503 while the server
+            // rebuilds its cache) keeps the current list and retries on the next slide
+            if (!listRes.ok && listRes.status !== 404) return;
+            const items = listRes.ok ? await listRes.json() : [];
+            const current = this.index >= 0 ? this.items[this.index] : null;
+            const currentUrl = current ? (current.uri || current.res) : null;
+            let pos = currentUrl ? items.findIndex(i => (i.uri || i.res) === currentUrl) : -1;
+            // Current photo is gone: the one after it has slid down into its slot
+            if (pos === -1) pos = Math.max(-1, Math.min(this.index, items.length) - 1);
+
+            this.items = items;
+            this.index = pos;
+            this.listVersion = listRes.ok ? (Number(listRes.headers.get('X-Deleted-Version')) || version) : null;
+        } catch (e) {
+            console.warn('[SLIDESHOW] List refresh failed:', e);
         }
     }
 

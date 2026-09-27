@@ -2542,6 +2542,21 @@ let screensaverCache = {
     refreshTriggered: false
 };
 
+// Bumped whenever a photo is deleted/hidden, so browsers cycling a cached slideshow
+// list (Day/Recent/Favs) can tell their copy is stale and re-fetch it.
+let slideshowDeleteVersion = 0;
+
+function removeFromScreensaverCache(url) {
+    slideshowDeleteVersion++;
+    if (!screensaverCache.images || screensaverCache.images.length === 0) return;
+    const key = normalizePhotoKey(url);
+    const initialCount = screensaverCache.images.length;
+    screensaverCache.images = screensaverCache.images.filter(img => normalizePhotoKey(img.uri || img.res) !== key);
+    if (screensaverCache.images.length < initialCount) {
+        console.log(`[SCREENSAVER] Removed deleted photo from cache. New count: ${screensaverCache.images.length}`);
+    }
+}
+
 async function refreshScreensaverCache(device, objectId) {
     if (screensaverCache.status === 'loading') return;
 
@@ -2877,12 +2892,17 @@ app.get('/api/slideshow/list', async (req, res) => {
         }
     }
 
+    res.set('X-Deleted-Version', String(slideshowDeleteVersion));
     res.json(images.map(img => {
         const url = img.uri || img.res;
         const rot = (settings.manualRotations && settings.manualRotations[url]) || 0;
         const tags = settings.fileTags?.[url] || [];
         return { ...img, ...(rot ? { manualRotation: rot } : {}), tags };
     }));
+});
+
+app.get('/api/slideshow/deleted-version', (req, res) => {
+    res.json({ version: slideshowDeleteVersion });
 });
 
 app.get('/api/slideshow/rotations', (req, res) => {
@@ -2907,18 +2927,7 @@ app.post('/api/slideshow/delete', (req, res) => {
 
     markPhotoDeleted(url);
     settings.deletedPhotos[normalizePhotoKey(url)] = true;
-
-    // Also remove from current cache if present
-    if (screensaverCache.images && screensaverCache.images.length > 0) {
-        const initialCount = screensaverCache.images.length;
-        screensaverCache.images = screensaverCache.images.filter(img => {
-            const imgUrl = img.uri || img.res;
-            return imgUrl !== url;
-        });
-        if (screensaverCache.images.length < initialCount) {
-            console.log(`[SCREENSAVER] Removed deleted photo from cache. New count: ${screensaverCache.images.length}`);
-        }
-    }
+    removeFromScreensaverCache(url);
 
     console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
     res.json({ success: true });
@@ -4908,15 +4917,32 @@ app.get('/api/local/va-candidates', async (req, res) => {
 // Moves a single local audio file into <base>/<Artist>/<Album>/<file> per its embedded tags,
 // where <base> is assumed to be three levels up (.../Base/Artist/Album/File). Shared by the
 // single-file and whole-folder "move to tag location" endpoints below.
-// Walks upward from startDir, removing directories left empty by a move, and
-// stops at (without removing) baseDir itself.
+// OS-generated files that never count as real content when deciding whether a folder is leftover.
+const JUNK_FILES = new Set(['thumbs.db', 'desktop.ini', '.ds_store']);
+
+// True when dir (recursively) contains nothing but cover art / OS junk — i.e. every track
+// has been moved out and what's left is safe to throw away. An empty dir also qualifies.
+async function isLeftoverCoverArtDir(dir) {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+        if (entry.isDirectory()) {
+            if (!await isLeftoverCoverArtDir(path.join(dir, entry.name))) return false;
+        } else {
+            const name = entry.name.toLowerCase();
+            if (!IMAGE_EXTS.has(path.extname(name)) && !JUNK_FILES.has(name)) return false;
+        }
+    }
+    return true;
+}
+
+// Walks upward from startDir, removing directories left empty by a move (or holding only
+// leftover cover art), and stops at (without removing) baseDir itself.
 async function cleanupEmptyDirsUpTo(startDir, baseDir) {
     let currentDir = startDir;
     while (currentDir && currentDir.length > baseDir.length && currentDir.startsWith(baseDir)) {
         try {
-            const remaining = await fs.promises.readdir(currentDir);
-            if (remaining.length === 0) {
-                await fs.promises.rmdir(currentDir);
+            if (await isLeftoverCoverArtDir(currentDir)) {
+                await fs.promises.rm(currentDir, { recursive: true, force: true });
                 currentDir = path.dirname(currentDir);
             } else {
                 break;
@@ -5049,8 +5075,16 @@ app.post('/api/local/move-folder-to-tags', express.json(), async (req, res) => {
             }
         }
 
-        terminalLog(`[MOVE-FOLDER-TO-TAGS] "${safeId}": moved ${moved}, skipped ${skipped}, duplicates removed ${duplicatesRemoved}, failed ${failed}`);
-        res.json({ success: true, moved, skipped, duplicatesRemoved, failed, errors });
+        // Per-file cleanup only climbs a fixed number of levels, so deeper leftovers (or a
+        // reimported folder whose top level held just the cover art) are swept here.
+        let folderRemoved = false;
+        if (folderPath !== localDir && fs.existsSync(folderPath) && await isLeftoverCoverArtDir(folderPath)) {
+            await fs.promises.rm(folderPath, { recursive: true, force: true });
+            folderRemoved = true;
+        }
+
+        terminalLog(`[MOVE-FOLDER-TO-TAGS] "${safeId}": moved ${moved}, skipped ${skipped}, duplicates removed ${duplicatesRemoved}, failed ${failed}${folderRemoved ? ', leftover folder removed' : ''}`);
+        res.json({ success: true, moved, skipped, duplicatesRemoved, failed, errors, folderRemoved });
     } catch (err) {
         console.error('[MOVE-FOLDER-TO-TAGS] Error:', err);
         res.status(500).json({ error: err.message });
@@ -5292,6 +5326,7 @@ app.post('/api/local/photo-delete', express.json(), async (req, res) => {
         }
 
         await fs.promises.rename(localPath, destPath);
+        removeFromScreensaverCache(uri);
         console.log(`[Photo Delete] Moved ${localPath} → ${destPath}`);
         res.json({ success: true });
     } catch (err) {
@@ -5539,6 +5574,79 @@ app.post('/api/local/merge-folder', express.json(), async (req, res) => {
         console.error('[MERGE]', err.message);
         res.status(500).json({ error: err.message });
     }
+});
+
+// Picks a free name in dir for `name`, appending " (2)", " (3)"… before the extension
+// (folders have none) when the name is already taken.
+function uniqueNameIn(dir, name, isDir) {
+    if (!fs.existsSync(path.join(dir, name))) return name;
+    const ext = isDir ? '' : path.extname(name);
+    const base = isDir ? name : path.basename(name, ext);
+    for (let i = 2; i < 1000; i++) {
+        const candidate = `${base} (${i})${ext}`;
+        if (!fs.existsSync(path.join(dir, candidate))) return candidate;
+    }
+    throw new Error(`Could not find a free name for ${name}`);
+}
+
+// Pastes files/folders from the client-side clipboard into a target folder.
+// mode 'copy' duplicates them; mode 'move' relocates them and tidies up the source folder.
+app.post('/api/local/paste', express.json(), async (req, res) => {
+    const { ids, targetId, mode } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0 || targetId == null) {
+        return res.status(400).json({ error: 'ids and targetId are required' });
+    }
+    if (mode !== 'copy' && mode !== 'move') return res.status(400).json({ error: 'mode must be copy or move' });
+
+    const localDir = path.join(__dirname, 'local');
+    const resolveId = (id) => {
+        if (id === '0' || id === '') return localDir;
+        const safeId = path.normalize(id).replace(/^(\.\.(\/|\\|$))+/, '');
+        return path.join(localDir, safeId);
+    };
+    const isInside = (p, dir) => p === dir || p.startsWith(dir + path.sep);
+
+    const targetDir = resolveId(String(targetId));
+    if (!isInside(targetDir, localDir)) return res.status(403).json({ error: 'Access denied' });
+    if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
+        return res.status(404).json({ error: 'Target folder not found' });
+    }
+
+    let done = 0, skipped = 0;
+    const errors = [];
+    for (const id of ids) {
+        const srcPath = resolveId(String(id));
+        const name = path.basename(srcPath);
+        try {
+            if (srcPath === localDir || !isInside(srcPath, localDir)) throw new Error('Access denied');
+            if (!fs.existsSync(srcPath)) throw new Error('Not found');
+            const isDir = fs.statSync(srcPath).isDirectory();
+
+            if (isDir && isInside(targetDir, srcPath)) throw new Error('Cannot paste a folder into itself');
+            // Moving something into the folder it already lives in is a no-op
+            if (mode === 'move' && path.dirname(srcPath) === targetDir) { skipped++; continue; }
+
+            const destPath = path.join(targetDir, uniqueNameIn(targetDir, name, isDir));
+            if (mode === 'copy') {
+                await fs.promises.cp(srcPath, destPath, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
+            } else {
+                try {
+                    await fs.promises.rename(srcPath, destPath);
+                } catch (e) {
+                    if (e.code !== 'EXDEV') throw e;
+                    // Different drive/volume — fall back to copy then delete
+                    await fs.promises.cp(srcPath, destPath, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
+                    await fs.promises.rm(srcPath, { recursive: true, force: true });
+                }
+            }
+            done++;
+        } catch (e) {
+            errors.push(`${name}: ${e.message}`);
+        }
+    }
+
+    terminalLog(`[PASTE] ${mode} ${done} item(s) into "${path.relative(localDir, targetDir) || '/'}"${skipped ? `, ${skipped} skipped` : ''}${errors.length ? `, ${errors.length} failed` : ''}`);
+    res.json({ success: errors.length === 0, done, skipped, failed: errors.length, errors });
 });
 
 app.post('/api/local/rename-folder', express.json(), async (req, res) => {

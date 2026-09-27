@@ -1311,6 +1311,67 @@ async function submitVAMove() {
     }
 }
 
+// Local-library file clipboard: { mode: 'copy' | 'move', items: [{ id, title }] }.
+// Filled by Copy/Move in an item's menu, emptied by a Move paste.
+let fileClipboard = null;
+
+function clipFiles(index, mode, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
+    const item = currentBrowserItems[index];
+    if (!item) return;
+
+    // In photo mode, copying a selected photo takes the whole visible selection with it
+    let items = [item];
+    if (currentBrowserMode === 'photo' && selectedPhotos.has(item.uri)) {
+        items = currentBrowserItems.filter(i => i.uri && selectedPhotos.has(i.uri));
+    }
+
+    fileClipboard = { mode, items: items.map(i => ({ id: i.id, title: i.title })) };
+    document.querySelectorAll('.paste-into-item').forEach(el => el.style.display = '');
+
+    const what = items.length === 1 ? `"${items[0].title}"` : `${items.length} items`;
+    showToast(`${mode === 'copy' ? 'Copied' : 'Ready to move'} ${what} — open a folder's menu to paste`, 'success', 3000);
+}
+
+// targetId null = paste into the folder currently being viewed
+async function pasteFiles(targetId, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    if (!fileClipboard) return;
+
+    if (targetId == null) targetId = browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0';
+    const { mode, items } = fileClipboard;
+
+    try {
+        const res = await fetch('/api/local/paste', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: items.map(i => i.id), targetId, mode })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Paste failed');
+
+        if (mode === 'move') {
+            fileClipboard = null;
+            document.querySelectorAll('.paste-into-item').forEach(el => el.style.display = 'none');
+        }
+
+        const parts = [`${data.done} ${mode === 'copy' ? 'copied' : 'moved'}`];
+        if (data.skipped) parts.push(`${data.skipped} already there`);
+        if (data.failed) parts.push(`${data.failed} failed`);
+        showToast(parts.join(', '), data.failed ? 'error' : 'success', data.failed ? 6000 : 3000);
+        if (data.failed) console.warn('[PASTE] Failures:', data.errors);
+
+        const lastFolder = browsePath[browsePath.length - 1];
+        if (lastFolder) await browse(selectedServerUdn, lastFolder.id);
+    } catch (err) {
+        console.error('[PASTE] Error:', err);
+        showToast(`Paste failed: ${err.message}`);
+    }
+}
+
 async function deleteTrack(index, event) {
     if (event) event.stopPropagation();
 
@@ -2260,6 +2321,32 @@ function renderBrowser(items) {
                                         <path d="M8 14h.01M12 14h.01M16 14h.01"/>
                                     </svg>
                                     Place in Date Folder
+                                </button>
+                                ` : ''}
+                                <button class="dropdown-item" onclick="clipFiles(${index}, 'copy', event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                    </svg>
+                                    Copy
+                                </button>
+                                <button class="dropdown-item" onclick="clipFiles(${index}, 'move', event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <circle cx="6" cy="6" r="3"></circle>
+                                        <circle cx="6" cy="18" r="3"></circle>
+                                        <line x1="20" y1="4" x2="8.12" y2="15.88"></line>
+                                        <line x1="14.47" y1="14.48" x2="20" y2="20"></line>
+                                        <line x1="8.12" y1="8.12" x2="12" y2="12"></line>
+                                    </svg>
+                                    Move
+                                </button>
+                                ${isContainer ? `
+                                <button class="dropdown-item paste-into-item" style="${fileClipboard ? '' : 'display: none;'}" onclick="pasteFiles('${escJs(item.id)}', event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+                                        <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+                                    </svg>
+                                    Paste Into
                                 </button>
                                 ` : ''}
                                 <button class="dropdown-item" style="color: var(--accent);" onclick="deleteTrack(${index}, event)">
@@ -5277,6 +5364,16 @@ function toggleBrowserMenu(event) {
     if (event) event.stopPropagation();
     const dropdown = document.getElementById('browser-menu-dropdown');
     if (dropdown) {
+        const pasteBtn = document.getElementById('btn-paste-here');
+        if (pasteBtn) {
+            const canPaste = !!fileClipboard && selectedServerUdn === LOCAL_SERVER_UDN;
+            pasteBtn.style.display = canPaste ? '' : 'none';
+            if (canPaste) {
+                const n = fileClipboard.items.length;
+                document.getElementById('btn-paste-here-label').textContent =
+                    `${fileClipboard.mode === 'copy' ? 'Paste' : 'Move'} ${n === 1 ? `"${fileClipboard.items[0].title}"` : `${n} items`} Here`;
+            }
+        }
         dropdown.classList.toggle('active');
     }
 }
@@ -6654,6 +6751,7 @@ async function moveFolderToTagsLocation(index, event) {
         if (data.skipped) parts.push(`${data.skipped} already correct`);
         if (data.duplicatesRemoved) parts.push(`${data.duplicatesRemoved} duplicates removed`);
         if (data.failed) parts.push(`${data.failed} failed`);
+        if (data.folderRemoved) parts.push('leftover folder removed');
         showToast(`Reimported "${item.title}": ${parts.join(', ')}`, data.failed ? 'error' : 'success', 4000);
         if (data.failed && data.errors?.length) console.warn('[Reimport] Failures:', data.errors);
 
