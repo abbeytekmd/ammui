@@ -207,7 +207,7 @@ let screensaverConfig = { serverUdn: null, objectId: null };
 const IDLE_TIMEOUT_MS = 60000; // 1 minute
 let lastReportedTrackKey = null;
 
-let manualRotations = {}; // Client-side cache of saved photo rotations
+let manualRotations = {}; // Client-side cache of saved photo rotations, by item.key (server name + path)
 
 let browserViewMode = localStorage.getItem('browserViewMode') || 'list';
 let selectedPhotos = new Set(); // URIs of selected photos for batch operations
@@ -1495,6 +1495,44 @@ async function addAllToPlaylist() {
     }
 }
 
+// Clears the selected renderer's playlist, queues the tracks in order and starts the first one.
+// Callers hold window._isProcessingPlayAction.
+async function replacePlaylistAndPlay(tracks) {
+    await clearPlaylist();
+
+    let firstTrackId = null;
+    for (let i = 0; i < tracks.length; i++) {
+        const track = tracks[i];
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                uri: track.uri,
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                duration: track.duration,
+                protocolInfo: track.protocolInfo,
+                albumArtUrl: track.albumArtUrl
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || `Failed to add track ${i + 1}`);
+        }
+
+        const data = await response.json();
+        if (i === 0) firstTrackId = data.newId;
+    }
+
+    await fetchPlaylist(selectedRendererUdn);
+
+    if (firstTrackId) {
+        await playPlaylistItem(firstTrackId, false, true);
+    }
+}
+
 async function playAll() {
     // In Videos mode, videos are the things we cast/queue; everywhere else they're excluded.
     const inVideoMode = currentBrowserMode === 'video';
@@ -1538,39 +1576,7 @@ async function playAll() {
     btn.textContent = 'Preparing...';
 
     try {
-        await clearPlaylist();
-
-        let firstTrackId = null;
-        for (let i = 0; i < tracks.length; i++) {
-            const track = tracks[i];
-            const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    uri: track.uri,
-                    title: track.title,
-                    artist: track.artist,
-                    album: track.album,
-                    duration: track.duration,
-                    protocolInfo: track.protocolInfo,
-                    albumArtUrl: track.albumArtUrl
-                })
-            });
-
-            if (!response.ok) {
-                const errData = await response.json();
-                throw new Error(errData.error || `Failed to add track ${i + 1}`);
-            }
-
-            const data = await response.json();
-            if (i === 0) firstTrackId = data.newId;
-        }
-
-        await fetchPlaylist(selectedRendererUdn);
-
-        if (firstTrackId) {
-            await playPlaylistItem(firstTrackId, false, true);
-        }
+        await replacePlaylistAndPlay(tracks);
 
         // On mobile, switch to playlist view
         if (window.innerWidth <= 800) {
@@ -1834,6 +1840,148 @@ async function executeBrowserFind() {
     }
 }
 
+// ─── Voice commands ──────────────────────────────────────────────────────────
+// The mic button listens for "play <song or album> by <artist>", "queue ...", or a playback
+// control ("stop", "next", "volume 30"). The server works out which (lib/voice-command.js) and
+// finds any music in the library index; this acts on it for the selected renderer.
+
+const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
+let voiceRecognition = null;
+
+function toggleVoiceCommand() {
+    if (voiceRecognition) {
+        voiceRecognition.abort();
+        return;
+    }
+    if (!window.isSecureContext) {
+        const secureUrl = secureAppUrl();
+        if (!secureUrl) {
+            showToast('Voice commands need the page opened over HTTPS - browsers block the microphone on plain http:// addresses.', 'error', 8000);
+        } else if (confirm(`Browsers only allow the microphone on secure pages.
+
+Switch to ${secureUrl} ?`)) {
+            window.location.href = secureUrl;
+        }
+        return;
+    }
+    if (!selectedServerUdn) {
+        showToast('Select a media server first.');
+        return;
+    }
+    if (!selectedRendererUdn) {
+        alert('Please select a Renderer on the left first!');
+        return;
+    }
+
+    const btn = document.getElementById('btn-voice');
+    const rec = new SpeechRecognitionImpl();
+    rec.lang = navigator.language || 'en-GB';
+    rec.interimResults = false;
+    rec.maxAlternatives = 3;
+
+    rec.onresult = (e) => runVoiceCommand(Array.from(e.results[0]).map(alt => alt.transcript));
+    rec.onerror = (e) => {
+        if (e.error === 'aborted') return; // the user pressed the button again
+        if (e.error === 'no-speech') showToast("Didn't catch that.", 'info', 2500);
+        else if (e.error === 'not-allowed' || e.error === 'service-not-allowed') showToast('Microphone access was blocked for this page.');
+        else showToast(`Voice recognition error: ${e.error}`);
+    };
+    rec.onend = () => {
+        voiceRecognition = null;
+        btn?.classList.remove('listening');
+    };
+
+    voiceRecognition = rec;
+    btn?.classList.add('listening');
+    showToast('Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "stop", "volume 30"', 'info', 4000);
+    rec.start();
+}
+
+// Adds tracks to the end of the selected renderer's playlist without interrupting what's playing.
+async function appendTracksToPlaylist(tracks) {
+    for (const track of tracks) {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                uri: track.uri,
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                duration: track.duration,
+                protocolInfo: track.protocolInfo,
+                albumArtUrl: track.albumArtUrl
+            })
+        });
+        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to add track');
+    }
+    await fetchPlaylist(selectedRendererUdn);
+}
+
+// Plays the track `step` places from the current one in the playlist (1 = next, -1 = previous).
+async function skipTrack(step) {
+    const index = currentPlaylistItems.findIndex(item => item.id == currentTrackId);
+    const target = currentPlaylistItems[index + step];
+    if (index < 0 || !target) {
+        showToast(step > 0 ? 'No next track in the playlist.' : 'Already at the first track.', 'info', 2500);
+        return;
+    }
+    await playPlaylistItem(target.id, true, true);
+}
+
+async function runVoiceControl(cmd) {
+    switch (cmd.action) {
+        case 'stop': return transportAction('stop');
+        case 'pause': return transportAction('pause');
+        case 'resume': return transportAction('play');
+        case 'next': return skipTrack(1);
+        case 'previous': return skipTrack(-1);
+        case 'volume': {
+            if (cmd.volume !== undefined) updateVolume(cmd.volume);
+            else adjustVolume(cmd.delta);
+            const slider = document.getElementById('volume-slider');
+            if (slider) showToast(`Volume ${slider.value}%`, 'success', 1500);
+            return;
+        }
+    }
+}
+
+// Tries each of the recogniser's guesses in turn and acts on the first one that makes sense.
+async function runVoiceCommand(transcripts) {
+    if (window._isProcessingPlayAction) return;
+    window._isProcessingPlayAction = true;
+
+    let lastError = 'No match found.';
+    try {
+        for (const text of transcripts) {
+            const res = await fetch(`/api/voice/${encodeURIComponent(selectedServerUdn)}/resolve?q=${encodeURIComponent(text)}`);
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) {
+                lastError = data.error || 'Voice search failed.';
+                continue;
+            }
+
+            if (!data.tracks) {
+                await runVoiceControl(data);
+            } else if (data.action === 'queue') {
+                await appendTracksToPlaylist(data.tracks);
+                showToast(`Queued ${data.label}${data.tracks.length > 1 ? ` (${data.tracks.length} tracks)` : ''}`, 'success', 3000);
+            } else {
+                showToast(`Playing ${data.label}`, 'success', 3000);
+                await replacePlaylistAndPlay(data.tracks);
+                if (window.innerWidth <= 800) switchView('playlist');
+            }
+            return;
+        }
+        showToast(`"${transcripts[0]}": ${lastError}`, 'error', 5000);
+    } catch (err) {
+        console.error('Voice command error:', err);
+        showToast(`Voice command failed: ${err.message}`);
+    } finally {
+        window._isProcessingPlayAction = false;
+    }
+}
+
 function updateBrowserControls(items) {
     const tracks = items.filter(item => item.type === 'item' && !isImageItem(item) && !isVideoItem(item));
     const images = items.filter(item => isImageItem(item));
@@ -1911,6 +2059,9 @@ function updateBrowserControls(items) {
 
     const btnPlayTag = document.getElementById('btn-play-tag');
     if (btnPlayTag) btnPlayTag.style.display = (inPhotoMode || inVideoMode) ? 'none' : '';
+
+    const btnVoice = document.getElementById('btn-voice');
+    if (btnVoice) btnVoice.style.display = (inPhotoMode || inVideoMode || !SpeechRecognitionImpl) ? 'none' : '';
 
     // Show/hide the entire menu button if no actions available
     const menuBtn = document.getElementById('btn-browser-menu');
@@ -2100,9 +2251,10 @@ function renderBrowser(items) {
         if ((isImage || isVideo) && thumbUrl && thumbUrl.includes('/local-files/')) {
             thumbUrl = `/api/thumb?w=400&uri=${encodeURIComponent(thumbUrl)}`;
         }
+        thumbUrl = mediaUrl(thumbUrl);
         if (thumbUrl) {
             const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-            const rot = isImage ? (manualRotations[item.uri] || 0) : 0;
+            const rot = isImage ? (manualRotations[item.key || item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
             // Folder art is a best-effort lookup (cover file or embedded tag on the first
             // track) — fall back to the plain folder icon (and the compact box size)
@@ -2985,7 +3137,7 @@ function syncLocalPlayback(status) {
             } catch (e) {}
             return currentTrack.uri;
         })();
-        video.src = isVideo ? browserPlayableVideoUrl(resolvedUri) : resolvedUri;
+        video.src = mediaUrl(isVideo ? browserPlayableVideoUrl(resolvedUri) : resolvedUri);
         video.setAttribute('data-track-id', status.trackId);
         video.setAttribute('data-is-local-player', 'true');
 
@@ -3259,7 +3411,7 @@ function showPlayerArt(url) {
                 if (containers[idx]) containers[idx].classList.remove('visible');
             }
         };
-        img.src = url;
+        img.src = mediaUrl(url);
     });
 
     // Directly sync the card UI
@@ -3284,6 +3436,19 @@ function hideAllPlayerArt() {
 // Local library videos are played through the server's /api/video/playable, which hands
 // back the original file when the browser can decode it and an H.264 transcode when it
 // can't (e.g. HEVC phone videos, which otherwise play as sound over a black picture).
+// On an https:// page the browser won't load plain http:// media, and DLNA servers only speak
+// http. Our own library files are served by this app on both, so they load same-origin; anything
+// else streams through the server.
+function mediaUrl(url) {
+    if (!url || window.location.protocol !== 'https:' || !/^http:\/\//i.test(url)) return url;
+    try {
+        const u = new URL(url);
+        const isThisServer = u.hostname === window.location.hostname || ['127.0.0.1', 'localhost', '::1'].includes(u.hostname);
+        if (isThisServer && u.pathname.startsWith('/local-files/')) return u.pathname + u.search;
+    } catch (e) { }
+    return `/api/media-proxy?url=${encodeURIComponent(url)}`;
+}
+
 function browserPlayableVideoUrl(uri) {
     return uri && uri.includes('/local-files/') ? `/api/video/playable?uri=${encodeURIComponent(uri)}` : uri;
 }
@@ -3304,7 +3469,7 @@ function openVideoModal(url, title = 'Video Player') {
 
         if (iframe) { iframe.src = ''; iframe.style.display = 'none'; }
         video.style.display = '';
-        video.src = url;
+        video.src = mediaUrl(url);
         video.volume = localVideoVolume;
         video.onended = closeVideoModal;
         // A file whose video codec the browser can't decode (e.g. HEVC/AV1) still plays
@@ -4387,9 +4552,9 @@ function updateCardNowPlaying() {
                 // Note: comparison with .src might fail if currentArtworkUrl is relative, 
                 // but for our proxy URLs it's usually stable enough.
                 const currentSrc = cardAlbumArt.getAttribute('src');
-                if (currentSrc !== currentArtworkUrl) {
+                if (currentSrc !== mediaUrl(currentArtworkUrl)) {
                     console.log(`[ART-SYNC] Updating card art src to: ${currentArtworkUrl}`);
-                    cardAlbumArt.src = currentArtworkUrl;
+                    cardAlbumArt.src = mediaUrl(currentArtworkUrl);
                 }
                 cardAlbumArt.style.display = 'block';
                 if (cardDefaultIcon) cardDefaultIcon.style.display = 'none';
@@ -4847,7 +5012,7 @@ function renderDeviceCard(device, forceHighlight = false, asServer = false, isSt
                 ${isStatic && !asServer ? `<img id="card-album-art" onclick="event.stopPropagation(); startMusicSlideshow()" style="display: none; width: 100%; height: 100%; object-fit: cover; border-radius: inherit; cursor: pointer;" alt="">` : ''}
                 <div id="${isStatic ? (asServer ? 'card-server-icon' : 'card-default-icon') : ''}" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
                     ${device.iconUrl ?
-            `<img src="${device.iconUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 2px;" alt="">` :
+            `<img src="${mediaUrl(device.iconUrl)}" style="width: 100%; height: 100%; object-fit: contain; padding: 2px;" alt="">` :
             (asServer ? `
                             <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
                                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -5237,6 +5402,7 @@ function updateHomeButtons() {
 // Initial fetch
 async function init() {
     await fetchGeneralSettings();
+    loadHttpsInfo();
     await fetchS3Settings();
 
     // Seed client-side rotation cache from server DB
@@ -6948,7 +7114,7 @@ async function rotatePhotoFromBrowser(index) {
     const item = currentBrowserItems[index];
     if (!item || !item.uri) return;
 
-    const current = manualRotations[item.uri] || 0;
+    const current = manualRotations[item.key || item.uri] || 0;
     const next = (current + 90) % 360;
 
     // Update thumbnail in DOM immediately
@@ -6965,7 +7131,7 @@ async function rotatePhotoFromBrowser(index) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: item.uri, rotation: next })
         });
-        manualRotations[item.uri] = next;
+        manualRotations[item.key || item.uri] = next;
     } catch (e) {
         showToast('Rotate failed: ' + e.message, 'error', 3000);
     }
@@ -7559,7 +7725,7 @@ async function submitArtSearch() {
             row.onmouseleave = () => row.style.background = '';
 
             const img = document.createElement('img');
-            img.src = candidate.thumb;
+            img.src = mediaUrl(candidate.thumb);
             img.style.cssText = 'width:56px;height:56px;object-fit:cover;border-radius:4px;flex-shrink:0;background:var(--card-bg);';
             img.onerror = () => { img.style.display = 'none'; };
 
@@ -7913,6 +8079,39 @@ async function importTags(event) {
         console.error('Failed to import tags:', err);
         showToast('Failed to import tags: ' + err.message);
     }
+}
+
+// The server also listens on HTTPS (needed for the microphone); Settings lists its addresses.
+let httpsInfo = null;
+
+async function loadHttpsInfo() {
+    try {
+        httpsInfo = await (await fetch('/api/https/info')).json();
+    } catch (err) {
+        console.error('Failed to fetch HTTPS info:', err);
+    }
+    renderHttpsSettings();
+}
+
+// This page's address over HTTPS, or null if the server isn't running HTTPS.
+function secureAppUrl() {
+    if (!httpsInfo?.available) return null;
+    return `https://${window.location.hostname}:${httpsInfo.httpsPort}${window.location.pathname}`;
+}
+
+function renderHttpsSettings() {
+    const el = document.getElementById('https-urls');
+    if (!el) return;
+    if (!httpsInfo?.available) {
+        el.textContent = "HTTPS isn't running - check the server log.";
+        return;
+    }
+    const status = window.location.protocol === 'https:'
+        ? '<p class="settings-hint">This page is using HTTPS.</p>'
+        : '';
+    el.innerHTML = status + httpsInfo.urls
+        .map(u => `<div><a href="${escapeHtml(u)}">${escapeHtml(u)}</a></div>`)
+        .join('');
 }
 
 async function fetchGeneralSettings() {

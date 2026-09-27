@@ -15,6 +15,8 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
 * Watch a track's music video on YouTube, right from the track list (needs a YouTube API key - see [Music Videos](#music-videos)).
+* Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop" (see [Voice Commands](#voice-commands)).
+* Runs over HTTPS with its own certificate, so browser features such as the microphone work from any device on your network (see [Secure Access (HTTPS)](#secure-access-https)).
 
 ## Local Media Server
 
@@ -22,7 +24,7 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
 * View server and browser logs from the menu (Logs), filtered by type (YOUTUBE, DEBUG, DEVICES, UPLOAD, and so on) to help track down problems.
 
-I have this running on a headless linux box and I run the UI from a Samsung tablet, my work PC, a Raspberry PI 5 connected to a 15" display and as a centrepiece to the house, I bought an old DELL All-In-One (Optiplex 3011) off ebay for 60 quid with Win10/Chrome.
+I have this running on a headless linux box and I run the UI variously from a Samsung tablet, my work PC, a Raspberry PI 5 connected to a 15" display and, as a centrepiece in our house, a DELL All-In-One Optiplex 3011, bought from ebay for 60 quid.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
@@ -58,6 +60,63 @@ Watch a track's music video on YouTube, right from the track list. When the vide
   * **No star** - anything else, such as a lyric video or a live cut. It still plays.
 * If a video is missing or wrong, open the track's File Information and choose "Find video on YouTube" to pick from the search results.
 * The optional `yt-dlp` tool and ffmpeg let videos with embedding disabled play locally (see Getting Started).
+
+## Voice Commands
+
+Press the glowing **Voice** button at the start of the music browser's toolbar and say what you want. Music plays on the currently selected player, from the currently selected media server.
+
+| Say | What happens |
+|---|---|
+| "play Wonderwall by Oasis", or just "Wonderwall by Oasis" | Plays that track, replacing the playlist |
+| "play the album Rumours", "play Rumours album" | Plays the whole album in track order |
+| "play something by Queen", "play the band Oasis", "play Queen" | Plays up to 200 of the artist's tracks, shuffled |
+| "shuffle Folklore" | Plays the album shuffled |
+| "queue Wonderwall by Oasis", "add the album Rumours to the queue" | Adds to the end of the playlist without interrupting what's playing |
+| "stop", "pause", "resume" / "carry on" | Playback controls |
+| "next", "skip", "previous", "go back" | Moves through the playlist |
+| "louder", "quieter", "volume 30", "volume max" | Changes the volume |
+
+* A control word on its own is a command, but with "play" in front it's a search: "stop" stops the music, while "play Stop" finds a song called Stop.
+* If a song and an album have the same name, the song is played unless you say "album".
+* "play something by the Beatles" plays the song "Something" if the artist has one, and only otherwise plays a mix of their songs.
+* Matching allows for how speech recognition writes things, so "rumors" finds "Rumours", "and" matches "&", "AC DC" finds "AC/DC", and your pronunciation of an artist's name doesn't have to produce the exact spelling.
+
+### Requirements and privacy
+
+* The page must be opened over HTTPS, as browsers only allow the microphone on secure pages (see [Secure Access (HTTPS)](#secure-access-https)).
+* Works in Chrome, Edge and Safari. Firefox has no speech recognition, so the button is hidden there.
+* The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music happens entirely on your server using the library search index.
+
+## Secure Access (HTTPS)
+
+AMMUI serves the app over HTTPS on port **3443**, e.g. `https://192.168.0.2:3443/`. Opening the page over plain HTTP (port 3000) redirects there automatically.
+
+Port 3000 still runs plain HTTP in the background and must stay open. Players (DLNA, Sonos, AirPlay) and AMMUI's own DLNA server fetch music, album art and device descriptions from it, and they can't use HTTPS with a self-made certificate. If the server machine has a firewall, allow both ports 3000 and 3443.
+
+### The certificate
+
+There's no public certificate for an address on your home network, so AMMUI makes its own on first start and keeps it in the `certs` folder next to the database:
+
+* `ca.crt` / `ca.key`: AMMUI's own certificate authority, valid for 10 years.
+* `server.crt` / `server.key`: the certificate the server uses. It covers `localhost`, the machine's name, `name.local` and every network address of the machine. It is renewed automatically at startup when an address changes or it's close to expiring.
+
+The `certs` folder holds private keys, so it isn't committed to git. Delete it and restart to start over with a new certificate.
+
+### Getting rid of the browser warning
+
+Until a device trusts AMMUI's certificate, browsers show a "connection is not private" warning. You can click through it (Advanced → Proceed) and everything, including voice commands, works. To remove the warning for good, go to **Settings → General → Secure Access (HTTPS)**, press **Download Certificate** on each device, and install it as a trusted root certificate:
+
+* **Windows**: open the downloaded file → Install Certificate → Local Machine → "Place all certificates in the following store" → **Trusted Root Certification Authorities**. Restart the browser.
+* **Android**: Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**, and choose the downloaded file.
+* **iPhone / iPad**: open the download in Safari and allow the profile, install it under Settings → General → VPN & Device Management, then turn it on under Settings → General → About → **Certificate Trust Settings**.
+* **macOS**: open the file in Keychain Access, then double-click "AMMUI Local CA" and set **Trust → When using this certificate** to Always Trust.
+
+Each device only needs this once: when the server certificate is renewed it's signed by the same authority, so it stays trusted.
+
+### Notes
+
+* A browser keeps each address's settings separately, so the first time you open the HTTPS address you'll need to choose your player and server again.
+* On an HTTPS page, music and photos from other media servers (which only speak HTTP) are passed through AMMUI, so they still play and display.
 
 ## Managing your music library
 
@@ -190,14 +249,16 @@ This describes what happens behind the Video button (see [Music Videos](#music-v
 
 2.  Open your browser and navigate to:
     ```
-    http://localhost:3000
+    https://localhost:3443
     ```
+    From another device use the server's address instead, e.g. `https://192.168.0.2:3443`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost:3000` also works and redirects to the HTTPS address.
 
 ## ⚙️ Built With
 
 *   **Node.js & Express** - Backend server
 *   **node-ssdp** - UPnP/DLNA discovery
 *   **sonos** - Sonos device support
+*   **node-forge** - HTTPS certificate generation
 *   **Vanilla JS & CSS3** - Frontend interface
 
 ## Tested with

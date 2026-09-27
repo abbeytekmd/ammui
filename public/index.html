@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=20">
+    <link rel="stylesheet" href="style.css?v=21">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -235,6 +235,16 @@
                     </div>
                     <div class="header-controls">
                         <div class="browser-control-group">
+                            <button id="btn-voice" onclick="toggleVoiceCommand()" class="btn-control btn-action-lg"
+                                title="Voice commands: &quot;play &lt;song or album&gt; by &lt;artist&gt;&quot;, &quot;queue ...&quot;, &quot;next&quot;, &quot;pause&quot;, &quot;stop&quot;, &quot;volume 30&quot;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2.25" stroke-linecap="round">
+                                    <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                                    <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                                    <line x1="12" y1="18" x2="12" y2="22"></line>
+                                </svg>
+                                <span class="btn-label" data-mobile="Voice">Voice</span>
+                            </button>
                             <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
                                 class="btn-control disabled btn-play-green btn-action-lg"
                                 title="Clear and play all tracks">
@@ -547,6 +557,22 @@
                                 onchange="saveGeneralSettings()">
                             <p class="settings-hint">This name will appear in the UI and as the DLNA server name.
                             </p>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Secure Access (HTTPS)</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Voice commands only work when the app is opened over HTTPS.
+                                Use one of these addresses:</p>
+                            <div id="https-urls" class="settings-hint">Loading...</div>
+                            <p class="settings-hint">The certificate is made by this app, so browsers warn that
+                                the connection isn't private until you trust it. To remove the warning for good,
+                                download the certificate below on each phone or PC and install it as a trusted
+                                root certificate.</p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <a class="btn-control btn-seek" href="/api/https/ca.crt" download="ammui-ca.crt"
+                                    style="text-decoration:none;">Download Certificate</a>
+                            </div>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -1463,8 +1489,8 @@
         </div>
     </div>
 
-    <script src="app.js?v=20"></script>
-    <script src="slideshow.js?v=1"></script>
+    <script src="app.js?v=23"></script>
+    <script src="slideshow.js?v=3"></script>
 </body>
 
 </html>

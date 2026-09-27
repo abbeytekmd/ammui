@@ -825,6 +825,45 @@ p.subtitle {
     transition: none;
 }
 
+/* Voice: the one filled, glowing button in the toolbar, so it's the first thing you see.
+   A slow halo "breathes" while idle; it turns red and pulses fast while listening. */
+#btn-voice {
+    position: relative;
+    color: #fff;
+    background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 55%, #6366f1 100%);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-shadow: 0 4px 14px rgba(168, 85, 247, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+    animation: voice-breathe 2.8s ease-in-out infinite;
+}
+
+#btn-voice:hover {
+    color: #fff;
+    background: linear-gradient(135deg, #f472b6 0%, #a78bfa 55%, #818cf8 100%);
+    border-color: rgba(255, 255, 255, 0.4);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 22px rgba(168, 85, 247, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+#btn-voice.listening {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    border-color: rgba(255, 255, 255, 0.35);
+    animation: voice-pulse 1s ease-out infinite;
+}
+
+@keyframes voice-breathe {
+    0%, 100% { box-shadow: 0 4px 14px rgba(168, 85, 247, 0.45), 0 0 0 0 rgba(236, 72, 153, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+    50% { box-shadow: 0 4px 18px rgba(168, 85, 247, 0.6), 0 0 0 7px rgba(236, 72, 153, 0), inset 0 1px 0 rgba(255, 255, 255, 0.25); }
+}
+
+@keyframes voice-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+    100% { box-shadow: 0 0 0 12px rgba(239, 68, 68, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #btn-voice, #btn-voice.listening { animation: none; }
+}
+
 .play-btn,
 .queue-btn {
     opacity: 0;
@@ -5501,7 +5540,8 @@ input:checked+.slider:before {
 
     #btn-play-all .btn-label[data-mobile],
     #btn-add-all .btn-label[data-mobile],
-    #btn-play-tag .btn-label[data-mobile] {
+    #btn-play-tag .btn-label[data-mobile],
+    #btn-voice .btn-label[data-mobile] {
         display: inline !important;
         font-size: 0.85rem !important;
     }
@@ -5513,7 +5553,8 @@ input:checked+.slider:before {
 
     #btn-play-all .btn-label[data-mobile]::after,
     #btn-add-all .btn-label[data-mobile]::after,
-    #btn-play-tag .btn-label[data-mobile]::after {
+    #btn-play-tag .btn-label[data-mobile]::after,
+    #btn-voice .btn-label[data-mobile]::after {
         display: none !important;
     }
 
@@ -5819,7 +5860,8 @@ input:checked+.slider:before {
 
     #btn-play-all .btn-label,
     #btn-add-all .btn-label,
-    #btn-play-tag .btn-label {
+    #btn-play-tag .btn-label,
+    #btn-voice .btn-label {
         display: inline;
         margin-left: 0.25rem;
     }

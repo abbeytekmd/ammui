@@ -159,7 +159,8 @@ class Slideshow {
                     longitude: item.longitude,
                     camera: item.camera || '',
                     tags: item.tags || [],
-                    manualRotation: manualRotations[originalUrl] || 0,
+                    key: item.key,
+                    manualRotation: manualRotations[item.key || originalUrl] || 0,
                     folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                     folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
                 };
@@ -285,7 +286,8 @@ class Slideshow {
                 longitude: item.longitude,
                 camera: item.camera || '',
                 tags: item.tags || [],
-                manualRotation: manualRotations[originalUrl] || 0,
+                key: item.key,
+                manualRotation: manualRotations[item.key || originalUrl] || 0,
                 folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                 folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
             };
@@ -335,12 +337,12 @@ class Slideshow {
                 if (this.bg) {
                     this.bg.style.opacity = 0;
                     setTimeout(() => {
-                        this.bg.style.backgroundImage = `url("${data.url.replace(/"/g, '%22')}")`;
+                        this.bg.style.backgroundImage = `url("${mediaUrl(data.url).replace(/"/g, '%22')}")`;
                         this.bg.style.opacity = 1;
                     }, 500);
                 }
 
-                this.img.src = data.url;
+                this.img.src = mediaUrl(data.url);
                 this.currentPhoto = data.url;
                 this.originalUrl = data.originalUrl || data.url;
                 this.currentPhotoData = data;
@@ -394,7 +396,7 @@ class Slideshow {
         const preload = new Image();
         preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight);
         preload.onerror = () => doTransition(0, 1);
-        preload.src = data.url;
+        preload.src = mediaUrl(data.url);
     }
 
     updateInfoUI(data) {
@@ -620,7 +622,7 @@ class Slideshow {
                 body: JSON.stringify({ url: urlForSave, rotation: this.rotation })
             });
             // Update client-side cache
-            manualRotations[urlForSave] = this.rotation;
+            manualRotations[this.currentPhotoData?.key || urlForSave] = this.rotation;
         } catch (e) {
             console.error('Rotate save failed:', e);
         }

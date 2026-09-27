@@ -29,6 +29,7 @@
     "image-size": "^2.0.2",
     "multer": "^2.0.2",
     "music-metadata": "^11.11.1",
+    "node-forge": "^1.4.0",
     "node-id3": "^0.2.9",
     "node-ssdp": "^4.0.1",
     "piexifjs": "^1.0.6",

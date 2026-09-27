@@ -13,6 +13,8 @@ coverage/
 .claude/
 local/
 cache/
+# HTTPS certificate authority and server keys (generated per machine)
+certs/
 
 # JSON settings and data
 devices.json

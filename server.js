@@ -11,6 +11,9 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
+import { resolveVoiceCommand, parseControlCommand } from './lib/voice-command.js';
+import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
+import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
 import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
@@ -28,9 +31,9 @@ import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
-    getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getUrisByTag,
+    getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted, normalizePhotoKey,
+    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted, migrateMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -41,7 +44,7 @@ import AirPlayManager from './lib/airplay-manager.js';
 import https from 'https';
 import crypto from 'crypto';
 import { exec, execFile, spawn } from 'child_process';
-import { PassThrough } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
 import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
@@ -77,6 +80,10 @@ process.on('unhandledRejection', (reason) => {
 
 const app = express();
 const port = 3000;
+// Same app over HTTPS, for browsers (the microphone needs a secure page). Renderers keep using
+// plain HTTP on `port`, since DLNA/Sonos/AirPlay devices can't fetch from a self-signed server.
+const httpsPort = 3443;
+const certsDir = path.join(baseDataDir, 'certs');
 
 // Ensure directories exist
 if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
@@ -88,6 +95,16 @@ for (const sub of ['music', 'pictures', 'videos']) {
     const dir = path.join(__dirname, 'local', sub);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
+
+// People always use the app over HTTPS: opening the page over plain HTTP redirects there.
+// HTTP itself stays open, because players (DLNA, Sonos, AirPlay) and the app's own DLNA server
+// fetch media, art and device descriptions from it and can't use a self-signed certificate.
+let httpsReady = false;
+app.use((req, res, next) => {
+    if (!httpsReady || req.secure || req.method !== 'GET' || (req.path !== '/' && req.path !== '/index.html')) return next();
+    const host = (req.headers.host || 'localhost').replace(/:\d+$/, '');
+    res.redirect(302, `https://${host}:${httpsPort}${req.originalUrl}`);
+});
 
 const logsDir = path.join(baseDataDir, 'logs');
 if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
@@ -180,10 +197,18 @@ function loadSettings() {
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
         settings.screensaver = { serverUdn: SERVER_UDN, objectId: 'pictures', pathName: 'pictures' };
     }
+    loadMediaKeyedSettings();
+    console.log('Loaded settings from DB.');
+}
+
+// Rotations, deleted markers and tags are keyed by mediaKey() ("<server name>/<path>").
+// Bring any older/unresolved keys up to date first, then load them.
+function loadMediaKeyedSettings() {
+    const changed = migrateMediaKeys();
+    if (changed) console.log(`[MEDIA-KEYS] Converted ${changed} saved entries to server name + path.`);
     settings.manualRotations = getAllPhotoRotations();
     settings.deletedPhotos = getAllDeletedPhotos();
     settings.fileTags = getAllFileTags();
-    console.log('Loaded settings from DB.');
 }
 
 function saveSettings() {
@@ -230,8 +255,22 @@ function findCaseInsensitivePath(parent, name) {
     return path.join(parent, name);
 }
 
+setLocalMediaServer({
+    name: () => `${settings.deviceName} Media Library`,
+    origin: () => `http://${getLocalIp()}:${port}`,
+    ports: [port, httpsPort],
+});
 loadDevices();
+for (const d of devices.values()) {
+    if (d.isServer && d.location) registerMediaOrigin(d.location, d.friendlyName, { weak: true });
+}
 loadSettings();
+// Browsing a server we couldn't place at startup may let more saved entries be converted.
+let mediaKeyRefreshTimer = null;
+onNewMediaServer(() => {
+    clearTimeout(mediaKeyRefreshTimer);
+    mediaKeyRefreshTimer = setTimeout(loadMediaKeyedSettings, 5000);
+});
 airplayManager = new AirPlayManager(devices, saveDevices);
 setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl });
 
@@ -913,6 +952,53 @@ app.get('/api/proxy-image', async (req, res) => {
     }
 });
 
+// On an https:// page the browser won't load plain http:// audio, video or images, and DLNA
+// servers only speak http, so the page streams those through here. Range requests are passed
+// on so seeking still works.
+app.get('/api/media-proxy', async (req, res) => {
+    const url = String(req.query.url || '');
+    if (!/^http:\/\//i.test(url)) return res.status(400).send('Invalid URL: must be http://');
+
+    const abort = new AbortController();
+    res.on('close', () => abort.abort());
+    try {
+        const upstream = await fetch(url, {
+            headers: req.headers.range ? { Range: req.headers.range } : {},
+            signal: abort.signal,
+        });
+        res.status(upstream.status);
+        for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag', 'cache-control']) {
+            const v = upstream.headers.get(h);
+            if (v) res.set(h, v);
+        }
+        if (!upstream.body) return res.end();
+        Readable.fromWeb(upstream.body).on('error', () => res.destroy()).pipe(res);
+    } catch (err) {
+        if (abort.signal.aborted) return;
+        console.warn(`[MEDIA-PROXY] Failed to fetch ${url}:`, err.cause?.code || err.message);
+        if (!res.headersSent) res.status(502).send('Failed to fetch media from remote device');
+    }
+});
+
+// Addresses for the Settings page, and the CA certificate a device installs to trust them.
+app.get('/api/https/info', (req, res) => {
+    const { dns, ips } = localHostNames();
+    const hosts = [...ips.filter(ip => ip !== '127.0.0.1'), ...dns.filter(h => h !== 'localhost')];
+    res.json({
+        httpsPort,
+        available: fs.existsSync(caCertificatePath(certsDir)),
+        urls: hosts.map(h => `https://${h}:${httpsPort}/`),
+    });
+});
+
+app.get('/api/https/ca.crt', (req, res) => {
+    const caPath = caCertificatePath(certsDir);
+    if (!fs.existsSync(caPath)) return res.status(404).send('HTTPS is not set up');
+    res.set('Content-Type', 'application/x-x509-ca-cert');
+    res.set('Content-Disposition', 'attachment; filename="ammui-ca.crt"');
+    res.sendFile(caPath);
+});
+
 // ---------------------------------------------------------------------------
 // Image thumbnail cache — the file browser was loading full-resolution photos
 // (often several MB / tens of megapixels) just to paint a 24px list icon or a
@@ -1301,10 +1387,37 @@ app.get('/api/library-index/:udn/search', async (req, res) => {
             await buildIndex(device, 'first search');
         }
         const { items, truncated } = searchLibraryIndex(udn, String(q), String(objectId));
+        for (const it of items) if (!it.key && it.uri) it.key = mediaKey(it.uri); // indexed before keys existed
         const meta = getLibraryIndexMeta(udn);
         res.json({ items, truncated, builtAt: meta?.built_at || null, itemCount: meta?.item_count || 0 });
     } catch (err) {
         console.error('Library index search failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Voice commands ("play X by Y"): finds the song, album or artist in the server's library index
+// and returns the tracks to play. The browser does the speech recognition and the playing.
+app.get('/api/voice/:udn/resolve', async (req, res) => {
+    const { udn } = req.params;
+    const q = String(req.query.q || '');
+    try {
+        // Playback controls ("stop", "next") don't need the library.
+        const control = parseControlCommand(q);
+        if (control) {
+            console.log(`[VOICE] "${q}" -> ${control.action}`);
+            return res.json(control);
+        }
+        if (!getLibraryIndexMeta(udn)) {
+            const device = findDeviceByUdn(udn);
+            if (!device) return res.status(404).json({ error: 'Media server not found' });
+            await buildIndex(device, 'first voice command');
+        }
+        const result = resolveVoiceCommand(udn, q);
+        console.log(`[VOICE] "${q}" -> ${result.error || `${result.action} ${result.kind}: ${result.label} (${result.tracks.length} tracks)`}`);
+        res.json(result);
+    } catch (err) {
+        console.error('Voice command failed:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
@@ -1912,8 +2025,11 @@ app.get('/api/settings/general', (req, res) => {
 app.post('/api/settings/general', express.json(), (req, res) => {
     const { deviceName } = req.body;
     if (deviceName) {
+        const oldLibraryName = `${settings.deviceName} Media Library`;
         settings.deviceName = deviceName;
         saveSettings();
+        renameMediaKeyServer(oldLibraryName, `${deviceName} Media Library`);
+        loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
     }
@@ -2549,9 +2665,9 @@ let slideshowDeleteVersion = 0;
 function removeFromScreensaverCache(url) {
     slideshowDeleteVersion++;
     if (!screensaverCache.images || screensaverCache.images.length === 0) return;
-    const key = normalizePhotoKey(url);
+    const key = mediaKey(url);
     const initialCount = screensaverCache.images.length;
-    screensaverCache.images = screensaverCache.images.filter(img => normalizePhotoKey(img.uri || img.res) !== key);
+    screensaverCache.images = screensaverCache.images.filter(img => mediaKey(img.uri || img.res) !== key);
     if (screensaverCache.images.length < initialCount) {
         console.log(`[SCREENSAVER] Removed deleted photo from cache. New count: ${screensaverCache.images.length}`);
     }
@@ -2580,7 +2696,7 @@ async function refreshScreensaverCache(device, objectId) {
             );
             if (!isImage) return false;
             const url = i.uri || i.res;
-            return !settings.deletedPhotos[normalizePhotoKey(url)];
+            return !settings.deletedPhotos[mediaKey(url)];
         });
 
         screensaverCache.images = images;
@@ -2671,7 +2787,7 @@ app.get('/api/slideshow/random', async (req, res) => {
             } else if (mode === 'favourites') {
                 imagesToUse = imagesToUse.filter(img => {
                     const url = img.uri || img.res;
-                    return settings.fileTags?.[url]?.includes('fav');
+                    return settings.fileTags?.[mediaKey(url)]?.includes('fav');
                 });
 
                 if (imagesToUse.length === 0) {
@@ -2743,7 +2859,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                         if (containers.length === 0 || Math.random() > 0.4) {
                             const candidate = images[randomInt(images.length)];
                             const url = candidate.uri || candidate.res;
-                            if (!settings.deletedPhotos[normalizePhotoKey(url)]) {
+                            if (!settings.deletedPhotos[mediaKey(url)]) {
                                 foundImage = candidate;
                                 foundImage.folderId = currentId;
                                 foundImage.folderTitle = currentTitle;
@@ -2815,8 +2931,9 @@ app.get('/api/slideshow/random', async (req, res) => {
                 title: foundImage.title,
                 date: date,
                 orientation: orientation,
-                manualRotation: (settings.manualRotations && settings.manualRotations[imgUrl]) || 0,
-                tags: settings.fileTags?.[imgUrl] || [],
+                key: mediaKey(imgUrl),
+                manualRotation: settings.manualRotations?.[mediaKey(imgUrl)] || 0,
+                tags: settings.fileTags?.[mediaKey(imgUrl)] || [],
                 location: foundImage._path || foundImage.location || '',
                 latitude: foundImage.lat,
                 longitude: foundImage.lon,
@@ -2858,7 +2975,7 @@ app.get('/api/slideshow/list', async (req, res) => {
 
     let images = screensaverCache.images.filter(img => {
         const url = img.uri || img.res;
-        return !settings.deletedPhotos[normalizePhotoKey(url)];
+        return !settings.deletedPhotos[mediaKey(url)];
     });
 
     if (mode === 'onThisDay') {
@@ -2885,7 +3002,7 @@ app.get('/api/slideshow/list', async (req, res) => {
     } else if (mode === 'favourites') {
         images = images.filter(img => {
             const url = img.uri || img.res;
-            return settings.fileTags?.[url]?.includes('fav');
+            return settings.fileTags?.[mediaKey(url)]?.includes('fav');
         });
         if (images.length === 0) {
             return res.status(404).json({ error: 'No favourite photos found' });
@@ -2894,10 +3011,10 @@ app.get('/api/slideshow/list', async (req, res) => {
 
     res.set('X-Deleted-Version', String(slideshowDeleteVersion));
     res.json(images.map(img => {
-        const url = img.uri || img.res;
-        const rot = (settings.manualRotations && settings.manualRotations[url]) || 0;
-        const tags = settings.fileTags?.[url] || [];
-        return { ...img, ...(rot ? { manualRotation: rot } : {}), tags };
+        const key = img.key || mediaKey(img.uri || img.res);
+        const rot = settings.manualRotations?.[key] || 0;
+        const tags = settings.fileTags?.[key] || [];
+        return { ...img, key, ...(rot ? { manualRotation: rot } : {}), tags };
     }));
 });
 
@@ -2915,7 +3032,7 @@ app.post('/api/slideshow/rotate', (req, res) => {
 
     // rotation should be 0, 90, 180, or 270
     setPhotoRotation(url, Number(rotation));
-    settings.manualRotations[url] = Number(rotation);
+    settings.manualRotations[mediaKey(url)] = Number(rotation);
 
     console.log(`[SCREENSAVER] Saved manual rotation for ${url}: ${rotation}`);
     res.json({ success: true, rotation });
@@ -2926,7 +3043,7 @@ app.post('/api/slideshow/delete', (req, res) => {
     if (!url) return res.status(400).json({ error: 'URL required' });
 
     markPhotoDeleted(url);
-    settings.deletedPhotos[normalizePhotoKey(url)] = true;
+    settings.deletedPhotos[mediaKey(url)] = true;
     removeFromScreensaverCache(url);
 
     console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
@@ -2937,39 +3054,35 @@ app.post('/api/slideshow/favourite', (req, res) => {
     const { url, favourite } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
 
+    const key = mediaKey(url);
     if (favourite) {
-        addFileTag(url, 'fav');
-        if (!settings.fileTags[url]) settings.fileTags[url] = [];
-        if (!settings.fileTags[url].includes('fav')) settings.fileTags[url].push('fav');
+        addFileTag(key, 'fav');
+        if (!settings.fileTags[key]) settings.fileTags[key] = [];
+        if (!settings.fileTags[key].includes('fav')) settings.fileTags[key].push('fav');
     } else {
-        removeFileTag(url, 'fav');
-        if (settings.fileTags[url]) settings.fileTags[url] = settings.fileTags[url].filter(t => t !== 'fav');
+        removeFileTag(key, 'fav');
+        if (settings.fileTags[key]) settings.fileTags[key] = settings.fileTags[key].filter(t => t !== 'fav');
     }
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
 });
 
+// Export entry for a saved key: files under /local-files/ become a path relative to the library
+// (so another instance can import them); anything else keeps a URL, as older exports did.
+function portableEntry(key) {
+    const parts = splitMediaKey(key);
+    if (parts && parts.path.startsWith('/local-files/')) {
+        return { type: 'local', path: decodeURIComponent(parts.path.slice('/local-files/'.length).split('?')[0]) };
+    }
+    return { type: 'remote', uri: mediaUrlFromKey(key) || key };
+}
+
 // Portable export: local-files favourites are stored as host/port-free relative paths so the
 // file can be imported into a different instance of this app; favourites pointing at another
 // DLNA server are kept as full URIs since the host there is part of their identity.
 app.get('/api/favourites/export', (req, res) => {
-    const uris = getUrisByTag('fav');
-    const favourites = [];
-
-    for (const uri of uris) {
-        try {
-            const u = new URL(uri);
-            if (u.pathname.startsWith('/local-files/')) {
-                favourites.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')) });
-            } else {
-                favourites.push({ type: 'remote', uri });
-            }
-        } catch (e) {
-            // Not a parseable absolute URL — treat as an already-relative local path
-            favourites.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, '') });
-        }
-    }
+    const favourites = getKeysByTag('fav').map(portableEntry);
 
     res.json({ version: 1, exportedAt: new Date().toISOString(), favourites });
 });
@@ -2980,11 +3093,7 @@ app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, r
 
     // Rehome local-files favourites onto this instance's own address, same logic the DLNA
     // browse handler uses so the resulting URIs match what the app will actually serve items as.
-    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
-    const requestHostname = rawHost.split(':')[0];
-    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
-    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
-    const baseUrl = `http://${requestHost}`;
+    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
 
     const localDir = path.join(__dirname, 'local');
     const picturesRoot = path.join(localDir, 'pictures');
@@ -3057,22 +3166,7 @@ app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, r
 // Portable export: same local-files-as-relative-path convention as favourites export, so
 // deleted (hidden-from-slideshow) markers can be copied to another instance of this app.
 app.get('/api/deleted/export', (req, res) => {
-    const uris = Object.keys(getAllDeletedPhotos());
-    const deleted = [];
-
-    for (const uri of uris) {
-        try {
-            const u = new URL(uri);
-            if (u.pathname.startsWith('/local-files/')) {
-                deleted.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')) });
-            } else {
-                deleted.push({ type: 'remote', uri });
-            }
-        } catch (e) {
-            // Not a parseable absolute URL — treat as an already-relative local path
-            deleted.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, '') });
-        }
-    }
+    const deleted = Object.keys(getAllDeletedPhotos()).map(portableEntry);
 
     res.json({ version: 1, exportedAt: new Date().toISOString(), deleted });
 });
@@ -3083,11 +3177,7 @@ app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res)
 
     // Rehome local-files entries onto this instance's own address, same logic favourites import
     // uses so the resulting URIs match what the app will actually serve items as.
-    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
-    const requestHostname = rawHost.split(':')[0];
-    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
-    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
-    const baseUrl = `http://${requestHost}`;
+    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
 
     const localDir = path.join(__dirname, 'local');
     const picturesRoot = path.join(localDir, 'pictures');
@@ -3158,21 +3248,7 @@ app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res)
 // Exports every tag on every file (favourites included, since 'fav' is just a reserved tag) so
 // the whole file_tags table can be copied to another instance of this app.
 app.get('/api/tags/export', (req, res) => {
-    const allTags = getAllFileTags();
-    const tags = [];
-
-    for (const [uri, uriTags] of Object.entries(allTags)) {
-        try {
-            const u = new URL(uri);
-            if (u.pathname.startsWith('/local-files/')) {
-                tags.push({ type: 'local', path: decodeURIComponent(u.pathname.replace('/local-files/', '')), tags: uriTags });
-            } else {
-                tags.push({ type: 'remote', uri, tags: uriTags });
-            }
-        } catch (e) {
-            tags.push({ type: 'local', path: uri.replace(/^\/local-files\//, '').replace(/^\//, ''), tags: uriTags });
-        }
-    }
+    const tags = Object.entries(getAllFileTags()).map(([key, keyTags]) => ({ ...portableEntry(key), tags: keyTags }));
 
     res.json({ version: 1, exportedAt: new Date().toISOString(), tags });
 });
@@ -3183,11 +3259,7 @@ app.post('/api/tags/import', express.json({ limit: '5mb' }), async (req, res) =>
 
     // Rehome local-files entries onto this instance's own address, same logic favourites/deleted
     // import uses so the resulting URIs match what the app will actually serve items as.
-    const rawHost = req.headers.host || `${getLocalIp()}:${port}`;
-    const requestHostname = rawHost.split(':')[0];
-    const isLoopback = requestHostname === '127.0.0.1' || requestHostname === 'localhost' || requestHostname === '::1';
-    const requestHost = isLoopback ? `${getLocalIp()}:${port}` : rawHost;
-    const baseUrl = `http://${requestHost}`;
+    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
 
     const localDir = path.join(__dirname, 'local');
     const picturesRoot = path.join(localDir, 'pictures');
@@ -4219,6 +4291,17 @@ app.listen(port, () => {
     console.log(`AMMUI server listening at http://localhost:${port}`);
 });
 
+try {
+    https.createServer(ensureHttpsCertificate(certsDir), app)
+        .on('error', err => console.error(`[HTTPS] Could not listen on port ${httpsPort}:`, err.message))
+        .listen(httpsPort, () => {
+            httpsReady = true;
+            console.log(`AMMUI server listening at https://localhost:${httpsPort}`);
+        });
+} catch (err) {
+    console.error('[HTTPS] Disabled - could not set up a certificate:', err.message);
+}
+
 process.on('SIGINT', () => {
     console.log('Shutting down AMMUI...');
     ssdpClient.stop();
@@ -4384,7 +4467,7 @@ app.get('/api/track-metadata', async (req, res) => {
                 longitude: metadata.format.longitude,
                 orientation: metadata.format.orientation
             },
-            tags: settings.fileTags?.[uri] || []
+            tags: settings.fileTags?.[mediaKey(uri)] || []
         };
 
         res.json(result);
@@ -4920,7 +5003,7 @@ app.post('/api/file-tags', (req, res) => {
     if (!Array.isArray(tags)) return res.status(400).json({ error: 'Tags must be an array' });
 
     setFileTags(uri, tags);
-    settings.fileTags[uri] = tags;
+    settings.fileTags[mediaKey(uri)] = tags;
     terminalLog(`[TAGS] Updated tags for ${uri}: ${tags.join(', ')}`);
     res.json({ success: true });
 });
@@ -6600,7 +6683,8 @@ app.post('/api/playlist/:udn/queue-tag', express.json(), async (req, res) => {
     const rendererDevice = Array.from(devices.values()).find(d => d.udn === udn);
     if (!rendererDevice || rendererDevice.loading) return res.status(404).json({ error: 'Renderer not found or still discovering' });
 
-    const uris = getUrisByTag(tag).filter(uri => uri.match(/\.(mp3|flac|wav|aac|m4a|ogg|wma|aiff|alac)$/i));
+    const uris = getKeysByTag(tag).map(mediaUrlFromKey)
+        .filter(uri => uri && uri.split('?')[0].match(/\.(mp3|flac|wav|aac|m4a|ogg|wma|aiff|alac)$/i));
 
     if (uris.length === 0) {
         return res.json({ success: true, count: 0 });
