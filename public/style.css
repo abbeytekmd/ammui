@@ -2222,6 +2222,49 @@ p.subtitle {
 
 .logo-btn {
     padding: 0.4rem;
+    position: relative;
+}
+
+/* "Update available" dot — on the logo button, and inline after the Updates tab label */
+.update-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 0 2px var(--bg), 0 0 8px rgba(16, 185, 129, 0.8);
+    pointer-events: none;
+}
+
+.update-badge-inline {
+    position: static;
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.8);
+}
+
+.update-available-item {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.update-commit-list {
+    margin: 0.75rem 0 0;
+    padding-left: 1.2rem;
+    font-size: 0.85rem;
+    opacity: 0.85;
+    max-height: 10rem;
+    overflow-y: auto;
+}
+
+.update-commit-list code {
+    opacity: 0.6;
+    margin-right: 0.4rem;
 }
 
 .header-logo {

@@ -3967,6 +3967,7 @@ function openServerSettingsModal() {
         const s3Enabled = document.getElementById('s3-enabled')?.checked;
         if (s3Enabled) startS3StatusPolling();
         loadLocalStats();
+        checkForUpdates();
     }
 }
 
@@ -8111,22 +8112,69 @@ async function triggerS3Sync() {
 
 
 // Update functions
-async function checkForUpdates() {
+// The server checks GitHub hourly; the page polls its cached answer to show the badges.
+const UPDATE_POLL_INTERVAL = 15 * 60 * 1000;
+let updateInfo = null;
+
+async function checkForUpdates(refresh = false) {
     const statusText = document.getElementById('update-status-text');
-    if (statusText) statusText.textContent = 'Checking...';
+    const checkBtn = document.getElementById('btn-update-check');
+    if (refresh && statusText) statusText.textContent = 'Checking...';
+    if (checkBtn) checkBtn.disabled = true;
     try {
-        const res = await fetch('/api/updates/check');
+        const res = await fetch(`/api/updates/check${refresh ? '?refresh=1' : ''}`);
         if (!res.ok) throw new Error('Check failed');
-        const data = await res.json();
-        if (statusText) {
-            statusText.textContent = data.available
-                ? `${data.behind} commit${data.behind !== 1 ? 's' : ''} behind`
-                : 'Up to date';
-        }
+        updateInfo = await res.json();
     } catch (err) {
-        if (statusText) statusText.textContent = 'Check failed';
         console.error('Update check failed:', err);
+        if (statusText) statusText.textContent = 'Check failed';
+        return;
+    } finally {
+        if (checkBtn) checkBtn.disabled = false;
     }
+    renderUpdateInfo();
+}
+
+function renderUpdateInfo() {
+    const info = updateInfo;
+    if (!info) return;
+    const available = !!info.available;
+
+    for (const id of ['update-badge-logo', 'update-badge-tab']) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = available ? '' : 'none';
+    }
+    const menuItem = document.getElementById('btn-update-available');
+    if (menuItem) menuItem.style.display = available ? '' : 'none';
+
+    const updateBtn = document.getElementById('btn-update-now');
+    if (updateBtn) updateBtn.disabled = !available || !info.supported || info.applying;
+
+    const statusText = document.getElementById('update-status-text');
+    if (statusText) {
+        if (!info.supported) statusText.textContent = 'Updates are not available in the packaged .exe build';
+        else if (info.applying) statusText.textContent = 'An update is in progress...';
+        else if (info.error) statusText.textContent = `Check failed: ${info.error}`;
+        else if (!info.checkedAt) statusText.textContent = 'Not checked yet';
+        else if (available) statusText.textContent = `${info.behind} new change${info.behind !== 1 ? 's' : ''} available`;
+        else statusText.textContent = `Up to date (checked ${new Date(info.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
+    }
+
+    const list = document.getElementById('update-commit-list');
+    if (list) {
+        const commits = available ? (info.commits || []) : [];
+        list.style.display = commits.length ? '' : 'none';
+        list.innerHTML = commits.map(c => `<li><code>${escapeHtml(c.hash)}</code>${escapeHtml(c.subject)}</li>`).join('')
+            + (info.behind > commits.length ? `<li>…and ${info.behind - commits.length} more</li>` : '');
+    }
+}
+
+function openUpdatesSettings() {
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    openServerSettingsModal();
+    const tab = [...document.querySelectorAll('#server-settings-modal .settings-tab')]
+        .find(b => b.textContent.trim().toLowerCase() === 'updates');
+    if (tab) switchSettingsTab('updates', tab);
 }
 
 async function performUpdate() {
@@ -8134,48 +8182,70 @@ async function performUpdate() {
     const progressContainer = document.getElementById('update-progress-container');
     const progressText = document.getElementById('update-progress-text');
     const progressBar = document.getElementById('update-progress-bar');
+    const setProgress = (message, pct) => {
+        if (message && progressText) progressText.textContent = message;
+        if (pct != null && progressBar) progressBar.style.width = `${pct}%`;
+    };
+
+    if (!confirm('Download the update and restart the server? Playback on this server will stop briefly.')) return;
 
     if (updateBtn) updateBtn.disabled = true;
     if (progressContainer) progressContainer.style.display = 'block';
-    if (progressText) progressText.textContent = 'Running git pull...';
-    if (progressBar) progressBar.style.width = '30%';
+    setProgress('Starting update...', 5);
 
+    let oldBootId = updateInfo?.bootId;
     try {
         const response = await fetch('/api/updates/apply', { method: 'POST' });
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = '';
+        let complete = false;
 
-        while (true) {
+        while (!complete) {
             const { done, value } = await reader.read();
             if (done) break;
-
-            const chunk = decoder.decode(value);
-            for (const line of chunk.split('\n')) {
-                if (!line.startsWith('data: ')) continue;
-                try {
-                    const data = JSON.parse(line.slice(6));
-                    if (data.message && progressText) progressText.textContent = data.message;
-                    if (data.progress !== null && progressBar) progressBar.style.width = `${data.progress}%`;
-                    if (data.error) throw new Error(data.error);
-                    if (data.complete) {
-                        if (progressBar) progressBar.style.width = '100%';
-                        showToast('Update complete — reloading...', 'success', 5000);
-                        setTimeout(() => window.location.reload(), 3000);
-                        return;
-                    }
-                } catch (e) {
-                    if (e.message !== 'Unexpected end of JSON input') throw e;
-                }
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split('\n\n');
+            buffer = events.pop(); // keep any partial event for the next chunk
+            for (const evt of events) {
+                if (!evt.startsWith('data: ')) continue;
+                const data = JSON.parse(evt.slice(6));
+                if (data.error) throw new Error(data.error);
+                setProgress(data.message, data.progress);
+                if (data.bootId) oldBootId = data.bootId;
+                if (data.complete) complete = true;
             }
         }
+        if (!complete) throw new Error('The server stopped responding before the update finished');
+
+        // Wait for the replacement server (a different bootId) before reloading
+        setProgress('Restarting server...', 95);
+        const deadline = Date.now() + 120000;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 1500));
+            try {
+                const res = await fetch('/api/updates/check', { cache: 'no-store' });
+                if (!res.ok) continue;
+                const info = await res.json();
+                if (info.bootId && info.bootId !== oldBootId) {
+                    setProgress('Updated — reloading...', 100);
+                    showToast('Update complete — reloading...', 'success', 3000);
+                    setTimeout(() => window.location.reload(), 800);
+                    return;
+                }
+            } catch (e) { /* server still down */ }
+        }
+        throw new Error('The server did not come back after restarting — check logs/server.log');
     } catch (err) {
         console.error('Update failed:', err);
-        if (progressText) progressText.textContent = `Failed: ${err.message}`;
-        showToast(`Update failed: ${err.message}`, 'error', 5000);
-    } finally {
+        setProgress(`Failed: ${err.message}`);
+        showToast(`Update failed: ${err.message}`, 'error', 8000);
         if (updateBtn) updateBtn.disabled = false;
     }
 }
+
+checkForUpdates();
+setInterval(() => { if (!document.hidden) checkForUpdates(); }, UPDATE_POLL_INTERVAL);
 
 // Stats Modal logic
 async function openStatsModal() {

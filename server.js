@@ -4091,57 +4091,122 @@ app.get('/api/art/local', async (req, res) => {
 });
 
 // Update API routes
+//
+// The server checks GitHub in the background (shortly after startup, then hourly) so the UI can
+// show an "update available" badge without each page load waiting on a git fetch.
+// Applying an update fast-forwards the checkout, reinstalls packages only if package files
+// changed, then restarts: either by exiting for an external supervisor (AMMUI_SUPERVISED=1),
+// or by handing off to a small relauncher that starts a fresh server once this one has exited.
+const bootId = Date.now().toString(36); // lets the UI spot that a restart has happened
+const UPDATE_CHECK_INTERVAL = 60 * 60 * 1000;
+let updateState = { available: false, behind: 0, commits: [], checkedAt: null, error: null, supported: !isPkg };
+let updateCheckInFlight = null;
+let updateApplying = false;
+
+const git = async (args) => (await execFileAsync('git', args, { cwd: __dirname, windowsHide: true })).stdout.trim();
+
+function checkForUpdates() {
+    if (isPkg) return Promise.resolve(updateState);
+    if (updateCheckInFlight) return updateCheckInFlight;
+    updateCheckInFlight = (async () => {
+        try {
+            await git(['fetch', '--quiet']);
+            const behind = parseInt(await git(['rev-list', '--count', 'HEAD..@{u}']), 10) || 0;
+            const log = behind ? await git(['log', '--format=%h%x09%s', '-n', '20', 'HEAD..@{u}']) : '';
+            const commits = log ? log.split('\n').map(l => { const [hash, ...rest] = l.split('\t'); return { hash, subject: rest.join('\t') }; }) : [];
+            if (behind && !updateState.available) terminalLog(`[UPDATE] Update available: ${behind} new commit${behind !== 1 ? 's' : ''}`);
+            updateState = { ...updateState, available: behind > 0, behind, commits, checkedAt: Date.now(), error: null };
+        } catch (err) {
+            const msg = (err.stderr || err.message || '').trim().split('\n')[0];
+            console.warn('[UPDATE] Check failed:', msg);
+            updateState = { ...updateState, checkedAt: Date.now(), error: msg };
+        } finally {
+            updateCheckInFlight = null;
+        }
+        return updateState;
+    })();
+    return updateCheckInFlight;
+}
+
+if (!isPkg) {
+    setTimeout(checkForUpdates, 30 * 1000);
+    setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
+}
+
 app.get('/api/updates/check', async (req, res) => {
-    try {
-        await execAsync('git fetch', { cwd: __dirname });
-        const { stdout } = await execAsync('git rev-list HEAD..@{u} --count', { cwd: __dirname });
-        const behind = parseInt(stdout.trim(), 10);
-        res.json({ available: behind > 0, behind });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
+    if (req.query.refresh === '1') await checkForUpdates();
+    res.json({ ...updateState, applying: updateApplying, bootId });
 });
 
-app.post('/api/updates/apply', (req, res) => {
+// Starts a replacement server after this process exits (so ports are free), then exits.
+function restartServer() {
+    if (process.env.AMMUI_SUPERVISED === '1') {
+        console.log('[UPDATE] Exiting for supervisor restart...');
+        process.exit(0);
+    }
+    const logPath = path.join(logsDir, 'server.log');
+    const relauncher = `
+        const { spawn } = require('child_process');
+        const fs = require('fs');
+        const [pid, exe, args, cwd, logPath] = JSON.parse(process.argv[1]);
+        const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+        const started = Date.now();
+        (function wait() {
+            if (alive() && Date.now() - started < 30000) return setTimeout(wait, 250);
+            const out = fs.openSync(logPath, 'a');
+            spawn(exe, args, { cwd, detached: true, windowsHide: true, stdio: ['ignore', out, out] }).unref();
+        })();`;
+    const payload = JSON.stringify([process.pid, process.execPath, [...process.execArgv, ...process.argv.slice(1)], __dirname, logPath]);
+    spawn(process.execPath, ['-e', relauncher, payload], { cwd: __dirname, detached: true, windowsHide: true, stdio: 'ignore' }).unref();
+    console.log(`[UPDATE] Restarting (new server output goes to ${logPath})...`);
+    setTimeout(() => process.exit(0), 200);
+}
+
+app.post('/api/updates/apply', async (req, res) => {
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Cache-Control'
+        'Connection': 'keep-alive'
     });
-
-    const sendProgress = (message, progress = null) => {
-        res.write(`data: ${JSON.stringify({ message, progress })}\n\n`);
+    const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+    const fail = (message) => {
+        console.error('[UPDATE] Failed:', message);
+        send({ error: message });
+        res.end();
+        updateApplying = false;
     };
 
-    sendProgress('Running git pull...', 30);
-    exec('git pull', { cwd: __dirname }, (err, stdout, stderr) => {
-        if (err) {
-            console.error('[UPDATE] git pull failed:', stderr || err.message);
-            res.write(`data: ${JSON.stringify({ error: stderr || err.message })}\n\n`);
-            res.end();
-            return;
+    if (isPkg) return fail('Updates are not supported in the packaged .exe build');
+    if (updateApplying) return fail('An update is already in progress');
+    updateApplying = true;
+
+    try {
+        send({ message: 'Checking for local changes...', progress: 10 });
+        const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
+        if (dirty) {
+            const files = dirty.split('\n').map(l => l.trim().replace(/^\S+\s+/, '')).slice(0, 5).join(', ');
+            return fail(`The app folder has uncommitted changes (${files}). Commit or discard them first.`);
         }
-        console.log('[UPDATE] git pull output:', stdout);
-        sendProgress('Running npm ci...', 70);
-        exec('npm ci', { cwd: __dirname }, (err2, stdout2, stderr2) => {
-            if (err2) {
-                console.error('[UPDATE] npm ci failed:', stderr2 || err2.message);
-                res.write(`data: ${JSON.stringify({ error: stderr2 || err2.message })}\n\n`);
-                res.end();
-                return;
-            }
-            console.log('[UPDATE] npm ci output:', stdout2);
-            sendProgress('Restarting...', 100);
-            res.write(`data: ${JSON.stringify({ complete: true })}\n\n`);
-            res.end();
-            setTimeout(() => {
-                console.log('[UPDATE] Restarting application...');
-                process.exit(0);
-            }, 1000);
-        });
-    });
+
+        send({ message: 'Downloading update...', progress: 30 });
+        const oldHead = await git(['rev-parse', 'HEAD']);
+        await git(['pull', '--ff-only']);
+        const newHead = await git(['rev-parse', 'HEAD']);
+        terminalLog(`[UPDATE] Pulled ${oldHead.slice(0, 7)} -> ${newHead.slice(0, 7)}`);
+
+        const changed = oldHead === newHead ? [] : (await git(['diff', '--name-only', oldHead, newHead])).split('\n');
+        if (changed.some(f => f === 'package.json' || f === 'package-lock.json')) {
+            send({ message: 'Installing packages...', progress: 60 });
+            // npm install, not npm ci: ci wipes node_modules, which fails on Windows while this server has files open
+            await execAsync('npm install --no-audit --no-fund', { cwd: __dirname, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+        }
+
+        send({ message: 'Restarting...', progress: 90, complete: true, bootId });
+        res.end();
+        restartServer();
+    } catch (err) {
+        fail((err.stderr || err.message || '').trim() || 'Unknown error');
+    }
 });
 
 app.listen(port, () => {
