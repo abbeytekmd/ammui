@@ -1980,12 +1980,33 @@ async function runVoiceCommand(transcripts) {
             }
             return;
         }
-        showToast(`"${transcripts[0]}": ${lastError}`, 'error', 5000);
+        const yt = await playVoiceRequestFromYoutube(transcripts[0]);
+        if (yt === true) return;
+        showToast(`"${transcripts[0]}": ${lastError}${yt ? ` (not looked up on YouTube: ${yt})` : ''}`, 'error', 5000);
     } catch (err) {
         console.error('Voice command error:', err);
         showToast(`Voice command failed: ${err.message}`);
     } finally {
         window._isProcessingPlayAction = false;
+    }
+}
+
+// A "<song> by <artist>" that isn't in the library plays as a YouTube video instead, but only
+// when the server finds a very good match. Returns true if a video was started, otherwise the
+// reason no YouTube search could be made (or null when it searched and found nothing).
+async function playVoiceRequestFromYoutube(text) {
+    try {
+        const res = await fetch(`/api/voice/youtube?q=${encodeURIComponent(text)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return data.error || `server error ${res.status}`;
+        if (!data.found) return data.reason || null;
+        if (data.ytDlpAvailable) ytDlpAvailable = true;
+        showToast(`Not in the library - playing the video of ${data.label}`, 'success', 3000);
+        playYoutubeCandidate(data.videoId, data.embeddable, data.label);
+        return true;
+    } catch (err) {
+        console.error('Voice YouTube fallback failed:', err);
+        return err.message;
     }
 }
 

@@ -11,7 +11,7 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
-import { resolveVoiceCommand, parseControlCommand } from './lib/voice-command.js';
+import { resolveVoiceCommand, parseControlCommand, voiceSongRequests } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
@@ -1462,6 +1462,43 @@ app.get('/api/browse-recursive/:udn', async (req, res) => {
     }
 });
 
+// Adds a recursively browsed folder to the renderer's queue. Folders often hold cover art,
+// playlists or files the renderer can't play (Sonos rejects those with UPnP error 804), so
+// non-media items are skipped and a rejected track is logged and passed over rather than
+// abandoning the rest of the folder. Returns how many tracks were added.
+async function queueFolderTracks(renderer, tracks, pathStr, lastId) {
+    let added = 0;
+    let firstError = null;
+    for (const track of tracks) {
+        const cls = track.class || '';
+        const mime = (track.protocolInfo || '').split(':')[2] || '';
+        if (!track.uri || /imageItem|playlistItem|textItem/.test(cls) || /^(image|text)\//.test(mime)) continue;
+
+        try {
+            if (track._path) {
+                const parsedPath = JSON.parse(track._path);
+                const fullPathStr = (pathStr ? pathStr + ' / ' : '') + parsedPath.map(p => p.title).join(' / ');
+                cacheUriPath(track.uri, fullPathStr);
+            } else {
+                cacheUriPath(track.uri, pathStr);
+            }
+        } catch (e) {
+            cacheUriPath(track.uri, pathStr);
+        }
+
+        try {
+            const newId = await renderer.insertTrack(track, lastId);
+            lastId = newId;
+            added++;
+        } catch (err) {
+            firstError = firstError || err;
+            console.warn(`[QUEUE] Skipped "${track.title}" (${track.uri}): ${err.message.slice(0, 200)}`);
+        }
+    }
+    if (added === 0 && firstError) throw firstError;
+    return added;
+}
+
 app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
     const { udn } = req.params;
     const { serverUdn, objectId, title, pathStr } = req.body;
@@ -1485,21 +1522,7 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
         // Clear playlist first for "Play Folder"
         await renderer.clearPlaylist();
 
-        let lastId = 0;
-        for (const track of tracks) {
-            try {
-                if (track._path) {
-                    const parsedPath = JSON.parse(track._path);
-                    const fullPathStr = (pathStr ? pathStr + ' / ' : '') + parsedPath.map(p => p.title).join(' / ');
-                    cacheUriPath(track.uri, fullPathStr);
-                } else {
-                    cacheUriPath(track.uri, pathStr);
-                }
-            } catch (e) {
-                cacheUriPath(track.uri, pathStr);
-            }
-            lastId = await renderer.insertTrack(track, lastId);
-        }
+        const added = await queueFolderTracks(renderer, tracks, pathStr, 0);
 
         // Start playing the first track
         let ids = await renderer.getIdArray();
@@ -1507,7 +1530,7 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
             await renderer.seekId(ids[0]);
         }
 
-        res.json({ success: true, count: tracks.length });
+        res.json({ success: true, count: added });
     } catch (err) {
         console.error('Play folder failed:', err.message);
         res.status(500).json({ error: err.message });
@@ -1534,24 +1557,11 @@ app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => 
 
         const renderer = getRenderer(rendererDevice);
         let ids = await renderer.getIdArray();
-        let lastId = ids.length > 0 ? ids[ids.length - 1] : 0;
+        const lastId = ids.length > 0 ? ids[ids.length - 1] : 0;
 
-        for (const track of tracks) {
-            try {
-                if (track._path) {
-                    const parsedPath = JSON.parse(track._path);
-                    const fullPathStr = (pathStr ? pathStr + ' / ' : '') + parsedPath.map(p => p.title).join(' / ');
-                    cacheUriPath(track.uri, fullPathStr);
-                } else {
-                    cacheUriPath(track.uri, pathStr);
-                }
-            } catch (e) {
-                cacheUriPath(track.uri, pathStr);
-            }
-            lastId = await renderer.insertTrack(track, lastId);
-        }
+        const added = await queueFolderTracks(renderer, tracks, pathStr, lastId);
 
-        res.json({ success: true, count: tracks.length });
+        res.json({ success: true, count: added });
     } catch (err) {
         console.error('Queue folder failed:', err.message);
         res.status(500).json({ error: err.message });
@@ -4796,6 +4806,60 @@ app.post('/api/youtube/select', express.json(), (req, res) => {
     const official = ownChannel && !YT_NOT_OFFICIAL_RE.test(videoTitle || '') ? 2 : 1;
     setCachedYoutubeVideo(artist || '', title, { videoId, embeddable: embeddable !== false, found: true, official }); // hand-picked: full star only if it's the artist's own channel and not a lyric/audio/live cut, else half
     res.json({ success: true });
+});
+
+// Voice fallback: "play <song> by <artist>" that isn't in the library is looked up on YouTube.
+// Only a very good match is returned: the video title must contain the whole song title and
+// the artist must appear in the video title or its channel name. One search per reading at
+// most, cached, and counted against its own daily budget - someone asked for this, so the
+// background fallback search using up its allowance mustn't block it.
+const YT_MAX_VOICE_SEARCHES_PER_DAY = 10;
+
+app.get('/api/voice/youtube', async (req, res) => {
+    const q = String(req.query.q || '');
+    const reply = r => res.json({ ...r, ytDlpAvailable: !ytDlpUnavailable });
+    const squash = s => ytNorm(s).replace(/[^a-z0-9]/g, '');
+    let reason = null; // why no search could be made, shown to the user
+
+    for (const { title, artist } of voiceSongRequests(q).slice(0, 2)) {
+        const known = lookupTrackInDb(artist, title);
+        if (known.status === 'found') {
+            console.log(`[VOICE] "${q}" -> YouTube (cached) ${known.videoId}`);
+            return reply({ found: true, videoId: known.videoId, embeddable: known.embeddable, label: `${title} by ${artist}` });
+        }
+
+        let candidates = getCachedYoutubeCandidates(artist, title);
+        if (!candidates) {
+            if (!settings.youtubeApiKey) { reason = 'no YouTube API key is set'; break; }
+            if (Date.now() < youtubeQuotaBlockedUntil) { reason = 'the YouTube quota is used up for now'; break; }
+            const today = new Date().toISOString().slice(0, 10);
+            const used = getSetting('ytVoiceSearches', {}) || {};
+            const count = used.day === today ? used.count : 0;
+            if (count >= YT_MAX_VOICE_SEARCHES_PER_DAY) { reason = `the ${YT_MAX_VOICE_SEARCHES_PER_DAY} YouTube searches allowed per day are used up`; break; }
+            try {
+                candidates = await fetchYoutubeCandidates(artist, title);
+            } catch (err) {
+                youtubeApiError(err);
+                reason = 'the YouTube search failed';
+                console.error('[VOICE] YouTube search failed:', err.response?.data?.error?.message || err.message);
+                break;
+            }
+            setSetting('ytVoiceSearches', { day: today, count: count + 1 });
+        }
+
+        const na = squash(artist);
+        const byArtist = candidates.filter(c => {
+            const nt = squash(c.title), nc = squash(c.channel);
+            return na.length >= 2 && (nt.includes(na) || nc.includes(na) || (nc.length >= 4 && na.includes(nc)));
+        });
+        const match = matchTrackToVideos(artist, title, byArtist);
+        if (match) {
+            console.log(`[VOICE] "${q}" -> YouTube ${match.videoId}: ${match.title} (${match.channel})`);
+            return reply({ found: true, videoId: match.videoId, embeddable: match.embeddable !== false, label: match.title });
+        }
+    }
+    console.log(`[VOICE] "${q}" -> no YouTube match${reason ? ` (${reason})` : ''}`);
+    reply({ found: false, reason });
 });
 
 // Finds the English Wikipedia article for an album. The search is free-text, so a hit is only
