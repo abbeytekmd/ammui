@@ -3591,6 +3591,28 @@ p.subtitle {
     transition: all 0.2s;
 }
 
+/* Checkbox with its label on the right; long labels wrap beside the box, not under it */
+.settings-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    cursor: pointer;
+}
+
+.settings-group .settings-check input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    margin: 0.1rem 0 0;
+    padding: 0;
+    accent-color: var(--primary);
+}
+
+.settings-check .settings-hint {
+    display: block;
+    margin: 0.2rem 0 0;
+}
+
 .settings-group input:focus {
     outline: none;
     border-color: var(--primary);

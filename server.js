@@ -22,7 +22,7 @@ import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
 
 import sizeOf from 'image-size';
-import { S3Client, HeadObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import VirtualRenderer from './lib/virtual-renderer.js';
@@ -164,7 +164,9 @@ let settings = {
         accessKeyId: '',
         secretAccessKey: '',
         bucket: '',
-        enabled: false
+        enabled: false,
+        mirror: false,
+        mirrorMaxDeletePercent: 10
     },
     deviceName: 'AMMUI',
     screensaver: {
@@ -348,6 +350,20 @@ function s3Log(message, isError = false) {
     if (isError) console.error(message); else console.log(message);
 }
 
+// Content types for what the local library holds (music, pictures, videos), so objects
+// preview and download correctly from the bucket.
+const S3_CONTENT_TYPES = {
+    '.mp3': 'audio/mpeg', '.flac': 'audio/flac', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac',
+    '.ogg': 'audio/ogg', '.opus': 'audio/opus', '.wma': 'audio/x-ms-wma', '.aiff': 'audio/aiff', '.aif': 'audio/aiff',
+    '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.bmp': 'image/bmp',
+    '.webp': 'image/webp', '.heic': 'image/heic', '.heif': 'image/heif', '.tif': 'image/tiff', '.tiff': 'image/tiff',
+    '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
+    '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo', '.3gp': 'video/3gpp',
+    '.m3u': 'audio/x-mpegurl', '.m3u8': 'application/vnd.apple.mpegurl', '.txt': 'text/plain', '.json': 'application/json'
+};
+// macOS/Windows housekeeping files (.DS_Store, ._foo, Thumbs.db, desktop.ini) aren't backed up
+const S3_SKIP_NAMES = /^(\.|thumbs\.db$|desktop\.ini$)/i;
+
 async function syncToS3() {
     if (s3SyncStatus.running) return;
     if (!settings.s3.enabled || !settings.s3.bucket || !settings.s3.accessKeyId) {
@@ -376,12 +392,15 @@ async function syncToS3() {
         const localDir = path.join(__dirname, 'local');
         if (!fs.existsSync(localDir)) return;
 
+        const deletedPicturesDir = path.join(localDir, 'pictures', '_deleted');
         const allFiles = [];
         async function walk(dir) {
             const files = await fsp.readdir(dir, { withFileTypes: true });
             for (const file of files) {
+                if (S3_SKIP_NAMES.test(file.name)) continue;
                 const res = path.resolve(dir, file.name);
                 if (file.isDirectory()) {
+                    if (res === deletedPicturesDir) continue; // photos the user deleted aren't worth keeping
                     await walk(res);
                 } else {
                     allFiles.push(res);
@@ -392,23 +411,51 @@ async function syncToS3() {
         await walk(localDir);
         s3SyncStatus.totalCount = allFiles.length;
 
+        // Per top-level folder (music / pictures / videos) tallies for the summary line
+        const tally = {};
+        const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+        const localKeys = new Set();
         for (const filePath of allFiles) {
-            const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
-            const relativePath = `${devicePrefix}/${path.relative(localDir, filePath).replace(/\\/g, '/')}`;
+            const localRel = path.relative(localDir, filePath).replace(/\\/g, '/');
+            const relativePath = `${devicePrefix}/${localRel}`;
+            localKeys.add(relativePath);
+            const section = localRel.includes('/') ? localRel.split('/')[0] : '(root)';
+            const t = tally[section] ??= { uploaded: 0, skipped: 0, failed: 0 };
             s3SyncStatus.currentFile = relativePath;
 
             try {
-                // Check if file already exists in S3 (basic check)
+                const { size } = await fsp.stat(filePath);
+                const contentType = S3_CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+                // Already backed up if an object of the same size is there; a changed file is sent again
+                let head = null;
                 try {
-                    await s3.send(new HeadObjectCommand({
+                    head = await s3.send(new HeadObjectCommand({
                         Bucket: settings.s3.bucket,
                         Key: relativePath
                     }));
-                    // console.log(`[S3] Skipping ${relativePath} (exists)`);
-                    s3SyncStatus.syncedCount++;
-                    continue;
                 } catch (e) {
                     // Not found, proceed with upload
+                }
+                if (head && head.ContentLength === size) {
+                    // Older syncs stored everything as audio/mpeg; correct the type in place
+                    // (a server-side copy, nothing is re-sent). Copies are limited to 5GB.
+                    if (head.ContentType !== contentType && size < 5 * 1024 * 1024 * 1024) {
+                        try {
+                            await s3.send(new CopyObjectCommand({
+                                Bucket: settings.s3.bucket,
+                                Key: relativePath,
+                                CopySource: `${settings.s3.bucket}/${relativePath.split('/').map(encodeURIComponent).join('/')}`,
+                                ContentType: contentType,
+                                MetadataDirective: 'REPLACE'
+                            }));
+                            s3Log(`[S3] Set content type of ${relativePath} to ${contentType}`);
+                        } catch (e) {
+                            s3Log(`[S3] Couldn't set content type of ${relativePath}: ${e.message}`, true);
+                        }
+                    }
+                    s3SyncStatus.syncedCount++;
+                    t.skipped++;
+                    continue;
                 }
 
                 s3Log(`[S3] Uploading ${relativePath}...`);
@@ -419,7 +466,7 @@ async function syncToS3() {
                         Bucket: settings.s3.bucket,
                         Key: relativePath,
                         Body: fileStream,
-                        ContentType: 'audio/mpeg' // fallback, could be better
+                        ContentType: contentType
                     },
                     queueSize: 4,
                     partSize: 5 * 1024 * 1024,
@@ -428,12 +475,20 @@ async function syncToS3() {
 
                 await parallelUploads3.done();
                 s3SyncStatus.syncedCount++;
+                t.uploaded++;
             } catch (err) {
+                t.failed++;
                 s3Log(`[S3] Failed to upload ${relativePath}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Upload failed for ${relativePath}: ${err.message}`;
                 // Continue with next file
             }
         }
+
+        for (const [section, t] of Object.entries(tally)) {
+            s3Log(`[S3] ${section}: ${t.uploaded} uploaded, ${t.skipped} already backed up, ${t.failed} failed`);
+        }
+
+        if (settings.s3.mirror) await mirrorDeleteFromS3(s3, `${devicePrefix}/`, localKeys);
 
         s3SyncStatus.lastSync = new Date().toISOString();
         s3Log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
@@ -444,6 +499,60 @@ async function syncToS3() {
         s3SyncStatus.running = false;
         s3SyncStatus.currentFile = '';
     }
+}
+
+// Mirror mode: remove objects under this server's folder in the bucket that are no longer in
+// the local library (deleted, moved or renamed files). Refuses to run if it would remove more
+// than the configured share of the backup, so an unmounted or emptied library can't wipe it.
+async function mirrorDeleteFromS3(s3, prefix, localKeys) {
+    if (localKeys.size === 0) {
+        s3Log('[S3] Mirror: local library is empty, not deleting anything from the bucket.', true);
+        return;
+    }
+
+    const remoteKeys = [];
+    let token;
+    do {
+        const page = await s3.send(new ListObjectsV2Command({
+            Bucket: settings.s3.bucket,
+            Prefix: prefix,
+            ContinuationToken: token
+        }));
+        for (const obj of page.Contents || []) remoteKeys.push(obj.Key);
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+
+    const extras = remoteKeys.filter(k => !localKeys.has(k));
+    if (extras.length === 0) {
+        s3Log('[S3] Mirror: nothing to delete.');
+        return;
+    }
+
+    const maxPercent = Number(settings.s3.mirrorMaxDeletePercent) || 10;
+    const percent = (extras.length / remoteKeys.length) * 100;
+    if (percent > maxPercent) {
+        const msg = `Mirror: ${extras.length} of ${remoteKeys.length} objects (${percent.toFixed(1)}%) would be deleted, ` +
+            `over the ${maxPercent}% limit. Nothing was deleted; raise the limit in S3 settings if this is expected.`;
+        s3Log(`[S3] ${msg}`, true);
+        s3SyncStatus.lastError = msg;
+        return;
+    }
+
+    // One object at a time: the batch DeleteObjects call needs a checksum header that some
+    // S3-compatible services reject.
+    let deleted = 0;
+    for (const key of extras) {
+        s3SyncStatus.currentFile = `Deleting ${key}`;
+        try {
+            await s3.send(new DeleteObjectCommand({ Bucket: settings.s3.bucket, Key: key }));
+            s3Log(`[S3] Deleted ${key} (no longer on this server)`);
+            deleted++;
+        } catch (err) {
+            s3Log(`[S3] Failed to delete ${key}: ${err.message}`, true);
+            s3SyncStatus.lastError = `Delete failed for ${key}: ${err.message}`;
+        }
+    }
+    s3Log(`[S3] Mirror: ${deleted}/${extras.length} objects deleted from the bucket.`);
 }
 
 // Daily Sync (every 24 hours)
@@ -2610,6 +2719,7 @@ app.get('/api/download-job/:id', (req, res) => {
 app.get('/api/local-stats', async (req, res) => {
     const musicDir = path.join(__dirname, 'local', 'music');
     const photosDir = path.join(__dirname, 'local', 'pictures');
+    const videosDir = path.join(__dirname, 'local', 'videos');
     const audioExts = AUDIO_EXTS;
     const imageExts = IMAGE_EXTS;
 
@@ -2631,7 +2741,9 @@ app.get('/api/local-stats', async (req, res) => {
     }
 
     try {
-        const [music, photos] = await Promise.all([walkDir(musicDir, audioExts), walkDir(photosDir, imageExts)]);
+        const [music, photos, videos] = await Promise.all([
+            walkDir(musicDir, audioExts), walkDir(photosDir, imageExts), walkDir(videosDir, VIDEO_EXTS)
+        ]);
 
         // Get free disk space using statvfs equivalent — df output
         let freeBytes = null;
@@ -2649,7 +2761,7 @@ app.get('/api/local-stats', async (req, res) => {
             }
         } catch (e) {}
 
-        res.json({ music, photos, freeBytes });
+        res.json({ music, photos, videos, freeBytes });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -5403,6 +5515,7 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments, useBir
 }
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.tif', '.heic', '.heif']);
+const VIDEO_EXTS = new Set(['.mp4', '.m4v', '.mov', '.webm', '.mkv', '.avi']);
 const AUDIO_EXTS = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav', '.ogg', '.opus', '.wma', '.aiff', '.alac']);
 
 async function* walkImages(dir) {

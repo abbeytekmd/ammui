@@ -7909,7 +7909,7 @@ async function loadLocalStats() {
     try {
         const res = await fetch('/api/local-stats');
         if (!res.ok) throw new Error('Failed');
-        const { music, photos, freeBytes } = await res.json();
+        const { music, photos, videos, freeBytes } = await res.json();
         el.innerHTML = `
             <span class="local-stats-label">Tracks</span>
             <span class="local-stats-value">${music.count.toLocaleString()}</span>
@@ -7920,6 +7920,11 @@ async function loadLocalStats() {
             <span class="local-stats-value">${photos.count.toLocaleString()}</span>
             <span class="local-stats-label">Photos size</span>
             <span class="local-stats-value">${fmtBytes(photos.bytes)}</span>
+            <hr class="local-stats-divider">
+            <span class="local-stats-label">Videos</span>
+            <span class="local-stats-value">${videos.count.toLocaleString()}</span>
+            <span class="local-stats-label">Videos size</span>
+            <span class="local-stats-value">${fmtBytes(videos.bytes)}</span>
             <hr class="local-stats-divider">
             <span class="local-stats-label">Free disk space</span>
             <span class="local-stats-value">${fmtBytes(freeBytes)}</span>
@@ -8210,6 +8215,10 @@ async function fetchS3Settings() {
         if (bucket) bucket.value = data.bucket || '';
         if (accessKey) accessKey.value = data.accessKeyId || '';
         if (secretKey) secretKey.value = data.secretAccessKey || '';
+        const mirror = document.getElementById('s3-mirror');
+        const mirrorMax = document.getElementById('s3-mirror-max');
+        if (mirror) mirror.checked = !!data.mirror;
+        if (mirrorMax) mirrorMax.value = data.mirrorMaxDeletePercent || 10;
         const fieldsContainer = document.getElementById('s3-settings-fields');
         if (fieldsContainer) {
             fieldsContainer.style.display = data.enabled ? 'block' : 'none';
@@ -8231,7 +8240,10 @@ async function saveS3Settings() {
     const bucket = document.getElementById('s3-bucket')?.value.trim();
     const accessKeyId = document.getElementById('s3-access-key')?.value.trim();
     const secretAccessKey = document.getElementById('s3-secret-key')?.value.trim();
-    const settings = { enabled, endpoint, region, bucket, accessKeyId, secretAccessKey };
+    const mirror = !!document.getElementById('s3-mirror')?.checked;
+    const mirrorPercent = parseInt(document.getElementById('s3-mirror-max')?.value, 10);
+    const mirrorMaxDeletePercent = mirrorPercent >= 1 && mirrorPercent <= 100 ? mirrorPercent : 10;
+    const settings = { enabled, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
     try {
         const response = await fetch('/api/settings/s3', {
             method: 'POST',

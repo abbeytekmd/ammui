@@ -45,7 +45,7 @@ I have this running on a headless linux box and I run the UI variously from a Sa
 ## Local DLNA Server
 * Upload button to upload tracks and photos from local disk.
 * Download buttons on music and photos from other servers to add a copy to the local server.
-* Sync all local music and photo files to S3 compatible storage (I use Wasabi).
+* Sync all local music, photo and video files to S3 compatible storage (I use Wasabi).
 
 ## Music Videos
 Watch a track's music video on YouTube, right from the track list. When the video ends, the player closes by itself.
@@ -180,8 +180,9 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 * **Stats** (logo menu): playback statistics for your library.
 * **Server Settings → General → Local Library**: file counts and sizes for what is stored on the server.
 * **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
-* **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key, and **S3 Cloud Sync**.
-* **S3 Cloud Sync → Sync Now / View Log**: copies the local music and photos to an S3 bucket as a backup. View Log shows the result of the last sync.
+* **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key.
+* **Server Settings → Backup**: S3 Cloud Sync settings. **Sync Now / View Log**: copies the local music, photos and videos to an S3 bucket as a backup (deleted photos and .DS_Store-type housekeeping files are left out; a file whose size has changed is uploaded again). View Log shows the result of the last sync, with counts for each folder.
+* **Server Settings → Backup → Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each sync also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
 
 ### Logs
 

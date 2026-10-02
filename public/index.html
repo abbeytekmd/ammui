@@ -545,6 +545,7 @@
             <div class="settings-tabs">
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
+                <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
             </div>
             <div class="manage-list-container">
@@ -678,15 +679,18 @@
                                 <code>yt-dlp</code> tool is installed on the server, those still play locally
                                 (extracted on the fly, not cached); otherwise they open on youtube.com instead.</p>
                         </div>
-
-                        <div class="settings-group" style="margin-top: 2rem;">
-                            <div class="settings-header-row">
-                                <label>S3 Cloud Sync</label>
-                            </div>
+                    </div>
+                </div>
+                <div id="settings-backup" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>S3 Cloud Backup</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Copies the local music, photos and videos to an S3 compatible bucket
+                                (AWS, Wasabi, Backblaze, Cloudflare R2...). Runs daily, or use Sync Now.</p>
                             <div style="margin-bottom: 0.75rem;">
-                                <label style="display:inline-flex; align-items:center; gap:0.5rem; cursor:pointer;">
+                                <label class="settings-check">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
-                                    Enable sync
+                                    <span>Enable sync</span>
                                 </label>
                             </div>
                             <div id="s3-settings-fields" style="display:none;">
@@ -715,6 +719,22 @@
                                         <label for="s3-secret-key">Secret Key</label>
                                         <input type="password" id="s3-secret-key" placeholder="Secret Access Key"
                                             onchange="saveS3Settings()">
+                                    </div>
+                                </div>
+
+                                <div style="margin-top: 0.75rem;">
+                                    <label class="settings-check">
+                                        <input type="checkbox" id="s3-mirror" onchange="saveS3Settings()">
+                                        <span>Delete files from the bucket that are no longer on this server
+                                            <span class="settings-hint">Use with versioning turned on in the bucket to
+                                                avoid accidental loss.</span>
+                                        </span>
+                                    </label>
+                                    <div class="settings-hint" style="display:flex; align-items:center; gap:0.5rem; margin:0.5rem 0 0 1.6rem;">
+                                        <label for="s3-mirror-max">Skip deleting if more than</label>
+                                        <input type="number" id="s3-mirror-max" min="1" max="100" step="1" value="10"
+                                            style="width:4.5em; padding:0.3rem 0.5rem;" onchange="saveS3Settings()">
+                                        <span>% of the backup would be removed</span>
                                     </div>
                                 </div>
 
