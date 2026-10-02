@@ -5472,7 +5472,45 @@ function updateHomeButtons() {
 }
 
 // Initial fetch
+// A new install has no name and its media services aren't running yet: ask for the name
+// before anything else loads. Saving it starts them on the server.
+async function ensureServerNamed() {
+    try {
+        const data = await (await fetch('/api/settings/general')).json();
+        if (data.deviceName) return;
+    } catch (err) {
+        console.error('Failed to fetch general settings:', err);
+        return;
+    }
+    const modal = document.getElementById('name-server-modal');
+    const form = document.getElementById('name-server-form');
+    const input = document.getElementById('name-server-input');
+    modal.style.display = 'flex';
+    input.focus();
+    await new Promise(resolve => {
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const deviceName = input.value.trim();
+            if (!deviceName) return;
+            try {
+                const response = await fetch('/api/settings/general', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deviceName })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                modal.style.display = 'none';
+                resolve();
+            } catch (err) {
+                console.error('Failed to name server:', err);
+                showToast('Failed to save the name');
+            }
+        });
+    });
+}
+
 async function init() {
+    await ensureServerNamed();
     await fetchGeneralSettings();
     loadHttpsInfo();
     await fetchS3Settings();

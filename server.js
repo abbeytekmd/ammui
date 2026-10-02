@@ -193,7 +193,7 @@ function loadSettings() {
     settings.acoustidKey = getSetting('acoustidKey', '');
     settings.youtubeApiKey = getSetting('youtubeApiKey', '');
     settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
-    settings.deviceName = getSetting('deviceName', 'AMMUI');
+    settings.deviceName = getSetting('deviceName', '');
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
@@ -257,8 +257,10 @@ function findCaseInsensitivePath(parent, name) {
     return path.join(parent, name);
 }
 
+// Until the server is named, saved media keys keep using the name older installs defaulted to
+const localLibraryName = (name = settings.deviceName) => `${name || 'AMMUI'} Media Library`;
 setLocalMediaServer({
-    name: () => `${settings.deviceName} Media Library`,
+    name: () => localLibraryName(),
     origin: () => `http://${getLocalIp()}:${port}`,
     ports: [port, httpsPort],
 });
@@ -273,8 +275,7 @@ onNewMediaServer(() => {
     clearTimeout(mediaKeyRefreshTimer);
     mediaKeyRefreshTimer = setTimeout(loadMediaKeyedSettings, 5000);
 });
-airplayManager = new AirPlayManager(devices, saveDevices);
-setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt });
+const localDlna = setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt });
 
 // Most recently seen device with this UDN (a device can appear under several locations).
 function findDeviceByUdn(udn) {
@@ -298,7 +299,7 @@ app.use('/api', (req, res, next) => {
 
 // Manually inject the local server into the devices map on startup
 // so it's always available even if SSDP discovery is slow or blocked.
-(function injectLocalServer() {
+function injectLocalServer() {
     const localLocation = `http://${getLocalIp()}:${port}/dlna/description.xml`;
     const localServer = {
         udn: SERVER_UDN,
@@ -327,8 +328,9 @@ app.use('/api', (req, res, next) => {
     devices.set(localLocation, localServer);
     devices.set(SERVER_UDN, localServer);
     console.log(`[DEBUG] Manually injected local server at ${localLocation}`);
+}
 
-    // Inject Browser Player
+(function injectBrowserPlayer() {
     const browserPlayer = {
         udn: BROWSER_PLAYER_UDN,
         location: `http://${getLocalIp()}:${port}/virtual/browser-player`,
@@ -555,10 +557,12 @@ async function mirrorDeleteFromS3(s3, prefix, localKeys) {
     s3Log(`[S3] Mirror: ${deleted}/${extras.length} objects deleted from the bucket.`);
 }
 
-// Daily Sync (every 24 hours)
-setInterval(syncToS3, 86400000);
-// Run first sync after 24 hours
-setTimeout(syncToS3, 86400000);
+function scheduleS3Sync() {
+    // Daily Sync (every 24 hours)
+    setInterval(syncToS3, 86400000);
+    // Run first sync after 24 hours
+    setTimeout(syncToS3, 86400000);
+}
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
 let ssdpRegistry = new Map(); // ip -> { services: Set, lastSeen: timestamp }
@@ -821,59 +825,61 @@ ssdpClient.on('advertise-bye', (headers, rinfo) => {
 
 
 
-console.log('Initializing Sonos discovery listener...');
-try {
-    const sonosDiscovery = DeviceDiscovery();
-    sonosDiscovery.on('DeviceAvailable', async (sonosDevice) => {
-        const host = sonosDevice.host;
-        const location = `http://${host}:1400/xml/device_description.xml`;
-        const existingDevice = devices.get(location);
-
-        if (!existingDevice || existingDevice.loading || !existingDevice.isRenderer) {
-            console.log(`Sonos library found/updated candidate: ${host}`);
-            devices.set(location, {
-                location,
-                friendlyName: `Discovering Sonos (${host})...`,
-                loading: true,
-                type: 'both',
-                isSonos: true,
-                isRenderer: true,
-                isServer: true
-            });
-            const deviceDetails = await parseDescription(location, true, true);
-            if (deviceDetails) {
-                console.log(`Successfully discovered Sonos: ${deviceDetails.friendlyName}`);
-                const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
-                const merged = { ...deviceDetails, loading: false, lastSeen: Date.now() };
-
-                // Preserve custom name and disabled states if they exist
-                if (existing) {
-                    if (existing.customName) merged.customName = existing.customName;
-                    if (existing.disabledPlayer !== undefined) merged.disabledPlayer = existing.disabledPlayer;
-                    if (existing.disabledServer !== undefined) merged.disabledServer = existing.disabledServer;
+function startSonosDiscovery() {
+    console.log('Initializing Sonos discovery listener...');
+    try {
+        const sonosDiscovery = DeviceDiscovery();
+        sonosDiscovery.on('DeviceAvailable', async (sonosDevice) => {
+            const host = sonosDevice.host;
+            const location = `http://${host}:1400/xml/device_description.xml`;
+            const existingDevice = devices.get(location);
+    
+            if (!existingDevice || existingDevice.loading || !existingDevice.isRenderer) {
+                console.log(`Sonos library found/updated candidate: ${host}`);
+                devices.set(location, {
+                    location,
+                    friendlyName: `Discovering Sonos (${host})...`,
+                    loading: true,
+                    type: 'both',
+                    isSonos: true,
+                    isRenderer: true,
+                    isServer: true
+                });
+                const deviceDetails = await parseDescription(location, true, true);
+                if (deviceDetails) {
+                    console.log(`Successfully discovered Sonos: ${deviceDetails.friendlyName}`);
+                    const existing = devices.get(location) || (deviceDetails.udn ? devices.get(deviceDetails.udn) : null);
+                    const merged = { ...deviceDetails, loading: false, lastSeen: Date.now() };
+    
+                    // Preserve custom name and disabled states if they exist
+                    if (existing) {
+                        if (existing.customName) merged.customName = existing.customName;
+                        if (existing.disabledPlayer !== undefined) merged.disabledPlayer = existing.disabledPlayer;
+                        if (existing.disabledServer !== undefined) merged.disabledServer = existing.disabledServer;
+                    }
+    
+                    devices.set(location, merged);
+                    if (deviceDetails.udn) {
+                        devices.set(deviceDetails.udn, merged);
+                    }
+                    saveDevices();
+                } else {
+                    console.warn(`Failed to discover Sonos details for ${host}`);
+                    if (!existingDevice) devices.delete(location);
+                    else existingDevice.loading = false;
                 }
-
-                devices.set(location, merged);
-                if (deviceDetails.udn) {
-                    devices.set(deviceDetails.udn, merged);
-                }
-                saveDevices();
             } else {
-                console.warn(`Failed to discover Sonos details for ${host}`);
-                if (!existingDevice) devices.delete(location);
-                else existingDevice.loading = false;
+                // Update last seen
+                existingDevice.lastSeen = Date.now();
             }
-        } else {
-            // Update last seen
-            existingDevice.lastSeen = Date.now();
-        }
-    });
-
-    sonosDiscovery.on('error', (err) => {
-        console.error('Sonos discovery error:', err.message);
-    });
-} catch (err) {
-    console.error('Failed to start Sonos discovery:', err.message);
+        });
+    
+        sonosDiscovery.on('error', (err) => {
+            console.error('Sonos discovery error:', err.message);
+        });
+    } catch (err) {
+        console.error('Failed to start Sonos discovery:', err.message);
+    }
 }
 
 
@@ -904,10 +910,12 @@ app.post('/api/airplay/stop-discovery', async (_req, res) => {
 });
 
 // Perform initial discovery on startup
-console.log('Performing startup SSDP discovery...');
-ssdpClient.search('ssdp:all');
-SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
-SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
+function startSsdpDiscovery() {
+    console.log('Performing startup SSDP discovery...');
+    ssdpClient.search('ssdp:all');
+    SEARCH_TARGETS_SERVERS.forEach(t => ssdpClient.search(t));
+    SEARCH_TARGETS_RENDERERS.forEach(t => ssdpClient.search(t));
+}
 
 
 /*setInterval(() => {
@@ -2142,15 +2150,16 @@ app.get('/api/settings/general', (req, res) => {
 });
 
 app.post('/api/settings/general', express.json(), (req, res) => {
-    const { deviceName } = req.body;
+    const deviceName = String(req.body.deviceName || '').trim();
     if (deviceName) {
-        const oldLibraryName = `${settings.deviceName} Media Library`;
+        const oldLibraryName = localLibraryName();
         settings.deviceName = deviceName;
         saveSettings();
-        renameMediaKeyServer(oldLibraryName, `${deviceName} Media Library`);
+        renameMediaKeyServer(oldLibraryName, localLibraryName());
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
+        startServices();
     }
     res.json({ success: true });
 });
@@ -4383,7 +4392,8 @@ function checkForUpdates() {
     return updateCheckInFlight;
 }
 
-if (!isPkg) {
+function scheduleUpdateChecks() {
+    if (isPkg) return;
     setTimeout(checkForUpdates, 30 * 1000);
     setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL);
 }
@@ -4464,14 +4474,32 @@ app.post('/api/updates/apply', async (req, res) => {
     }
 });
 
-app.listen(port, () => {
+// Everything beyond the web server itself. The name is announced on the network and used for
+// backups, so a new install waits until it has been named in the UI (POST /api/settings/general).
+let servicesStarted = false;
+function startServices() {
+    if (servicesStarted) return;
+    servicesStarted = true;
+    console.log(`Starting services for "${settings.deviceName}"...`);
+    injectLocalServer();
+    localDlna.startAdvertising();
+    airplayManager = new AirPlayManager(devices, saveDevices);
+    startSonosDiscovery();
+    startSsdpDiscovery();
+    scheduleS3Sync();
+    scheduleUpdateChecks();
     startIndexScheduler(findDeviceByUdn);
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {
         const local = findDeviceByUdn(SERVER_UDN);
         if (local && !getLibraryIndexMeta(SERVER_UDN)) buildIndex(local, 'startup').catch(() => { });
     }, 10000);
+}
+
+app.listen(port, () => {
     console.log(`AMMUI server listening at http://localhost:${port}`);
+    if (settings.deviceName) startServices();
+    else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
 });
 
 try {
