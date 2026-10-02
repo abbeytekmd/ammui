@@ -304,7 +304,7 @@ function injectLocalServer() {
     const localServer = {
         udn: SERVER_UDN,
         location: localLocation,
-        friendlyName: `${settings.deviceName} Media Library`,
+        friendlyName: localLibraryName(),
         type: 'server',
         isServer: true,
         isRenderer: false,
@@ -2159,6 +2159,10 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
+        // The local server's entry is never re-read from its description, so rename it here
+        const localServer = devices.get(SERVER_UDN);
+        if (localServer) localServer.friendlyName = localLibraryName();
+        if (servicesStarted) localDlna.readvertise();
         startServices();
     }
     res.json({ success: true });
