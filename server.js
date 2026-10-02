@@ -16,7 +16,7 @@ import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
@@ -274,7 +274,7 @@ onNewMediaServer(() => {
     mediaKeyRefreshTimer = setTimeout(loadMediaKeyedSettings, 5000);
 });
 airplayManager = new AirPlayManager(devices, saveDevices);
-setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl });
+setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt });
 
 // Most recently seen device with this UDN (a device can appear under several locations).
 function findDeviceByUdn(udn) {
@@ -4001,12 +4001,58 @@ app.get('/api/art/candidates', async (req, res) => {
     }
 });
 
+// Writes art into a local track's album folder as its cover, so the folder browser and the
+// player show the same image. Returns { url, folderPath } or null if the track isn't local
+// or the folder couldn't be written.
+function saveArtToTrackFolder(uri, data, contentType) {
+    const local = localDirForUri(uri);
+    if (!local || !writeFolderArt(local.dir, data, contentType)) return null;
+    return { url: folderArtUrl(local.relDir, local.dir), folderPath: local.relDir };
+}
+
 app.post('/api/art/cache-url', express.json(), async (req, res) => {
-    const { artist, album, coverUrl } = req.body;
+    const { artist, album, coverUrl, uri } = req.body;
     if (!coverUrl) return res.status(400).json({ error: 'coverUrl required' });
     try {
         const localUrl = await downloadAndCacheArt(artist || '', album || '', coverUrl);
+        // Local track: the chosen art becomes the album folder's cover
+        const row = uri && getCachedArt(artist || '', album || '');
+        const saved = row && saveArtToTrackFolder(uri, row.data, row.content_type);
+        if (saved) return res.json({ ...saved, folder: true });
         res.json({ url: `${localUrl}&t=${Date.now()}` });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Moves art the player has been showing for a local track (e.g. a manual pick made before
+// picks were written to the album folder) into the folder as its cover.
+app.post('/api/art/folder-save', express.json(), async (req, res) => {
+    const { uri, artUrl } = req.body;
+    if (!uri || !artUrl) return res.status(400).json({ error: 'uri and artUrl required' });
+    if (!localDirForUri(uri)) return res.status(422).json({ error: 'Not a local library track' });
+    try {
+        let data, contentType;
+        const cachedKey = artUrl.startsWith('/api/art/cached') && new URL(artUrl, 'http://x').searchParams.get('key');
+        if (cachedKey) {
+            const row = getCachedArtByKey(cachedKey);
+            if (!row) return res.status(404).json({ error: 'Not in cache' });
+            data = row.data;
+            contentType = row.content_type;
+        } else if (/^https?:\/\//.test(artUrl)) {
+            const response = await fetch(artUrl, {
+                headers: { 'User-Agent': `${settings.deviceName}/1.0` },
+                signal: AbortSignal.timeout(15000)
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status} fetching art`);
+            contentType = response.headers.get('content-type') || 'image/jpeg';
+            data = Buffer.from(await response.arrayBuffer());
+        } else {
+            return res.status(400).json({ error: 'Unsupported artUrl' });
+        }
+        const saved = saveArtToTrackFolder(uri, data, contentType);
+        if (!saved) return res.status(500).json({ error: 'Could not write cover file' });
+        res.json({ ...saved, folder: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -4039,6 +4085,18 @@ app.get('/api/art/search', async (req, res) => {
     let { artist, album, uri, skip } = req.query;
     const skipUrls = skip ? skip.split(',').map(s => s.trim()).filter(Boolean) : [];
     let albumArtist = req.query.albumArtist || null;
+
+    // Local track: the album folder's cover is the single source of truth (found or
+    // fetched once and saved there), so the player matches the folder browser.
+    const local = localDirForUri(uri);
+    if (local) {
+        try {
+            const art = await resolveFolderArt(local.dir, { findDiscogsArtUrl, getCachedArt });
+            if (art?.path) return res.json({ url: folderArtUrl(local.relDir, local.dir), source: 'folder' });
+        } catch (e) {
+            console.warn(`[ART] Folder art lookup failed for ${local.relDir}:`, e.message);
+        }
+    }
 
     if (uri && (!artist || !album || !albumArtist)) {
         try {
@@ -4107,6 +4165,11 @@ app.get('/api/art/search', async (req, res) => {
             if (cacheArtist !== artist || cacheAlbum !== album) {
                 const row = getCachedArt(cacheArtist, cacheAlbum);
                 if (row) setCachedArt(artist, album, row.data, row.content_type);
+            }
+            if (local) {
+                const row = getCachedArt(cacheArtist, cacheAlbum);
+                const saved = row && saveArtToTrackFolder(uri, row.data, row.content_type);
+                if (saved) return res.json({ url: saved.url, source: 'discogs' });
             }
             // Append a timestamp so the browser doesn't serve a stale cached version of the same URL
             return res.json({ url: `${localUrl}&t=${Date.now()}`, source: 'discogs' });
@@ -4179,13 +4242,11 @@ app.get('/api/art/local', async (req, res) => {
 
             if (fs.existsSync(localPath)) {
                 const dir = path.dirname(localPath);
-                const artFiles = ['folder.jpg', 'cover.jpg', 'folder.png', 'cover.png', 'album.jpg', 'artwork.jpg'];
-                for (const artFile of artFiles) {
+                const artFile = findArtSidecar(fs.readdirSync(dir));
+                if (artFile) {
                     const artPath = path.join(dir, artFile);
-                    if (fs.existsSync(artPath)) {
-                        console.log(`[ART] Found sidecar artwork: ${artPath}`);
-                        return res.sendFile(path.resolve(artPath));
-                    }
+                    console.log(`[ART] Found sidecar artwork: ${artPath}`);
+                    return res.sendFile(path.resolve(artPath));
                 }
             }
         }

@@ -3246,8 +3246,24 @@ async function updatePlayerArtwork(artist, album, uri, albumArtUrl) {
         triedArtworkQueryKey = query;
     }
 
-    // If the user manually chose artwork for this track, always use it
-    const override = uri && artworkOverrides.get(uri);
+    // If the user manually chose artwork for this track, always use it. For local tracks
+    // the album folder's cover is the source of truth, so move an old pick there instead.
+    let override = uri && artworkOverrides.get(uri);
+    if (override && uri.includes('/local-files/')) {
+        try {
+            const res = await fetch('/api/art/folder-save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uri, artUrl: override })
+            });
+            if (res.ok) {
+                applyFolderArtSaved(uri, await res.json());
+                override = null;
+            }
+        } catch (e) {
+            console.warn('[ART] Moving artwork pick to album folder failed:', e);
+        }
+    }
     if (override) {
         if (override !== currentArtworkUrl) {
             currentArtworkUrl = override;
@@ -7811,6 +7827,33 @@ async function submitArtSearch() {
     }
 }
 
+// Art was just saved as a local album folder's cover ({ url, folderPath } from the server):
+// drop now-redundant per-track picks for that album and refresh any folder-browser tiles
+// still showing the old cover.
+function applyFolderArtSaved(trackUri, { url, folderPath }) {
+    const folderPrefix = trackUri.slice(0, trackUri.lastIndexOf('/') + 1);
+    for (const key of [...artworkOverrides.keys()]) {
+        if (key.startsWith(folderPrefix) && !key.slice(folderPrefix.length).includes('/')) artworkOverrides.delete(key);
+    }
+    localStorage.setItem('artworkOverrides', JSON.stringify([...artworkOverrides]));
+
+    const folderArtPath = (src) => {
+        try {
+            let u = new URL(src, window.location.href);
+            if (u.pathname === '/api/media-proxy') u = new URL(u.searchParams.get('url'));
+            return u.pathname === '/api/art/folder' ? u.searchParams.get('path') : null;
+        } catch (e) { return null; }
+    };
+    document.querySelectorAll('img[data-thumb-url]').forEach(img => {
+        if (folderArtPath(img.getAttribute('src')) !== folderPath) return;
+        img.src = url;
+        img.dataset.thumbUrl = url;
+        img.style.removeProperty('display');
+        if (img.nextElementSibling?.classList.contains('folder-art-fallback')) img.nextElementSibling.style.display = 'none';
+        img.parentElement.classList.add('has-thumb');
+    });
+}
+
 async function selectArtCandidate(coverUrl, artist, album, uri) {
     const currentTrack = currentPlaylistItems.find(item => item.id == currentTrackId);
     const trackUri = uri || currentTrack?.uri || '';
@@ -7823,7 +7866,7 @@ async function selectArtCandidate(coverUrl, artist, album, uri) {
         const res = await fetch('/api/art/cache-url', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ artist: trackArtist, album: trackAlbum, coverUrl })
+            body: JSON.stringify({ artist: trackArtist, album: trackAlbum, coverUrl, uri: trackUri })
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
@@ -7831,7 +7874,10 @@ async function selectArtCandidate(coverUrl, artist, album, uri) {
         const query = `${trackArtist} ${trackAlbum}`.trim();
         currentArtworkQuery = query;
         failedArtworkQueries.delete(query);
-        if (trackUri) {
+        if (data.folder) {
+            // Saved as the album folder's cover — no per-track override needed
+            applyFolderArtSaved(trackUri, data);
+        } else if (trackUri) {
             artworkOverrides.set(trackUri, data.url);
             localStorage.setItem('artworkOverrides', JSON.stringify([...artworkOverrides]));
         }
