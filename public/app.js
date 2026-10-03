@@ -5284,23 +5284,27 @@ function updateBrowserModeTabs() {
     const hasServer = !!selectedServerUdn &&
         (currentDevices || []).some(d => d.udn === selectedServerUdn && d.isServer);
     bar.hidden = !hasServer;
-    const activeTab = calendarVisible ? 'calendar' : currentBrowserMode;
+    const activeTab = appView || currentBrowserMode;
     bar.querySelectorAll('.lib-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === activeTab);
     });
 }
 
-// Calendar tab: a month view that takes the place of the browser/player layout
-let calendarVisible = false;
-let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+// Calendar and Recipes tabs are full views that take the place of the browser/player
+// layout. appView is the one showing, or null for the normal layout.
+let appView = null;
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view' };
 
-function setCalendarVisible(visible) {
-    calendarVisible = visible;
-    document.getElementById('calendar-view').hidden = !visible;
-    document.querySelector('.main-layout').hidden = visible;
-    if (floatingBtn) floatingBtn.style.visibility = visible ? 'hidden' : '';
+function setAppView(view) {
+    appView = view;
+    for (const [name, id] of Object.entries(APP_VIEWS)) document.getElementById(id).hidden = name !== view;
+    document.querySelector('.main-layout').hidden = !!view;
+    if (floatingBtn) floatingBtn.style.visibility = view ? 'hidden' : '';
     updateBrowserModeTabs();
 }
+
+// Calendar tab: a month view
+let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 
 let calendarRenderToken = 0;
 const CALENDAR_MAX_EVENTS_PER_DAY = 3;
@@ -5309,7 +5313,7 @@ function showCalendar() {
     const now = new Date();
     calendarMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     renderCalendar();
-    setCalendarVisible(true);
+    setAppView('calendar');
 }
 
 const calendarDateKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -5349,6 +5353,18 @@ function getHiddenCalendars() {
     try { return new Set(JSON.parse(localStorage.getItem('calendarHidden') || '[]')); } catch (e) { return new Set(); }
 }
 
+// Entry tags unticked in the sidebar; likewise per browser
+function getHiddenCalendarTags() {
+    try { return new Set(JSON.parse(localStorage.getItem('calendarHiddenTags') || '[]')); } catch (e) { return new Set(); }
+}
+
+function setCalendarTagHidden(tag, hidden) {
+    const set = getHiddenCalendarTags();
+    hidden ? set.add(tag) : set.delete(tag);
+    try { localStorage.setItem('calendarHiddenTags', JSON.stringify([...set])); } catch (e) { }
+    drawCalendarEvents();
+}
+
 function setCalendarHidden(id, hidden) {
     const set = getHiddenCalendars();
     hidden ? set.add(id) : set.delete(id);
@@ -5359,19 +5375,99 @@ function setCalendarHidden(id, hidden) {
 // The calendars and events last loaded for the month on screen, so toggling a
 // calendar can redraw without fetching again
 let calendarLoaded = null; // { cals, events, errors, gridStart, gridEnd }
+let calendarTagColors = {}; // { tag: colour } for entry tags
 
-function renderCalendarSidebar(cals) {
-    const list = document.getElementById('calendar-sidebar-list');
-    if (!list) return;
-    const hidden = getHiddenCalendars();
-    list.innerHTML = cals.map(c => `
-        <label class="calendar-toggle" style="--event-color: ${escapeHtml(c.color)}" title="${escapeHtml(c.name)}">
-            <input type="checkbox" ${hidden.has(c.id) ? '' : 'checked'}
-                onchange="setCalendarHidden('${escapeHtml(c.id)}', !this.checked)">
-            <span class="calendar-toggle-swatch"></span>
-            <span class="calendar-toggle-name">${escapeHtml(c.name)}</span>
-        </label>`).join('');
-    document.getElementById('calendar-sidebar').hidden = !cals.length;
+const CALENDAR_PALETTE_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="13.5" cy="6.5" r="1.5"></circle><circle cx="17.5" cy="10.5" r="1.5"></circle>
+    <circle cx="8.5" cy="7.5" r="1.5"></circle><circle cx="6.5" cy="12.5" r="1.5"></circle>
+    <path d="M12 2a10 10 0 0 0 0 20c.9 0 1.6-.7 1.6-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6H16a6 6 0 0 0 6-6c0-4.9-4.5-8.6-10-8.6z"></path>
+</svg>`;
+
+// One sidebar row: a show/hide tickbox in the item's colour, plus a colour button.
+// items: [{ key, label, color, hidden }]; handlers get the item's key.
+function renderCalendarSidebarRows(list, items, { onToggle, onPreview, onSave }) {
+    list.innerHTML = items.map((item, i) => `
+        <div class="calendar-sidebar-row" data-i="${i}" style="--event-color: ${escapeHtml(item.color)}">
+            <label class="calendar-toggle" title="${escapeHtml(item.label)}">
+                <input type="checkbox" class="calendar-toggle-box" ${item.hidden ? '' : 'checked'}>
+                <span class="calendar-toggle-swatch"></span>
+                <span class="calendar-toggle-name">${escapeHtml(item.label)}</span>
+            </label>
+            <label class="calendar-color-btn" title="Change colour">
+                ${CALENDAR_PALETTE_ICON}
+                <input type="color" class="calendar-color-pick" value="${escapeHtml(item.color)}" aria-label="Colour for ${escapeHtml(item.label)}">
+            </label>
+        </div>`).join('');
+    list.querySelectorAll('.calendar-sidebar-row').forEach(row => {
+        const item = items[Number(row.dataset.i)];
+        row.querySelector('.calendar-toggle-box').onchange = e => onToggle(item.key, !e.target.checked);
+        const pick = row.querySelector('.calendar-color-pick');
+        // While the picker is open, recolour without rebuilding the sidebar (that would close it)
+        pick.oninput = () => { row.style.setProperty('--event-color', pick.value); onPreview(item.key, pick.value); };
+        pick.onchange = () => { row.style.setProperty('--event-color', pick.value); onSave(item.key, pick.value); };
+    });
+}
+
+function renderCalendarSidebar(cals, tags) {
+    const hiddenCals = getHiddenCalendars();
+    const hiddenTags = getHiddenCalendarTags();
+    renderCalendarSidebarRows(document.getElementById('calendar-sidebar-list'),
+        cals.map(c => ({ key: c.id, label: c.name, color: c.color, hidden: hiddenCals.has(c.id) })),
+        { onToggle: setCalendarHidden, onPreview: previewCalendarColor, onSave: saveCalendarColor });
+    renderCalendarSidebarRows(document.getElementById('calendar-sidebar-tags'),
+        tags.map(t => ({ key: t, label: `#${t}`, color: calendarTagColors[t] || '#6366f1', hidden: hiddenTags.has(t) })),
+        { onToggle: setCalendarTagHidden, onPreview: previewTagColor, onSave: saveTagColor });
+    document.getElementById('calendar-sidebar-cals-heading').hidden = !cals.length;
+    document.getElementById('calendar-sidebar-tags-heading').hidden = !tags.length;
+    document.getElementById('calendar-sidebar').hidden = !cals.length && !tags.length;
+}
+
+function showCalendarColorError(err) {
+    const statusEl = document.getElementById('calendar-status');
+    statusEl.className = 'calendar-status error';
+    statusEl.textContent = `Couldn't save the colour: ${err.message}`;
+}
+
+function previewCalendarColor(id, color) {
+    const cal = calendarLoaded?.cals.find(c => c.id === id);
+    if (cal) cal.color = color;
+    drawCalendarEvents();
+}
+
+async function saveCalendarColor(id, color) {
+    previewCalendarColor(id, color);
+    try {
+        const res = await fetch(`/api/calendars/${encodeURIComponent(id)}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ color })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+    } catch (err) {
+        showCalendarColorError(err);
+    }
+}
+
+function previewTagColor(tag, color) {
+    calendarTagColors[tag] = color;
+    drawCalendarEvents();
+}
+
+async function saveTagColor(tag, color) {
+    previewTagColor(tag, color);
+    try {
+        const res = await fetch('/api/calendar-entries/tag-color', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag, color })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+    } catch (err) {
+        showCalendarColorError(err);
+    }
+}
+
+// An entry is drawn in the colour of its first tag that's ticked
+function entryColor(entry, hiddenTags) {
+    const tag = entry.tags.find(t => !hiddenTags.has(t)) || entry.tags[0];
+    return calendarTagColors[tag] || '#6366f1';
 }
 
 function drawCalendarEvents() {
@@ -5380,7 +5476,10 @@ function drawCalendarEvents() {
     const hidden = getHiddenCalendars();
     const colors = Object.fromEntries(cals.map(c => [c.id, c.color]));
     const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
-    const byDay = groupCalendarEvents(events.filter(ev => !hidden.has(ev.calendarId)), gridStart, gridEnd);
+    // An entry stays visible while at least one of its tags is ticked
+    const hiddenTags = getHiddenCalendarTags();
+    const visible = ev => ev.entry ? ev.entry.tags.some(t => !hiddenTags.has(t)) : !hidden.has(ev.calendarId);
+    const byDay = groupCalendarEvents(events.filter(visible), gridStart, gridEnd);
     const timeFmt = { hour: '2-digit', minute: '2-digit' };
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
@@ -5389,7 +5488,7 @@ function drawCalendarEvents() {
         list.slice(0, CALENDAR_MAX_EVENTS_PER_DAY).forEach(ev => {
             const el = document.createElement('div');
             el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
-            el.style.setProperty('--event-color', colors[ev.calendarId] || 'var(--primary)');
+            el.style.setProperty('--event-color', ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
             const time = ev.allDay ? '' : new Date(ev.start).toLocaleTimeString(undefined, timeFmt);
             if (time) {
                 const t = document.createElement('span');
@@ -5398,7 +5497,20 @@ function drawCalendarEvents() {
                 el.appendChild(t);
             }
             el.appendChild(document.createTextNode(ev.title));
-            el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
+            if (ev.entry) {
+                el.classList.add('local-entry');
+                el.dataset.entryId = ev.entry.id;
+                if (ev.entry.repeat) el.classList.add('repeating');
+                if (ev.entry.recipe) {
+                    const icon = document.createElement('span');
+                    icon.className = 'calendar-event-recipe';
+                    icon.textContent = '🍽';
+                    el.insertBefore(icon, el.firstChild);
+                }
+                el.title = [ev.title, ev.entry.recipe ? `Recipe: ${ev.entry.recipe.name}` : '', ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+            } else {
+                el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
+            }
             cell.appendChild(el);
         });
         if (list.length > CALENDAR_MAX_EVENTS_PER_DAY) {
@@ -5414,23 +5526,38 @@ function drawCalendarEvents() {
 async function loadCalendarEvents(gridStart, gridEnd, token) {
     const statusEl = document.getElementById('calendar-status');
     calendarLoaded = null;
+    const range = `start=${calendarDateKey(gridStart)}&end=${calendarDateKey(gridEnd)}`;
     try {
-        const cals = await (await fetch('/api/calendars')).json();
+        const [cals, entryData, tagData] = await Promise.all([
+            fetch('/api/calendars').then(r => r.json()),
+            fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
+            fetch('/api/calendar-entries/tags').then(r => r.json())
+        ]);
         if (token !== calendarRenderToken) return;
-        renderCalendarSidebar(cals);
+        calendarTagColors = tagData.colors || {};
+        renderCalendarSidebar(cals, tagData.tags || []);
+
+        // This app's entries go first, so they aren't the ones pushed into "+N more"
+        const entryEvents = (entryData.entries || []).map(entry => {
+            const [y, m, d] = entry.date.split('-').map(Number);
+            return { calendarId: null, title: entry.recipe ? entry.recipe.name : entry.title, allDay: true, start: entry.date, end: calendarDateKey(new Date(y, m - 1, d + 1)), entry };
+        });
+        calendarLoaded = { cals, events: entryEvents, gridStart, gridEnd };
+        drawCalendarEvents();
+
         if (!cals.length) {
             statusEl.className = 'calendar-status';
-            statusEl.textContent = 'Add Google calendars in Server Settings → Calendars to see their events here.';
+            statusEl.textContent = 'Click a day to add an entry. Google calendars can be added in Server Settings → Calendars.';
             return;
         }
         statusEl.className = 'calendar-status';
         statusEl.textContent = 'Loading events…';
-        const res = await fetch(`/api/calendars/events?start=${calendarDateKey(gridStart)}&end=${calendarDateKey(gridEnd)}`);
+        const res = await fetch(`/api/calendars/events?${range}`);
         const data = await res.json();
         if (token !== calendarRenderToken) return;
         if (!res.ok) throw new Error(data.error || 'Failed to load events');
 
-        calendarLoaded = { cals, events: data.events, gridStart, gridEnd };
+        calendarLoaded = { cals, events: [...entryEvents, ...data.events], gridStart, gridEnd };
         drawCalendarEvents();
 
         const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
@@ -5487,6 +5614,237 @@ function renderCalendar() {
     loadCalendarEvents(gridStart, gridEnd, ++calendarRenderToken);
 }
 
+// --- Calendar entries: click empty space in a day to add one, click an entry to edit it ---
+let calendarEntryEditing = null; // { id|null, date, tags: [] }
+let calendarEntryTagOptions = [];
+
+function onCalendarGridClick(event) {
+    const entryEl = event.target.closest('.calendar-event.local-entry');
+    if (entryEl) {
+        const ev = calendarLoaded?.events.find(e => e.entry && e.entry.id === entryEl.dataset.entryId);
+        if (ev) openCalendarEntryModal(entryEl.closest('.calendar-day')?.dataset.date || ev.entry.date, ev.entry);
+        return;
+    }
+    // Google events and "+N more" aren't editable, so clicks on them do nothing
+    if (event.target.closest('.calendar-event, .calendar-more')) return;
+    const cell = event.target.closest('.calendar-day');
+    if (cell) openCalendarEntryModal(cell.dataset.date);
+}
+
+const formatCalendarDate = ymd => {
+    const [y, m, d] = ymd.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+};
+
+// "Every 2 weeks until 3 March 2027"
+function describeCalendarRepeat(repeat) {
+    if (!repeat) return '';
+    const n = repeat.interval;
+    const text = n === 1 ? `Every ${repeat.unit}` : `Every ${n} ${repeat.unit}s`;
+    return repeat.until ? `${text} until ${formatCalendarDate(repeat.until)}` : text;
+}
+
+function updateCalendarEntryRepeatUI() {
+    const repeating = !!document.getElementById('calendar-entry-repeat-unit').value;
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-repeat-on').forEach(el => { el.hidden = !repeating; });
+    document.getElementById('calendar-entry-date-heading').textContent = repeating ? 'Starts' : 'Date';
+}
+
+// --- Entry | Recipe: a normal entry has a title and description; a recipe entry just names a recipe ---
+let calendarEntryKind = 'entry';
+
+function setCalendarEntryKind(kind) {
+    calendarEntryKind = kind;
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-kind-btn').forEach(btn => {
+        const on = btn.dataset.kind === kind;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    document.getElementById('calendar-entry-normal-fields').hidden = kind !== 'entry';
+    document.getElementById('calendar-entry-recipe-fields').hidden = kind !== 'recipe';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
+}
+
+// Fills the Recipe dropdown. A linked recipe missing from the list still shows, so it isn't lost.
+async function loadCalendarEntryRecipeOptions(selectedId, linked) {
+    const select = document.getElementById('calendar-entry-recipe');
+    let recipes = [];
+    try {
+        recipes = (await (await fetch('/api/recipes')).json()).recipes || [];
+    } catch (e) { }
+    if (linked && !recipes.some(r => r.id === linked.id)) recipes.push(linked);
+    select.innerHTML = '<option value="">Choose a recipe…</option>' +
+        recipes.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
+    select.value = selectedId || '';
+    document.getElementById('calendar-entry-no-recipes').hidden = recipes.length > 0;
+    updateCalendarEntryRecipeUI();
+}
+
+function selectedCalendarEntryRecipeName() {
+    const select = document.getElementById('calendar-entry-recipe');
+    return select.value ? select.options[select.selectedIndex].textContent : '';
+}
+
+function updateCalendarEntryRecipeUI() {
+    document.getElementById('calendar-entry-open-recipe').style.display =
+        document.getElementById('calendar-entry-recipe').value ? '' : 'none';
+}
+
+
+async function openRecipeFromEntry() {
+    const id = document.getElementById('calendar-entry-recipe').value;
+    if (!id) return;
+    closeCalendarEntryModal();
+    await showRecipes();
+    await selectRecipe(id);
+}
+
+
+// date: the day clicked. For a repeating entry that's one occurrence; saving keeps the
+// series' own start date, and changes apply to every occurrence.
+async function openCalendarEntryModal(date, entry = null) {
+    const startDate = entry ? (entry.startDate || entry.date) : date;
+    calendarEntryEditing = { id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [] };
+    document.getElementById('calendar-entry-heading').textContent = entry ? 'Edit Entry' : 'New Entry';
+    // For a repeating entry, say which occurrence was clicked; the Date field holds the series start
+    document.getElementById('calendar-entry-date-label').textContent =
+        entry && entry.repeat && date !== startDate ? `Opened from ${formatCalendarDate(date)}` : '';
+    document.getElementById('calendar-entry-date').value = startDate;
+    const repeat = entry ? entry.repeat : null;
+    const recipeId = entry && entry.recipe ? entry.recipe.id : '';
+    await loadCalendarEntryRecipeOptions(recipeId, entry && entry.recipe);
+    setCalendarEntryKind(entry && entry.recipe ? 'recipe' : 'entry');
+    document.getElementById('calendar-entry-repeat-unit').value = repeat ? repeat.unit : '';
+    document.getElementById('calendar-entry-repeat-interval').value = repeat ? repeat.interval : 1;
+    document.getElementById('calendar-entry-repeat-until').value = repeat && repeat.until ? repeat.until : '';
+    document.getElementById('calendar-entry-series-note').textContent = repeat
+        ? 'Changes apply to every occurrence.'
+        : '';
+    updateCalendarEntryRepeatUI();
+    document.getElementById('calendar-entry-title').value = entry && !entry.recipe ? entry.title : '';
+    document.getElementById('calendar-entry-description').value = entry && !entry.recipe ? entry.description : '';
+    document.getElementById('calendar-entry-tag-input').value = '';
+    document.getElementById('calendar-entry-delete-btn').style.display = entry ? '' : 'none';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
+    renderCalendarEntryTags();
+    document.getElementById('calendar-entry-modal').style.display = 'flex';
+    document.getElementById(calendarEntryKind === 'recipe' ? 'calendar-entry-recipe' : 'calendar-entry-title').focus();
+
+    try {
+        const data = await (await fetch('/api/calendar-entries/tags')).json();
+        calendarEntryTagOptions = data.tags || [];
+        Object.assign(calendarTagColors, data.colors || {});
+    } catch (e) {
+        calendarEntryTagOptions = [];
+    }
+    if (calendarEntryEditing) renderCalendarEntryTags();
+}
+
+function closeCalendarEntryModal() {
+    document.getElementById('calendar-entry-modal').style.display = 'none';
+    calendarEntryEditing = null;
+}
+
+// Every existing tag as a chip to click on/off, plus any new ones added in this edit
+function renderCalendarEntryTags() {
+    const container = document.getElementById('calendar-entry-tags');
+    const all = [...new Set([...calendarEntryTagOptions, ...calendarEntryEditing.tags])].sort((a, b) => a.localeCompare(b));
+    if (!all.length) {
+        container.innerHTML = '<span class="settings-hint" style="margin: 0;">No tags yet. Type one below and click Add.</span>';
+        return;
+    }
+    container.innerHTML = all.map((tag, i) => {
+        const on = calendarEntryEditing.tags.includes(tag);
+        const color = calendarTagColors[tag] ? ` style="--event-color: ${escapeHtml(calendarTagColors[tag])}"` : '';
+        return `<button type="button" class="calendar-entry-tag-chip${on ? ' selected' : ''}" data-i="${i}" aria-pressed="${on}"${color}>${on ? '✓ ' : ''}${escapeHtml(tag)}</button>`;
+    }).join('');
+    container.querySelectorAll('.calendar-entry-tag-chip').forEach(el => {
+        el.onclick = () => toggleCalendarEntryTag(all[Number(el.dataset.i)]);
+    });
+}
+
+function toggleCalendarEntryTag(tag) {
+    const tags = calendarEntryEditing.tags;
+    const i = tags.indexOf(tag);
+    i === -1 ? tags.push(tag) : tags.splice(i, 1);
+    renderCalendarEntryTags();
+}
+
+// A new tag is added already selected; an existing one typed in just gets selected
+function addCalendarEntryTag() {
+    const input = document.getElementById('calendar-entry-tag-input');
+    const typed = input.value.trim();
+    input.value = '';
+    if (typed) {
+        const existing = calendarEntryTagOptions.find(t => t.toLowerCase() === typed.toLowerCase()) || typed;
+        if (!calendarEntryEditing.tags.includes(existing)) calendarEntryEditing.tags.push(existing);
+        renderCalendarEntryTags();
+    }
+    input.focus();
+}
+
+async function saveCalendarEntry() {
+    if (!calendarEntryEditing) return;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
+    // A tag typed but not yet added still counts
+    if (document.getElementById('calendar-entry-tag-input').value.trim()) addCalendarEntryTag();
+    // A recipe entry takes its title from the recipe and has no description
+    const isRecipe = calendarEntryKind === 'recipe';
+    const recipeId = isRecipe ? document.getElementById('calendar-entry-recipe').value : null;
+    if (isRecipe && !recipeId) { setStatus('Choose a recipe.', true); return; }
+    const title = isRecipe ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim();
+    const description = isRecipe ? '' : document.getElementById('calendar-entry-description').value.trim();
+    if (!title) { setStatus('Enter a title.', true); return; }
+    if (!calendarEntryEditing.tags.length) { setStatus('Select at least one tag.', true); return; }
+
+    const date = document.getElementById('calendar-entry-date').value;
+    if (!date) { setStatus('Choose a date.', true); return; }
+    calendarEntryEditing.date = date;
+
+    const unit = document.getElementById('calendar-entry-repeat-unit').value;
+    let repeat = null;
+    if (unit) {
+        const interval = Number(document.getElementById('calendar-entry-repeat-interval').value);
+        const until = document.getElementById('calendar-entry-repeat-until').value || null;
+        if (!Number.isInteger(interval) || interval < 1 || interval > 999) { setStatus('Repeat every must be a whole number from 1 to 999.', true); return; }
+        if (until && until < calendarEntryEditing.date) { setStatus('The repeat end date is before the entry starts.', true); return; }
+        repeat = { unit, interval, until };
+    }
+
+    const btn = document.getElementById('calendar-entry-save-btn');
+    btn.disabled = true;
+    try {
+        const { id, tags } = calendarEntryEditing;
+        const res = await fetch(id ? `/api/calendar-entries/${encodeURIComponent(id)}` : '/api/calendar-entries', {
+            method: id ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ date, title, description, repeat, recipeId, tags })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        closeCalendarEntryModal();
+        renderCalendar();
+    } catch (err) {
+        setStatus(err.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function deleteCalendarEntry() {
+    if (!calendarEntryEditing?.id) return;
+    const title = (calendarEntryKind === 'recipe' ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
+    if (!confirm(`Delete "${title}"?`)) return;
+    try {
+        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(calendarEntryEditing.id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
+        closeCalendarEntryModal();
+        renderCalendar();
+    } catch (err) {
+        setCalendarSettingsStatus('calendar-entry-status', err.message, true);
+    }
+}
+
 // --- Server Settings → Calendars ---
 // Messages go in a line inside the dialog, as toasts sit behind it
 function setCalendarSettingsStatus(elId, text, isError) {
@@ -5507,8 +5865,7 @@ async function loadCalendarSettings() {
         }
         listEl.innerHTML = cals.map(c => `
             <div class="calendar-settings-row" data-id="${escapeHtml(c.id)}">
-                <input type="color" class="calendar-color-input" value="${escapeHtml(c.color)}"
-                    onchange="updateCalendar('${escapeHtml(c.id)}', { color: this.value })" title="Colour">
+                <span class="calendar-settings-dot" style="background: ${escapeHtml(c.color)}"></span>
                 <input type="text" class="calendar-name-input" value="${escapeHtml(c.name)}"
                     onchange="updateCalendar('${escapeHtml(c.id)}', { name: this.value })" title="Rename">
                 <span class="calendar-settings-host">${escapeHtml(c.host)}</span>
@@ -5522,7 +5879,6 @@ async function loadCalendarSettings() {
 async function addCalendar() {
     const nameInput = document.getElementById('calendar-add-name');
     const urlInput = document.getElementById('calendar-add-url');
-    const colorInput = document.getElementById('calendar-add-color');
     const btn = document.getElementById('calendar-add-btn');
     const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-add-status', text, isError);
     const url = urlInput.value.trim();
@@ -5535,7 +5891,7 @@ async function addCalendar() {
         const res = await fetch('/api/calendars', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: nameInput.value.trim(), url, color: colorInput.value })
+            body: JSON.stringify({ name: nameInput.value.trim(), url })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to add calendar');
@@ -5543,7 +5899,7 @@ async function addCalendar() {
         urlInput.value = '';
         setStatus(`Added "${data.name}".`, false);
         await loadCalendarSettings();
-        if (calendarVisible) renderCalendar();
+        if (appView === 'calendar') renderCalendar();
     } catch (err) {
         setStatus(err.message, true);
     } finally {
@@ -5561,7 +5917,7 @@ async function updateCalendar(id, changes) {
             body: JSON.stringify(changes)
         });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-        if (calendarVisible) renderCalendar();
+        if (appView === 'calendar') renderCalendar();
     } catch (err) {
         setCalendarSettingsStatus('calendar-list-status', `Couldn't update calendar: ${err.message}`, true);
     }
@@ -5575,14 +5931,222 @@ async function removeCalendar(id, btn) {
         const res = await fetch(`/api/calendars/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
         await loadCalendarSettings();
-        if (calendarVisible) renderCalendar();
+        if (appView === 'calendar') renderCalendar();
     } catch (err) {
         setCalendarSettingsStatus('calendar-list-status', `Couldn't remove calendar: ${err.message}`, true);
     }
 }
 
+// --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
+let recipeList = [];       // [{ id, name, ingredientCount }]
+let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [] }
+let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
+
+const recipeIsDirty = () => !!recipeDraft && JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients }) !== recipeSavedJson;
+
+function setRecipeStatus(text, isError) {
+    setCalendarSettingsStatus('recipe-status', text, isError);
+}
+
+// Keeps whatever is open (including unsaved edits) when returning to the tab
+async function showRecipes() {
+    setAppView('recipes');
+    await loadRecipes();
+    if (!recipeDraft) renderRecipeEditor();
+}
+
+async function loadRecipes() {
+    try {
+        const res = await fetch('/api/recipes');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load recipes');
+        recipeList = data.recipes || [];
+    } catch (err) {
+        recipeList = [];
+        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load recipes: ${escapeHtml(err.message)}</p>`;
+        return;
+    }
+    renderRecipeList();
+}
+
+function renderRecipeList() {
+    const listEl = document.getElementById('recipes-list');
+    const filter = document.getElementById('recipes-filter').value.trim().toLowerCase();
+    const shown = recipeList.filter(r => !filter || r.name.toLowerCase().includes(filter));
+    if (!recipeList.length) {
+        listEl.innerHTML = '<p class="settings-hint">No recipes yet. Click + New to add one.</p>';
+        return;
+    }
+    if (!shown.length) {
+        listEl.innerHTML = '<p class="settings-hint">No recipes match.</p>';
+        return;
+    }
+    listEl.innerHTML = shown.map(r => `
+        <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}" data-id="${escapeHtml(r.id)}">
+            <span class="recipe-list-name">${escapeHtml(r.name)}</span>
+            <span class="recipe-list-meta">${r.ingredientCount} ingredient${r.ingredientCount === 1 ? '' : 's'}</span>
+        </button>`).join('');
+    listEl.querySelectorAll('.recipe-list-item').forEach(btn => {
+        btn.onclick = () => selectRecipe(btn.dataset.id);
+    });
+}
+
+function confirmDiscardRecipe() {
+    return !recipeIsDirty() || confirm('Discard the unsaved changes to this recipe?');
+}
+
+function openRecipeDraft(recipe) {
+    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: [...(recipe.ingredients || [])] };
+    recipeSavedJson = JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients });
+    setRecipeStatus('', false);
+    document.getElementById('recipe-ingredient-input').value = '';
+    renderRecipeEditor();
+    renderRecipeList();
+}
+
+async function selectRecipe(id) {
+    if (recipeDraft && recipeDraft.id === id) return;
+    if (!confirmDiscardRecipe()) return;
+    try {
+        const res = await fetch(`/api/recipes/${encodeURIComponent(id)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load recipe');
+        openRecipeDraft(data);
+    } catch (err) {
+        showToast(`Couldn't open recipe: ${err.message}`, 'error');
+        await loadRecipes();
+    }
+}
+
+function newRecipe() {
+    if (!confirmDiscardRecipe()) return;
+    openRecipeDraft({});
+    document.getElementById('recipe-name').focus();
+}
+
+function renderRecipeEditor() {
+    const editor = document.getElementById('recipe-editor');
+    document.getElementById('recipe-empty').hidden = !!recipeDraft;
+    editor.hidden = !recipeDraft;
+    if (!recipeDraft) return;
+    document.getElementById('recipe-name').value = recipeDraft.name;
+    renderRecipeIngredients();
+    updateRecipeButtons();
+}
+
+function renderRecipeIngredients() {
+    const list = document.getElementById('recipe-ingredients');
+    const items = recipeDraft.ingredients;
+    list.innerHTML = items.map((text, i) => `
+        <li class="recipe-ingredient" data-i="${i}">
+            <input type="text" value="${escapeHtml(text)}" maxlength="300" aria-label="Ingredient ${i + 1}">
+            <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === items.length - 1 ? 'disabled' : ''}>▼</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
+        </li>`).join('');
+    list.querySelectorAll('.recipe-ingredient').forEach(row => {
+        const i = Number(row.dataset.i);
+        const input = row.querySelector('input');
+        input.oninput = () => { recipeDraft.ingredients[i] = input.value; updateRecipeButtons(); };
+        // Enter in a row jumps to the "add" box, ready for the next ingredient
+        input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-ingredient-input').focus(); } };
+        row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
+            btn.onclick = () => {
+                const act = btn.dataset.act;
+                if (act === 'remove') items.splice(i, 1);
+                else {
+                    const j = act === 'up' ? i - 1 : i + 1;
+                    [items[i], items[j]] = [items[j], items[i]];
+                }
+                renderRecipeIngredients();
+                updateRecipeButtons();
+            };
+        });
+    });
+}
+
+function markRecipeDirty() {
+    if (!recipeDraft) return;
+    recipeDraft.name = document.getElementById('recipe-name').value;
+    updateRecipeButtons();
+}
+
+function updateRecipeButtons() {
+    const dirty = recipeIsDirty();
+    const isNew = !recipeDraft.id;
+    document.getElementById('recipe-save-btn').disabled = !dirty && !isNew;
+    document.getElementById('recipe-revert-btn').style.display = !dirty || isNew ? 'none' : '';
+    document.getElementById('recipe-delete-btn').textContent = isNew ? 'Cancel' : 'Delete';
+}
+
+function addRecipeIngredient() {
+    const input = document.getElementById('recipe-ingredient-input');
+    const text = input.value.trim();
+    input.value = '';
+    input.focus();
+    if (!text || !recipeDraft) return;
+    recipeDraft.ingredients.push(text);
+    renderRecipeIngredients();
+    updateRecipeButtons();
+}
+
+function revertRecipe() {
+    if (!recipeDraft) return;
+    openRecipeDraft({ id: recipeDraft.id, ...JSON.parse(recipeSavedJson) });
+}
+
+async function saveRecipe() {
+    if (!recipeDraft) return;
+    // An ingredient typed but not yet added still counts
+    if (document.getElementById('recipe-ingredient-input').value.trim()) addRecipeIngredient();
+    const name = recipeDraft.name.trim();
+    if (!name) { setRecipeStatus('Enter a recipe name.', true); document.getElementById('recipe-name').focus(); return; }
+    const ingredients = recipeDraft.ingredients.map(t => t.trim()).filter(Boolean);
+
+    const btn = document.getElementById('recipe-save-btn');
+    btn.disabled = true;
+    try {
+        const id = recipeDraft.id;
+        const res = await fetch(id ? `/api/recipes/${encodeURIComponent(id)}` : '/api/recipes', {
+            method: id ? 'PUT' : 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, ingredients })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        openRecipeDraft(data);
+        setRecipeStatus('Saved.', false);
+        await loadRecipes();
+    } catch (err) {
+        setRecipeStatus(err.message, true);
+        updateRecipeButtons();
+    }
+}
+
+// For a recipe not yet saved this button reads "Cancel" and just closes it
+async function deleteRecipe() {
+    if (!recipeDraft) return;
+    if (!recipeDraft.id) {
+        if (!confirmDiscardRecipe()) return;
+        recipeDraft = null;
+        renderRecipeEditor();
+        renderRecipeList();
+        return;
+    }
+    if (!confirm(`Delete the recipe "${recipeDraft.name.trim() || 'Untitled'}"?`)) return;
+    try {
+        const res = await fetch(`/api/recipes/${encodeURIComponent(recipeDraft.id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
+        recipeDraft = null;
+        renderRecipeEditor();
+        await loadRecipes();
+    } catch (err) {
+        setRecipeStatus(err.message, true);
+    }
+}
+
 async function switchBrowserMode(mode) {
-    if (calendarVisible) setCalendarVisible(false);
+    if (appView) setAppView(null);
     if (selectedServerUdn) {
         saveLastPath(); // Save current path for old mode
     }

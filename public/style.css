@@ -1417,12 +1417,12 @@ p.subtitle {
 /* Photos benefit from bigger tiles than music/video grid tiles since the
    thumbnail itself is the content, not just a label for a title below it. */
 .playlist-items.grid-view.photo-mode {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
 }
 
 @media (max-width: 600px) {
     .playlist-items.grid-view.photo-mode {
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     }
 }
 
@@ -1906,6 +1906,14 @@ p.subtitle {
     gap: 0.15rem;
 }
 
+.calendar-sidebar .calendar-sidebar-tags-heading {
+    margin-top: 0.75rem;
+}
+
+.calendar-sidebar h3[hidden] {
+    display: none;
+}
+
 .calendar-toggle {
     position: relative;
     display: flex;
@@ -1992,6 +2000,474 @@ p.subtitle {
     }
 }
 
+/* Clicking empty space in a day adds an entry */
+.calendar-grid .calendar-day {
+    cursor: pointer;
+}
+
+.calendar-grid .calendar-day:hover {
+    background: color-mix(in srgb, var(--card-bg) 85%, var(--primary));
+}
+
+.calendar-event {
+    cursor: default;
+}
+
+.calendar-event.local-entry {
+    cursor: pointer;
+}
+
+.calendar-event.repeating::before {
+    content: '↻ ';
+    opacity: 0.85;
+}
+
+.calendar-event.local-entry:hover {
+    filter: brightness(1.2);
+}
+
+.calendar-entry-form {
+    padding: 1.25rem 1.5rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.calendar-entry-form .settings-group {
+    gap: 0.4rem;
+}
+
+.calendar-entry-form .tags-container {
+    margin-bottom: 0.25rem;
+}
+
+.calendar-entry-form .tags-container:empty {
+    display: none;
+}
+
+.calendar-entry-form textarea {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    resize: vertical;
+    min-height: 5rem;
+}
+
+.calendar-entry-form textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.calendar-entry-repeat {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.calendar-entry-repeat[hidden],
+.calendar-entry-repeat-on[hidden] {
+    display: none;
+}
+
+.calendar-entry-repeat-word {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.calendar-entry-form .calendar-entry-repeat input,
+.calendar-entry-form .calendar-entry-repeat select {
+    width: auto;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    color-scheme: dark;
+}
+
+/* Entry | Recipe switch at the top of the entry dialog */
+.calendar-entry-kind {
+    display: flex;
+    padding: 0.2rem;
+    gap: 0.2rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+}
+
+.calendar-entry-kind-btn {
+    flex: 1;
+    padding: 0.45rem 0.75rem;
+    border: none;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.calendar-entry-kind-btn:hover {
+    color: var(--text);
+}
+
+.calendar-entry-kind-btn.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+.calendar-entry-normal-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.calendar-entry-normal-fields[hidden],
+#calendar-entry-recipe-fields[hidden],
+#calendar-entry-no-recipes[hidden] {
+    display: none;
+}
+
+.calendar-entry-form .calendar-entry-recipe-select {
+    flex: 1;
+    min-width: 0;
+}
+
+.calendar-event-recipe {
+    margin-right: 0.2rem;
+}
+
+.calendar-entry-form #calendar-entry-repeat-interval {
+    width: 4.5rem;
+}
+
+.calendar-entry-form .calendar-entry-repeat select option {
+    background: var(--bg);
+}
+
+.calendar-entry-tags-hint {
+    text-transform: none;
+    font-weight: 400;
+    opacity: 0.8;
+}
+
+.calendar-entry-tag-choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    max-height: 9rem;
+    overflow-y: auto;
+    margin-bottom: 0.25rem;
+}
+
+.calendar-entry-tag-chip {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    color: var(--text-muted);
+    padding: 0.25rem 0.75rem;
+    border-radius: 2rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.calendar-entry-tag-chip:hover {
+    color: var(--text);
+    border-color: var(--primary);
+}
+
+.calendar-entry-tag-chip.selected {
+    background: color-mix(in srgb, var(--event-color, var(--primary)) 30%, transparent);
+    border-color: var(--event-color, var(--primary));
+    color: var(--text);
+}
+
+.calendar-entry-actions {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.calendar-entry-delete {
+    color: #f87171;
+}
+
+/* Recipes tab — list on the left, the selected recipe on the right */
+.recipes-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 1.5rem;
+    padding-top: 1rem;
+}
+
+.recipes-view[hidden] {
+    display: none;
+}
+
+.recipes-list-panel {
+    width: 18rem;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.recipes-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.recipes-list-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.recipes-filter,
+.recipe-name-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.55rem 0.75rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.recipes-filter:focus,
+.recipe-name-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+.recipes-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.recipe-list-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid transparent;
+    border-radius: 0.6rem;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.recipe-list-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.recipe-list-item.active {
+    background: color-mix(in srgb, var(--primary) 18%, transparent);
+    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.recipe-list-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.recipe-list-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.recipes-list .settings-hint {
+    padding: 0.5rem 0.75rem;
+}
+
+.recipe-panel {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+}
+
+.recipe-empty {
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.recipe-empty[hidden],
+.recipe-editor[hidden] {
+    display: none;
+}
+
+.recipe-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.recipe-name-input {
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.recipe-editor h3 {
+    margin: 0.5rem 0 0;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.recipe-ingredients {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    counter-reset: ingredient;
+}
+
+.recipe-ingredients:empty::before {
+    content: 'No ingredients yet.';
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.recipe-ingredient {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    counter-increment: ingredient;
+}
+
+.recipe-ingredient::before {
+    content: counter(ingredient) '.';
+    width: 1.75rem;
+    flex-shrink: 0;
+    text-align: right;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+/* Each ingredient can be corrected in place; it only looks like an input on hover/focus */
+.recipe-ingredient input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.recipe-ingredient input:hover,
+.recipe-ingredient input:focus {
+    outline: none;
+    border-color: var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.recipe-ingredient-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.recipe-ingredient:hover .recipe-ingredient-btn,
+.recipe-ingredient:focus-within .recipe-ingredient-btn {
+    opacity: 1;
+}
+
+.recipe-ingredient-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+.recipe-ingredient-btn:disabled {
+    visibility: hidden;
+}
+
+.recipe-add-ingredient {
+    margin-left: 2.25rem;
+}
+
+.recipe-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.5rem;
+}
+
+@media (hover: none) {
+    .recipe-ingredient-btn {
+        opacity: 1;
+    }
+}
+
+@media (max-width: 800px) {
+    .recipes-view {
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .recipes-list-panel {
+        width: auto;
+        max-height: 35vh;
+    }
+
+    .recipe-panel {
+        padding: 1rem;
+    }
+
+    .recipe-add-ingredient {
+        margin-left: 0;
+    }
+}
+
 /* Settings → Calendars */
 .calendar-settings-list {
     display: flex;
@@ -2035,25 +2511,73 @@ p.subtitle {
     white-space: nowrap;
 }
 
-input[type="color"].calendar-color-input,
-.calendar-add-grid input[type="color"] {
-    width: 2.5rem;
-    height: 2.25rem;
-    padding: 0.15rem;
-    border-radius: 0.4rem;
-    cursor: pointer;
+/* Colour is shown here but changed from the Calendar tab's sidebar */
+.calendar-settings-dot {
+    width: 0.8rem;
+    height: 0.8rem;
+    border-radius: 50%;
     flex-shrink: 0;
 }
 
 .calendar-add-grid {
-    display: grid;
-    grid-template-columns: 1fr auto;
+    display: flex;
+    flex-direction: column;
     gap: 1rem;
     margin: 0.75rem 0 1rem;
 }
 
-.calendar-add-grid .calendar-add-url {
-    grid-column: span 2;
+/* Sidebar row: the show/hide toggle plus a colour button */
+.calendar-sidebar-row {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+.calendar-sidebar-row .calendar-toggle {
+    flex: 1;
+}
+
+.calendar-color-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    flex-shrink: 0;
+    border-radius: 0.4rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+}
+
+.calendar-sidebar-row:hover .calendar-color-btn,
+.calendar-color-btn:focus-within {
+    opacity: 1;
+}
+
+.calendar-color-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+/* The native picker covers the icon invisibly, so a click opens it */
+.calendar-color-btn input[type="color"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    border: none;
+    padding: 0;
+}
+
+@media (hover: none) {
+    .calendar-color-btn {
+        opacity: 1;
+    }
 }
 
 @media (max-width: 600px) {

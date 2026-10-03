@@ -40,6 +40,8 @@ import {
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
+    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags,
+    listRecipes, getRecipe, saveRecipe, deleteRecipe,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
@@ -173,6 +175,7 @@ let settings = {
     },
     deviceName: 'AMMUI',
     calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
+    calendarTagColors: {}, // { tag: '#rrggbb' } colours of calendar entry tags
     screensaver: {
         serverUdn: null,
         objectId: null,
@@ -204,6 +207,7 @@ function loadSettings() {
     if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
     settings.calendars = getSetting('calendars', []) || [];
+    settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
@@ -230,6 +234,7 @@ function saveSettings() {
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
     setSetting('calendars', settings.calendars);
+    setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
 }
 
@@ -2361,6 +2366,14 @@ app.post('/api/settings/general', express.json(), (req, res) => {
 // --- Calendar feeds (Calendar tab) ---
 // The feed address is a secret (anyone with it can read the calendar), so it's never sent back
 const CALENDAR_COLOR_RE = /^#[0-9a-f]{6}$/i;
+// New calendars and entry tags take the first of these not already in use
+const CALENDAR_PALETTE = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#ec4899', '#84cc16', '#f97316', '#64748b'];
+function nextCalendarColor() {
+    const used = new Set([...Object.values(settings.calendarTagColors), ...settings.calendars.map(c => c.color)].map(c => c.toLowerCase()));
+    // Once all are taken, cycle through them again
+    const total = settings.calendars.length + Object.keys(settings.calendarTagColors).length;
+    return CALENDAR_PALETTE.find(c => !used.has(c)) || CALENDAR_PALETTE[total % CALENDAR_PALETTE.length];
+}
 const publicCalendar = c => ({ id: c.id, name: c.name, color: c.color, host: new URL(c.url).host });
 
 app.get('/api/calendars', (req, res) => {
@@ -2385,7 +2398,7 @@ app.post('/api/calendars', express.json(), async (req, res) => {
         id: crypto.randomUUID(),
         name: String(req.body.name || '').trim() || feed.name || 'Calendar',
         url,
-        color: CALENDAR_COLOR_RE.test(req.body.color) ? req.body.color : '#6366f1'
+        color: CALENDAR_COLOR_RE.test(req.body.color) ? req.body.color : nextCalendarColor()
     };
     settings.calendars.push(cal);
     saveSettings();
@@ -2420,6 +2433,136 @@ app.get('/api/calendars/events', async (req, res) => {
     if (isNaN(start) || isNaN(end) || end <= start) return res.status(400).json({ error: 'start and end dates are required' });
     if (end - start > 100 * 24 * 3600 * 1000) return res.status(400).json({ error: 'Date range is too long' });
     res.json(await getCalendarEvents(settings.calendars, start, end));
+});
+
+// --- Calendar entries (added on the Calendar tab) ---
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Returns a clean entry, or a string saying what's wrong
+function cleanCalendarEntry(body) {
+    const date = String(body.date || '');
+    const title = String(body.title || '').trim();
+    const description = String(body.description || '').trim();
+    const tags = [...new Set((Array.isArray(body.tags) ? body.tags : []).map(t => String(t).trim()).filter(Boolean))];
+    if (!DATE_RE.test(date) || isNaN(new Date(`${date}T00:00:00`))) return 'A valid date is required';
+    if (!title) return 'A title is required';
+    if (title.length > 200) return 'The title is too long';
+    if (description.length > 10000) return 'The description is too long';
+    if (!tags.length) return 'Add at least one tag';
+    if (tags.some(t => t.length > 60)) return 'A tag is too long';
+
+    // Optional repeat: { unit: day|week|month, interval: 1-999, until?: YYYY-MM-DD }
+    let repeat = null;
+    if (body.repeat) {
+        const unit = String(body.repeat.unit || '');
+        const interval = Number(body.repeat.interval);
+        const until = body.repeat.until ? String(body.repeat.until) : null;
+        if (!['day', 'week', 'month'].includes(unit)) return 'Repeat must be days, weeks or months';
+        if (!Number.isInteger(interval) || interval < 1 || interval > 999) return 'Repeat every must be a whole number from 1 to 999';
+        if (until && (!DATE_RE.test(until) || isNaN(new Date(`${until}T00:00:00`)))) return 'The repeat end date is not valid';
+        if (until && until < date) return 'The repeat end date is before the entry date';
+        repeat = { unit, interval, until };
+    }
+
+    // Optional linked recipe
+    const recipeId = body.recipeId ? String(body.recipeId) : null;
+    if (recipeId && !getRecipe(recipeId)) return 'That recipe no longer exists';
+    return { date, title, description, repeat, recipeId, tags };
+}
+
+app.put('/api/calendar-entries/tag-color', express.json(), (req, res) => {
+    const tag = String(req.body.tag || '').trim();
+    if (!tag || !CALENDAR_COLOR_RE.test(req.body.color)) return res.status(400).json({ error: 'A tag and a valid colour are required' });
+    settings.calendarTagColors[tag] = req.body.color;
+    saveSettings();
+    res.json({ tag, color: req.body.color });
+});
+
+// ?start=YYYY-MM-DD&end=YYYY-MM-DD (end exclusive)
+app.get('/api/calendar-entries', (req, res) => {
+    const { start, end } = req.query;
+    if (!DATE_RE.test(start || '') || !DATE_RE.test(end || '')) return res.status(400).json({ error: 'start and end dates are required' });
+    res.json({ entries: getCalendarEntries(start, end) });
+});
+
+// Every tag used on an entry: the choices in the entry editor and the Calendar tab's tag filter
+// Give any tag without a colour the next unused one
+function ensureTagColors(tags) {
+    let changed = false;
+    for (const tag of tags) {
+        if (!settings.calendarTagColors[tag]) {
+            settings.calendarTagColors[tag] = nextCalendarColor();
+            changed = true;
+        }
+    }
+    if (changed) saveSettings();
+}
+
+// { tags: [names], colors: { tag: colour } }
+app.get('/api/calendar-entries/tags', (req, res) => {
+    const tags = getAllCalendarEntryTags().sort((a, b) => a.localeCompare(b));
+    ensureTagColors(tags);
+    res.json({ tags, colors: Object.fromEntries(tags.map(t => [t, settings.calendarTagColors[t]])) });
+});
+
+app.post('/api/calendar-entries', express.json(), (req, res) => {
+    const entry = cleanCalendarEntry(req.body);
+    if (typeof entry === 'string') return res.status(400).json({ error: entry });
+    ensureTagColors(entry.tags);
+    res.json(saveCalendarEntry({ id: crypto.randomUUID(), ...entry }));
+});
+
+app.put('/api/calendar-entries/:id', express.json(), (req, res) => {
+    if (!getCalendarEntry(req.params.id)) return res.status(404).json({ error: 'Entry not found' });
+    const entry = cleanCalendarEntry(req.body);
+    if (typeof entry === 'string') return res.status(400).json({ error: entry });
+    ensureTagColors(entry.tags);
+    res.json(saveCalendarEntry({ id: req.params.id, ...entry }));
+});
+
+app.delete('/api/calendar-entries/:id', (req, res) => {
+    if (!deleteCalendarEntry(req.params.id)) return res.status(404).json({ error: 'Entry not found' });
+    res.json({ success: true });
+});
+
+// --- Recipes (Recipes tab) ---
+// Returns a clean recipe, or a string saying what's wrong
+function cleanRecipe(body) {
+    const name = String(body.name || '').trim();
+    const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : []).map(t => String(t).trim()).filter(Boolean);
+    if (!name) return 'A recipe name is required';
+    if (name.length > 200) return 'The name is too long';
+    if (ingredients.length > 500) return 'Too many ingredients';
+    if (ingredients.some(t => t.length > 300)) return 'An ingredient is too long';
+    return { name, ingredients };
+}
+
+app.get('/api/recipes', (req, res) => {
+    res.json({ recipes: listRecipes() });
+});
+
+app.get('/api/recipes/:id', (req, res) => {
+    const recipe = getRecipe(req.params.id);
+    if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
+    res.json(recipe);
+});
+
+app.post('/api/recipes', express.json(), (req, res) => {
+    const recipe = cleanRecipe(req.body);
+    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
+    res.json(saveRecipe({ id: crypto.randomUUID(), ...recipe }));
+});
+
+app.put('/api/recipes/:id', express.json(), (req, res) => {
+    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Recipe not found' });
+    const recipe = cleanRecipe(req.body);
+    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
+    res.json(saveRecipe({ id: req.params.id, ...recipe }));
+});
+
+app.delete('/api/recipes/:id', (req, res) => {
+    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Recipe not found' });
+    res.json({ success: true });
 });
 
 app.get('/api/sync/s3/status', (req, res) => {
