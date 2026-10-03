@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=22">
+    <link rel="stylesheet" href="style.css?v=24">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -699,46 +699,57 @@
                 </div>
                 <div id="settings-backup" class="settings-panel">
                     <div class="manage-section">
-                        <h3>S3 Cloud Backup</h3>
+                        <h3>S3 Connection</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Copies the local music, photos and videos to an S3 compatible bucket
-                                (AWS, Wasabi, Backblaze, Cloudflare R2...). Runs daily, or use Sync Now.</p>
-                            <div style="margin-bottom: 0.75rem;">
+                            <p class="settings-hint">Back up the local music, photos and videos to an S3 compatible
+                                bucket (AWS, Wasabi, Backblaze, Cloudflare R2...), or restore them from one. Enter the
+                                bucket details and test them first.</p>
+                            <div class="s3-settings-grid">
+                                <div class="input-group">
+                                    <label for="s3-endpoint">Endpoint</label>
+                                    <input type="text" id="s3-endpoint" placeholder="e.g. s3.amazonaws.com"
+                                        onchange="saveS3Settings()">
+                                </div>
+                                <div class="input-group">
+                                    <label for="s3-region">Region</label>
+                                    <input type="text" id="s3-region" placeholder="e.g. us-east-1"
+                                        onchange="saveS3Settings()">
+                                </div>
+                                <div class="input-group">
+                                    <label for="s3-bucket">Bucket</label>
+                                    <input type="text" id="s3-bucket" placeholder="Bucket name"
+                                        onchange="saveS3Settings()">
+                                </div>
+                                <div class="input-group">
+                                    <label for="s3-access-key">Access Key</label>
+                                    <input type="text" id="s3-access-key" placeholder="Access Key ID"
+                                        onchange="saveS3Settings()">
+                                </div>
+                                <div class="input-group" style="grid-column: span 2;">
+                                    <label for="s3-secret-key">Secret Key</label>
+                                    <input type="password" id="s3-secret-key" placeholder="Secret Access Key"
+                                        onchange="saveS3Settings()">
+                                </div>
+                            </div>
+                            <div class="s3-test-row">
+                                <button id="btn-s3-test" onclick="testS3Connection()"
+                                    class="btn-control btn-small primary">Test Connection</button>
+                                <span id="s3-test-result" class="s3-test-result"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="s3-actions" style="display:none;">
+                        <div class="manage-section" style="margin-top: 1.5rem;">
+                            <h3>Backup</h3>
+                            <div class="settings-group">
+                                <p class="settings-hint">Uploads this server's library into a folder named after the
+                                    server. Files already backed up are skipped.</p>
                                 <label class="settings-check">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
-                                    <span>Enable sync</span>
+                                    <span>Back up automatically every day</span>
                                 </label>
-                            </div>
-                            <div id="s3-settings-fields" style="display:none;">
-                                <div class="s3-settings-grid">
-                                    <div class="input-group">
-                                        <label for="s3-endpoint">Endpoint</label>
-                                        <input type="text" id="s3-endpoint" placeholder="e.g. s3.amazonaws.com"
-                                            onchange="saveS3Settings()">
-                                    </div>
-                                    <div class="input-group">
-                                        <label for="s3-region">Region</label>
-                                        <input type="text" id="s3-region" placeholder="e.g. us-east-1"
-                                            onchange="saveS3Settings()">
-                                    </div>
-                                    <div class="input-group">
-                                        <label for="s3-bucket">Bucket</label>
-                                        <input type="text" id="s3-bucket" placeholder="Bucket name"
-                                            onchange="saveS3Settings()">
-                                    </div>
-                                    <div class="input-group">
-                                        <label for="s3-access-key">Access Key</label>
-                                        <input type="text" id="s3-access-key" placeholder="Access Key ID"
-                                            onchange="saveS3Settings()">
-                                    </div>
-                                    <div class="input-group" style="grid-column: span 2;">
-                                        <label for="s3-secret-key">Secret Key</label>
-                                        <input type="password" id="s3-secret-key" placeholder="Secret Access Key"
-                                            onchange="saveS3Settings()">
-                                    </div>
-                                </div>
-
-                                <div style="margin-top: 0.75rem;">
+                                <div>
                                     <label class="settings-check">
                                         <input type="checkbox" id="s3-mirror" onchange="saveS3Settings()">
                                         <span>Delete files from the bucket that are no longer on this server
@@ -753,31 +764,47 @@
                                         <span>% of the backup would be removed</span>
                                     </div>
                                 </div>
-
-                                <div id="s3-sync-status-container" class="sync-status-container"
-                                    style="margin-top: 1rem;">
-                                    <div class="sync-status-row">
-                                        <span class="sync-status-label">Status:</span>
-                                        <span id="s3-sync-state" class="sync-status-value">Idle</span>
-                                    </div>
-                                    <div id="s3-sync-progress-row" class="sync-progress-row" style="display: none;">
-                                        <div class="progress-info">
-                                            <span id="s3-sync-count">0/0 files</span>
-                                            <span id="s3-sync-percent">0%</span>
-                                        </div>
-                                        <div class="progress-bar-bg">
-                                            <div id="s3-sync-bar" class="progress-bar-fill" style="width: 0%;"></div>
-                                        </div>
-                                        <div id="s3-sync-file" class="sync-current-file"></div>
-                                    </div>
-                                    <div class="sync-actions" style="margin-top: 0.5rem;">
-                                        <button id="btn-s3-sync-now" onclick="triggerS3Sync()"
-                                            class="btn-control btn-small primary">Sync Now</button>
-                                        <button id="btn-s3-view-log" onclick="openS3SyncLogModal()"
-                                            class="btn-control ghost btn-small">View Log</button>
-                                        <span id="s3-last-sync" class="last-sync-time"></span>
-                                    </div>
+                                <div class="sync-actions">
+                                    <button id="btn-s3-sync-now" onclick="triggerS3Sync()"
+                                        class="btn-control btn-small primary">Back Up Now</button>
                                 </div>
+                            </div>
+                        </div>
+
+                        <div class="manage-section" style="margin-top: 1.5rem;">
+                            <h3>Restore</h3>
+                            <div class="settings-group">
+                                <p class="settings-hint">Downloads every file in a bucket folder into this server's
+                                    library. Files already here with the same size are skipped.</p>
+                                <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+                                    <select id="s3-restore-folder" style="min-width:12em;"></select>
+                                    <button id="btn-s3-restore-refresh" onclick="loadS3RestoreFolders()"
+                                        class="btn-control ghost btn-small" title="Reload folder list">Refresh</button>
+                                    <button id="btn-s3-restore-start" onclick="startS3Restore()"
+                                        class="btn-control btn-small primary">Restore</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="s3-sync-status-container" class="sync-status-container" style="margin-top: 1.5rem;">
+                            <div class="sync-status-row">
+                                <span class="sync-status-label">Status:</span>
+                                <span id="s3-sync-state" class="sync-status-value">Idle</span>
+                            </div>
+                            <div id="s3-sync-progress-row" class="sync-progress-row" style="display: none;">
+                                <div class="progress-info">
+                                    <span id="s3-sync-count">0/0 files</span>
+                                    <span id="s3-sync-percent">0%</span>
+                                </div>
+                                <div class="progress-bar-bg">
+                                    <div id="s3-sync-bar" class="progress-bar-fill" style="width: 0%;"></div>
+                                </div>
+                                <div id="s3-sync-file" class="sync-current-file"></div>
+                            </div>
+                            <div class="sync-actions" style="margin-top: 0.5rem;">
+                                <button id="btn-s3-view-log" onclick="openS3SyncLogModal()"
+                                    class="btn-control ghost btn-small">View Log</button>
+                                <span id="s3-last-sync" class="last-sync-time"></span>
                             </div>
                         </div>
                     </div>
@@ -1293,6 +1320,8 @@
         <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
             ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
             onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
+            <!-- Music buttons hide when nothing is queued; the exit button always stays -->
+            <div id="ss-music-controls" class="ss-music-controls" style="display:none;">
             <button id="btn-ss-playpause-bar" class="btn-ss-music" onclick="toggleSlideshowPlayback(event)"
                 ontouchend="toggleSlideshowPlayback(event); event.preventDefault();" title="Play/Pause Music">
                 <svg id="svg-ss-play-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
@@ -1301,14 +1330,6 @@
                 <svg id="svg-ss-pause-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"
                     style="display: none;">
                     <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
-                </svg>
-            </button>
-            <button id="btn-ss-retry-art" class="btn-ss-music" onclick="retryAlbumArt()"
-                ontouchend="retryAlbumArt(); event.preventDefault();" title="Retry album art" style="display:none;">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M3 2v6h6" />
-                    <path d="M3 13a9 9 0 1 0 3-7.7l-3 2.7" />
                 </svg>
             </button>
             <button id="btn-ss-stop-after" class="btn-ss-music btn-stop-after" onclick="toggleStopAfterTrack()"
@@ -1333,6 +1354,28 @@
                     <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                     <line x1="15" y1="12" x2="21" y2="12"></line>
                     <line x1="18" y1="9" x2="18" y2="15"></line>
+                </svg>
+            </button>
+            <button id="btn-ss-retry-art" class="btn-ss-music" onclick="retryAlbumArt()"
+                ontouchend="retryAlbumArt(); event.preventDefault();" title="Retry album art" style="display:none;">
+                <!-- Picture frame with a refresh arrow in the corner -->
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <polyline points="3 17 8 12 12 16" />
+                    <path d="M22 18a4 4 0 1 1-1.2-2.85" />
+                    <polyline points="21 13 21 15.5 18.5 15.5" />
+                </svg>
+            </button>
+            </div>
+            <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
+                ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
+                title="Exit Slideshow">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
                 </svg>
             </button>
         </div>
@@ -1432,15 +1475,6 @@
             </div>
         </div>
 
-        <button class="btn-ss-exit-corner" onclick="event.stopPropagation(); stopSlideshow();"
-            ontouchstart="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
-            title="Exit Slideshow">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-            </svg>
-        </button>
     </div>
     </div>
     <div id="about-modal" class="modal-overlay" style="display: none;">
@@ -1541,7 +1575,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=27"></script>
+    <script src="app.js?v=30"></script>
     <script src="slideshow.js?v=3"></script>
 </body>
 

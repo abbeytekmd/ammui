@@ -22,9 +22,10 @@ import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
 
 import sizeOf from 'image-size';
-import { S3Client, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
+import { pipeline } from 'stream/promises';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
@@ -128,7 +129,7 @@ function loadDevices() {
     try {
         const list = getAllDevices();
         list.forEach(d => {
-            if (d.udn === SERVER_UDN || (d.friendlyName && d.friendlyName.includes('Media Library'))) return;
+            if (isOwnUdn(d.udn)) return;
             if (d.location) devices.set(d.location, d);
             if (d.udn) devices.set(d.udn, d);
         });
@@ -164,7 +165,8 @@ let settings = {
         accessKeyId: '',
         secretAccessKey: '',
         bucket: '',
-        enabled: false,
+        enabled: false, // daily automatic sync
+        verified: false, // the connection test passed with the current details
         mirror: false,
         mirrorMaxDeletePercent: 10
     },
@@ -181,7 +183,9 @@ let settings = {
 
 let s3SyncStatus = {
     running: false,
+    mode: 'sync', // 'sync' (upload) or 'restore' (download); both share the progress fields
     lastSync: null,
+    lastRestore: null,
     lastError: null,
     currentFile: '',
     syncedCount: 0,
@@ -192,7 +196,10 @@ function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
     settings.acoustidKey = getSetting('acoustidKey', '');
     settings.youtubeApiKey = getSetting('youtubeApiKey', '');
-    settings.s3 = { ...settings.s3, ...(getSetting('s3', {}) || {}) };
+    const savedS3 = getSetting('s3', {}) || {};
+    settings.s3 = { ...settings.s3, ...savedS3 };
+    // Installs from before the connection test existed: a configured bucket was already in use
+    if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
@@ -257,6 +264,16 @@ function findCaseInsensitivePath(parent, name) {
     return path.join(parent, name);
 }
 
+// The UDN this install advertises over SSDP. It must be unique per install, or two servers on
+// the same network each mistake the other's announcements for their own. Internally the local
+// library is still keyed by SERVER_UDN.
+let NETWORK_UDN = getSetting('dlnaUdn', null);
+if (!NETWORK_UDN) {
+    NETWORK_UDN = `uuid:${crypto.randomUUID()}`;
+    setSetting('dlnaUdn', NETWORK_UDN);
+}
+const isOwnUdn = (udn) => !!udn && (udn === SERVER_UDN || udn === NETWORK_UDN);
+
 // Until the server is named, saved media keys keep using the name older installs defaulted to
 const localLibraryName = (name = settings.deviceName) => `${name || 'AMMUI'} Media Library`;
 setLocalMediaServer({
@@ -275,7 +292,7 @@ onNewMediaServer(() => {
     clearTimeout(mediaKeyRefreshTimer);
     mediaKeyRefreshTimer = setTimeout(loadMediaKeyedSettings, 5000);
 });
-const localDlna = setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt });
+const localDlna = setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt, udn: NETWORK_UDN });
 
 // Most recently seen device with this UDN (a device can appear under several locations).
 function findDeviceByUdn(udn) {
@@ -366,9 +383,69 @@ const S3_CONTENT_TYPES = {
 // macOS/Windows housekeeping files (.DS_Store, ._foo, Thumbs.db, desktop.ini) aren't backed up
 const S3_SKIP_NAMES = /^(\.|thumbs\.db$|desktop\.ini$)/i;
 
-async function syncToS3() {
+function createS3Client(config = settings.s3) {
+    return new S3Client({
+        endpoint: config.endpoint || undefined,
+        region: config.region || 'auto',
+        credentials: {
+            accessKeyId: config.accessKeyId,
+            secretAccessKey: config.secretAccessKey
+        },
+        forcePathStyle: false
+    });
+}
+
+const S3_CONNECTION_FIELDS = ['endpoint', 'region', 'bucket', 'accessKeyId', 'secretAccessKey'];
+
+// Plain-language reasons for the errors people actually hit while setting up a bucket
+function describeS3Error(err) {
+    const code = err.name || err.Code || err.code || '';
+    switch (code) {
+        case 'InvalidAccessKeyId': return 'The access key is not recognised.';
+        case 'SignatureDoesNotMatch': return 'The secret key is wrong for this access key.';
+        case 'NoSuchBucket': return 'That bucket does not exist at this endpoint.';
+        case 'AccessDenied': return 'The keys are valid but are not allowed to use this bucket.';
+        case 'PermanentRedirect':
+        case 'AuthorizationHeaderMalformed': return 'The region does not match the bucket. Check the region.';
+        case 'ENOTFOUND':
+        case 'EAI_AGAIN': return 'Could not reach the endpoint. Check the address and the internet connection.';
+        case 'ECONNREFUSED':
+        case 'ETIMEDOUT': return 'The endpoint did not respond.';
+    }
+    return err.message || String(err);
+}
+
+// Lists the bucket, then writes and removes a small object, so the user finds out up front
+// whether backups (write), mirroring (delete) and restores (read) will work.
+async function testS3Connection(config) {
+    if (!config.bucket || !config.accessKeyId || !config.secretAccessKey) {
+        return { ok: false, message: 'Fill in the bucket, access key and secret key.' };
+    }
+    const s3 = createS3Client(config);
+    try {
+        await s3.send(new ListObjectsV2Command({ Bucket: config.bucket, MaxKeys: 1 }));
+    } catch (err) {
+        return { ok: false, message: describeS3Error(err) };
+    }
+    const testKey = `.ammui-access-test-${Date.now()}`;
+    let canWrite = false, canDelete = false;
+    try {
+        await s3.send(new PutObjectCommand({ Bucket: config.bucket, Key: testKey, Body: 'ammui', ContentType: 'text/plain' }));
+        canWrite = true;
+        await s3.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: testKey }));
+        canDelete = true;
+    } catch (err) {
+        s3Log(`[S3] Connection test: ${canWrite ? 'delete' : 'write'} failed: ${err.message}`, true);
+    }
+    let message = 'Connected. Backup and restore are both available.';
+    if (!canWrite) message = 'Connected, but these keys are read-only: restore will work, backups will fail.';
+    else if (!canDelete) message = `Connected. These keys can't delete, so "delete files no longer on this server" won't work (a test file ${testKey} was left in the bucket).`;
+    return { ok: true, canWrite, canDelete, message };
+}
+
+async function syncToS3({ manual = false } = {}) {
     if (s3SyncStatus.running) return;
-    if (!settings.s3.enabled || !settings.s3.bucket || !settings.s3.accessKeyId) {
+    if (!settings.s3.bucket || !settings.s3.accessKeyId || (!manual && !settings.s3.enabled)) {
         console.log('[S3] Sync skipped: Not configured or disabled.');
         return;
     }
@@ -381,15 +458,9 @@ async function syncToS3() {
         s3SyncStatus.totalCount = 0;
         s3SyncStatus.lastError = null;
 
-        const s3 = new S3Client({
-            endpoint: settings.s3.endpoint || undefined,
-            region: settings.s3.region || 'auto',
-            credentials: {
-                accessKeyId: settings.s3.accessKeyId,
-                secretAccessKey: settings.s3.secretAccessKey
-            },
-            forcePathStyle: false
-        });
+        s3SyncStatus.mode = 'sync';
+
+        const s3 = createS3Client();
 
         const localDir = path.join(__dirname, 'local');
         if (!fs.existsSync(localDir)) return;
@@ -557,6 +628,102 @@ async function mirrorDeleteFromS3(s3, prefix, localKeys) {
     s3Log(`[S3] Mirror: ${deleted}/${extras.length} objects deleted from the bucket.`);
 }
 
+// Top-level folders in the bucket; each server backs up under its own device-name folder.
+async function listS3Folders() {
+    const s3 = createS3Client();
+    const folders = [];
+    let token;
+    do {
+        const page = await s3.send(new ListObjectsV2Command({
+            Bucket: settings.s3.bucket,
+            Delimiter: '/',
+            ContinuationToken: token
+        }));
+        for (const p of page.CommonPrefixes || []) folders.push(p.Prefix.replace(/\/$/, ''));
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return folders.sort((a, b) => a.localeCompare(b));
+}
+
+// Download everything under one bucket folder into the local library. Files already present
+// with the same size are left alone, so a restore can be re-run after an interruption.
+async function restoreFromS3(folder) {
+    if (s3SyncStatus.running) return;
+    try {
+        try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
+        s3Log(`[S3] Starting restore from ${folder}/ ...`);
+        s3SyncStatus.running = true;
+        s3SyncStatus.mode = 'restore';
+        s3SyncStatus.syncedCount = 0;
+        s3SyncStatus.totalCount = 0;
+        s3SyncStatus.lastError = null;
+
+        const s3 = createS3Client();
+        const prefix = `${folder}/`;
+        const objects = [];
+        let token;
+        do {
+            const page = await s3.send(new ListObjectsV2Command({
+                Bucket: settings.s3.bucket,
+                Prefix: prefix,
+                ContinuationToken: token
+            }));
+            for (const obj of page.Contents || []) {
+                if (!obj.Key.endsWith('/')) objects.push(obj); // skip "folder" placeholder objects
+            }
+            token = page.IsTruncated ? page.NextContinuationToken : undefined;
+        } while (token);
+        s3SyncStatus.totalCount = objects.length;
+
+        const localDir = path.join(__dirname, 'local');
+        let downloaded = 0, skipped = 0, failed = 0;
+        for (const obj of objects) {
+            const rel = obj.Key.slice(prefix.length);
+            s3SyncStatus.currentFile = rel;
+            const target = path.resolve(localDir, rel);
+            // Keys are untrusted; never write outside the library folder
+            if (!target.startsWith(localDir + path.sep)) {
+                s3Log(`[S3] Skipping ${obj.Key}: path is outside the library`, true);
+                failed++;
+                s3SyncStatus.syncedCount++;
+                continue;
+            }
+            try {
+                const existing = await fsp.stat(target).catch(() => null);
+                if (existing && existing.size === obj.Size) {
+                    skipped++;
+                    s3SyncStatus.syncedCount++;
+                    continue;
+                }
+                s3Log(`[S3] Downloading ${rel}...`);
+                await fsp.mkdir(path.dirname(target), { recursive: true });
+                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: obj.Key }));
+                // Write to a temp file first so an interrupted download doesn't leave a truncated file
+                const tmp = `${target}.restoring`;
+                await pipeline(Body, fs.createWriteStream(tmp));
+                await fsp.rename(tmp, target);
+                downloaded++;
+            } catch (err) {
+                failed++;
+                s3Log(`[S3] Failed to download ${rel}: ${err.message}`, true);
+                s3SyncStatus.lastError = `Download failed for ${rel}: ${err.message}`;
+                await fsp.unlink(`${target}.restoring`).catch(() => {});
+            }
+            s3SyncStatus.syncedCount++;
+        }
+
+        if (downloaded > 0) markDirty(SERVER_UDN, findDeviceByUdn);
+        s3SyncStatus.lastRestore = new Date().toISOString();
+        s3Log(`[S3] Restore complete: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
+    } catch (err) {
+        s3Log(`[S3] Global Restore Error: ${err.message}`, true);
+        s3SyncStatus.lastError = err.message;
+    } finally {
+        s3SyncStatus.running = false;
+        s3SyncStatus.currentFile = '';
+    }
+}
+
 function scheduleS3Sync() {
     // Daily Sync (every 24 hours)
     setInterval(syncToS3, 86400000);
@@ -699,8 +866,10 @@ async function handleSSDPMessage(headers, rinfo) {
     // PREVENT SELF-OVERWRITE: If this is our own local server (match by UDN), 
     // ignore the SSDP announcement. We handle our own server via manual injection 
     // to ensure it's always available with the correct services list.
+    // Older AMMUI installs all advertised SERVER_UDN; those are dropped too, since storing one
+    // under that UDN would replace our own library entry.
     const usn = (headers.USN || '').toLowerCase();
-    if (usn.includes(SERVER_UDN.toLowerCase())) {
+    if (usn.includes(SERVER_UDN.toLowerCase()) || usn.includes(NETWORK_UDN.toLowerCase())) {
         return;
     }
 
@@ -749,7 +918,9 @@ async function handleSSDPMessage(headers, rinfo) {
         });
 
         const deviceDetails = await parseDescription(location, isServer, isRenderer);
-        if (deviceDetails) {
+        if (deviceDetails && isOwnUdn(deviceDetails.udn)) {
+            devices.delete(location); // ourselves on another address
+        } else if (deviceDetails) {
             const udn = deviceDetails.udn;
             const existingByUdn = udn ? devices.get(udn) : null;
 
@@ -2133,16 +2304,32 @@ app.get('/api/settings/s3', (req, res) => {
     res.json(s3);
 });
 
+// The settings page shows the secret masked; a value still containing the mask means "unchanged"
+function unmaskS3Secret(body) {
+    const out = { ...body };
+    if (out.secretAccessKey && out.secretAccessKey.includes('****')) out.secretAccessKey = settings.s3.secretAccessKey;
+    return out;
+}
+
 app.post('/api/settings/s3', express.json(), (req, res) => {
-    const newS3 = req.body;
-    // If it's masked, preserve existing
-    if (newS3.secretAccessKey && newS3.secretAccessKey.includes('****')) {
-        newS3.secretAccessKey = settings.s3.secretAccessKey;
-    }
+    const newS3 = unmaskS3Secret(req.body);
+    delete newS3.verified; // only a passing connection test sets this
+    const connectionChanged = S3_CONNECTION_FIELDS.some(f => f in newS3 && (newS3[f] || '') !== (settings.s3[f] || ''));
     settings.s3 = { ...settings.s3, ...newS3 };
+    if (connectionChanged) settings.s3.verified = false;
     saveSettings();
     console.log('[S3] Settings updated.');
-    res.json({ success: true });
+    res.json({ success: true, verified: !!settings.s3.verified });
+});
+
+app.post('/api/sync/s3/test', express.json(), async (req, res) => {
+    const config = { ...settings.s3, ...unmaskS3Secret(req.body) };
+    const result = await testS3Connection(config);
+    // Keep exactly what was tested, so a pass always refers to the saved details
+    const tested = Object.fromEntries(S3_CONNECTION_FIELDS.map(f => [f, config[f] || '']));
+    settings.s3 = { ...settings.s3, ...tested, verified: result.ok };
+    saveSettings();
+    res.json(result);
 });
 
 app.get('/api/settings/general', (req, res) => {
@@ -2174,7 +2361,29 @@ app.get('/api/sync/s3/status', (req, res) => {
 
 app.post('/api/sync/s3/start', (req, res) => {
     if (s3SyncStatus.running) return res.status(400).json({ error: 'Sync already running' });
-    syncToS3(); // Trigger async
+    syncToS3({ manual: true }); // Trigger async
+    res.json({ success: true });
+});
+
+app.get('/api/sync/s3/folders', async (req, res) => {
+    if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+        return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+    }
+    try {
+        res.json({ folders: await listS3Folders() });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/sync/s3/restore', express.json(), (req, res) => {
+    const folder = String(req.body.folder || '').replace(/\/+$/, '');
+    if (!folder) return res.status(400).json({ error: 'No folder chosen' });
+    if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+        return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+    }
+    if (s3SyncStatus.running) return res.status(400).json({ error: 'A sync or restore is already running' });
+    restoreFromS3(folder); // Trigger async
     res.json({ success: true });
 });
 
@@ -4360,13 +4569,13 @@ app.get('/api/art/local', async (req, res) => {
 
 // Update API routes
 //
-// The server checks GitHub in the background (shortly after startup, then hourly) so the UI can
+// The server checks GitHub in the background (shortly after startup, then daily) so the UI can
 // show an "update available" badge without each page load waiting on a git fetch.
 // Applying an update fast-forwards the checkout, reinstalls packages only if package files
 // changed, then restarts: either by exiting for an external supervisor (AMMUI_SUPERVISED=1),
 // or by handing off to a small relauncher that starts a fresh server once this one has exited.
 const bootId = Date.now().toString(36); // lets the UI spot that a restart has happened
-const UPDATE_CHECK_INTERVAL = 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 let updateState = { available: false, behind: 0, commits: [], checkedAt: null, error: null, supported: !isPkg };
 let updateCheckInFlight = null;
 let updateApplying = false;

@@ -3997,8 +3997,8 @@ function updateTransportControls() {
         const eqBtn = document.getElementById('id-sonos-eq');
         if (eqBtn) eqBtn.disabled = true;
 
-        const ssMusicBar = document.getElementById('ss-music-bar');
-        if (ssMusicBar) ssMusicBar.style.display = 'none';
+        const ssMusicControls = document.getElementById('ss-music-controls');
+        if (ssMusicControls) ssMusicControls.style.display = 'none';
         return;
     }
 
@@ -4039,13 +4039,13 @@ function updateTransportControls() {
     const ssPlayPauseBar = document.getElementById('btn-ss-playpause-bar');
     const ssSvgPlayBar = document.getElementById('svg-ss-play-bar');
     const ssSvgPauseBar = document.getElementById('svg-ss-pause-bar');
-    const ssMusicBar = document.getElementById('ss-music-bar');
+    const ssMusicControls = document.getElementById('ss-music-controls');
 
-    if (ssMusicBar) {
+    if (ssMusicControls) {
         if (!selectedRendererUdn || isPlaylistEmpty) {
-            ssMusicBar.style.display = 'none';
+            ssMusicControls.style.display = 'none';
         } else {
-            ssMusicBar.style.display = 'flex';
+            ssMusicControls.style.display = 'flex';
             if (isPlaying) {
                 if (ssSvgPlayBar) ssSvgPlayBar.style.display = 'none';
                 if (ssSvgPauseBar) ssSvgPauseBar.style.display = 'block';
@@ -4192,8 +4192,7 @@ function openServerSettingsModal() {
         loadDiscogsToken();
         loadAcoustidKey();
         loadYoutubeKey();
-        const s3Enabled = document.getElementById('s3-enabled')?.checked;
-        if (s3Enabled) startS3StatusPolling();
+        startS3StatusPolling();
         loadLocalStats();
         checkForUpdates();
     }
@@ -8303,15 +8302,9 @@ async function fetchS3Settings() {
         const mirrorMax = document.getElementById('s3-mirror-max');
         if (mirror) mirror.checked = !!data.mirror;
         if (mirrorMax) mirrorMax.value = data.mirrorMaxDeletePercent || 10;
-        const fieldsContainer = document.getElementById('s3-settings-fields');
-        if (fieldsContainer) {
-            fieldsContainer.style.display = data.enabled ? 'block' : 'none';
-        }
-        if (data.enabled) {
-            updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
-        } else {
-            stopS3StatusPolling(); // Safety measure
-        }
+        applyS3VerifiedUi(!!data.verified);
+        setS3TestResult(data.verified ? 'Connection tested.' : '', 'ok');
+        updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
     } catch (err) {
         console.error('Failed to fetch S3 settings:', err);
     }
@@ -8328,25 +8321,75 @@ async function saveS3Settings() {
     const mirrorPercent = parseInt(document.getElementById('s3-mirror-max')?.value, 10);
     const mirrorMaxDeletePercent = mirrorPercent >= 1 && mirrorPercent <= 100 ? mirrorPercent : 10;
     const settings = { enabled, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
+    // Clicking Test right after editing a field fires this first (on blur); the test waits for it
+    s3SavePromise = (async () => {
+        try {
+            const response = await fetch('/api/settings/s3', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(settings)
+            });
+            if (response.ok) {
+                const data = await response.json();
+                if (!data.verified && s3Verified) setS3TestResult('Details changed. Test the connection again.', 'error');
+                applyS3VerifiedUi(!!data.verified);
+                showToast('S3 settings saved', 'success', 2000);
+            }
+        } catch (err) {
+            console.error('Failed to save S3 settings:', err);
+            showToast('Failed to save S3 settings');
+        }
+    })();
+    return s3SavePromise;
+}
+
+let s3SavePromise = null;
+let s3Verified = false;
+let s3FoldersLoaded = false;
+
+// Backup and Restore only appear once the connection details have passed a test
+function applyS3VerifiedUi(verified) {
+    const actions = document.getElementById('s3-actions');
+    if (actions) actions.style.display = verified ? 'block' : 'none';
+    if (verified && !s3FoldersLoaded) loadS3RestoreFolders();
+    if (!verified) s3FoldersLoaded = false;
+    s3Verified = verified;
+}
+
+function setS3TestResult(message, kind) {
+    const el = document.getElementById('s3-test-result');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `s3-test-result ${message ? kind : ''}`;
+}
+
+async function testS3Connection() {
+    const btn = document.getElementById('btn-s3-test');
+    if (btn) btn.classList.add('disabled');
+    setS3TestResult('Testing...', 'pending');
     try {
-        const response = await fetch('/api/settings/s3', {
+        if (s3SavePromise) await s3SavePromise;
+        const body = {
+            endpoint: document.getElementById('s3-endpoint')?.value.trim(),
+            region: document.getElementById('s3-region')?.value.trim(),
+            bucket: document.getElementById('s3-bucket')?.value.trim(),
+            accessKeyId: document.getElementById('s3-access-key')?.value.trim(),
+            secretAccessKey: document.getElementById('s3-secret-key')?.value.trim()
+        };
+        const response = await fetch('/api/sync/s3/test', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings)
+            body: JSON.stringify(body)
         });
-        if (response.ok) {
-            const fieldsContainer = document.getElementById('s3-settings-fields');
-            if (fieldsContainer) fieldsContainer.style.display = enabled ? 'block' : 'none';
-            if (enabled) {
-                startS3StatusPolling();
-            } else {
-                stopS3StatusPolling();
-            }
-            showToast('S3 settings saved', 'success', 2000);
-        }
+        const result = await response.json();
+        setS3TestResult(result.message, result.ok ? (result.canWrite && result.canDelete ? 'ok' : 'warn') : 'error');
+        s3FoldersLoaded = false; // the bucket may have changed
+        applyS3VerifiedUi(!!result.ok);
     } catch (err) {
-        console.error('Failed to save S3 settings:', err);
-        showToast('Failed to save S3 settings');
+        console.error('S3 connection test error:', err);
+        setS3TestResult(`Test failed: ${err.message}`, 'error');
+    } finally {
+        if (btn) btn.classList.remove('disabled');
     }
 }
 
@@ -8376,23 +8419,24 @@ async function updateS3Status() {
         const barEl = document.getElementById('s3-sync-bar');
         const fileEl = document.getElementById('s3-sync-file');
         const lastSyncEl = document.getElementById('s3-last-sync');
-        const btnSync = document.getElementById('btn-s3-sync-now');
+        const buttons = ['btn-s3-sync-now', 'btn-s3-restore-start', 'btn-s3-test']
+            .map(id => document.getElementById(id)).filter(Boolean);
         if (stateEl) {
             if (status.running) {
-                stateEl.textContent = 'Syncing...';
+                stateEl.textContent = status.mode === 'restore' ? 'Restoring...' : 'Backing up...';
                 stateEl.style.color = 'var(--primary)';
                 if (progressRow) progressRow.style.display = 'block';
-                if (btnSync) btnSync.classList.add('disabled');
+                buttons.forEach(b => b.classList.add('disabled'));
             } else if (status.lastError) {
                 stateEl.textContent = 'Error';
                 stateEl.style.color = 'var(--accent)';
                 if (progressRow) progressRow.style.display = 'none';
-                if (btnSync) btnSync.classList.remove('disabled');
+                buttons.forEach(b => b.classList.remove('disabled'));
             } else {
                 stateEl.textContent = 'Idle';
                 stateEl.style.color = 'var(--text-muted)';
                 if (progressRow) progressRow.style.display = 'none';
-                if (btnSync) btnSync.classList.remove('disabled');
+                buttons.forEach(b => b.classList.remove('disabled'));
             }
         }
         if (status.running && status.totalCount > 0) {
@@ -8402,9 +8446,11 @@ async function updateS3Status() {
             if (barEl) barEl.style.width = `${percent}%`;
             if (fileEl) fileEl.textContent = status.currentFile;
         }
-        if (lastSyncEl && status.lastSync) {
-            const date = new Date(status.lastSync);
-            lastSyncEl.textContent = `Last sync: ${date.toLocaleTimeString()}`;
+        if (lastSyncEl) {
+            const parts = [];
+            if (status.lastSync) parts.push(`Last sync: ${new Date(status.lastSync).toLocaleTimeString()}`);
+            if (status.lastRestore) parts.push(`Last restore: ${new Date(status.lastRestore).toLocaleTimeString()}`);
+            lastSyncEl.textContent = parts.join(' · ');
         }
     } catch (err) {
         console.error('Failed to update S3 status:', err);
@@ -8450,7 +8496,7 @@ async function triggerS3Sync() {
             const data = await response.json();
             throw new Error(data.error || 'Failed to start sync');
         }
-        showToast('Cloud sync started', 'success', 2000);
+        showToast('Backup started', 'success', 2000);
         await updateS3Status();
     } catch (err) {
         console.error('S3 sync error:', err);
@@ -8459,11 +8505,67 @@ async function triggerS3Sync() {
     }
 }
 
+async function loadS3RestoreFolders() {
+    const select = document.getElementById('s3-restore-folder');
+    const startBtn = document.getElementById('btn-s3-restore-start');
+    if (!select) return;
+    s3FoldersLoaded = true;
+    select.innerHTML = '<option value="">Loading folders...</option>';
+    select.disabled = true;
+    startBtn?.classList.add('disabled');
+    try {
+        const response = await fetch('/api/sync/s3/folders');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to list folders');
+        select.innerHTML = '';
+        if (data.folders.length === 0) {
+            select.innerHTML = '<option value="">No folders found in the bucket</option>';
+            return;
+        }
+        for (const folder of data.folders) {
+            const opt = document.createElement('option');
+            opt.value = folder;
+            opt.textContent = folder;
+            select.appendChild(opt);
+        }
+        select.disabled = false;
+        startBtn?.classList.remove('disabled');
+    } catch (err) {
+        console.error('S3 folder list error:', err);
+        select.innerHTML = '<option value="">Couldn\'t read the bucket</option>';
+        s3FoldersLoaded = false;
+        showToast(`Restore Error: ${err.message}`);
+    }
+}
+
+async function startS3Restore() {
+    const folder = document.getElementById('s3-restore-folder')?.value;
+    if (!folder) return;
+    if (!confirm(`Download all files from "${folder}" in the bucket into this server's library? Files that already exist with a different size will be overwritten.`)) return;
+    try {
+        const response = await fetch('/api/sync/s3/restore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder })
+        });
+        if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.error || 'Failed to start restore');
+        }
+        showToast('Restore started', 'success', 2000);
+        startS3StatusPolling();
+        await updateS3Status();
+    } catch (err) {
+        console.error('S3 restore error:', err);
+        showToast(`Restore Error: ${err.message}`);
+    }
+}
+
 
 
 
 // Update functions
-// The server checks GitHub hourly; the page polls its cached answer to show the badges.
+// The server checks GitHub daily; the page polls its cached answer to show the badges.
 const UPDATE_POLL_INTERVAL = 15 * 60 * 1000;
 let updateInfo = null;
 
