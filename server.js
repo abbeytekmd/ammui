@@ -42,6 +42,7 @@ import {
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
+import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import https from 'https';
 import crypto from 'crypto';
 import { exec, execFile, spawn } from 'child_process';
@@ -171,6 +172,7 @@ let settings = {
         mirrorMaxDeletePercent: 10
     },
     deviceName: 'AMMUI',
+    calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
     screensaver: {
         serverUdn: null,
         objectId: null,
@@ -201,6 +203,7 @@ function loadSettings() {
     // Installs from before the connection test existed: a configured bucket was already in use
     if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
+    settings.calendars = getSetting('calendars', []) || [];
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
@@ -226,6 +229,7 @@ function saveSettings() {
     setSetting('youtubeApiKey', settings.youtubeApiKey);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
+    setSetting('calendars', settings.calendars);
     setSetting('screensaver', settings.screensaver);
 }
 
@@ -2352,6 +2356,70 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         startServices();
     }
     res.json({ success: true });
+});
+
+// --- Calendar feeds (Calendar tab) ---
+// The feed address is a secret (anyone with it can read the calendar), so it's never sent back
+const CALENDAR_COLOR_RE = /^#[0-9a-f]{6}$/i;
+const publicCalendar = c => ({ id: c.id, name: c.name, color: c.color, host: new URL(c.url).host });
+
+app.get('/api/calendars', (req, res) => {
+    res.json(settings.calendars.map(publicCalendar));
+});
+
+app.post('/api/calendars', express.json(), async (req, res) => {
+    let url;
+    try {
+        url = normaliseFeedUrl(req.body.url);
+    } catch (e) {
+        return res.status(400).json({ error: 'Enter a valid calendar address' });
+    }
+    if (settings.calendars.some(c => c.url === url)) return res.status(400).json({ error: 'That calendar has already been added' });
+    let feed;
+    try {
+        feed = await checkFeed(url);
+    } catch (e) {
+        return res.status(400).json({ error: `Could not read the calendar: ${e.message}` });
+    }
+    const cal = {
+        id: crypto.randomUUID(),
+        name: String(req.body.name || '').trim() || feed.name || 'Calendar',
+        url,
+        color: CALENDAR_COLOR_RE.test(req.body.color) ? req.body.color : '#6366f1'
+    };
+    settings.calendars.push(cal);
+    saveSettings();
+    terminalLog(`[CALENDAR] Added "${cal.name}"`);
+    res.json(publicCalendar(cal));
+});
+
+app.patch('/api/calendars/:id', express.json(), (req, res) => {
+    const cal = settings.calendars.find(c => c.id === req.params.id);
+    if (!cal) return res.status(404).json({ error: 'Calendar not found' });
+    const name = String(req.body.name ?? '').trim();
+    if (name) cal.name = name;
+    if (CALENDAR_COLOR_RE.test(req.body.color)) cal.color = req.body.color;
+    saveSettings();
+    res.json(publicCalendar(cal));
+});
+
+app.delete('/api/calendars/:id', (req, res) => {
+    const cal = settings.calendars.find(c => c.id === req.params.id);
+    if (!cal) return res.status(404).json({ error: 'Calendar not found' });
+    settings.calendars = settings.calendars.filter(c => c !== cal);
+    forgetFeed(cal.url);
+    saveSettings();
+    terminalLog(`[CALENDAR] Removed "${cal.name}"`);
+    res.json({ success: true });
+});
+
+// ?start=YYYY-MM-DD&end=YYYY-MM-DD (end exclusive)
+app.get('/api/calendars/events', async (req, res) => {
+    const start = new Date(`${req.query.start}T00:00:00`);
+    const end = new Date(`${req.query.end}T00:00:00`);
+    if (isNaN(start) || isNaN(end) || end <= start) return res.status(400).json({ error: 'start and end dates are required' });
+    if (end - start > 100 * 24 * 3600 * 1000) return res.status(400).json({ error: 'Date range is too long' });
+    res.json(await getCalendarEvents(settings.calendars, start, end));
 });
 
 app.get('/api/sync/s3/status', (req, res) => {

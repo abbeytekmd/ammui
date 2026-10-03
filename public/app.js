@@ -4191,6 +4191,7 @@ function openServerSettingsModal() {
         loadDiscogsToken();
         loadAcoustidKey();
         loadYoutubeKey();
+        loadCalendarSettings();
         startS3StatusPolling();
         loadLocalStats();
         checkForUpdates();
@@ -5283,12 +5284,305 @@ function updateBrowserModeTabs() {
     const hasServer = !!selectedServerUdn &&
         (currentDevices || []).some(d => d.udn === selectedServerUdn && d.isServer);
     bar.hidden = !hasServer;
+    const activeTab = calendarVisible ? 'calendar' : currentBrowserMode;
     bar.querySelectorAll('.lib-tab').forEach(tab => {
-        tab.classList.toggle('active', tab.dataset.mode === currentBrowserMode);
+        tab.classList.toggle('active', tab.dataset.mode === activeTab);
     });
 }
 
+// Calendar tab: a month view that takes the place of the browser/player layout
+let calendarVisible = false;
+let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+
+function setCalendarVisible(visible) {
+    calendarVisible = visible;
+    document.getElementById('calendar-view').hidden = !visible;
+    document.querySelector('.main-layout').hidden = visible;
+    if (floatingBtn) floatingBtn.style.visibility = visible ? 'hidden' : '';
+    updateBrowserModeTabs();
+}
+
+let calendarRenderToken = 0;
+const CALENDAR_MAX_EVENTS_PER_DAY = 3;
+
+function showCalendar() {
+    const now = new Date();
+    calendarMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    renderCalendar();
+    setCalendarVisible(true);
+}
+
+const calendarDateKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Spread events over the days they cover. All-day dates are "YYYY-MM-DD" with an
+// exclusive end; timed events are instants, placed in this browser's timezone.
+function groupCalendarEvents(events, gridStart, gridEnd) {
+    const byDay = new Map();
+    for (const ev of events) {
+        let first, last;
+        if (ev.allDay) {
+            const [sy, sm, sd] = ev.start.split('-').map(Number);
+            const [ey, em, ed] = ev.end.split('-').map(Number);
+            first = new Date(sy, sm - 1, sd);
+            last = new Date(ey, em - 1, ed - 1);
+            if (last < first) last = first;
+        } else {
+            const s = new Date(ev.start);
+            const e = new Date(ev.end);
+            first = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+            // An event ending exactly at midnight doesn't spill into the next day
+            const endAdj = e > s ? new Date(e.getTime() - 1) : s;
+            last = new Date(endAdj.getFullYear(), endAdj.getMonth(), endAdj.getDate());
+        }
+        const d = first < gridStart ? new Date(gridStart) : new Date(first);
+        for (; d <= last && d < gridEnd; d.setDate(d.getDate() + 1)) {
+            const key = calendarDateKey(d);
+            if (!byDay.has(key)) byDay.set(key, []);
+            byDay.get(key).push(ev);
+        }
+    }
+    return byDay;
+}
+
+// Calendars hidden with the sidebar tickboxes; a per-browser preference
+function getHiddenCalendars() {
+    try { return new Set(JSON.parse(localStorage.getItem('calendarHidden') || '[]')); } catch (e) { return new Set(); }
+}
+
+function setCalendarHidden(id, hidden) {
+    const set = getHiddenCalendars();
+    hidden ? set.add(id) : set.delete(id);
+    try { localStorage.setItem('calendarHidden', JSON.stringify([...set])); } catch (e) { }
+    drawCalendarEvents();
+}
+
+// The calendars and events last loaded for the month on screen, so toggling a
+// calendar can redraw without fetching again
+let calendarLoaded = null; // { cals, events, errors, gridStart, gridEnd }
+
+function renderCalendarSidebar(cals) {
+    const list = document.getElementById('calendar-sidebar-list');
+    if (!list) return;
+    const hidden = getHiddenCalendars();
+    list.innerHTML = cals.map(c => `
+        <label class="calendar-toggle" style="--event-color: ${escapeHtml(c.color)}" title="${escapeHtml(c.name)}">
+            <input type="checkbox" ${hidden.has(c.id) ? '' : 'checked'}
+                onchange="setCalendarHidden('${escapeHtml(c.id)}', !this.checked)">
+            <span class="calendar-toggle-swatch"></span>
+            <span class="calendar-toggle-name">${escapeHtml(c.name)}</span>
+        </label>`).join('');
+    document.getElementById('calendar-sidebar').hidden = !cals.length;
+}
+
+function drawCalendarEvents() {
+    if (!calendarLoaded) return;
+    const { cals, events, gridStart, gridEnd } = calendarLoaded;
+    const hidden = getHiddenCalendars();
+    const colors = Object.fromEntries(cals.map(c => [c.id, c.color]));
+    const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
+    const byDay = groupCalendarEvents(events.filter(ev => !hidden.has(ev.calendarId)), gridStart, gridEnd);
+    const timeFmt = { hour: '2-digit', minute: '2-digit' };
+
+    document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
+        const list = byDay.get(cell.dataset.date) || [];
+        cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
+        list.slice(0, CALENDAR_MAX_EVENTS_PER_DAY).forEach(ev => {
+            const el = document.createElement('div');
+            el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
+            el.style.setProperty('--event-color', colors[ev.calendarId] || 'var(--primary)');
+            const time = ev.allDay ? '' : new Date(ev.start).toLocaleTimeString(undefined, timeFmt);
+            if (time) {
+                const t = document.createElement('span');
+                t.className = 'calendar-event-time';
+                t.textContent = time;
+                el.appendChild(t);
+            }
+            el.appendChild(document.createTextNode(ev.title));
+            el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
+            cell.appendChild(el);
+        });
+        if (list.length > CALENDAR_MAX_EVENTS_PER_DAY) {
+            const more = document.createElement('div');
+            more.className = 'calendar-more';
+            more.textContent = `+${list.length - CALENDAR_MAX_EVENTS_PER_DAY} more`;
+            more.title = list.slice(CALENDAR_MAX_EVENTS_PER_DAY).map(ev => ev.title).join('\n');
+            cell.appendChild(more);
+        }
+    });
+}
+
+async function loadCalendarEvents(gridStart, gridEnd, token) {
+    const statusEl = document.getElementById('calendar-status');
+    calendarLoaded = null;
+    try {
+        const cals = await (await fetch('/api/calendars')).json();
+        if (token !== calendarRenderToken) return;
+        renderCalendarSidebar(cals);
+        if (!cals.length) {
+            statusEl.className = 'calendar-status';
+            statusEl.textContent = 'Add Google calendars in Server Settings → Calendars to see their events here.';
+            return;
+        }
+        statusEl.className = 'calendar-status';
+        statusEl.textContent = 'Loading events…';
+        const res = await fetch(`/api/calendars/events?start=${calendarDateKey(gridStart)}&end=${calendarDateKey(gridEnd)}`);
+        const data = await res.json();
+        if (token !== calendarRenderToken) return;
+        if (!res.ok) throw new Error(data.error || 'Failed to load events');
+
+        calendarLoaded = { cals, events: data.events, gridStart, gridEnd };
+        drawCalendarEvents();
+
+        const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
+        if (data.errors && data.errors.length) {
+            statusEl.className = 'calendar-status error';
+            statusEl.textContent = `Couldn't load: ${data.errors.map(e => names[e.calendarId] || 'a calendar').join(', ')}`;
+        } else {
+            statusEl.textContent = '';
+        }
+    } catch (err) {
+        if (token !== calendarRenderToken) return;
+        statusEl.className = 'calendar-status error';
+        statusEl.textContent = `Couldn't load events: ${err.message}`;
+    }
+}
+
+// -1 / +1 steps a month; 0 jumps back to the current month
+function changeCalendarMonth(step) {
+    const now = new Date();
+    calendarMonth = step === 0
+        ? new Date(now.getFullYear(), now.getMonth(), 1)
+        : new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + step, 1);
+    renderCalendar();
+}
+
+function renderCalendar() {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    document.getElementById('calendar-title').textContent =
+        calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+
+    // Weeks start on Monday
+    const weekdayNames = [];
+    for (let i = 0; i < 7; i++) {
+        weekdayNames.push(new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'short' })); // 1 Jan 2024 was a Monday
+    }
+    const leading = (new Date(year, month, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const cellCount = Math.ceil((leading + daysInMonth) / 7) * 7;
+
+    const today = new Date();
+    let html = weekdayNames.map(n => `<div class="calendar-weekday">${n}</div>`).join('');
+    for (let i = 0; i < cellCount; i++) {
+        const d = new Date(year, month, 1 - leading + i);
+        const classes = ['calendar-day'];
+        if (d.getMonth() !== month) classes.push('other-month');
+        if (d.toDateString() === today.toDateString()) classes.push('today');
+        html += `<div class="${classes.join(' ')}" data-date="${calendarDateKey(d)}"><span class="calendar-day-num">${d.getDate()}</span></div>`;
+    }
+    document.getElementById('calendar-grid').innerHTML = html;
+
+    const gridStart = new Date(year, month, 1 - leading);
+    const gridEnd = new Date(year, month, 1 - leading + cellCount);
+    loadCalendarEvents(gridStart, gridEnd, ++calendarRenderToken);
+}
+
+// --- Server Settings → Calendars ---
+// Messages go in a line inside the dialog, as toasts sit behind it
+function setCalendarSettingsStatus(elId, text, isError) {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'calendar-status' + (isError ? ' error' : ' success');
+}
+
+async function loadCalendarSettings() {
+    const listEl = document.getElementById('calendar-settings-list');
+    if (!listEl) return;
+    try {
+        const cals = await (await fetch('/api/calendars')).json();
+        if (!cals.length) {
+            listEl.innerHTML = '<span class="settings-hint">No calendars added yet.</span>';
+            return;
+        }
+        listEl.innerHTML = cals.map(c => `
+            <div class="calendar-settings-row" data-id="${escapeHtml(c.id)}">
+                <input type="color" class="calendar-color-input" value="${escapeHtml(c.color)}"
+                    onchange="updateCalendar('${escapeHtml(c.id)}', { color: this.value })" title="Colour">
+                <input type="text" class="calendar-name-input" value="${escapeHtml(c.name)}"
+                    onchange="updateCalendar('${escapeHtml(c.id)}', { name: this.value })" title="Rename">
+                <span class="calendar-settings-host">${escapeHtml(c.host)}</span>
+                <button class="btn-control btn-small" onclick="removeCalendar('${escapeHtml(c.id)}', this)" title="Remove this calendar">Remove</button>
+            </div>`).join('');
+    } catch (err) {
+        listEl.innerHTML = '<span class="settings-hint">Could not load calendars.</span>';
+    }
+}
+
+async function addCalendar() {
+    const nameInput = document.getElementById('calendar-add-name');
+    const urlInput = document.getElementById('calendar-add-url');
+    const colorInput = document.getElementById('calendar-add-color');
+    const btn = document.getElementById('calendar-add-btn');
+    const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-add-status', text, isError);
+    const url = urlInput.value.trim();
+    if (!url) { setStatus('Paste the calendar\'s iCal address first.', true); return; }
+
+    setStatus('', false);
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    try {
+        const res = await fetch('/api/calendars', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: nameInput.value.trim(), url, color: colorInput.value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to add calendar');
+        nameInput.value = '';
+        urlInput.value = '';
+        setStatus(`Added "${data.name}".`, false);
+        await loadCalendarSettings();
+        if (calendarVisible) renderCalendar();
+    } catch (err) {
+        setStatus(err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Calendar';
+    }
+}
+
+async function updateCalendar(id, changes) {
+    setCalendarSettingsStatus('calendar-list-status', '', false);
+    try {
+        const res = await fetch(`/api/calendars/${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(changes)
+        });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        if (calendarVisible) renderCalendar();
+    } catch (err) {
+        setCalendarSettingsStatus('calendar-list-status', `Couldn't update calendar: ${err.message}`, true);
+    }
+}
+
+async function removeCalendar(id, btn) {
+    const name = btn.closest('.calendar-settings-row')?.querySelector('.calendar-name-input')?.value || 'this calendar';
+    if (!confirm(`Remove "${name}"?`)) return;
+    setCalendarSettingsStatus('calendar-list-status', '', false);
+    try {
+        const res = await fetch(`/api/calendars/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        await loadCalendarSettings();
+        if (calendarVisible) renderCalendar();
+    } catch (err) {
+        setCalendarSettingsStatus('calendar-list-status', `Couldn't remove calendar: ${err.message}`, true);
+    }
+}
+
 async function switchBrowserMode(mode) {
+    if (calendarVisible) setCalendarVisible(false);
     if (selectedServerUdn) {
         saveLastPath(); // Save current path for old mode
     }

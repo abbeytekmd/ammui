@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=28">
+    <link rel="stylesheet" href="style.css?v=33">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -44,9 +44,29 @@
                     </svg>
                     <span>Videos</span>
                 </button>
+                <button type="button" class="lib-tab" data-mode="calendar" onclick="showCalendar()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>Calendar</span>
+                </button>
             </nav>
 
             <div class="menu-container logo-menu">
+                <button id="btn-start-slideshow" class="btn-control top-bar-icon-btn" onclick="manualStartSlideshow()"
+                    title="Start photo slideshow" aria-label="Start photo slideshow">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                        <path d="M10 7.5l4.5 2.5-4.5 2.5z" fill="currentColor"></path>
+                    </svg>
+                </button>
                 <button id="btn-logo-menu" class="btn-control logo-btn" onclick="toggleLogoMenu(event)"
                     title="Menu">
                     <img src="/amm-icon.png" alt="AMM Logo" class="header-logo">
@@ -63,16 +83,6 @@
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
                         Update Available
-                    </button>
-                    <button id="btn-start-slideshow" onclick="manualStartSlideshow()" class="dropdown-item"
-                        title="Start photo slideshow">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                            <line x1="8" y1="21" x2="16" y2="21"></line>
-                            <line x1="12" y1="17" x2="12" y2="21"></line>
-                        </svg>
-                        Slideshow
                     </button>
                     <button id="btn-server-settings" onclick="openServerSettingsModal()" class="dropdown-item"
                         title="Server settings: general, integrations, updates">
@@ -454,6 +464,34 @@
             </div>
         </main>
 
+        <section id="calendar-view" class="calendar-view" hidden>
+            <div class="calendar-header">
+                <button type="button" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="15 18 9 12 15 6"></polyline>
+                    </svg>
+                </button>
+                <h2 id="calendar-title" class="calendar-title"></h2>
+                <button type="button" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="9 18 15 12 9 6"></polyline>
+                    </svg>
+                </button>
+                <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
+                    title="Go to the current month">Today</button>
+            </div>
+            <div id="calendar-status" class="calendar-status"></div>
+            <div class="calendar-body">
+                <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
+                    <h3>Calendars</h3>
+                    <div id="calendar-sidebar-list" class="calendar-sidebar-list"></div>
+                </aside>
+                <div id="calendar-grid" class="calendar-grid"></div>
+            </div>
+        </section>
+
 
     </div>
 
@@ -571,6 +609,7 @@
             <div class="settings-tabs">
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
+                <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
             </div>
@@ -704,6 +743,44 @@
                                 Some videos have embedding disabled by their owner — if the
                                 <code>yt-dlp</code> tool is installed on the server, those still play locally
                                 (extracted on the fly, not cached); otherwise they open on youtube.com instead.</p>
+                        </div>
+                    </div>
+                </div>
+                <div id="settings-calendars" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Calendars</h3>
+                        <div id="calendar-settings-list" class="calendar-settings-list">
+                            <span class="settings-hint">Loading...</span>
+                        </div>
+                        <div id="calendar-list-status" class="calendar-status"></div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Add a Google Calendar</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">In Google Calendar on a computer, open <b>Settings</b>, pick the
+                                calendar under <b>Settings for my calendars</b>, and copy
+                                <b>Secret address in iCal format</b> from the <b>Integrate calendar</b> section. Any
+                                other iCal (.ics) address works too. Keep the address private: anyone who has it
+                                can read the calendar.</p>
+                            <div class="calendar-add-grid">
+                                <div class="input-group">
+                                    <label for="calendar-add-name">Name</label>
+                                    <input type="text" id="calendar-add-name" placeholder="Leave blank to use the calendar's own name">
+                                </div>
+                                <div class="input-group">
+                                    <label for="calendar-add-color">Colour</label>
+                                    <input type="color" id="calendar-add-color" value="#6366f1">
+                                </div>
+                                <div class="input-group calendar-add-url">
+                                    <label for="calendar-add-url">iCal address</label>
+                                    <input type="password" id="calendar-add-url" autocomplete="off"
+                                        placeholder="https://calendar.google.com/calendar/ical/.../basic.ics">
+                                </div>
+                            </div>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button id="calendar-add-btn" class="btn-control btn-small primary" onclick="addCalendar()">Add Calendar</button>
+                            </div>
+                            <div id="calendar-add-status" class="calendar-status"></div>
                         </div>
                     </div>
                 </div>
@@ -1570,7 +1647,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=34"></script>
+    <script src="app.js?v=38"></script>
     <script src="slideshow.js?v=3"></script>
 </body>
 
