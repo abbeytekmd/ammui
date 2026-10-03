@@ -3462,11 +3462,12 @@ async function importKeysFromDevice() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to get keys');
-        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube' };
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3' };
         showToast(data.imported.length
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
-        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey()]);
+        if (data.s3Verified === false) showToast(`The S3 details from ${data.source} were copied but the connection test failed here`, 'error');
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), fetchS3Settings()]);
     } catch (err) {
         showToast(err.message, 'error');
     } finally {

@@ -2337,6 +2337,10 @@ app.get('/api/peer/keys', (req, res) => {
     const from = req.socket.remoteAddress;
     if (!isLanAddress(from)) return res.status(403).json({ error: 'Only available on the local network' });
     const keys = Object.fromEntries(SHARED_KEY_NAMES.filter(k => settings[k]).map(k => [k, settings[k]]));
+    // S3: just the connection details; whether to sync or mirror stays each device's own choice
+    if (settings.s3.accessKeyId && settings.s3.secretAccessKey) {
+        keys.s3 = Object.fromEntries(S3_CONNECTION_FIELDS.map(f => [f, settings.s3[f] || '']));
+    }
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
 });
@@ -2359,9 +2363,18 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
     }
     const imported = SHARED_KEY_NAMES.filter(k => typeof keys?.[k] === 'string' && keys[k].trim());
     for (const k of imported) settings[k] = keys[k].trim();
+    const s3 = keys?.s3;
+    let s3Verified = null;
+    if (s3 && s3.accessKeyId && s3.secretAccessKey) {
+        const tested = Object.fromEntries(S3_CONNECTION_FIELDS.map(f => [f, String(s3[f] || '').trim()]));
+        // Test from here before trusting it, as the connection test on the S3 panel does
+        s3Verified = (await testS3Connection(tested)).ok;
+        settings.s3 = { ...settings.s3, ...tested, verified: s3Verified };
+        imported.push('s3');
+    }
     if (imported.length) saveSettings();
     console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);
-    res.json({ source: source.name, imported });
+    res.json({ source: source.name, imported, s3Verified });
 });
 
 app.get('/api/settings/s3', (req, res) => {
