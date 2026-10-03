@@ -723,6 +723,31 @@ p.subtitle {
     box-shadow: 0 0 18px var(--primary-glow);
 }
 
+/* Play All is the main action: solid green rather than the tinted green of Play Tag */
+#btn-play-all.btn-action-lg {
+    padding: 0.6rem 1.5rem;
+    font-size: 0.95rem;
+    font-weight: 800;
+}
+
+#btn-play-all.btn-play-green:not(.disabled) {
+    background: linear-gradient(180deg, #22c55e 0%, #16a34a 100%) !important;
+    border-color: #4ade80 !important;
+    color: #fff !important;
+    box-shadow: 0 4px 14px rgba(34, 197, 94, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
+}
+
+#btn-play-all.btn-play-green:not(.disabled):hover {
+    background: linear-gradient(180deg, #4ade80 0%, #22c55e 100%) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 22px rgba(34, 197, 94, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
+}
+
+/* Voice sits at the far right of the browser toolbar */
+.browser-control-group #btn-voice {
+    margin-left: auto;
+}
+
 .divider {
     width: 1px;
     height: 1.5rem;
@@ -785,6 +810,14 @@ p.subtitle {
 
 .dropdown-item:hover {
     background: rgba(255, 255, 255, 0.05);
+}
+
+/* Opens upwards from the browser toolbar; left/bottom are set when it opens */
+.upload-menu {
+    position: fixed;
+    top: auto;
+    right: auto;
+    min-width: 150px;
 }
 
 .dropdown-item.disabled {
@@ -3496,20 +3529,6 @@ p.subtitle {
     }
 }
 
-#btn-upload {
-    background: rgba(16, 185, 129, 0.1) !important;
-    border: 1px solid rgba(16, 185, 129, 0.3) !important;
-    color: #10b981 !important;
-    transition: all 0.2s ease !important;
-}
-
-#btn-upload:hover:not(.disabled) {
-    background: #10b981 !important;
-    color: white !important;
-    box-shadow: 0 0 15px rgba(16, 185, 129, 0.4) !important;
-    transform: translateY(-2px);
-}
-
 /* Player Artwork Styles */
 .player-artwork-container {
     width: 60px;
@@ -4013,24 +4032,13 @@ p.subtitle {
     color: var(--text-muted);
 }
 
-/* Upload progress bars (single file + folder) */
-#upload-file-bar,
+/* Folder upload progress bar */
 #upload-folder-bar {
     height: 100%;
     width: 0%;
     background: var(--primary);
     border-radius: 3px;
     transition: width 0.3s ease;
-}
-
-#upload-file-bar.indeterminate {
-    width: 100% !important;
-    animation: upload-pulse 1s ease-in-out infinite;
-}
-
-@keyframes upload-pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.35; }
 }
 
 /* Metadata Comparative Styles */

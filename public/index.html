@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=25">
+    <link rel="stylesheet" href="style.css?v=28">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -235,16 +235,6 @@
                     </div>
                     <div class="header-controls">
                         <div class="browser-control-group">
-                            <button id="btn-voice" onclick="toggleVoiceCommand()" class="btn-control btn-action-lg"
-                                title="Voice commands: &quot;play &lt;song or album&gt; by &lt;artist&gt;&quot;, &quot;queue ...&quot;, &quot;next&quot;, &quot;pause&quot;, &quot;stop&quot;, &quot;volume 30&quot;">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2.25" stroke-linecap="round">
-                                    <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-                                    <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
-                                    <line x1="12" y1="18" x2="12" y2="22"></line>
-                                </svg>
-                                <span class="btn-label" data-mobile="Voice">Voice</span>
-                            </button>
                             <button id="btn-play-all" onclick="playAll(); event.stopPropagation();"
                                 class="btn-control disabled btn-play-green btn-action-lg"
                                 title="Clear and play all tracks">
@@ -329,30 +319,50 @@
 
 
                             <span class="divider"></span>
-                            <button id="btn-upload" onclick="triggerUpload()" class="btn-control disabled"
-                                title="Upload to local server">
+                            <!-- Browsers can't pick files and folders in one dialog, so Upload offers both -->
+                            <div class="menu-container upload-menu-container">
+                                <button id="btn-upload" onclick="toggleUploadMenu(event)" class="btn-control"
+                                    title="Upload photos, videos or music to the local server">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                        stroke-width="2">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="17 8 12 3 7 8"></polyline>
+                                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                                    </svg>
+                                    <span class="btn-label" data-mobile="">Upload</span>
+                                </button>
+                                <div id="upload-menu" class="dropdown-menu upload-menu">
+                                    <button class="dropdown-item" onclick="triggerUpload('files')">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                                            <polyline points="14 2 14 8 20 8"></polyline>
+                                        </svg>
+                                        Files&hellip;
+                                    </button>
+                                    <button class="dropdown-item" onclick="triggerUpload('folder')">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                                        </svg>
+                                        Folder&hellip;
+                                    </button>
+                                </div>
+                                <input type="file" id="upload-files-input" style="display: none;" multiple
+                                    accept="audio/*,image/*,video/*" onchange="handleUpload(event)">
+                                <input type="file" id="upload-folder-input" style="display: none;" webkitdirectory multiple
+                                    onchange="handleUpload(event)">
+                            </div>
+                            <button id="btn-voice" onclick="toggleVoiceCommand()" class="btn-control btn-action-lg"
+                                title="Voice commands: &quot;play &lt;song or album&gt; by &lt;artist&gt;&quot;, &quot;queue ...&quot;, &quot;next&quot;, &quot;pause&quot;, &quot;stop&quot;, &quot;volume 30&quot;">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                                    <polyline points="17 8 12 3 7 8"></polyline>
-                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                    stroke-width="2.25" stroke-linecap="round">
+                                    <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                                    <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                                    <line x1="12" y1="18" x2="12" y2="22"></line>
                                 </svg>
-                                <span class="btn-label" data-mobile="">Upload</span>
+                                <span class="btn-label" data-mobile="Voice">Voice</span>
                             </button>
-                            <input type="file" id="upload-input" style="display: none;" accept="audio/*,image/*,video/*"
-                                onchange="handleFileUpload(event)">
-                            <button id="btn-upload-folder" onclick="triggerFolderUpload()" class="btn-control"
-                                title="Upload a folder of photos, videos or music to local server">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                    stroke-width="2">
-                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                                    <polyline points="12 11 12 17"></polyline>
-                                    <polyline points="9 14 12 11 15 14"></polyline>
-                                </svg>
-                                <span class="btn-label" data-mobile="">Upload Folder</span>
-                            </button>
-                            <input type="file" id="upload-folder-input" style="display: none;" webkitdirectory multiple
-                                onchange="handleFolderUpload(event)">
                         </div>
                     </div>
                 </div>
@@ -1200,11 +1210,11 @@
         </div>
     </div>
 
-    <!-- Upload Folder Progress Modal -->
+    <!-- Upload Progress Modal (files or a folder) -->
     <div id="upload-folder-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content download-progress-modal-content">
             <div class="modal-header">
-                <h3 id="upload-folder-title">Uploading folder...</h3>
+                <h3 id="upload-folder-title">Uploading...</h3>
             </div>
             <div class="download-progress-body">
                 <div class="download-progress-bar-wrap">
@@ -1216,21 +1226,6 @@
             <div class="modal-footer">
                 <div id="upload-folder-stats" class="download-progress-stats"></div>
                 <button id="upload-folder-close" class="btn-modal-close" onclick="closeUploadFolderModal()" disabled>Close</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Single File Upload Progress Modal -->
-    <div id="upload-file-modal" class="modal-overlay" style="display: none;">
-        <div class="modal-content download-progress-modal-content">
-            <div class="modal-header">
-                <h3 id="upload-file-title">Uploading&hellip;</h3>
-            </div>
-            <div class="download-progress-body">
-                <div class="download-progress-bar-wrap">
-                    <div id="upload-file-bar"></div>
-                </div>
-                <div id="upload-file-current" class="download-progress-current"></div>
             </div>
         </div>
     </div>
@@ -1575,7 +1570,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=32"></script>
+    <script src="app.js?v=34"></script>
     <script src="slideshow.js?v=3"></script>
 </body>
 

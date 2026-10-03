@@ -368,7 +368,6 @@ async function selectServer(udn) {
     closeServerModal();
     renderDevices();
     updateBrowserModeTabs();
-    updateLocalOnlyUI();
 
     if (window.innerWidth <= 1100) {
         switchView('browser');
@@ -5861,119 +5860,25 @@ async function applyEq(type, value) {
     }
 }
 
-// Upload functionality
-function triggerUpload() {
-    const input = document.getElementById('upload-input');
-    if (input) input.click();
+function toggleUploadMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('upload-menu');
+    if (!menu) return;
+    const wasActive = menu.classList.contains('active');
+    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
+    if (wasActive) return;
+    // On narrow screens the toolbar scrolls sideways and would clip the menu, so it lives under
+    // <body> and is placed just above the button
+    if (menu.parentElement !== document.body) document.body.appendChild(menu);
+    const r = document.getElementById('btn-upload').getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 168))}px`;
+    menu.style.bottom = `${window.innerHeight - r.top + 8}px`;
+    menu.classList.add('active');
 }
 
-function openUploadFileModal(name) {
-    const modal = document.getElementById('upload-file-modal');
-    if (!modal) return;
-    const bar = document.getElementById('upload-file-bar');
-    if (bar) {
-        bar.classList.remove('indeterminate');
-        bar.style.width = '0%';
-    }
-    const title = document.getElementById('upload-file-title');
-    if (title) title.textContent = 'Uploading…';
-    const current = document.getElementById('upload-file-current');
-    if (current) current.textContent = name;
-    modal.style.display = 'flex';
-}
-
-function updateUploadFileModal(fraction, uploadComplete) {
-    const bar = document.getElementById('upload-file-bar');
-    const title = document.getElementById('upload-file-title');
-    const current = document.getElementById('upload-file-current');
-    if (uploadComplete || fraction >= 1) {
-        // Bytes are all sent; the server is still parsing metadata / writing the file.
-        if (bar) bar.classList.add('indeterminate');
-        if (title) title.textContent = 'Almost done…';
-        if (current) current.textContent = 'Processing on server…';
-    } else {
-        const pct = Math.max(0, Math.min(100, Math.round(fraction * 100)));
-        if (bar) bar.style.width = pct + '%';
-        if (title) title.textContent = `Uploading… ${pct}%`;
-    }
-}
-
-function closeUploadFileModal() {
-    const modal = document.getElementById('upload-file-modal');
-    if (modal) modal.style.display = 'none';
-}
-
-// POST a FormData with real upload-progress reporting. fetch() can't report
-// request-body progress, so single-file uploads use XHR instead.
-function uploadWithProgress(url, formData, onProgress) {
-    return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', url);
-        xhr.upload.onprogress = (e) => {
-            if (e.lengthComputable) onProgress(e.loaded / e.total, false);
-        };
-        xhr.upload.onload = () => onProgress(1, true);
-        xhr.onload = () => {
-            let data = {};
-            try { data = JSON.parse(xhr.responseText || '{}'); } catch (_) {}
-            if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-            else reject(new Error(data.error || `Upload failed (${xhr.status})`));
-        };
-        xhr.onerror = () => reject(new Error('Network error during upload'));
-        xhr.send(formData);
-    });
-}
-
-async function handleFileUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const btn = document.getElementById('btn-upload');
-    const originalContent = btn ? btn.innerHTML : '';
-
-    openUploadFileModal(file.name);
-
-    try {
-        if (btn) {
-            btn.classList.add('disabled');
-            btn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
-                    <path d="M21 12a9 9 0 1 1-6.219-8.56"></path>
-                </svg>
-                Uploading...
-            `;
-        }
-
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const result = await uploadWithProgress('/api/upload', formData, updateUploadFileModal);
-
-        const uploadedMsg = (result.type === 'photo' || result.type === 'video')
-            ? `Uploaded ${result.type}: ${result.title}`
-            : `Successfully uploaded: ${result.title} by ${result.artist}`;
-        showToast(uploadedMsg, 'success');
-
-        // Refresh current folder if we are browsing local server
-        if (selectedServerUdn === LOCAL_SERVER_UDN) {
-            const currentFolder = browsePath[browsePath.length - 1];
-            await browse(selectedServerUdn, currentFolder.id);
-        }
-    } catch (err) {
-        console.error('Upload error:', err);
-        showToast(`Upload failed: ${err.message}`);
-    } finally {
-        closeUploadFileModal();
-        if (btn) {
-            btn.classList.remove('disabled');
-            btn.innerHTML = originalContent;
-        }
-        event.target.value = ''; // Reset input
-    }
-}
-
-function triggerFolderUpload() {
-    const input = document.getElementById('upload-folder-input');
+function triggerUpload(kind) {
+    document.getElementById('upload-menu')?.classList.remove('active');
+    const input = document.getElementById(kind === 'folder' ? 'upload-folder-input' : 'upload-files-input');
     if (input) input.click();
 }
 
@@ -5992,7 +5897,8 @@ function closeUploadFolderModal() {
     document.getElementById('upload-folder-modal').style.display = 'none';
 }
 
-async function handleFolderUpload(event) {
+// Uploads files picked individually or a whole folder; the server files each one by its tags or date
+async function handleUpload(event) {
     const files = Array.from(event.target.files);
     event.target.value = '';
     if (!files.length) return;
@@ -6009,12 +5915,14 @@ async function handleFolderUpload(event) {
     });
 
     if (!eligible.length) {
-        showToast('No supported audio, image or video files found in the selected folder', 'warning');
+        showToast('No supported audio, image or video files in the selection', 'warning');
         return;
     }
 
-    const folderName = (eligible[0].webkitRelativePath || eligible[0].name).split('/')[0];
-    openUploadFolderModal(folderName, eligible.length);
+    const fromFolder = !!eligible[0].webkitRelativePath;
+    const label = fromFolder ? eligible[0].webkitRelativePath.split('/')[0]
+        : eligible.length === 1 ? eligible[0].name : 'selected files';
+    openUploadFolderModal(label, eligible.length);
 
     let uploaded = 0, skipped = 0, failed = 0;
     const MAX_LOG_ENTRIES = 500;
@@ -6045,7 +5953,7 @@ async function handleFolderUpload(event) {
             }
         } catch (err) {
             failed++;
-            console.error(`[Upload Folder] Failed on ${file.name}:`, err);
+            console.error(`[Upload] Failed on ${file.name}:`, err);
             outcome = { text: `✗ ${file.name}: ${err && err.message ? err.message : 'Unknown error'}`, color: '#f87171' };
         }
 
@@ -6076,22 +5984,6 @@ async function handleFolderUpload(event) {
         if (currentFolder) await browse(selectedServerUdn, currentFolder.id);
     }
 }
-
-function updateLocalOnlyUI() {
-    const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
-    const noServer = !selectedServerUdn;
-    const uploadBtn = document.getElementById('btn-upload');
-    if (uploadBtn) {
-        const disable = isLocalServer || noServer;
-        uploadBtn.classList.toggle('disabled', disable);
-        uploadBtn.title = isLocalServer
-            ? 'Upload not available when browsing the local library'
-            : 'Upload to local server';
-    }
-}
-
-// Initial update
-updateLocalOnlyUI();
 
 function renderAlphabet() {
     const alphabetScroll = document.getElementById('alphabet-scroll');
