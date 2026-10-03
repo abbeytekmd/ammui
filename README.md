@@ -30,6 +30,7 @@ I have this running on a headless linux box and I run the UI variously from a Sa
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
 * Go back to the last picture in the slideshow in case you just missed it.
+* Previous / next arrows and the close button are always on screen, so they work with a single tap on a touchscreen. Close sits at the end of the bar in the top right.
 * Overlay pause and volume controls for current music player, if active.
 * Photo date and device used info is shown if available.
 * Photos with location data present will show a small map overlay. Click on map to show larger view. 
@@ -43,9 +44,10 @@ I have this running on a headless linux box and I run the UI variously from a Sa
 <img src="images/ammui-tablet-mode.png" width="600"/>
 
 ## Local DLNA Server
-* Upload button to upload tracks and photos from local disk.
+* Upload button to add music, photos and videos from the device you're using: pick individual files or a whole folder.
 * Download buttons on music and photos from other servers to add a copy to the local server.
-* Sync all local music, photo and video files to S3 compatible storage (I use Wasabi).
+* Back up all local music, photo and video files to S3 compatible storage (I use Wasabi), and restore them from it (see [Backup and restore](#backup-and-restore)).
+* Several AMMUI servers can run on the same network and see each other's libraries. Give each one a different name (Server Settings → General).
 
 ## Music Videos
 Watch a track's music video on YouTube, right from the track list. When the video ends, the player closes by itself.
@@ -63,7 +65,7 @@ Watch a track's music video on YouTube, right from the track list. When the vide
 
 ## Voice Commands
 
-Press the glowing **Voice** button at the start of the music browser's toolbar and say what you want. Music plays on the currently selected player, from the currently selected media server.
+Press the glowing **Voice** button at the right-hand end of the music browser's toolbar and say what you want. Music plays on the currently selected player, from the currently selected media server.
 
 | Say | What happens |
 |---|---|
@@ -131,7 +133,7 @@ Browse the local server in **Music** mode to see the commands. Most of them are 
 
 ### Getting music in
 
-* **Upload** (toolbar): add a single file. **Upload Folder**: add a whole folder of music, photos or videos. Music is filed into `Artist/Album/Title` using the file's tags, falling back to `Unknown Artist` / `Unknown Album` when tags are missing. Supported: mp3, flac, m4a, aac, wav, ogg and opus. Photos and videos are files into `Year/Month` if a date can be determined from the file.
+* **Upload** (toolbar): choose **Files…** to pick one or more files, or **Folder…** to add a whole folder of music, photos or videos. Music is filed into `Artist/Album/Title` using the file's tags, falling back to `Unknown Artist` / `Unknown Album` when tags are missing. Supported: mp3, flac, m4a, aac, wav, ogg and opus. Photos and videos are filed into `Year/Month` if a date can be determined from the file. Files that are already there are skipped.
 * **Download** (row menu, on a track or folder from another media server): copies it into the local library. Folders download in the background with a progress window, and files that already exist are skipped.
 
 ### Folder menu (the ☰ button on each row)
@@ -166,23 +168,39 @@ The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagr
 4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
 5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
 6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
-7. **Export Tags** and **Sync Now** to keep a backup.
+7. **Export Tags** and **Back Up Now** to keep a backup.
 
 
 ### Album art
 
-Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cover.png`, `album.jpg` or `artwork.jpg` in the same folder, then a picture embedded in the file, then an automatic Discogs search by artist and album (needs a Discogs token in Settings). If a track still has no art, or the wrong one, use the **Retry album art** button on the slideshow's music bar to search Discogs by artist and album yourself and pick a replacement.
+Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cover.png`, `album.jpg` or `artwork.jpg` in the same folder, then a picture embedded in the file, then an automatic Discogs search by artist and album (needs a Discogs token in Settings). If a track still has no art, or the wrong one, use the **Retry album art** button (the picture icon just left of the close button on the slideshow's music bar) to search Discogs by artist and album yourself and pick a replacement.
 
 ### Menu and settings commands
 
 * **Set Home** (top of the browser, ☰): remember this folder as the starting point for Music browsing. It also sets where **Build Album** puts new albums.
 * **Logs** (logo menu): see what a command did and why it failed, filtered by type (for example `IDENTIFY`, `TAGS`, `UPLOAD`).
-* **Stats** (logo menu): playback statistics for your library.
+* **Playback Stats** (logo menu): your 100 most played tracks, and the 100 albums with the most track plays (every play of a track counts towards its album). The lists scroll.
 * **Server Settings → General → Local Library**: file counts and sizes for what is stored on the server.
 * **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
 * **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key.
-* **Server Settings → Backup**: S3 Cloud Sync settings. **Sync Now / View Log**: copies the local music, photos and videos to an S3 bucket as a backup (deleted photos and .DS_Store-type housekeeping files are left out; a file whose size has changed is uploaded again). View Log shows the result of the last sync, with counts for each folder.
-* **Server Settings → Backup → Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each sync also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
+* **Server Settings → Backup**: back up to, and restore from, an S3 bucket. See [Backup and restore](#backup-and-restore).
+* **Server Settings → Updates**: AMMUI checks GitHub for a new version shortly after it starts and then once a day, and shows a badge in the menu when one is available.
+
+### Backup and restore
+
+**Server Settings → Backup** works with any S3 compatible bucket (AWS, Wasabi, Backblaze, Cloudflare R2...).
+
+1. **S3 Connection**: enter the endpoint, region, bucket, access key and secret key, then press **Test Connection**. The test lists the bucket, then writes and removes a small test file, and tells you what will work:
+   * green: backup and restore both work.
+   * amber: the keys are read-only (restore works, backups will fail), or they can't delete (the "delete files no longer on this server" option won't work, and the test file is left behind).
+   * red: what's wrong, such as an unknown access key, wrong secret key, missing bucket, wrong region or unreachable endpoint.
+
+   The Backup and Restore sections appear once the test passes. Changing any connection detail hides them again until it's re-tested.
+2. **Backup**: **Back Up Now** copies the local music, photos and videos into a folder in the bucket named after this server. Tick **Back up automatically every day** to run it daily. Deleted photos and .DS_Store-type housekeeping files are left out, and a file whose size has changed is uploaded again.
+   * **Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each backup also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
+3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one and press **Restore** to download everything in it into this server's library. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced. This is how to move a library to a new machine: set up the connection there, then restore the old server's folder.
+
+The status box underneath shows progress for both. **View Log** shows the result of the last backup or restore, with counts for each folder.
 
 ### Logs
 
