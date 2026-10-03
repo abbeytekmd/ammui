@@ -3432,6 +3432,31 @@ async function saveYoutubeKey() {
     }
 }
 
+async function loadKeySharing() {
+    const box = document.getElementById('key-sharing-allow');
+    if (!box) return;
+    try {
+        box.checked = !!(await (await fetch('/api/settings/key-sharing')).json()).allow;
+    } catch (e) { }
+}
+
+async function saveKeySharing() {
+    const box = document.getElementById('key-sharing-allow');
+    try {
+        const res = await fetch('/api/settings/key-sharing', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ allow: box.checked })
+        });
+        if (!res.ok) throw new Error();
+        box.checked = !!(await res.json()).allow;
+        showToast(box.checked ? 'Other devices can now copy this device\'s keys' : 'Key sharing switched off', 'success', 2500);
+    } catch (e) {
+        box.checked = !box.checked;
+        showToast('Failed to save settings to server');
+    }
+}
+
 // Other AMMUI installs on the network that keys can be copied from
 async function loadKeySources() {
     const select = document.getElementById('key-source-select');
@@ -4235,6 +4260,7 @@ function openServerSettingsModal() {
         loadAcoustidKey();
         loadYoutubeKey();
         loadKeySources();
+        loadKeySharing();
         loadCalendarSettings();
         startS3StatusPolling();
         loadLocalStats();

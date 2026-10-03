@@ -768,6 +768,13 @@
                             <p class="settings-hint">Fetches the Discogs, AcoustID and YouTube keys and the S3 connection
                                 details from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
+                            <label class="settings-check" style="margin-top: 0.5rem;">
+                                <input type="checkbox" id="key-sharing-allow" onchange="saveKeySharing()">
+                                <span>Let other devices copy my keys
+                                    <span class="settings-hint">Switch on only while copying to another device: while
+                                        it's on, anything on this network can read this device's keys.</span>
+                                </span>
+                            </label>
                         </div>
 
                         <div class="settings-group">

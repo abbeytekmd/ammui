@@ -162,6 +162,7 @@ let settings = {
     discogsToken: '',
     acoustidKey: '',
     youtubeApiKey: '',
+    allowKeySharing: false, // let other AMMUI installs on the network copy the keys above
     s3: {
         endpoint: '',
         region: 'auto',
@@ -201,6 +202,7 @@ function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
     settings.acoustidKey = getSetting('acoustidKey', '');
     settings.youtubeApiKey = getSetting('youtubeApiKey', '');
+    settings.allowKeySharing = !!getSetting('allowKeySharing', false);
     const savedS3 = getSetting('s3', {}) || {};
     settings.s3 = { ...settings.s3, ...savedS3 };
     // Installs from before the connection test existed: a configured bucket was already in use
@@ -231,6 +233,7 @@ function saveSettings() {
     setSetting('discogsToken', settings.discogsToken);
     setSetting('acoustidKey', settings.acoustidKey);
     setSetting('youtubeApiKey', settings.youtubeApiKey);
+    setSetting('allowKeySharing', settings.allowKeySharing);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
     setSetting('calendars', settings.calendars);
@@ -1314,7 +1317,7 @@ const thumbWaiters = [];
 const THUMB_MAX_CONCURRENT = 4;           // cap ffmpeg processes for a big folder
 
 // Probe once at startup so we can skip straight to redirect if ffmpeg is missing.
-execAsync('ffmpeg -version').catch(() => {
+execAsync('ffmpeg -version', { windowsHide: true }).catch(() => {
     ffmpegUnavailable = true;
     console.warn('[THUMB] ffmpeg not found on PATH — photo browser will use full-size images (slower). Install ffmpeg for fast thumbnails.');
 });
@@ -1323,7 +1326,7 @@ execAsync('ffmpeg -version').catch(() => {
 // AcoustID lookup requires. Probe once so the "Identify with AcoustID" button
 // can fail early with a helpful message instead of a cryptic spawn error.
 let fpcalcUnavailable = false;
-execAsync('fpcalc -version').catch(() => {
+execAsync('fpcalc -version', { windowsHide: true }).catch(() => {
     fpcalcUnavailable = true;
     console.warn('[ACOUSTID] fpcalc not found on PATH — "Identify with AcoustID" will be unavailable. Install Chromaprint (fpcalc) to enable it.');
 });
@@ -1332,7 +1335,7 @@ execAsync('fpcalc -version').catch(() => {
 // real stream instead of relying on the (blocked) iframe embed player. Probe once so
 // the frontend knows whether to offer local playback or just fall back to a new tab.
 let ytDlpUnavailable = false;
-execAsync('yt-dlp --version').catch(() => {
+execAsync('yt-dlp --version', { windowsHide: true }).catch(() => {
     ytDlpUnavailable = true;
     console.warn('[YOUTUBE] yt-dlp not found on PATH — non-embeddable videos will open on youtube.com instead of playing locally. Install yt-dlp to enable local playback for those.');
 });
@@ -2331,10 +2334,11 @@ function otherAmmuiDevices() {
     return [...out.values()];
 }
 
-// Answers another AMMUI asking for this install's keys. Only from the local network; there are
-// no CORS headers, so a web page in someone's browser can't read the reply.
+// Answers another AMMUI asking for this install's keys. Only when sharing is switched on, and only
+// from the local network; there are no CORS headers, so a web page in someone's browser can't read the reply.
 app.get('/api/peer/keys', (req, res) => {
     const from = req.socket.remoteAddress;
+    if (!settings.allowKeySharing) return res.status(403).json({ error: 'key sharing is switched off on that device' });
     if (!isLanAddress(from)) return res.status(403).json({ error: 'Only available on the local network' });
     const keys = Object.fromEntries(SHARED_KEY_NAMES.filter(k => settings[k]).map(k => [k, settings[k]]));
     // S3: just the connection details; whether to sync or mirror stays each device's own choice
@@ -2343,6 +2347,17 @@ app.get('/api/peer/keys', (req, res) => {
     }
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
+});
+
+app.get('/api/settings/key-sharing', (req, res) => {
+    res.json({ allow: settings.allowKeySharing });
+});
+
+app.post('/api/settings/key-sharing', express.json(), (req, res) => {
+    settings.allowKeySharing = req.body.allow === true;
+    saveSettings();
+    console.log(`Key sharing ${settings.allowKeySharing ? 'switched on' : 'switched off'}.`);
+    res.json({ allow: settings.allowKeySharing });
 });
 
 app.get('/api/settings/key-sources', (req, res) => {
@@ -3273,7 +3288,7 @@ app.get('/api/local-stats', async (req, res) => {
             const { execSync } = await import('child_process');
             const target = fs.existsSync(musicDir) ? musicDir : baseDataDir;
             if (process.platform === 'win32') {
-                const out = execSync(`wmic logicaldisk where "DeviceID='${path.parse(target).root.replace(/\\/g, '').replace('/', '')}" get FreeSpace /value`, { encoding: 'utf8' });
+                const out = execSync(`wmic logicaldisk where "DeviceID='${path.parse(target).root.replace(/\\/g, '').replace('/', '')}" get FreeSpace /value`, { encoding: 'utf8', windowsHide: true });
                 const match = out.match(/FreeSpace=(\d+)/);
                 if (match) freeBytes = parseInt(match[1], 10);
             } else {
@@ -5715,7 +5730,7 @@ app.get('/api/youtube/stream/:videoId', (req, res) => {
         '--retries', 'infinite',
         '--fragment-retries', 'infinite',
         url
-    ]);
+    ], { windowsHide: true });
     const ffmpeg = spawn('ffmpeg', [
         '-loglevel', 'error',
         '-i', 'pipe:0',
@@ -5724,7 +5739,7 @@ app.get('/api/youtube/stream/:videoId', (req, res) => {
         '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
         '-f', 'mp4',
         'pipe:1'
-    ]);
+    ], { windowsHide: true });
 
     res.setHeader('Content-Type', 'video/mp4');
     ytdlp.stdout.pipe(ffmpeg.stdin);
@@ -7303,7 +7318,7 @@ app.post('/api/local/acoustid-identify', express.json(), async (req, res) => {
         // than -json so older Chromaprint builds work too.
         let fingerprint, duration;
         try {
-            const { stdout } = await execFileAsync('fpcalc', [filePath], { maxBuffer: 4 * 1024 * 1024 });
+            const { stdout } = await execFileAsync('fpcalc', [filePath], { maxBuffer: 4 * 1024 * 1024, windowsHide: true });
             fingerprint = (stdout.match(/^FINGERPRINT=(.+)$/m) || [])[1]?.trim();
             duration = Math.round(parseFloat((stdout.match(/^DURATION=([\d.]+)/m) || [])[1]));
         } catch (e) {
