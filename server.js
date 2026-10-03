@@ -40,7 +40,7 @@ import {
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
-    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags,
+    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
@@ -2303,6 +2303,67 @@ app.post('/api/settings/youtube', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+// --- Copying API keys between AMMUI installs on the same network ---
+const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey'];
+
+// Loopback, private (10/8, 172.16/12, 192.168/16), link-local and IPv6 unique-local addresses
+function isLanAddress(addr = '') {
+    const a = addr.replace(/^::ffff:/i, '').toLowerCase();
+    if (a === '::1' || a.startsWith('127.')) return true;
+    const m = a.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+    if (m) {
+        const [x, y] = [Number(m[1]), Number(m[2])];
+        return x === 10 || (x === 172 && y >= 16 && y <= 31) || (x === 192 && y === 168) || (x === 169 && y === 254);
+    }
+    return a.startsWith('fe80:') || a.startsWith('fc') || a.startsWith('fd');
+}
+
+// Other AMMUI installs seen over SSDP: [{ udn, name, origin }]
+function otherAmmuiDevices() {
+    const out = new Map();
+    for (const d of devices.values()) {
+        if (d.manufacturer !== 'AMMUI' || !d.udn || !d.location || isOwnUdn(d.udn) || out.has(d.udn)) continue;
+        try {
+            const origin = new URL(d.location).origin;
+            out.set(d.udn, { udn: d.udn, name: (d.friendlyName || origin).replace(/ Media Library$/, ''), origin });
+        } catch (e) { }
+    }
+    return [...out.values()];
+}
+
+// Answers another AMMUI asking for this install's keys. Only from the local network; there are
+// no CORS headers, so a web page in someone's browser can't read the reply.
+app.get('/api/peer/keys', (req, res) => {
+    const from = req.socket.remoteAddress;
+    if (!isLanAddress(from)) return res.status(403).json({ error: 'Only available on the local network' });
+    const keys = Object.fromEntries(SHARED_KEY_NAMES.filter(k => settings[k]).map(k => [k, settings[k]]));
+    console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
+    res.json({ name: settings.deviceName || 'AMMUI', keys });
+});
+
+app.get('/api/settings/key-sources', (req, res) => {
+    res.json({ devices: otherAmmuiDevices() });
+});
+
+// { udn }: fetch the keys from that AMMUI install and save every one it has
+app.post('/api/settings/import-keys', express.json(), async (req, res) => {
+    const source = otherAmmuiDevices().find(d => d.udn === req.body.udn);
+    if (!source) return res.status(404).json({ error: 'That device is no longer on the network' });
+    let keys;
+    try {
+        const resp = await axios.get(`${source.origin}/api/peer/keys`, { timeout: 5000 });
+        keys = resp.data && resp.data.keys;
+    } catch (err) {
+        const msg = err.response?.status === 404 ? 'it needs updating to a version that can share keys' : (err.response?.data?.error || err.message);
+        return res.status(502).json({ error: `Couldn't get keys from ${source.name}: ${msg}` });
+    }
+    const imported = SHARED_KEY_NAMES.filter(k => typeof keys?.[k] === 'string' && keys[k].trim());
+    for (const k of imported) settings[k] = keys[k].trim();
+    if (imported.length) saveSettings();
+    console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);
+    res.json({ source: source.name, imported });
+});
+
 app.get('/api/settings/s3', (req, res) => {
     const s3 = { ...settings.s3 };
     // Mask secret
@@ -2466,8 +2527,14 @@ function cleanCalendarEntry(body) {
 
     // Optional linked recipe
     const recipeId = body.recipeId ? String(body.recipeId) : null;
-    if (recipeId && !getRecipe(recipeId)) return 'That recipe no longer exists';
-    return { date, title, description, repeat, recipeId, tags };
+    if (recipeId && !getRecipe(recipeId)) return 'That meal no longer exists';
+    // A meal is for 1-10 people
+    let people = null;
+    if (recipeId) {
+        people = Number(body.people);
+        if (!Number.isInteger(people) || people < 1 || people > 10) return 'People must be a whole number from 1 to 10';
+    }
+    return { date, title, description, repeat, recipeId, people, tags };
 }
 
 app.put('/api/calendar-entries/tag-color', express.json(), (req, res) => {
@@ -2505,6 +2572,11 @@ app.get('/api/calendar-entries/tags', (req, res) => {
     res.json({ tags, colors: Object.fromEntries(tags.map(t => [t, settings.calendarTagColors[t]])) });
 });
 
+// { people: n|null } from the most recently saved meal entry, to prefill a new one
+app.get('/api/calendar-entries/last-people', (req, res) => {
+    res.json({ people: getLastMealPeople() });
+});
+
 app.post('/api/calendar-entries', express.json(), (req, res) => {
     const entry = cleanCalendarEntry(req.body);
     if (typeof entry === 'string') return res.status(400).json({ error: entry });
@@ -2529,11 +2601,16 @@ app.delete('/api/calendar-entries/:id', (req, res) => {
 // Returns a clean recipe, or a string saying what's wrong
 function cleanRecipe(body) {
     const name = String(body.name || '').trim();
-    const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : []).map(t => String(t).trim()).filter(Boolean);
-    if (!name) return 'A recipe name is required';
+    // Each ingredient is { amount, unit, text }; a plain string is taken as just the text
+    const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : [])
+        .map(i => i && typeof i === 'object' ? i : { text: i })
+        .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), text: String(i.text ?? '').trim() }))
+        .filter(i => i.text);
+    if (!name) return 'A meal name is required';
     if (name.length > 200) return 'The name is too long';
     if (ingredients.length > 500) return 'Too many ingredients';
-    if (ingredients.some(t => t.length > 300)) return 'An ingredient is too long';
+    if (ingredients.some(i => i.text.length > 300)) return 'An ingredient is too long';
+    if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
     return { name, ingredients };
 }
 
@@ -2543,7 +2620,7 @@ app.get('/api/recipes', (req, res) => {
 
 app.get('/api/recipes/:id', (req, res) => {
     const recipe = getRecipe(req.params.id);
-    if (!recipe) return res.status(404).json({ error: 'Recipe not found' });
+    if (!recipe) return res.status(404).json({ error: 'Meal not found' });
     res.json(recipe);
 });
 
@@ -2554,14 +2631,14 @@ app.post('/api/recipes', express.json(), (req, res) => {
 });
 
 app.put('/api/recipes/:id', express.json(), (req, res) => {
-    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Recipe not found' });
+    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
     const recipe = cleanRecipe(req.body);
     if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
     res.json(saveRecipe({ id: req.params.id, ...recipe }));
 });
 
 app.delete('/api/recipes/:id', (req, res) => {
-    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Recipe not found' });
+    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
     res.json({ success: true });
 });
 

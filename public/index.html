@@ -60,7 +60,7 @@
                         <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"></path>
                         <line x1="6" y1="17" x2="18" y2="17"></line>
                     </svg>
-                    <span>Recipes</span>
+                    <span>Meals</span>
                 </button>
             </nav>
 
@@ -475,28 +475,38 @@
         <section id="recipes-view" class="recipes-view" hidden>
             <aside class="recipes-list-panel">
                 <div class="recipes-list-header">
-                    <h2>Recipes</h2>
+                    <h2>Meals</h2>
                     <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
                 </div>
-                <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search recipes..."
+                <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search meals..."
                     autocomplete="off" oninput="renderRecipeList()">
                 <div id="recipes-list" class="recipes-list"></div>
             </aside>
             <div id="recipe-panel" class="recipe-panel">
                 <div id="recipe-empty" class="recipe-empty">
-                    <p>Select a recipe, or add a new one.</p>
+                    <p>Select a meal, or add a new one.</p>
                 </div>
                 <div id="recipe-editor" class="recipe-editor" hidden>
-                    <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Recipe name"
+                    <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Meal name"
                         maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
                     <h3>Ingredients</h3>
                     <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
-                    <div class="tag-input-wrapper recipe-add-ingredient">
-                        <input type="text" id="recipe-ingredient-input" placeholder="Add an ingredient, e.g. 2 onions, chopped"
-                            maxlength="300" autocomplete="off"
-                            onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
+                    <div class="tag-input-wrapper recipe-add-ingredient"
+                        onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
+                        <input type="text" id="recipe-amount-input" class="recipe-amount" placeholder="Amount"
+                            maxlength="20" autocomplete="off" aria-label="Amount">
+                        <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
+                            maxlength="40" autocomplete="off" aria-label="Unit">
+                        <input type="text" id="recipe-ingredient-input" placeholder="Add an ingredient, e.g. onions, chopped"
+                            maxlength="300" autocomplete="off" aria-label="Ingredient">
                         <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
                     </div>
+                    <datalist id="recipe-units">
+                        <option value="g"><option value="kg"><option value="ml"><option value="l">
+                        <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
+                        <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
+                        <option value="clove"><option value="slice"><option value="piece">
+                    </datalist>
                     <div id="recipe-status" class="calendar-status"></div>
                     <div class="recipe-actions">
                         <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
@@ -747,6 +757,19 @@
                 <div id="settings-integrations" class="settings-panel">
                     <div class="manage-section">
                         <h3>Integrations</h3>
+                        <div class="settings-group">
+                            <label for="key-source-select">Copy Keys From Another Device</label>
+                            <div class="input-with-button">
+                                <select id="key-source-select" class="key-source-select">
+                                    <option value="">Looking for devices…</option>
+                                </select>
+                                <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
+                            </div>
+                            <p class="settings-hint">Fetches the Discogs, AcoustID and YouTube keys from another AMMUI on
+                                this network. Keys that device has replace the ones here; any it doesn't have are left as
+                                they are.</p>
+                        </div>
+
                         <div class="settings-group">
                             <label for="discogs-token-input">Discogs API Token</label>
                             <div class="input-with-button">
@@ -1187,19 +1210,25 @@
                     <button type="button" class="calendar-entry-kind-btn" data-kind="entry" role="tab"
                         onclick="setCalendarEntryKind('entry')">Entry</button>
                     <button type="button" class="calendar-entry-kind-btn" data-kind="recipe" role="tab"
-                        onclick="setCalendarEntryKind('recipe')">Recipe</button>
+                        onclick="setCalendarEntryKind('recipe')">Meal</button>
                 </div>
                 <div id="calendar-entry-recipe-fields" class="settings-group">
-                    <label for="calendar-entry-recipe">Recipe</label>
+                    <label for="calendar-entry-recipe">Meal</label>
                     <div class="calendar-entry-repeat">
                         <select id="calendar-entry-recipe" class="calendar-entry-recipe-select" onchange="updateCalendarEntryRecipeUI()">
-                            <option value="">Choose a recipe…</option>
+                            <option value="">Choose a meal…</option>
                         </select>
                         <button type="button" id="calendar-entry-open-recipe" class="btn-control ghost btn-small"
-                            onclick="openRecipeFromEntry()">Open Recipe</button>
+                            onclick="openRecipeFromEntry()">Open Meal</button>
                     </div>
-                    <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No recipes yet. Add them
-                        on the Recipes tab.</p>
+                    <div class="calendar-entry-repeat">
+                        <span class="calendar-entry-repeat-word">For</span>
+                        <input type="number" id="calendar-entry-people" min="1" max="10" step="1" value="1"
+                            aria-label="Number of people">
+                        <label for="calendar-entry-people" class="calendar-entry-repeat-word">people</label>
+                    </div>
+                    <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No meals yet. Add them
+                        on the Meals tab.</p>
                 </div>
                 <div id="calendar-entry-normal-fields" class="calendar-entry-normal-fields">
                     <div class="settings-group">
@@ -1243,6 +1272,7 @@
                     <div id="calendar-entry-tags" class="calendar-entry-tag-choices"></div>
                     <div class="tag-input-wrapper">
                         <input type="text" id="calendar-entry-tag-input" placeholder="New tag..." autocomplete="off"
+                            oninput="updateCalendarEntrySaveButton()"
                             onkeydown="if(event.key==='Enter') { event.preventDefault(); addCalendarEntryTag(); }">
                         <button class="btn-control ghost btn-small" onclick="addCalendarEntryTag()">Add</button>
                     </div>

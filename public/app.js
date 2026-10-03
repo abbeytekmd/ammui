@@ -3432,6 +3432,48 @@ async function saveYoutubeKey() {
     }
 }
 
+// Other AMMUI installs on the network that keys can be copied from
+async function loadKeySources() {
+    const select = document.getElementById('key-source-select');
+    const btn = document.getElementById('key-import-btn');
+    if (!select) return;
+    let sources = [];
+    try {
+        sources = (await (await fetch('/api/settings/key-sources')).json()).devices || [];
+    } catch (e) { }
+    select.innerHTML = sources.length
+        ? sources.map(d => `<option value="${escapeHtml(d.udn)}">${escapeHtml(d.name)}</option>`).join('')
+        : '<option value="">No other AMMUI devices found</option>';
+    btn.disabled = !sources.length;
+}
+
+async function importKeysFromDevice() {
+    const select = document.getElementById('key-source-select');
+    const btn = document.getElementById('key-import-btn');
+    if (!select.value) return;
+    const name = select.options[select.selectedIndex].textContent;
+    if (!confirm(`Copy the API keys from ${name}? Keys it has will replace the ones on this device.`)) return;
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/settings/import-keys', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ udn: select.value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to get keys');
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube' };
+        showToast(data.imported.length
+            ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
+            : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey()]);
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        btn.disabled = !select.value;
+    }
+}
+
 function showPlayerArt(url) {
     if (!selectedRendererUdn) return;
     const safeUdn = selectedRendererUdn.replace(/:/g, '-');
@@ -4191,6 +4233,7 @@ function openServerSettingsModal() {
         loadDiscogsToken();
         loadAcoustidKey();
         loadYoutubeKey();
+        loadKeySources();
         loadCalendarSettings();
         startS3StatusPolling();
         loadLocalStats();
@@ -5507,7 +5550,7 @@ function drawCalendarEvents() {
                     icon.textContent = '🍽';
                     el.insertBefore(icon, el.firstChild);
                 }
-                el.title = [ev.title, ev.entry.recipe ? `Recipe: ${ev.entry.recipe.name}` : '', ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+                el.title = [ev.title, ev.entry.recipe ? `Meal: ${ev.entry.recipe.name}${ev.entry.people ? ` for ${ev.entry.people}` : ''}` : '', ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
             } else {
                 el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
             }
@@ -5673,7 +5716,7 @@ async function loadCalendarEntryRecipeOptions(selectedId, linked) {
         recipes = (await (await fetch('/api/recipes')).json()).recipes || [];
     } catch (e) { }
     if (linked && !recipes.some(r => r.id === linked.id)) recipes.push(linked);
-    select.innerHTML = '<option value="">Choose a recipe…</option>' +
+    select.innerHTML = '<option value="">Choose a meal…</option>' +
         recipes.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
     select.value = selectedId || '';
     document.getElementById('calendar-entry-no-recipes').hidden = recipes.length > 0;
@@ -5713,6 +5756,12 @@ async function openCalendarEntryModal(date, entry = null) {
     const repeat = entry ? entry.repeat : null;
     const recipeId = entry && entry.recipe ? entry.recipe.id : '';
     await loadCalendarEntryRecipeOptions(recipeId, entry && entry.recipe);
+    // People: the entry's own count, else whatever the last saved meal entry used
+    let people = entry && entry.people;
+    if (!people) {
+        try { people = (await (await fetch('/api/calendar-entries/last-people')).json()).people; } catch (e) { }
+    }
+    document.getElementById('calendar-entry-people').value = people || 1;
     setCalendarEntryKind(entry && entry.recipe ? 'recipe' : 'entry');
     document.getElementById('calendar-entry-repeat-unit').value = repeat ? repeat.unit : '';
     document.getElementById('calendar-entry-repeat-interval').value = repeat ? repeat.interval : 1;
@@ -5745,8 +5794,16 @@ function closeCalendarEntryModal() {
     calendarEntryEditing = null;
 }
 
+// Save stays disabled until a tag is selected (a tag typed but not yet added also counts)
+function updateCalendarEntrySaveButton() {
+    const typed = document.getElementById('calendar-entry-tag-input').value.trim();
+    document.getElementById('calendar-entry-save-btn').disabled =
+        !calendarEntryEditing || (!calendarEntryEditing.tags.length && !typed);
+}
+
 // Every existing tag as a chip to click on/off, plus any new ones added in this edit
 function renderCalendarEntryTags() {
+    updateCalendarEntrySaveButton();
     const container = document.getElementById('calendar-entry-tags');
     const all = [...new Set([...calendarEntryTagOptions, ...calendarEntryEditing.tags])].sort((a, b) => a.localeCompare(b));
     if (!all.length) {
@@ -5791,7 +5848,9 @@ async function saveCalendarEntry() {
     // A recipe entry takes its title from the recipe and has no description
     const isRecipe = calendarEntryKind === 'recipe';
     const recipeId = isRecipe ? document.getElementById('calendar-entry-recipe').value : null;
-    if (isRecipe && !recipeId) { setStatus('Choose a recipe.', true); return; }
+    if (isRecipe && !recipeId) { setStatus('Choose a meal.', true); return; }
+    const people = isRecipe ? Number(document.getElementById('calendar-entry-people').value) : null;
+    if (isRecipe && (!Number.isInteger(people) || people < 1 || people > 10)) { setStatus('People must be a whole number from 1 to 10.', true); return; }
     const title = isRecipe ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim();
     const description = isRecipe ? '' : document.getElementById('calendar-entry-description').value.trim();
     if (!title) { setStatus('Enter a title.', true); return; }
@@ -5818,7 +5877,7 @@ async function saveCalendarEntry() {
         const res = await fetch(id ? `/api/calendar-entries/${encodeURIComponent(id)}` : '/api/calendar-entries', {
             method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date, title, description, repeat, recipeId, tags })
+            body: JSON.stringify({ date, title, description, repeat, recipeId, people, tags })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -5827,7 +5886,7 @@ async function saveCalendarEntry() {
     } catch (err) {
         setStatus(err.message, true);
     } finally {
-        btn.disabled = false;
+        updateCalendarEntrySaveButton();
     }
 }
 
@@ -5939,7 +5998,7 @@ async function removeCalendar(id, btn) {
 
 // --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
 let recipeList = [];       // [{ id, name, ingredientCount }]
-let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [] }
+let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [{ amount, unit, text }] }
 let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
 
 const recipeIsDirty = () => !!recipeDraft && JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients }) !== recipeSavedJson;
@@ -5959,11 +6018,11 @@ async function loadRecipes() {
     try {
         const res = await fetch('/api/recipes');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load recipes');
+        if (!res.ok) throw new Error(data.error || 'Failed to load meals');
         recipeList = data.recipes || [];
     } catch (err) {
         recipeList = [];
-        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load recipes: ${escapeHtml(err.message)}</p>`;
+        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load meals: ${escapeHtml(err.message)}</p>`;
         return;
     }
     renderRecipeList();
@@ -5974,11 +6033,11 @@ function renderRecipeList() {
     const filter = document.getElementById('recipes-filter').value.trim().toLowerCase();
     const shown = recipeList.filter(r => !filter || r.name.toLowerCase().includes(filter));
     if (!recipeList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No recipes yet. Click + New to add one.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No meals yet. Click + New to add one.</p>';
         return;
     }
     if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No recipes match.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No meals match.</p>';
         return;
     }
     listEl.innerHTML = shown.map(r => `
@@ -5992,14 +6051,14 @@ function renderRecipeList() {
 }
 
 function confirmDiscardRecipe() {
-    return !recipeIsDirty() || confirm('Discard the unsaved changes to this recipe?');
+    return !recipeIsDirty() || confirm('Discard the unsaved changes to this meal?');
 }
 
 function openRecipeDraft(recipe) {
-    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: [...(recipe.ingredients || [])] };
+    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: (recipe.ingredients || []).map(i => ({ amount: i.amount || '', unit: i.unit || '', text: i.text || '' })) };
     recipeSavedJson = JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients });
     setRecipeStatus('', false);
-    document.getElementById('recipe-ingredient-input').value = '';
+    for (const f of ['amount', 'unit', 'ingredient']) document.getElementById(`recipe-${f}-input`).value = '';
     renderRecipeEditor();
     renderRecipeList();
 }
@@ -6010,10 +6069,10 @@ async function selectRecipe(id) {
     try {
         const res = await fetch(`/api/recipes/${encodeURIComponent(id)}`);
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load recipe');
+        if (!res.ok) throw new Error(data.error || 'Failed to load meal');
         openRecipeDraft(data);
     } catch (err) {
-        showToast(`Couldn't open recipe: ${err.message}`, 'error');
+        showToast(`Couldn't open meal: ${err.message}`, 'error');
         await loadRecipes();
     }
 }
@@ -6037,19 +6096,22 @@ function renderRecipeEditor() {
 function renderRecipeIngredients() {
     const list = document.getElementById('recipe-ingredients');
     const items = recipeDraft.ingredients;
-    list.innerHTML = items.map((text, i) => `
+    list.innerHTML = items.map((ing, i) => `
         <li class="recipe-ingredient" data-i="${i}">
-            <input type="text" value="${escapeHtml(text)}" maxlength="300" aria-label="Ingredient ${i + 1}">
+            <input type="text" class="recipe-amount" data-field="amount" value="${escapeHtml(ing.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount ${i + 1}">
+            <input type="text" class="recipe-unit" data-field="unit" value="${escapeHtml(ing.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit ${i + 1}">
+            <input type="text" data-field="text" value="${escapeHtml(ing.text)}" maxlength="300" aria-label="Ingredient ${i + 1}">
             <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === items.length - 1 ? 'disabled' : ''}>▼</button>
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
         </li>`).join('');
     list.querySelectorAll('.recipe-ingredient').forEach(row => {
         const i = Number(row.dataset.i);
-        const input = row.querySelector('input');
-        input.oninput = () => { recipeDraft.ingredients[i] = input.value; updateRecipeButtons(); };
-        // Enter in a row jumps to the "add" box, ready for the next ingredient
-        input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-ingredient-input').focus(); } };
+        row.querySelectorAll('input').forEach(input => {
+            input.oninput = () => { items[i][input.dataset.field] = input.value; updateRecipeButtons(); };
+            // Enter in a row jumps to the "add" boxes, ready for the next ingredient
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-amount-input').focus(); } };
+        });
         row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
             btn.onclick = () => {
                 const act = btn.dataset.act;
@@ -6080,12 +6142,15 @@ function updateRecipeButtons() {
 }
 
 function addRecipeIngredient() {
-    const input = document.getElementById('recipe-ingredient-input');
-    const text = input.value.trim();
-    input.value = '';
-    input.focus();
+    const [amount, unit, text] = ['amount', 'unit', 'ingredient'].map(f => {
+        const input = document.getElementById(`recipe-${f}-input`);
+        const value = input.value.trim();
+        input.value = '';
+        return value;
+    });
+    document.getElementById('recipe-amount-input').focus();
     if (!text || !recipeDraft) return;
-    recipeDraft.ingredients.push(text);
+    recipeDraft.ingredients.push({ amount, unit, text });
     renderRecipeIngredients();
     updateRecipeButtons();
 }
@@ -6100,8 +6165,10 @@ async function saveRecipe() {
     // An ingredient typed but not yet added still counts
     if (document.getElementById('recipe-ingredient-input').value.trim()) addRecipeIngredient();
     const name = recipeDraft.name.trim();
-    if (!name) { setRecipeStatus('Enter a recipe name.', true); document.getElementById('recipe-name').focus(); return; }
-    const ingredients = recipeDraft.ingredients.map(t => t.trim()).filter(Boolean);
+    if (!name) { setRecipeStatus('Enter a meal name.', true); document.getElementById('recipe-name').focus(); return; }
+    const ingredients = recipeDraft.ingredients
+        .map(i => ({ amount: i.amount.trim(), unit: i.unit.trim(), text: i.text.trim() }))
+        .filter(i => i.text);
 
     const btn = document.getElementById('recipe-save-btn');
     btn.disabled = true;
@@ -6133,7 +6200,7 @@ async function deleteRecipe() {
         renderRecipeList();
         return;
     }
-    if (!confirm(`Delete the recipe "${recipeDraft.name.trim() || 'Untitled'}"?`)) return;
+    if (!confirm(`Delete the meal "${recipeDraft.name.trim() || 'Untitled'}"?`)) return;
     try {
         const res = await fetch(`/api/recipes/${encodeURIComponent(recipeDraft.id)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');

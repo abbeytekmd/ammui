@@ -1047,7 +1047,8 @@ p.subtitle {
     }
 }
 
-.btn-control.disabled {
+.btn-control.disabled,
+.btn-control:disabled {
     opacity: 0.3;
     cursor: not-allowed;
     pointer-events: none;
@@ -2147,7 +2148,8 @@ p.subtitle {
     margin-right: 0.2rem;
 }
 
-.calendar-entry-form #calendar-entry-repeat-interval {
+.calendar-entry-form #calendar-entry-repeat-interval,
+.calendar-entry-form #calendar-entry-people {
     width: 4.5rem;
 }
 
@@ -2433,6 +2435,19 @@ p.subtitle {
 
 .recipe-add-ingredient {
     margin-left: 2.25rem;
+}
+
+/* Amount and unit sit in narrow columns before the ingredient */
+.recipe-ingredient input.recipe-amount,
+.tag-input-wrapper input.recipe-amount {
+    flex: 0 0 5rem;
+    width: 5rem;
+}
+
+.recipe-ingredient input.recipe-unit,
+.tag-input-wrapper input.recipe-unit {
+    flex: 0 0 6.5rem;
+    width: 6.5rem;
 }
 
 .recipe-actions {
@@ -4533,6 +4548,22 @@ p.subtitle {
 .settings-check .settings-hint {
     display: block;
     margin: 0.2rem 0 0;
+}
+
+/* Device picker for copying API keys, styled like the key inputs beside it */
+.settings-group select.key-source-select {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.settings-group select.key-source-select option {
+    background: var(--bg);
 }
 
 .settings-group input:focus {
