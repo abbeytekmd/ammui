@@ -7073,7 +7073,7 @@ app.post('/api/local/acoustid-identify', express.json(), async (req, res) => {
 app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => {
     const { uri, field, value } = req.body;
     if (!uri || !field || value === undefined) return res.status(400).json({ error: 'uri, field, and value are required' });
-    if (!['artist', 'album', 'albumartist', 'trackof'].includes(field)) return res.status(400).json({ error: 'Invalid field' });
+    if (!['artist', 'album', 'albumartist', 'trackof', 'year'].includes(field)) return res.status(400).json({ error: 'Invalid field' });
     if (field === 'trackof' && !/^\d{1,4}$/.test(String(value).trim())) return res.status(400).json({ error: 'Track count must be a whole number' });
 
     try {

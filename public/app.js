@@ -6804,7 +6804,7 @@ async function openFileInfoModal(trackData) {
             const isEditable = ((f.label in editFieldMap) || f.label === 'Created') && isLocalFile;
             const editField = editFieldMap[f.label];
             // "Copy to all tracks in this folder" only makes sense for album-level fields
-            const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist' || editField === 'trackof';
+            const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist' || editField === 'trackof' || editField === 'year';
 
             let editCell;
             if (!isEditable) {
@@ -6834,6 +6834,7 @@ async function openFileInfoModal(trackData) {
             } else {
                 editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass} metadata-editable-cell">
                        <input class="metadata-edit-input" data-field="${editField}" value="${(eValRaw || '').toString().replace(/"/g, '&quot;')}" placeholder="Enter ${f.label.toLowerCase()}..." />
+                       ${editField === 'albumartist' ? `<button class="metadata-save-btn" onclick="copyArtistToAlbumArtist(this)" title="Copy the Artist value into Album Artist">Artist</button>` : ''}
                        <button class="metadata-save-btn" onclick="saveTrackTag('${editField}', this)">Save</button>
                        ${canCopyToFolder ? `<button class="metadata-save-btn metadata-copy-folder-btn" onclick="copyTagToFolderAll('${editField}', this)" title="Copy to all tracks in this folder">All</button>` : ''}
                    </div>`;
@@ -7567,6 +7568,16 @@ async function saveFileTags() {
     } catch (err) {
         console.error('Failed to save tags:', err);
     }
+}
+
+// Fill the Album Artist field from the Artist field (highlighted, for the user to Save)
+function copyArtistToAlbumArtist(btn) {
+    const artistInput = document.querySelector('.metadata-edit-input[data-field="artist"]');
+    const input = btn.closest('.metadata-editable-cell').querySelector('.metadata-edit-input');
+    if (!artistInput || !input) return;
+    input.value = artistInput.value;
+    input.classList.add('metadata-suggested');
+    input.focus();
 }
 
 async function copyTagToFolderAll(field, btn) {
