@@ -8751,29 +8751,22 @@ function renderStats(data) {
     const tracksList = document.getElementById('stats-tracks-list');
     const albumsList = document.getElementById('stats-albums-list');
 
-    if (tracksList) {
-        tracksList.innerHTML = data.tracks.map((track, index) => `
+    // One line per entry: rank, title, artist (muted), play count
+    const row = (index, title, artist, count, unit = 'plays') => `
             <div class="stats-item">
-                <div class="stats-rank">#${index + 1}</div>
+                <div class="stats-rank">${index + 1}</div>
                 <div class="stats-info">
-                    <div class="stats-title">${track.title}</div>
-                    <div class="stats-subtitle">${track.artist || 'Unknown Artist'}</div>
+                    <span class="stats-title">${escapeHtml(title)}</span>
+                    <span class="stats-subtitle">${escapeHtml(artist || 'Unknown Artist')}</span>
                 </div>
-                <div class="stats-count">${track.count} plays</div>
-            </div>
-        `).join('');
+                <div class="stats-count" title="${count} ${unit}">${count}</div>
+            </div>`;
+
+    if (tracksList) {
+        tracksList.innerHTML = data.tracks.map((t, i) => row(i, t.title, t.artist, t.count)).join('');
     }
 
     if (albumsList) {
-        albumsList.innerHTML = data.albums.map((album, index) => `
-            <div class="stats-item">
-                <div class="stats-rank">#${index + 1}</div>
-                <div class="stats-info">
-                    <div class="stats-title">${album.album}</div>
-                    <div class="stats-subtitle">${album.artist || 'Unknown Artist'}</div>
-                </div>
-                <div class="stats-count">${album.count} plays</div>
-            </div>
-        `).join('');
+        albumsList.innerHTML = data.albums.map((a, i) => row(i, a.album, a.artist, a.count, 'track plays')).join('');
     }
 }

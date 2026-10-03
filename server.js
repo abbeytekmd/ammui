@@ -1163,8 +1163,8 @@ app.get('/api/browse/:udn', async (req, res) => {
 
 app.get('/api/stats', (req, res) => {
     try {
-        const topTracks = getTopTracks(20);
-        const topAlbums = getTopAlbums(20);
+        const topTracks = getTopTracks(100);
+        const topAlbums = getTopAlbums(100);
         res.json({ tracks: topTracks, albums: topAlbums });
     } catch (err) {
         console.error('Failed to get stats:', err);

@@ -5464,14 +5464,20 @@ input:checked+.slider:before {
     height: 80vh;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+}
+
+.stats-modal-content > .modal-header {
+    flex: none;
 }
 
 .stats-tabs {
     display: flex;
     gap: 1rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 0.75rem;
     border-bottom: 1px solid var(--card-border);
     padding-bottom: 0.5rem;
+    flex: none;
 }
 
 .stats-tab {
@@ -5500,10 +5506,13 @@ input:checked+.slider:before {
     background: var(--accent);
 }
 
+/* The list scrolls inside the modal; min-height lets the flex child shrink below its content */
 .stats-panel {
     display: none;
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+    padding-right: 0.25rem;
 }
 
 .stats-panel.active {
@@ -5513,60 +5522,60 @@ input:checked+.slider:before {
 .stats-list {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
 }
 
 .stats-item {
-    background: var(--bg-tertiary);
-    border-radius: 0.75rem;
-    padding: 1rem;
     display: flex;
     align-items: center;
-    gap: 1rem;
-    transition: transform 0.2s;
+    gap: 0.75rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.stats-item:nth-child(odd) {
+    background: rgba(255, 255, 255, 0.03);
 }
 
 .stats-item:hover {
-    transform: translateX(4px);
-    background: var(--bg-secondary);
+    background: rgba(255, 255, 255, 0.08);
 }
 
 .stats-rank {
-    font-size: 1.25rem;
-    font-weight: 800;
+    font-size: 0.75rem;
+    font-weight: 700;
     color: var(--accent);
-    min-width: 2.5rem;
-    opacity: 0.5;
+    min-width: 1.75rem;
+    text-align: right;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
 }
 
 .stats-info {
     flex: 1;
     min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .stats-title {
     font-weight: 600;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    color: var(--text);
 }
 
 .stats-subtitle {
-    font-size: 0.85rem;
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    margin-left: 0.5rem;
 }
 
 .stats-count {
-    background: var(--accent-gradient);
-    padding: 0.25rem 0.75rem;
-    border-radius: 2rem;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     font-weight: 600;
-    color: white;
+    color: var(--text-muted);
+    min-width: 2rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Button labels shortening for mobile */
