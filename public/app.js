@@ -7942,23 +7942,6 @@ async function saveGeneralSettings() {
     }
 }
 
-async function saveAlbumArtistSetting() {
-    const box = document.getElementById('album-artist-top-folder');
-    if (!box) return;
-    try {
-        const response = await fetch('/api/settings/general', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ albumArtistFromTopFolder: box.checked })
-        });
-        if (!response.ok) throw new Error('Save failed');
-        showToast('Settings saved', 'success', 2000);
-    } catch (err) {
-        console.error('Failed to save album artist setting:', err);
-        showToast('Failed to save settings');
-    }
-}
-
 async function exportFavourites() {
     try {
         const response = await fetch('/api/favourites/export');
@@ -8182,8 +8165,6 @@ async function fetchGeneralSettings() {
     try {
         const response = await fetch('/api/settings/general');
         const data = await response.json();
-        const topFolderBox = document.getElementById('album-artist-top-folder');
-        if (topFolderBox) topFolderBox.checked = !!data.albumArtistFromTopFolder;
         if (data.deviceName) {
             currentDeviceName = data.deviceName;
             const nameInput = document.getElementById('device-name-input');

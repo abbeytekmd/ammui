@@ -16,7 +16,7 @@ import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, setAlbumArtistFromTopFolder, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
@@ -293,8 +293,6 @@ onNewMediaServer(() => {
     mediaKeyRefreshTimer = setTimeout(loadMediaKeyedSettings, 5000);
 });
 const localDlna = setupLocalDlna(app, port, settings.deviceName, { findDiscogsArtUrl, getCachedArt, udn: NETWORK_UDN });
-setAlbumArtistFromTopFolder(settings.albumArtistFromTopFolder);
-
 // Most recently seen device with this UDN (a device can appear under several locations).
 function findDeviceByUdn(udn) {
     return Array.from(devices.values())
@@ -2334,15 +2332,10 @@ app.post('/api/sync/s3/test', express.json(), async (req, res) => {
 });
 
 app.get('/api/settings/general', (req, res) => {
-    res.json({ deviceName: settings.deviceName, albumArtistFromTopFolder: !!settings.albumArtistFromTopFolder });
+    res.json({ deviceName: settings.deviceName });
 });
 
 app.post('/api/settings/general', express.json(), (req, res) => {
-    if (req.body.albumArtistFromTopFolder !== undefined) {
-        settings.albumArtistFromTopFolder = !!req.body.albumArtistFromTopFolder;
-        setAlbumArtistFromTopFolder(settings.albumArtistFromTopFolder);
-        saveSettings();
-    }
     const deviceName = String(req.body.deviceName || '').trim();
     if (deviceName) {
         const oldLibraryName = localLibraryName();
