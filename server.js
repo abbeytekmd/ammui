@@ -16,7 +16,7 @@ import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName, isPlaceholderImage } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
@@ -4335,6 +4335,15 @@ app.post('/api/local/identify-folder-picture-dates-from-filename', express.json(
 });
 
 // Helper function for Discogs search
+// Discogs gives a release with no picture a 1x1 spacer.gif as its cover_image; drop
+// those results so a pictureless release can never be chosen as the cover.
+function withDiscogsCover(json) {
+    if (Array.isArray(json?.results)) {
+        json.results = json.results.filter(r => r.cover_image && !/spacer\.gif/i.test(r.cover_image));
+    }
+    return json;
+}
+
 // Search order: albumArtist+album, artist+album, album-only, keyword
 async function findDiscogsArtUrl(artist, album, skipUrls = [], albumArtist = null) {
     const DISCOGS_TOKEN = settings.discogsToken;
@@ -4401,7 +4410,7 @@ async function findDiscogsArtUrl(artist, album, skipUrls = [], albumArtist = nul
                 signal: AbortSignal.timeout(10000)
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return await response.json();
+            return withDiscogsCover(await response.json());
         } catch (e) {
             let detail = e.message;
             if (e.cause) detail += ` (Cause: ${e.cause.message || e.cause.code || e.cause})`;
@@ -4602,7 +4611,7 @@ async function findDiscogsCandidates(artist, album, albumArtist) {
             signal: AbortSignal.timeout(10000)
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return await response.json();
+        return withDiscogsCover(await response.json());
     };
 
     const scoreItem = (item, candidateArtist, requireArtistMatch) => {
@@ -4768,6 +4777,7 @@ async function downloadAndCacheArt(artist, album, externalUrl) {
     if (!response.ok) throw new Error(`HTTP ${response.status} fetching art`);
     const contentType = response.headers.get('content-type') || 'image/jpeg';
     const data = Buffer.from(await response.arrayBuffer());
+    if (isPlaceholderImage(data)) throw new Error(`Blank placeholder image at ${externalUrl}`);
     setCachedArt(artist, album, data, contentType);
     return `/api/art/cached?key=${encodeURIComponent(artCacheKey(artist, album))}`;
 }
@@ -4786,6 +4796,14 @@ app.get('/api/art/search', async (req, res) => {
     let { artist, album, uri, skip } = req.query;
     const skipUrls = skip ? skip.split(',').map(s => s.trim()).filter(Boolean) : [];
     let albumArtist = req.query.albumArtist || null;
+
+    // Pictures and videos have no album: searching would just use their year/month
+    // folder names ("2026" / "10") as artist and album.
+    if (uri) {
+        let ext = '';
+        try { ext = path.extname(new URL(uri).pathname).toLowerCase(); } catch { ext = path.extname(uri.split('?')[0]).toLowerCase(); }
+        if (IMAGE_EXTS.has(ext) || VIDEO_EXTS.has(ext)) return res.status(404).json({ error: 'Not an audio track' });
+    }
 
     // Local track: the album folder's cover is the single source of truth (found or
     // fetched once and saved there), so the player matches the folder browser.
@@ -4816,7 +4834,8 @@ app.get('/api/art/search', async (req, res) => {
     if (artist || album) {
         const key = artCacheKey(artist, album);
         const localUrl = `/api/art/cached?key=${encodeURIComponent(key)}`;
-        if (getCachedArt(artist, album) && !skipUrls.includes(localUrl)) {
+        const cachedRow = getCachedArt(artist, album);
+        if (cachedRow && !isPlaceholderImage(cachedRow.data) && !skipUrls.includes(localUrl)) {
             return res.json({ url: localUrl, source: 'cache' });
         }
     }
