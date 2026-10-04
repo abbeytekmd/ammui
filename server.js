@@ -16,7 +16,7 @@ import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar } from './lib/local-dlna-server.js';
+import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
@@ -2835,6 +2835,12 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
         const localDir = path.join(__dirname, 'local');
         const filename = req.file.originalname;
 
+        const artInfo = isImage && parseAlbumArtName(filename);
+        if (artInfo) {
+            const result = importAlbumArt(req.file.path, artInfo, ext);
+            return res.json({ success: true, filename, type: 'albumart', skipped: result.skipped });
+        }
+
         if (isImage || isVideo) {
             // Images go in the date-based picture tree; videos get the same
             // date foldering but under their own local/videos root so they stay a
@@ -3006,6 +3012,28 @@ function extractDateFromString(str) {
     return null;
 }
 
+// An imported "albumart~Artist~Album" image (see albumArtName) goes back into
+// local/music/<Artist>/<Album> as that album's cover rather than into the pictures tree.
+// An album that already has a cover keeps it. srcPath is a temp file, removed either way.
+function importAlbumArt(srcPath, artInfo, ext) {
+    const musicDir = path.join(__dirname, 'local', 'music');
+    const artistDir = findCaseInsensitivePath(musicDir, safeName(artInfo.artist));
+    const albumDir = findCaseInsensitivePath(artistDir, safeName(artInfo.album));
+    try {
+        if (fs.existsSync(albumDir) && findArtSidecar(fs.readdirSync(albumDir))) {
+            return { skipped: true };
+        }
+        fs.mkdirSync(albumDir, { recursive: true });
+        const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+        const saved = writeFolderArt(albumDir, fs.readFileSync(srcPath), contentType);
+        if (!saved) throw new Error(`Could not save album art to ${albumDir}`);
+        console.log(`[ART] Imported album art to ${saved}`);
+        return { skipped: false };
+    } finally {
+        try { fs.unlinkSync(srcPath); } catch (e) { }
+    }
+}
+
 async function downloadFileHelper(uri, title, artist, album) {
     const localDir = path.join(__dirname, 'local');
 
@@ -3071,6 +3099,12 @@ async function downloadFileHelper(uri, title, artist, album) {
     }
 
     if (isImage) {
+        const artInfo = parseAlbumArtName(title);
+        if (artInfo) {
+            const result = importAlbumArt(downloadPath, artInfo, ext);
+            return { success: true, filename, skipped: result.skipped };
+        }
+
         // Post-process image: determine Year/Month via shared detectPictureDate
         let hintSegments;
         try {
