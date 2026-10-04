@@ -3047,17 +3047,19 @@ async function downloadFileHelper(uri, title, artist, album) {
     } catch (e) { }
 
     const isImage = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].includes(ext);
-    const safeTitle = safeName(title || (isImage ? 'Photo' : 'Track'));
+    const isVideo = VIDEO_EXTS.has(ext);
+    const safeTitle = safeName(title || (isImage ? 'Photo' : isVideo ? 'Video' : 'Track'));
     const filename = `${safeTitle}${ext}`;
 
     let targetDir;
     let tempPath = null;
 
-    if (isImage) {
-        // For pictures, we download to a temp location first to extract EXIF data
+    if (isImage || isVideo) {
+        // Pictures and videos download to a temp location first so their date can be
+        // read before choosing the year/month folder
         const tempFilename = `download_${Date.now()}${ext}`;
         tempPath = path.join(__dirname, 'uploads', tempFilename);
-        console.log(`Downloading image ${uri} to temp ${tempPath}...`);
+        console.log(`Downloading ${isVideo ? 'video' : 'image'} ${uri} to temp ${tempPath}...`);
     } else {
         // Music logic: local/music/[Artist]/[Album]
         // `artist` here is expected to already be album-artist-first (callers pass
@@ -3093,19 +3095,21 @@ async function downloadFileHelper(uri, title, artist, album) {
         writer.on('error', reject);
     });
 
-    if (!isImage) {
+    if (!isImage && !isVideo) {
         console.log(`Download finished: ${filename}`);
         return { success: true, filename };
     }
 
-    if (isImage) {
-        const artInfo = parseAlbumArtName(title);
+    {
+        const artInfo = isImage && parseAlbumArtName(title);
         if (artInfo) {
             const result = importAlbumArt(downloadPath, artInfo, ext);
             return { success: true, filename, skipped: result.skipped };
         }
 
-        // Post-process image: determine Year/Month via shared detectPictureDate
+        // Post-process: determine Year/Month via shared detectPictureDate. Videos get the
+        // same date foldering under local/videos, as uploads do.
+        const rootSub = isVideo ? 'videos' : 'pictures';
         let hintSegments;
         try {
             const uriPath = new URL(uri).pathname;
@@ -3119,10 +3123,10 @@ async function downloadFileHelper(uri, title, artist, album) {
         let finalDir;
         if (!detected) {
             console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
-            finalDir = path.join(localDir, 'pictures', 'unknown-date');
+            finalDir = path.join(localDir, rootSub, 'unknown-date');
         } else {
             const { year, month } = detected;
-            finalDir = path.join(localDir, 'pictures', year, month ?? '01');
+            finalDir = path.join(localDir, rootSub, year, month ?? '01');
         }
         if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
