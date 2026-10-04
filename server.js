@@ -47,7 +47,7 @@ import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import https from 'https';
 import crypto from 'crypto';
-import { exec, execFile, spawn } from 'child_process';
+import { exec, execFile, execSync, spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
 import { createRequire } from 'module';
@@ -1338,6 +1338,50 @@ let ytDlpUnavailable = false;
 execAsync('yt-dlp --version', { windowsHide: true }).catch(() => {
     ytDlpUnavailable = true;
     console.warn('[YOUTUBE] yt-dlp not found on PATH — non-embeddable videos will open on youtube.com instead of playing locally. Install yt-dlp to enable local playback for those.');
+});
+
+// External programs the app shells out to, for the Settings → Tools page. Each is probed
+// fresh on request, and a successful probe clears the matching "unavailable" flag so a
+// program installed since startup is picked up without a restart.
+const EXTERNAL_TOOLS = [
+    { id: 'ffmpeg', name: 'FFmpeg', cmd: 'ffmpeg -version',
+      usedFor: 'Converting phone (HEVC) videos so browsers can play them, photo and video thumbnails, AirPlay streaming, and playing YouTube videos locally',
+      install: { win32: 'winget install Gyan.FFmpeg', other: 'sudo apt-get install ffmpeg' },
+      onFound: () => { ffmpegUnavailable = false; } },
+    { id: 'ffprobe', name: 'FFprobe', cmd: 'ffprobe -version',
+      usedFor: 'Detecting which videos need converting before the browser can play them (installed with FFmpeg)',
+      install: { win32: 'winget install Gyan.FFmpeg', other: 'sudo apt-get install ffmpeg' } },
+    { id: 'yt-dlp', name: 'yt-dlp', cmd: 'yt-dlp --version',
+      usedFor: 'Playing YouTube videos that have embedding disabled inside the app (also needs FFmpeg)',
+      install: { win32: 'winget install yt-dlp.yt-dlp', other: 'sudo apt-get install yt-dlp' },
+      onFound: () => { ytDlpUnavailable = false; } },
+    { id: 'fpcalc', name: 'fpcalc (Chromaprint)', cmd: 'fpcalc -version',
+      usedFor: 'Identify with AcoustID (audio fingerprinting)',
+      install: { win32: 'Download from https://acoustid.org/chromaprint and put fpcalc.exe on your PATH', other: 'sudo apt-get install libchromaprint-tools' },
+      onFound: () => { fpcalcUnavailable = false; } },
+    { id: 'git', name: 'Git', cmd: 'git --version',
+      usedFor: 'Update & Restart (downloads new versions of the app)',
+      install: { win32: 'winget install Git.Git', other: 'sudo apt-get install git' } },
+    { id: 'npm', name: 'npm', cmd: 'npm --version',
+      usedFor: 'Installing new packages during Update & Restart (comes with Node.js)',
+      install: { win32: 'winget install OpenJS.NodeJS.LTS', other: 'sudo apt-get install npm' } },
+];
+
+app.get('/api/tools/status', async (_req, res) => {
+    const tools = await Promise.all(EXTERNAL_TOOLS.map(async tool => {
+        let found = false, version = '';
+        try {
+            const { stdout, stderr } = await execAsync(tool.cmd, { windowsHide: true, timeout: 10000 });
+            found = true;
+            version = (stdout || stderr || '').split(/\r?\n/).find(l => l.trim())?.trim().slice(0, 120) || '';
+            tool.onFound?.();
+        } catch { /* not on PATH, or failed to run */ }
+        return {
+            id: tool.id, name: tool.name, usedFor: tool.usedFor, found, version,
+            install: process.platform === 'win32' ? tool.install.win32 : tool.install.other
+        };
+    }));
+    res.json({ platform: process.platform, tools });
 });
 
 function runThumbTask(task) {
@@ -3320,12 +3364,15 @@ app.get('/api/local-stats', async (req, res) => {
             walkDir(musicDir, audioExts), walkDir(photosDir, imageExts), walkDir(videosDir, VIDEO_EXTS)
         ]);
 
-        // Get free disk space using statvfs equivalent — df output
+        // Free disk space. fs.statfs needs Node 18.15+; the packaged .exe's older Node
+        // falls back to wmic (gone from recent Windows 11, but present where that runs) / df.
         let freeBytes = null;
         try {
-            const { execSync } = await import('child_process');
             const target = fs.existsSync(musicDir) ? musicDir : baseDataDir;
-            if (process.platform === 'win32') {
+            if (fs.promises.statfs) {
+                const s = await fs.promises.statfs(target);
+                freeBytes = s.bavail * s.bsize;
+            } else if (process.platform === 'win32') {
                 const out = execSync(`wmic logicaldisk where "DeviceID='${path.parse(target).root.replace(/\\/g, '').replace('/', '')}" get FreeSpace /value`, { encoding: 'utf8', windowsHide: true });
                 const match = out.match(/FreeSpace=(\d+)/);
                 if (match) freeBytes = parseInt(match[1], 10);

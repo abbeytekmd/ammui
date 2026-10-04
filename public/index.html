@@ -669,6 +669,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
+                <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-general" class="settings-panel active">
@@ -1000,6 +1001,23 @@
                             <p class="settings-hint" style="margin-top: 1rem;">
                                 Checks GitHub hourly. Updating downloads the new code (<code>git pull</code>), installs any new
                                 packages, then restarts the server and reloads this page.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div id="settings-tools" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>External Programs</h3>
+                        <div class="settings-group">
+                            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap: wrap;">
+                                <button onclick="loadToolsStatus()" class="btn-control ghost">Check Again</button>
+                                <span id="tools-status-text" class="settings-hint" style="margin:0;"></span>
+                            </div>
+                            <ul id="tools-list" class="tools-list"></ul>
+                            <p class="settings-hint" style="margin-top: 1rem;">
+                                These are separate programs the server runs. They're checked on the server's PATH, so what
+                                counts is the machine running the app, not this browser. After installing one, restart the
+                                app if it still shows as missing (a new PATH only takes effect for newly started programs).
                             </p>
                         </div>
                     </div>

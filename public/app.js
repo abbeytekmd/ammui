@@ -4450,6 +4450,35 @@ function switchSettingsTab(tab, btnEl) {
         startAirPlayScan();
     }
 
+    if (tab.toLowerCase() === 'tools') loadToolsStatus();
+}
+
+// Settings → Tools: which external programs (ffmpeg, yt-dlp, ...) the server can run.
+async function loadToolsStatus() {
+    const list = document.getElementById('tools-list');
+    const status = document.getElementById('tools-status-text');
+    if (!list) return;
+    if (status) status.textContent = 'Checking...';
+    try {
+        const res = await fetch('/api/tools/status');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const { tools } = await res.json();
+        list.innerHTML = tools.map(t => `
+            <li class="tools-item ${t.found ? 'found' : 'missing'}">
+                <div class="tools-item-head">
+                    <span class="tools-item-icon">${t.found ? '✓' : '✗'}</span>
+                    <strong>${escapeHtml(t.name)}</strong>
+                    <span class="tools-item-version">${t.found ? escapeHtml(t.version || 'found') : 'Not found'}</span>
+                </div>
+                <div class="tools-item-use">${escapeHtml(t.usedFor)}</div>
+                ${t.found ? '' : `<div class="tools-item-install">To install: <code>${escapeHtml(t.install)}</code></div>`}
+            </li>`).join('');
+        const missing = tools.filter(t => !t.found).length;
+        if (status) status.textContent = missing ? `${missing} of ${tools.length} not found` : 'All found';
+    } catch (err) {
+        list.innerHTML = '';
+        if (status) status.textContent = `Couldn't check: ${err.message}`;
+    }
 }
 
 function renderManageDevices() {

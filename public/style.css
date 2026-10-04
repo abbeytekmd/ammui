@@ -3257,6 +3257,64 @@ p.subtitle {
     margin-right: 0.4rem;
 }
 
+.tools-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+}
+
+.tools-item {
+    padding: 0.6rem 0.75rem;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border-left: 3px solid #4ade80;
+    font-size: 0.85rem;
+}
+
+.tools-item.missing {
+    border-left-color: #f87171;
+}
+
+.tools-item-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.tools-item-icon {
+    font-weight: bold;
+    color: #4ade80;
+}
+
+.tools-item.missing .tools-item-icon,
+.tools-item.missing .tools-item-version {
+    color: #f87171;
+}
+
+.tools-item-version {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.tools-item-use {
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+}
+
+.tools-item-install {
+    margin-top: 0.35rem;
+    overflow-wrap: anywhere;
+}
+
+.tools-item-install code {
+    user-select: all;
+}
+
 .header-logo {
     width: 28px;
     height: 28px;
