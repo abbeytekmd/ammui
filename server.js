@@ -1344,25 +1344,25 @@ execAsync('yt-dlp --version', { windowsHide: true }).catch(() => {
 // fresh on request, and a successful probe clears the matching "unavailable" flag so a
 // program installed since startup is picked up without a restart.
 const EXTERNAL_TOOLS = [
-    { id: 'ffmpeg', name: 'FFmpeg', cmd: 'ffmpeg -version',
+    { id: 'ffmpeg', name: 'FFmpeg', cmd: ['ffmpeg', '-version'],
       usedFor: 'Converting phone (HEVC) videos so browsers can play them, photo and video thumbnails, AirPlay streaming, and playing YouTube videos locally',
       install: { win32: 'winget install Gyan.FFmpeg', other: 'sudo apt-get install ffmpeg' },
       onFound: () => { ffmpegUnavailable = false; } },
-    { id: 'ffprobe', name: 'FFprobe', cmd: 'ffprobe -version',
+    { id: 'ffprobe', name: 'FFprobe', cmd: ['ffprobe', '-version'],
       usedFor: 'Detecting which videos need converting before the browser can play them (installed with FFmpeg)',
       install: { win32: 'winget install Gyan.FFmpeg', other: 'sudo apt-get install ffmpeg' } },
-    { id: 'yt-dlp', name: 'yt-dlp', cmd: 'yt-dlp --version',
+    { id: 'yt-dlp', name: 'yt-dlp', cmd: ['yt-dlp', '--version'],
       usedFor: 'Playing YouTube videos that have embedding disabled inside the app (also needs FFmpeg)',
       install: { win32: 'winget install yt-dlp.yt-dlp', other: 'sudo apt-get install yt-dlp' },
       onFound: () => { ytDlpUnavailable = false; } },
-    { id: 'fpcalc', name: 'fpcalc (Chromaprint)', cmd: 'fpcalc -version',
+    { id: 'fpcalc', name: 'fpcalc (Chromaprint)', cmd: ['fpcalc', '-version'],
       usedFor: 'Identify with AcoustID (audio fingerprinting)',
       install: { win32: 'Download from https://acoustid.org/chromaprint and put fpcalc.exe on your PATH', other: 'sudo apt-get install libchromaprint-tools' },
       onFound: () => { fpcalcUnavailable = false; } },
-    { id: 'git', name: 'Git', cmd: 'git --version',
+    { id: 'git', name: 'Git', cmd: ['git', '--version'],
       usedFor: 'Update & Restart (downloads new versions of the app)',
       install: { win32: 'winget install Git.Git', other: 'sudo apt-get install git' } },
-    { id: 'npm', name: 'npm', cmd: 'npm --version',
+    { id: 'npm', name: 'npm', cmd: ['npm', '--version'], shell: true,
       usedFor: 'Installing new packages during Update & Restart (comes with Node.js)',
       install: { win32: 'winget install OpenJS.NodeJS.LTS', other: 'sudo apt-get install npm' } },
 ];
@@ -1371,7 +1371,13 @@ app.get('/api/tools/status', async (_req, res) => {
     const tools = await Promise.all(EXTERNAL_TOOLS.map(async tool => {
         let found = false, version = '';
         try {
-            const { stdout, stderr } = await execAsync(tool.cmd, { windowsHide: true, timeout: 10000 });
+            // Launched the way the app itself runs them (no shell), so a program only a shell
+            // can find (e.g. a .cmd wrapper) doesn't show as found while the feature still fails.
+            // npm is the exception: on Windows it is npm.cmd, which the update step runs via a shell.
+            const [file, ...args] = tool.cmd;
+            const { stdout, stderr } = tool.shell
+                ? await execAsync(tool.cmd.join(' '), { windowsHide: true, timeout: 10000 })
+                : await execFileAsync(file, args, { windowsHide: true, timeout: 10000 });
             found = true;
             version = (stdout || stderr || '').split(/\r?\n/).find(l => l.trim())?.trim().slice(0, 120) || '';
             tool.onFound?.();
@@ -1505,10 +1511,18 @@ function probeVideoCodec(srcPath) {
             '-v', 'error', '-select_streams', 'v:0',
             '-show_entries', 'stream=codec_name', '-of', 'csv=p=0', srcPath
         ], { windowsHide: true });
-        let out = '';
+        let out = '', err = '';
         proc.stdout.on('data', d => { out += d.toString(); });
-        proc.on('error', () => resolve(''));
-        proc.on('close', () => resolve(out.trim().split(/\s+/)[0] || ''));
+        proc.stderr.on('data', d => { err += d.toString(); });
+        proc.on('error', e => {
+            console.warn(`[VIDEO] Could not run ffprobe (${e.code || e.message}) — playing the original file unconverted.`);
+            resolve('');
+        });
+        proc.on('close', code => {
+            const codec = out.trim().split(/\s+/)[0] || '';
+            if (!codec) console.warn(`[VIDEO] ffprobe found no video codec (exit ${code}) in ${srcPath}${err.trim() ? `: ${err.trim().slice(-300)}` : ''}`);
+            resolve(codec);
+        });
     });
 }
 
@@ -1523,7 +1537,11 @@ app.get('/api/video/playable', async (req, res) => {
         try { relPath = decodeURIComponent(rawUri.slice(markerIdx + marker.length)); }
         catch { relPath = rawUri.slice(markerIdx + marker.length); }
     }
-    if (relPath === null || ffmpegUnavailable) return res.redirect(302, rawUri);
+    if (relPath === null) return res.redirect(302, rawUri);
+    if (ffmpegUnavailable) {
+        console.warn(`[VIDEO] ffmpeg isn't available to the server — playing the original file unconverted: ${relPath}`);
+        return res.redirect(302, rawUri);
+    }
 
     const srcPath = path.resolve(thumbLocalRoot, relPath);
     if (srcPath !== thumbLocalRoot && !srcPath.startsWith(thumbLocalRoot + path.sep)) {
@@ -1532,21 +1550,33 @@ app.get('/api/video/playable', async (req, res) => {
 
     let stat;
     try { stat = await fs.promises.stat(srcPath); }
-    catch { return res.redirect(302, rawUri); }
+    catch (e) {
+        console.warn(`[VIDEO] Can't read ${srcPath} (${e.code || e.message}) — passing the request through unchanged.`);
+        return res.redirect(302, rawUri);
+    }
 
     const key = crypto.createHash('md5').update(`${srcPath}|${stat.mtimeMs}|${stat.size}`).digest('hex');
     const cacheName = key + '.mp4';
     const cacheFile = path.join(videoCacheDir, cacheName);
     if (fs.existsSync(cacheFile)) {
+        console.log(`[VIDEO] Playing cached conversion of ${relPath}`);
         res.type('video/mp4');
         return res.sendFile(cacheFile);
     }
 
+    // Only a successful probe is remembered, so one failure (e.g. before ffprobe was
+    // installed) doesn't leave the file unconverted until the server restarts.
     const probeKey = `${srcPath}|${stat.mtimeMs}`;
-    if (!videoCodecCache.has(probeKey)) videoCodecCache.set(probeKey, await probeVideoCodec(srcPath));
-    const codec = videoCodecCache.get(probeKey);
+    let codec = videoCodecCache.get(probeKey);
+    if (!codec) {
+        codec = await probeVideoCodec(srcPath);
+        if (codec) videoCodecCache.set(probeKey, codec);
+    }
     // Unknown codec (ffprobe missing/failed) or one browsers already play: use the original.
-    if (!codec || BROWSER_VIDEO_CODECS.has(codec)) return res.redirect(302, rawUri);
+    if (!codec || BROWSER_VIDEO_CODECS.has(codec)) {
+        if (codec) console.log(`[VIDEO] ${codec} plays in browsers as-is, no conversion needed: ${relPath}`);
+        return res.redirect(302, rawUri);
+    }
 
     // Only one request writes a given cache file; a concurrent one just streams.
     const writeCache = !videoTranscodesInflight.has(key);
