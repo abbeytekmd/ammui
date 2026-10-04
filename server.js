@@ -71,6 +71,17 @@ const __dirname = path.dirname(__filename);
 // in the same directory as the executable, not inside the read-only snapshot.
 const baseDataDir = isPkg ? path.dirname(process.execPath) : __dirname;
 
+// Helper programs (ffmpeg.exe, ffprobe.exe, yt-dlp.exe, fpcalc.exe) can simply be dropped
+// into the app folder. Windows finds a program in the *working* folder before the PATH, so
+// without this they'd work from the app folder but not from anything started elsewhere
+// (the video transcode runs inside cache/videos) — and yt-dlp, which runs ffmpeg itself.
+{
+    const pathKey = Object.keys(process.env).find(k => k.toUpperCase() === 'PATH') || 'PATH';
+    const entries = (process.env[pathKey] || '').split(path.delimiter);
+    const missing = [...new Set([baseDataDir, __dirname])].filter(d => !entries.includes(d));
+    if (missing.length) process.env[pathKey] = [...missing, ...entries].filter(Boolean).join(path.delimiter);
+}
+
 
 // Without these, a single unexpected error anywhere (e.g. a malformed EXIF blob in one photo
 // out of thousands during a big folder import) crashes the whole process — every in-flight
@@ -1367,9 +1378,36 @@ const EXTERNAL_TOOLS = [
       install: { win32: 'winget install OpenJS.NodeJS.LTS', other: 'sudo apt-get install npm' } },
 ];
 
+// The file a no-shell spawn(name) would launch, searched the way Node does: each PATH entry
+// in turn (unlike a shell, not the working folder); on Windows only .com/.exe count, never .cmd/.bat.
+function resolveLikeSpawn(name, cwd = process.cwd()) {
+    const isWin = process.platform === 'win32';
+    const dirs = (process.env.PATH || '').split(path.delimiter)
+        .map(d => d.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
+    const names = isWin ? [`${name}.com`, `${name}.exe`] : [name];
+    for (const dir of dirs) {
+        for (const n of names) {
+            const full = path.resolve(cwd, dir, n);
+            try { if (fs.statSync(full).isFile()) return full; } catch { /* missing, or a broken link */ }
+        }
+    }
+    return null;
+}
+
+// Every match the OS command lookup finds (where / which -a), for comparison.
+async function shellLookup(name) {
+    try {
+        const { stdout } = await execAsync(process.platform === 'win32' ? `where ${name}` : `which -a ${name}`, { windowsHide: true, timeout: 10000 });
+        return stdout.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    } catch { return []; }
+}
+
 app.get('/api/tools/status', async (_req, res) => {
     const tools = await Promise.all(EXTERNAL_TOOLS.map(async tool => {
-        let found = false, version = '';
+        let found = false, version = '', error = '';
+        const shellPaths = await shellLookup(tool.cmd[0]);
+        // A shell-launched tool (npm) runs whatever the shell lookup finds first.
+        const launches = tool.shell ? (shellPaths[0] || null) : resolveLikeSpawn(tool.cmd[0]);
         try {
             // Launched the way the app itself runs them (no shell), so a program only a shell
             // can find (e.g. a .cmd wrapper) doesn't show as found while the feature still fails.
@@ -1381,9 +1419,9 @@ app.get('/api/tools/status', async (_req, res) => {
             found = true;
             version = (stdout || stderr || '').split(/\r?\n/).find(l => l.trim())?.trim().slice(0, 120) || '';
             tool.onFound?.();
-        } catch { /* not on PATH, or failed to run */ }
+        } catch (e) { error = e.code || e.message || ''; }
         return {
-            id: tool.id, name: tool.name, usedFor: tool.usedFor, found, version,
+            id: tool.id, name: tool.name, usedFor: tool.usedFor, found, version, error, launches, shellPaths,
             install: process.platform === 'win32' ? tool.install.win32 : tool.install.other
         };
     }));
@@ -1588,6 +1626,11 @@ app.get('/api/video/playable', async (req, res) => {
     if (writeCache) videoTranscodesInflight.add(key);
 
     console.log(`[VIDEO] Transcoding ${codec} -> h264 for browser: ${relPath}`);
+    // ffmpeg runs inside the cache folder (the tee output is a relative name, since a
+    // drive letter's ":" would clash with tee's syntax). If that folder has gone missing
+    // since startup, spawn fails with ENOENT exactly as if ffmpeg weren't installed.
+    try { fs.mkdirSync(videoCacheDir, { recursive: true }); }
+    catch (e) { console.warn(`[VIDEO] Could not create the video cache folder ${videoCacheDir}: ${e.message}`); }
     const ffmpeg = spawn('ffmpeg', [
         '-hide_banner', '-loglevel', 'error',
         '-i', srcPath,
@@ -1618,8 +1661,13 @@ app.get('/api/video/playable', async (req, res) => {
     });
 
     ffmpeg.on('error', err => {
-        console.error('[VIDEO] Failed to start ffmpeg:', err.message);
-        if (err.code === 'ENOENT') ffmpegUnavailable = true;
+        if (writeCache) videoTranscodesInflight.delete(key);
+        if (err.code === 'ENOENT' && !fs.existsSync(videoCacheDir)) {
+            console.error(`[VIDEO] Failed to start ffmpeg: the working folder ${videoCacheDir} doesn't exist (ffmpeg itself may be fine).`);
+        } else {
+            console.error(`[VIDEO] Failed to start ffmpeg: ${err.message}${err.code === 'ENOENT' ? " — ffmpeg isn't on the server's PATH" : ''}`);
+            if (err.code === 'ENOENT') ffmpegUnavailable = true;
+        }
         if (!res.headersSent) res.redirect(302, rawUri);
     });
     ffmpeg.on('close', code => {
@@ -1629,7 +1677,8 @@ app.get('/api/video/playable', async (req, res) => {
         if (code === 0) {
             fs.promises.rename(tmpPath, cacheFile).catch(() => fs.promises.unlink(tmpPath).catch(() => {}));
         } else {
-            console.warn(`[VIDEO] ffmpeg exited ${code} for ${relPath}: ${stderr.trim().slice(-300)}`);
+            // A negative code is a launch failure (e.g. -4058 = ENOENT), already logged by the error handler.
+            if (code >= 0) console.warn(`[VIDEO] ffmpeg exited ${code} for ${relPath}: ${stderr.trim().slice(-300)}`);
             fs.promises.unlink(tmpPath).catch(() => {});
         }
     });

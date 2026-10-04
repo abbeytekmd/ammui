@@ -4471,6 +4471,8 @@ async function loadToolsStatus() {
                     <span class="tools-item-version">${t.found ? escapeHtml(t.version || 'found') : 'Not found'}</span>
                 </div>
                 <div class="tools-item-use">${escapeHtml(t.usedFor)}</div>
+                ${t.launches ? `<div class="tools-item-path">Runs: <code>${escapeHtml(t.launches)}</code></div>` : ''}
+                ${!t.launches && t.shellPaths?.length ? `<div class="tools-item-path">Found by the system at <code>${escapeHtml(t.shellPaths[0])}</code>, but the app can't launch it from there${t.error ? ` (${escapeHtml(t.error)})` : ''}.</div>` : ''}
                 ${t.found ? '' : `<div class="tools-item-install">To install: <code>${escapeHtml(t.install)}</code></div>`}
             </li>`).join('');
         const missing = tools.filter(t => !t.found).length;

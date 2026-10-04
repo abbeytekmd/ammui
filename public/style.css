@@ -3306,9 +3306,15 @@ p.subtitle {
     margin-top: 0.25rem;
 }
 
-.tools-item-install {
+.tools-item-install,
+.tools-item-path {
     margin-top: 0.35rem;
     overflow-wrap: anywhere;
+}
+
+.tools-item-path {
+    color: var(--text-muted);
+    font-size: 0.8rem;
 }
 
 .tools-item-install code {

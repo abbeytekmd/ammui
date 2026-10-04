@@ -29,3 +29,10 @@ server.log
 .claude/settings.local.json
 ammui.db*
 logs/
+
+# Helper programs dropped into the app folder (picked up via PATH at startup)
+/ffmpeg.exe
+/ffprobe.exe
+/ffplay.exe
+/yt-dlp.exe
+/fpcalc.exe
