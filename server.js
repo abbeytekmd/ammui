@@ -3504,23 +3504,30 @@ async function refreshScreensaverCache(device, objectId) {
     screensaverCache.objectId = objectId;
     screensaverCache.status = 'loading';
     screensaverCache.images = [];
+    // Images found so far, so Day/Recent/Favs can start showing photos before the scan finishes.
+    // Held on this cache object so a scan superseded by a settings change can't leak into the new one.
+    const cache = screensaverCache;
+    cache.partialImages = [];
+
+    // Images that are NOT deleted
+    const isWantedImage = (i) => {
+        const isImage = i.type === 'item' && (
+            (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
+            (i.protocolInfo && i.protocolInfo.includes('image/')) ||
+            (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
+        );
+        if (!isImage) return false;
+        const url = i.uri || i.res;
+        return !settings.deletedPhotos[mediaKey(url)];
+    };
 
     try {
         const mediaServer = new MediaServer(device);
         // Use browseRecursive from MediaServer class
-        const allItems = await mediaServer.browseRecursive(objectId, settings.screensaver.pathName || 'Home');
+        const allItems = await mediaServer.browseRecursive(objectId, settings.screensaver.pathName || 'Home', undefined,
+            (found) => { cache.partialImages.push(...found.filter(isWantedImage)); });
 
-        // Filter for images and NOT deleted
-        const images = allItems.filter(i => {
-            const isImage = i.type === 'item' && (
-                (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
-                (i.protocolInfo && i.protocolInfo.includes('image/')) ||
-                (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
-            );
-            if (!isImage) return false;
-            const url = i.uri || i.res;
-            return !settings.deletedPhotos[mediaKey(url)];
-        });
+        const images = allItems.filter(isWantedImage);
 
         screensaverCache.images = images;
         screensaverCache.status = 'ready';
@@ -3530,6 +3537,7 @@ async function refreshScreensaverCache(device, objectId) {
         console.error('[SCREENSAVER] Scan failed:', err);
         screensaverCache.status = 'error';
     }
+    cache.partialImages = [];
 }
 
 app.post('/api/settings/screensaver', (req, res) => {
@@ -3783,7 +3791,10 @@ app.get('/api/slideshow/list', async (req, res) => {
     const { mode } = req.query;
 
     const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-    if (!cacheValid || screensaverCache.status !== 'ready') {
+    // While the scan is still running, answer with whatever matches it has found so far
+    // (flagged X-Scan-Partial so the browser keeps re-fetching until the full list is ready).
+    const partial = !cacheValid || screensaverCache.status !== 'ready';
+    if (partial) {
         let device = devices.get(serverUdn);
         if (!device) {
             for (const d of devices.values()) {
@@ -3793,14 +3804,17 @@ app.get('/api/slideshow/list', async (req, res) => {
         if (device && (!cacheValid || screensaverCache.status === 'idle' || screensaverCache.status === 'error')) {
             refreshScreensaverCache(device, objectId);
         }
-        return res.status(503).json({ error: 'Cache not ready yet' });
     }
 
-    let images = screensaverCache.images.filter(img => {
+    const source = partial
+        ? (cacheValid && screensaverCache.status === 'loading' ? screensaverCache.partialImages || [] : [])
+        : screensaverCache.images;
+    let images = source.filter(img => {
         const url = img.uri || img.res;
         return !settings.deletedPhotos[mediaKey(url)];
     });
 
+    let emptyError = 'No images found';
     if (mode === 'onThisDay') {
         const today = new Date();
         const month = today.getMonth() + 1;
@@ -3810,28 +3824,30 @@ app.get('/api/slideshow/list', async (req, res) => {
             if (!d) return false;
             return (d.getMonth() + 1) === month && d.getDate() === day;
         });
-        if (images.length === 0) {
-            return res.status(404).json({ error: 'No images found for this day' });
-        }
+        emptyError = 'No images found for this day';
     } else if (mode === 'recent') {
         const cutoff = getRecentCutoff();
         images = images.filter(img => {
             const d = getImageDate(img);
             return d && d >= cutoff;
         });
-        if (images.length === 0) {
-            return res.status(404).json({ error: 'No recent photos found' });
-        }
+        emptyError = 'No recent photos found';
     } else if (mode === 'favourites') {
         images = images.filter(img => {
             const url = img.uri || img.res;
             return settings.fileTags?.[mediaKey(url)]?.includes('fav');
         });
-        if (images.length === 0) {
-            return res.status(404).json({ error: 'No favourite photos found' });
+        emptyError = 'No favourite photos found';
+    }
+
+    if (images.length === 0) {
+        if (partial) return res.status(503).json({ error: 'Cache not ready yet' });
+        if (mode === 'onThisDay' || mode === 'recent' || mode === 'favourites') {
+            return res.status(404).json({ error: emptyError });
         }
     }
 
+    if (partial) res.set('X-Scan-Partial', '1');
     res.set('X-Deleted-Version', String(slideshowDeleteVersion));
     res.json(images.map(img => {
         const key = img.key || mediaKey(img.uri || img.res);

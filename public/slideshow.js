@@ -196,7 +196,7 @@ class Slideshow {
                     if (items.length > 0) {
                         clearTimeout(this._modeRetryTimer);
                         this.items = items;
-                        this.listVersion = Number(listRes.headers.get('X-Deleted-Version')) || 0;
+                        this.listVersion = this.listVersionOf(listRes, 0);
                         if (this.resumeMode === this.mode) {
                             // Try to resume by URL so deleted items don't shift position
                             let resumePos = -1;
@@ -265,10 +265,17 @@ class Slideshow {
 
             this.items = items;
             this.index = pos;
-            this.listVersion = listRes.ok ? (Number(listRes.headers.get('X-Deleted-Version')) || version) : null;
+            this.listVersion = listRes.ok ? this.listVersionOf(listRes, version) : null;
         } catch (e) {
             console.warn('[SLIDESHOW] List refresh failed:', e);
         }
+    }
+
+    // A list sent while the server is still scanning holds only the photos found so far:
+    // give it a version the server never uses so refreshListIfStale re-fetches it every slide.
+    listVersionOf(listRes, fallback) {
+        if (listRes.headers.get('X-Scan-Partial') === '1') return -1;
+        return Number(listRes.headers.get('X-Deleted-Version')) || fallback;
     }
 
     async previous() {
