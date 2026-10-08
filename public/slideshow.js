@@ -107,10 +107,12 @@ class Slideshow {
             this.resumeUrl = currentItem ? (currentItem.uri || currentItem.res) : null;
             this.resumeIndex = this.index;
             this.resumeMode = this.mode;
+            this.resumeOrder = this.items;
         } else {
             this.resumeIndex = -1;
             this.resumeUrl = null;
             this.resumeMode = null;
+            this.resumeOrder = null;
         }
         this.items = [];
         this.index = -1;
@@ -195,16 +197,18 @@ class Slideshow {
                     const items = await listRes.json();
                     if (items.length > 0) {
                         clearTimeout(this._modeRetryTimer);
-                        this.items = items;
+                        const resuming = this.resumeMode === this.mode;
+                        // Shuffle once; when resuming, keep the order already being cycled
+                        this.items = this.shuffleInto(resuming ? (this.resumeOrder || []) : [], items, resuming ? this.resumeUrl : null);
                         this.listVersion = this.listVersionOf(listRes, 0);
-                        if (this.resumeMode === this.mode) {
+                        if (resuming) {
                             // Try to resume by URL so deleted items don't shift position
                             let resumePos = -1;
                             if (this.resumeUrl) {
-                                resumePos = items.findIndex(i => (i.uri || i.res) === this.resumeUrl);
+                                resumePos = this.items.findIndex(i => (i.uri || i.res) === this.resumeUrl);
                             }
                             // Fallback to saved index if URL not found (e.g. it was deleted)
-                            if (resumePos === -1 && this.resumeIndex >= 0 && this.resumeIndex < items.length) {
+                            if (resumePos === -1 && this.resumeIndex >= 0 && this.resumeIndex < this.items.length) {
                                 resumePos = this.resumeIndex;
                             }
                             this.index = resumePos - 1; // next() will increment
@@ -214,6 +218,7 @@ class Slideshow {
                         this.resumeIndex = -1;
                         this.resumeUrl = null;
                         this.resumeMode = null;
+                        this.resumeOrder = null;
                         return this.next();
                     }
                 }
@@ -256,9 +261,9 @@ class Slideshow {
             // 404 = nothing left in this mode; anything else (e.g. 503 while the server
             // rebuilds its cache) keeps the current list and retries on the next slide
             if (!listRes.ok && listRes.status !== 404) return;
-            const items = listRes.ok ? await listRes.json() : [];
             const current = this.index >= 0 ? this.items[this.index] : null;
             const currentUrl = current ? (current.uri || current.res) : null;
+            const items = this.shuffleInto(this.items, listRes.ok ? await listRes.json() : [], currentUrl);
             let pos = currentUrl ? items.findIndex(i => (i.uri || i.res) === currentUrl) : -1;
             // Current photo is gone: the one after it has slid down into its slot
             if (pos === -1) pos = Math.max(-1, Math.min(this.index, items.length) - 1);
@@ -269,6 +274,22 @@ class Slideshow {
         } catch (e) {
             console.warn('[SLIDESHOW] List refresh failed:', e);
         }
+    }
+
+    // Day/Recent/Favs lists are shuffled once and then cycled in that order. Photos already in
+    // `order` keep their places (dropping any no longer in `items`); new ones are slotted in at
+    // random points after `currentUrl`, so they still turn up this time round.
+    shuffleInto(order, items, currentUrl) {
+        const urlOf = i => i.uri || i.res;
+        const fresh = new Map(items.map(i => [urlOf(i), i]));
+        const merged = order.filter(i => fresh.has(urlOf(i))).map(i => fresh.get(urlOf(i)));
+        const known = new Set(merged.map(urlOf));
+        const start = currentUrl ? merged.findIndex(i => urlOf(i) === currentUrl) + 1 : 0;
+        for (const item of fresh.values()) {
+            if (known.has(urlOf(item))) continue;
+            merged.splice(start + Math.floor(Math.random() * (merged.length - start + 1)), 0, item);
+        }
+        return merged;
     }
 
     // A list sent while the server is still scanning holds only the photos found so far:
