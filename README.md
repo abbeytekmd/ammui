@@ -4,6 +4,8 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
 * Right side of the screen - playback device: DLNA player, Sonos, Airplay
 
+**Get started:** on Windows, download and run the installer. See [Installation](#-installation).
+
 <img src="images/ammui-desktop-mode.png" />
 
 ## Features
@@ -25,6 +27,151 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * View server and browser logs from the menu (Logs), filtered by type (YOUTUBE, DEBUG, DEVICES, UPLOAD, and so on) to help track down problems.
 
 I have this running on a headless linux box and I run the UI variously from a Samsung tablet, my work PC, a Raspberry PI 5 connected to a 15" display and, as a centrepiece in our house, a DELL All-In-One Optiplex 3011, bought from ebay for 60 quid.
+
+## 🚀 Installation
+
+> **Windows only for now.** An installer for Windows is available below. Installers for other platforms are coming; until then, see [Other platforms (manual install)](#other-platforms-manual-install).
+
+### Windows
+
+1. **Download the installer**: [ammui-setup.cmd](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.cmd). If the link opens as text in your browser, go back, right-click it and choose *Save link as…*. If the browser says the file isn't commonly downloaded, choose *Keep*.
+2. **Run it**: double-click the downloaded file. If Windows SmartScreen says "Windows protected your PC", choose *More info* → *Run anyway*.
+3. **Answer the prompts** (see [What you may need to do](#what-you-may-need-to-do) below). Setup takes a few minutes, most of it downloading.
+4. **Name your server**: when setup finishes, AMMUI opens in your browser at `https://localhost:3443`. Give the server a name when asked, and you're ready to go.
+
+The installer is a one-off: once AMMUI is set up you never need it again. AMMUI keeps itself up to date.
+
+#### What it installs
+
+Anything already on the PC is left alone, so only what's missing gets installed.
+
+| What | Why | Where it goes |
+|---|---|---|
+| **Node.js** (current LTS, v22.13 or newer needed) | Runs AMMUI | Installed for all users with winget, or from nodejs.org if winget isn't available |
+| **Git** | Downloads the AMMUI code from GitHub | Installed with winget. If that isn't possible, the code is downloaded as a zip file instead |
+| **AMMUI** and its packages | The app itself | `%USERPROFILE%\ammui` (your user folder). Your database, settings, certificates and local library are kept here too |
+| **ffmpeg** (optional) | AirPlay, photo and video thumbnails, local playback of YouTube videos | `ffmpeg.exe` and `ffprobe.exe` in the AMMUI folder |
+| **yt-dlp** (optional) | Plays YouTube videos that have embedding disabled | `yt-dlp.exe` in the AMMUI folder |
+| **fpcalc** (Chromaprint, optional) | "Identify with AcoustID" | `fpcalc.exe` in the AMMUI folder |
+
+It also adds these shortcuts:
+
+* **AMMUI Server** on the desktop and in the Start menu: starts the server. Its window shows the server log; close the window to stop AMMUI.
+* **AMMUI Server** in the Startup folder (`shell:startup`): starts AMMUI, minimised, every time you sign in to Windows.
+* **AMMUI Kiosk** on the desktop: opens AMMUI full screen in Chrome (or Edge if Chrome isn't installed), for a dedicated display such as a wall-mounted screen or an all-in-one PC. Press Alt+F4 to close it. It needs the server to be running.
+
+AMMUI is also listed in *Settings → Apps* as **AMMUI Media Hub**, so it can be uninstalled like any other program (see [Uninstalling](#uninstalling)).
+
+#### What you may need to do
+
+* **Allow the download and the file to run**: see steps 1 and 2 above. The installer is a plain script, so you can open it in Notepad to see exactly what it does.
+* **Approve installs**: if Node.js or Git need installing, Windows asks for permission (*Yes* in the User Account Control prompt). This needs an administrator account or password.
+* **Allow Node.js through the firewall**: the first time the server starts, Windows Defender Firewall asks about Node.js. Tick **Private networks** and choose *Allow*, otherwise your players (Sonos, DLNA, AirPlay) and other devices can't connect. This also needs an administrator.
+* **Trust the AMMUI certificate**: AMMUI runs over HTTPS with its own certificate (see [Secure Access (HTTPS)](#secure-access-https)). The installer offers to trust it on this PC. Choose *Yes* in the Windows security warning so the browser and the kiosk don't show a certificate warning. Choosing *No* is safe; the browser will just warn you each time.
+* **Set up your other devices**: open `https://<this PC's name or IP address>:3443/` on a tablet, phone or other computer. To stop the certificate warning there, install the certificate on each device as described in [Getting rid of the browser warning](#getting-rid-of-the-browser-warning).
+* **Add API keys** (optional) under **Server Settings → Integrations**: a Discogs token (album art), an AcoustID key (identify tracks by their audio) and a YouTube key (music videos).
+
+If something goes wrong the installer stops with a message in red and waits for a key press so you can read it. Fix the problem it describes and run the installer again; it carries on from where it got to.
+
+#### Options
+
+Run the installer from a command prompt to change what it does:
+
+* Install somewhere other than your user folder: `ammui-setup.cmd D:\ammui`
+* `set AMMUI_NO_EXTRAS=1` first to skip ffmpeg, yt-dlp and fpcalc.
+* `set AMMUI_NO_STARTUP=1` first so AMMUI doesn't start when you sign in to Windows.
+* `set AMMUI_NO_RUN=1` first to set everything up without starting the server.
+* Or run it straight from a PowerShell window without saving the file: `irm https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.cmd | iex`
+
+### Other platforms (manual install)
+
+Installers for other platforms are on the way. Until then, AMMUI can be installed by hand on any system that runs Node.js.
+
+#### Prerequisites
+*   Node.js (v22.13 or higher, for its built-in SQLite)
+*   npm
+*   Git
+
+#### Installation
+
+1.  Clone the repository:
+    ```bash
+    git clone https://github.com/abbeytekmd/ammui.git
+    cd ammui
+    ```
+
+2.  Install dependencies:
+    ```bash
+    npm install
+    ```
+
+3. Optional: Install ffmpeg for Airplay support, photo/video thumbnails and local playback of YouTube videos.
+    ```bash
+    sudo apt-get install ffmpeg
+    ```
+    or just download/install the package on Windows.
+
+4. Optional: Install Chromaprint (`fpcalc`) for "Identify with AcoustID".
+    ```bash
+    sudo apt-get install libchromaprint-tools
+    ```
+    or on Windows download the Chromaprint build and put `fpcalc.exe` on your PATH. Then add a free AcoustID API key under Settings → Integrations.
+
+5. Optional: Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) so YouTube videos that have embedding disabled can still play locally (in the "Video" button on a track) instead of opening on youtube.com.
+    ```bash
+    sudo apt-get install yt-dlp
+    ```
+    or on Windows download `yt-dlp.exe` and put it on your PATH. ffmpeg (step 3) is also required for this: the video is copied and the audio re-encoded to AAC on the fly, as YouTube's Opus audio could drop out partway through playback.
+
+#### Usage
+
+1.  Start the application:
+    ```bash
+    npm start
+    ```
+
+2.  Open your browser and navigate to:
+    ```
+    https://localhost:3443
+    ```
+    From another device use the server's address instead, e.g. `https://192.168.0.2:3443`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost:3000` also works and redirects to the HTTPS address.
+
+## Uninstalling
+
+### Windows
+
+1. Open *Settings → Apps → Installed apps* (on Windows 10: *Settings → Apps → Apps & features*). AMMUI is also listed in *Control Panel → Programs and Features*.
+2. Find **AMMUI Media Hub**, open its menu (**⋯**) and choose *Uninstall*.
+3. Confirm that you want to remove AMMUI.
+4. Choose whether to **delete the AMMUI folder** (`%USERPROFILE%\ammui`, or wherever you installed it). This folder holds your AMMUI database and settings, and the local library: the music, photos and videos added to AMMUI's own server.
+   * **No** (the default) keeps the folder, so nothing you added to AMMUI is lost and you can reinstall into it later.
+   * **Yes** deletes it and everything in it. Back up anything you want to keep first (see [Backup and restore](#backup-and-restore)).
+5. If Windows asks whether to delete the AMMUI certificate from the root store, choose *Yes*.
+
+The uninstaller removes:
+
+* the running AMMUI server and any open kiosk window (they're stopped first)
+* the **AMMUI Server** shortcuts (desktop, Start menu and Startup folder) and the **AMMUI Kiosk** shortcut
+* this PC's trust in AMMUI's certificate
+* the AMMUI entry in *Settings → Apps*
+* `%LOCALAPPDATA%\AMMUI` (the icon, the kiosk browser's profile and the uninstaller itself)
+* the AMMUI folder, only if you said *Yes* in step 4
+
+It leaves alone:
+
+* **Node.js and Git**, as other programs may use them. Remove them from *Settings → Apps* if you don't need them.
+* Music, photo and video folders elsewhere on your PC or network that AMMUI was browsing.
+* Certificates installed on your other devices (tablets, phones, other PCs). Remove those in each device's certificate settings if you want to.
+
+If the AMMUI entry is missing from *Settings → Apps*, run the uninstaller by hand from a command prompt:
+
+```
+powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
+```
+
+### Other platforms
+
+Stop the server (Ctrl+C in its terminal, or stop the service if you set one up), then delete the folder you cloned AMMUI into. As on Windows, that folder holds the database, settings and local library, so back up anything you want to keep first.
 
 ## Slideshow:
 * Apply rotation to photos and the server will remember.
@@ -225,56 +372,6 @@ This describes what happens behind the Video button (see [Music Videos](#music-v
 ### Quota and limits
 * A channel search or a whole-of-YouTube search costs 100 of YouTube's 10,000 daily quota units; reading a page of uploads costs only a unit or two. Channel searches are capped at 60 a day and the "Official Video" searches at 30 a day, so a large library may take a few days to fill in. Tracks that hit a cap stay dashed and are retried later.
 * If YouTube reports its quota is used up, automatic lookups pause for an hour.
-
-## 🚀 Getting Started
-
-### Prerequisites
-*   Node.js (v18 or higher)
-*   npm
-
-### Installation
-
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/abbeytekmd/ammui.git
-    cd ammui
-    ```
-
-2.  Install dependencies:
-    ```bash
-    npm install
-    ```
-
-3. Optional: Install ffmpeg for Airplay support, photo/video thumbnails and local playback of YouTube videos.
-    ```bash
-    sudo apt-get install ffmpeg
-    ```
-    or just download/install the package on Windows.
-
-4. Optional: Install Chromaprint (`fpcalc`) for "Identify with AcoustID".
-    ```bash
-    sudo apt-get install libchromaprint-tools
-    ```
-    or on Windows download the Chromaprint build and put `fpcalc.exe` on your PATH. Then add a free AcoustID API key under Settings → Integrations.
-
-5. Optional: Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) so YouTube videos that have embedding disabled can still play locally (in the "Video" button on a track) instead of opening on youtube.com.
-    ```bash
-    sudo apt-get install yt-dlp
-    ```
-    or on Windows download `yt-dlp.exe` and put it on your PATH. ffmpeg (step 3) is also required for this: the video is copied and the audio re-encoded to AAC on the fly, as YouTube's Opus audio could drop out partway through playback.
-
-### Usage
-
-1.  Start the application:
-    ```bash
-    npm start
-    ```
-
-2.  Open your browser and navigate to:
-    ```
-    https://localhost:3443
-    ```
-    From another device use the server's address instead, e.g. `https://192.168.0.2:3443`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost:3000` also works and redirects to the HTTPS address.
 
 ## ⚙️ Built With
 
