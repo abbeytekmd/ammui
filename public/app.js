@@ -2280,7 +2280,9 @@ function renderBrowser(items) {
         }
         thumbUrl = mediaUrl(thumbUrl);
         if (thumbUrl) {
-            const escThumb = (thumbUrl || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+            // HTML-attribute escaping only: a JS-style \' here would end up in the URL itself
+            // and break art for folders with apostrophes (e.g. "That's What I'm Not").
+            const escThumb = (thumbUrl || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
             const rot = isImage ? (manualRotations[item.key || item.uri] || 0) : 0;
             const rotStyle = rot ? ` style="transform: rotate(${rot}deg)"` : '';
             // Folder art is a best-effort lookup (cover file or embedded tag on the first
@@ -5248,6 +5250,61 @@ function toggleMobileView() {
             switchView('playlist');
         }
     }
+}
+
+// Keep the floating Player/Library button level with the bar at the bottom of the current view:
+// in the library, the toolbar's bottom row of buttons (which moves as it wraps or shrinks);
+// in the player, the progress bar, which is also shortened so it doesn't run under the button.
+function alignFloatingNavBtn() {
+    if (!floatingBtn) return;
+    const narrow = window.matchMedia('(max-width: 1100px)').matches;
+    const progress = document.querySelector('#playlist-container .position-control-wrapper');
+    const inPlayer = floatingBtn.classList.contains('on-left');
+    if (progress) {
+        for (const prop of ['margin-left', 'margin-right', 'width']) progress.style.removeProperty(prop);
+    }
+
+    let target = null;
+    if (narrow && inPlayer) {
+        target = progress && progress.offsetParent ? progress : null;
+    } else if (narrow) {
+        const group = document.querySelector('#browser-container .browser-control-group');
+        const buttons = group ? Array.from(group.querySelectorAll('.btn-control')).filter(b => b.offsetParent) : [];
+        if (buttons.length) target = buttons.reduce((a, b) => (b.getBoundingClientRect().bottom > a.getBoundingClientRect().bottom ? b : a));
+    }
+    if (!target) {
+        floatingBtn.style.removeProperty('bottom');
+        return;
+    }
+
+    const rect = target.getBoundingClientRect();
+    const centreFromBottom = window.innerHeight - (rect.top + rect.height / 2);
+    floatingBtn.style.bottom = `${Math.max(8, centreFromBottom - floatingBtn.offsetHeight / 2)}px`;
+
+    // Make room beside the progress bar on whichever side the button sits
+    if (target === progress) {
+        const gap = 8;
+        const btn = floatingBtn.getBoundingClientRect();
+        progress.style.width = 'auto'; // it's width: 100%, which would overflow with a margin
+        if (btn.left + btn.width / 2 < window.innerWidth / 2) {
+            progress.style.marginLeft = `${Math.max(0, btn.right + gap - rect.left)}px`;
+        } else {
+            progress.style.marginRight = `${Math.max(0, rect.right - (btn.left - gap))}px`;
+        }
+    }
+}
+{
+    const group = document.querySelector('#browser-container .browser-control-group');
+    const progress = document.querySelector('#playlist-container .position-control-wrapper');
+    if (window.ResizeObserver) {
+        const ro = new ResizeObserver(alignFloatingNavBtn);
+        if (group) ro.observe(group);
+        if (progress) ro.observe(progress);
+    }
+    window.addEventListener('resize', alignFloatingNavBtn);
+    // Re-measure once the slide between library and player views has finished
+    const layout = document.querySelector('.main-layout');
+    if (layout) layout.addEventListener('transitionend', e => { if (e.target === layout) alignFloatingNavBtn(); });
 }
 
 let touchStartX = 0;
@@ -8917,6 +8974,8 @@ async function saveGeneralSettings() {
         if (response.ok) {
             currentDeviceName = deviceName;
             updateUIWithDeviceName();
+            // The server button shows the media library's name, which follows the device name
+            await fetchDevices();
             showToast('Settings saved', 'success', 2000);
         }
     } catch (err) {

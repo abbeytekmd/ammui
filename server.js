@@ -128,8 +128,11 @@ const s3SyncLogPath = path.join(logsDir, 's3-sync.log');
 app.use(express.json());
 
 
+const LOOPBACK_IPS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 app.use((req, res, next) => {
-    terminalLog(`${req.method} ${req.url}`);
+    // Skip the app's own loopback DLNA browses — library walks fire these in bursts of hundreds
+    const selfBrowse = req.path === '/dlna/ContentDirectory/control' && LOOPBACK_IPS.has(req.ip);
+    if (!selfBrowse) terminalLog(`${req.method} ${req.url}`);
     next();
 });
 
@@ -2566,9 +2569,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
-        // The local server's entry is never re-read from its description, so rename it here
-        const localServer = devices.get(SERVER_UDN);
-        if (localServer) localServer.friendlyName = localLibraryName();
+        // The local server's entries are never re-read from its description, so rename them
+        // here — including any saved under an older LAN address or the advertised UDN.
+        for (const d of devices.values()) {
+            if (isOwnUdn(d.udn) && d.isServer) d.friendlyName = localLibraryName();
+        }
+        saveDevices();
         if (servicesStarted) localDlna.readvertise();
         startServices();
     }

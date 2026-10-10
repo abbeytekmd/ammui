@@ -681,6 +681,50 @@ p.subtitle {
     margin-top: 0.5rem;
     padding-top: 0.5rem;
     border-top: 1px solid var(--card-border);
+    /* The toolbar compacts based on the browser column's width, not the viewport */
+    container-type: inline-size;
+}
+
+/* Wrap onto a second row rather than overflowing off the right edge */
+#browser-container .browser-control-group {
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+#browser-container .browser-control-group .btn-control {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+/* Narrow column: tighten spacing and slim down the big action buttons */
+@container (max-width: 640px) {
+    #browser-container .browser-control-group {
+        gap: 0.3rem;
+    }
+
+    #browser-container .browser-control-group .btn-action-lg,
+    #browser-container #btn-play-all.btn-action-lg {
+        padding: 0.45rem 0.7rem;
+        font-size: 0.82rem;
+    }
+
+    #browser-container .browser-control-group .btn-control {
+        gap: 0.35rem;
+    }
+}
+
+/* Very narrow: secondary tools (Find / Grid / Upload / etc.) go icon-only.
+   Phones (<=600px viewport) keep their own short-label layout below. */
+@media (min-width: 601px) {
+    @container (max-width: 500px) {
+        #browser-container .browser-control-group .btn-control:not(.btn-action-lg) .btn-label {
+            display: none;
+        }
+
+        #browser-container .browser-control-group .btn-control:not(.btn-action-lg) {
+            padding: 0.4rem 0.5rem;
+        }
+    }
 }
 
 .transport-group,
@@ -741,11 +785,6 @@ p.subtitle {
     background: linear-gradient(180deg, #4ade80 0%, #22c55e 100%) !important;
     transform: translateY(-1px);
     box-shadow: 0 6px 22px rgba(34, 197, 94, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3) !important;
-}
-
-/* Voice sits at the far right of the browser toolbar */
-.browser-control-group #btn-voice {
-    margin-left: auto;
 }
 
 .divider {
@@ -6615,8 +6654,11 @@ input:checked+.slider:before {
     }
 
     /* Refine playlist controls for tight spaces on mobile */
+    .browser-control-group {
+        gap: 0.25rem !important;
+    }
+
     .playlist-controls,
-    .browser-control-group,
     .position-control-wrapper {
         gap: 0.25rem !important;
         flex-wrap: nowrap !important;
@@ -6972,6 +7014,10 @@ input:checked+.slider:before {
         display: flex;
         justify-content: center;
         margin-top: 0.5rem;
+        /* Keep clear of the floating Player button pinned bottom-right
+           (~130px wide + 1.5rem inset); the toolbar's container queries
+           then compact it to fit the remaining width. */
+        padding-right: 10rem;
     }
 
     #playlist-container .position-control-wrapper {
