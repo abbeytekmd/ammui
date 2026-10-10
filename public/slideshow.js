@@ -1,6 +1,29 @@
 // Idle Screensaver Logic - Now handled by Slideshow class
 let currentScreensaverFolder = null; // Used for folder navigation
 
+/*
+ * Slide transitions. Each one pairs an exit (old photo) with an enter (new photo).
+ * Only transform and opacity are animated, so the compositor does the work and
+ * nothing is repainted per frame (keeps it smooth on a Raspberry Pi).
+ * `out` is the state the old photo animates to; `in` is the state the new photo
+ * animates from. Keys: x/y translate, rx/ry/rz rotate (deg), s scale, o opacity.
+ * Every outMs must be >= fade.outMs (panoramas always fade out on the same timer).
+ */
+const SS_TRANSITIONS = {
+    fade:       { outMs: 500, inMs: 1000, out: { o: 0 }, in: { o: 0 } },
+    zoomIn:     { outMs: 600, inMs: 1100, out: { s: 1.3, o: 0 }, in: { s: 0.75, o: 0 }, easeIn: 'cubic-bezier(.16,1,.3,1)' },
+    zoomOut:    { outMs: 600, inMs: 1100, out: { s: 0.7, o: 0 }, in: { s: 1.35, o: 0 }, easeIn: 'cubic-bezier(.16,1,.3,1)' },
+    slideLeft:  { outMs: 700, inMs: 900,  out: { x: '-100%', o: 0.4 }, in: { x: '100%', o: 0.4 }, easeIn: 'cubic-bezier(.22,1,.36,1)' },
+    slideRight: { outMs: 700, inMs: 900,  out: { x: '100%', o: 0.4 }, in: { x: '-100%', o: 0.4 }, easeIn: 'cubic-bezier(.22,1,.36,1)' },
+    slideUp:    { outMs: 700, inMs: 900,  out: { y: '-100%', o: 0.4 }, in: { y: '100%', o: 0.4 }, easeIn: 'cubic-bezier(.22,1,.36,1)' },
+    flip:       { outMs: 600, inMs: 800,  out: { ry: 90 }, in: { ry: -90 } },
+    tumble:     { outMs: 600, inMs: 800,  out: { rx: -90 }, in: { rx: 90 } },
+    door:       { outMs: 700, inMs: 1000, out: { x: '-35%', ry: 75, o: 0 }, in: { x: '35%', ry: -75, o: 0 } },
+    swirl:      { outMs: 700, inMs: 1200, out: { rz: 90, s: 0.2, o: 0 }, in: { rz: -90, s: 0.2, o: 0 }, easeIn: 'cubic-bezier(.22,1,.36,1)' },
+    drop:       { outMs: 600, inMs: 1100, out: { y: '15%', s: 0.9, o: 0 }, in: { y: '-100%' }, easeIn: 'cubic-bezier(.34,1.4,.64,1)' },
+    pop:        { outMs: 500, inMs: 900,  out: { s: 0.85, o: 0 }, in: { s: 0.3, o: 0 }, easeIn: 'cubic-bezier(.34,1.56,.64,1)' },
+};
+
 class Slideshow {
     constructor() {
         this.items = [];
@@ -343,6 +366,36 @@ class Slideshow {
         this.resetInterval();
     }
 
+    // Random transition, never the same one twice in a row; plain fade if the user prefers reduced motion
+    pickTransition() {
+        if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return SS_TRANSITIONS.fade;
+        const names = Object.keys(SS_TRANSITIONS).filter(n => n !== this._lastTransition);
+        this._lastTransition = names[Math.floor(Math.random() * names.length)];
+        return SS_TRANSITIONS[this._lastTransition];
+    }
+
+    // Runs one half ('out' or 'in') of a transition on the slideshow image
+    animateImg(fx, phase) {
+        if (!this.img.animate) return;
+        if (this._imgAnim) this._imgAnim.cancel();
+
+        // Every keyframe uses the same function list so the browser interpolates each
+        // part directly. The effect comes first so it acts in screen space, and the
+        // photo's own rotation comes last.
+        const frame = ({ x = 0, y = 0, rx = 0, ry = 0, rz = 0, s = 1, o = 1 } = {}) => ({
+            transform: `perspective(1400px) translate3d(${x}, ${y}, 0) rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) scale(${s}) rotate(${this.rotation}deg)`,
+            opacity: o
+        });
+
+        const keyframes = phase === 'out' ? [frame(), frame(fx.out)] : [frame(fx.in), frame()];
+        this._imgAnim = this.img.animate(keyframes, {
+            duration: phase === 'out' ? fx.outMs : fx.inMs,
+            easing: phase === 'out' ? (fx.easeOut || 'cubic-bezier(.55,0,.75,.2)') : (fx.easeIn || 'cubic-bezier(.25,.8,.35,1)'),
+            // Hold the exit's end state until the new photo is ready to enter
+            fill: phase === 'out' ? 'forwards' : 'none'
+        });
+    }
+
     renderPhoto(data) {
         if (data.url === this.currentPhoto && this.img.style.opacity == 1) {
             if (this.mode === 'nowPlaying') this.updateInfoUI(data);
@@ -350,6 +403,9 @@ class Slideshow {
         }
 
         const doTransition = (naturalWidth, naturalHeight) => {
+            const fx = this.pickTransition();
+            // A panning panorama's transform belongs to its CSS animation, so only fade it out
+            this.animateImg(this.img.classList.contains('panorama') ? SS_TRANSITIONS.fade : fx, 'out');
             this.img.style.opacity = 0;
             if (this.info) this.info.style.opacity = 0;
 
@@ -386,10 +442,11 @@ class Slideshow {
                 this.updateInfoUI(data);
 
                 const applyDisplay = (w, h) => {
-                    this.img.style.opacity = 1;
-                    if (this.info) this.info.style.opacity = 1;
                     const ratio = w / h;
                     const isPanorama = ratio > 2.2;
+                    this.animateImg(isPanorama ? SS_TRANSITIONS.fade : fx, 'in');
+                    this.img.style.opacity = 1;
+                    if (this.info) this.info.style.opacity = 1;
                     this.img.classList.toggle('panorama', isPanorama);
                     this.img.style.animation = 'none';
                     void this.img.offsetWidth; // force reflow
@@ -417,7 +474,7 @@ class Slideshow {
                 } else {
                     this.img.onload = () => applyDisplay(this.img.naturalWidth, this.img.naturalHeight);
                 }
-            }, 500);
+            }, fx.outMs);
         };
 
         // Preload the image so the current photo stays visible until the new one is ready
