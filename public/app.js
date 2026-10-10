@@ -9139,16 +9139,20 @@ async function saveGeneralSettings() {
     }
 }
 
-// --- Favourites, deleted photos and tags: exported together in one file; on import each can be
-// ticked or not. Each part still goes through its own server route (which rehomes paths). ---
+// --- Favourites, deleted photos, tags, ingredients and meals: exported together in one file; on
+// import each can be ticked or not. Each part goes through its own server route (which, for the
+// media parts, rehomes paths). ---
 const LIBRARY_DATA_PARTS = [
     { key: 'favourites', label: 'favourite', exportUrl: '/api/favourites/export', importUrl: '/api/favourites/import' },
     { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
     { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
+    // Ingredients before meals, so their one-person quantities are in place first
+    { key: 'ingredients', label: 'ingredient', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
+    { key: 'meals', label: 'meal', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
 ];
 let pendingLibraryData = null; // parsed import file, while the import dialog is open
 
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 // Shows how many of each the export would hold, so you can tell whether it's worth exporting
 async function loadLibraryDataCounts() {
@@ -9163,7 +9167,9 @@ async function loadLibraryDataCounts() {
             <span class="local-stats-value">${value}</span>`;
         el.innerHTML = row('Favourites', c.favourites)
             + row('Deleted photos', c.deleted)
-            + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0);
+            + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0)
+            + row('Ingredients', c.ingredients)
+            + row('Meals', c.meals);
     } catch (e) {
         el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
     }
@@ -9177,7 +9183,7 @@ async function exportLibraryData() {
             return (await response.json())[part.key] || [];
         }));
         if (parts.every(p => !p.length)) {
-            showToast('No favourites, deleted photos or tags to export', 'warning', 3000);
+            showToast('Nothing to export', 'warning', 3000);
             return;
         }
         const data = { version: 2, exportedAt: new Date().toISOString() };
@@ -9218,7 +9224,7 @@ async function openLibraryDataImport(event) {
         data = data.some(item => item && Array.isArray(item.tags)) ? { tags: data } : { favourites: data };
     }
     if (!data || !LIBRARY_DATA_PARTS.some(part => Array.isArray(data[part.key]))) {
-        showToast('No favourites, deleted photos or tags found in that file');
+        showToast('Nothing to import found in that file');
         return;
     }
     pendingLibraryData = data;
@@ -9254,6 +9260,8 @@ function describeImportResult(part, result) {
     if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
     if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
     if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
+    if (result.updated) extras.push(`${plural(result.updated, 'quantity', 'quantities')} filled in`);
+    if (result.existing) extras.push(`${result.existing} already here`);
     if (result.missing) extras.push(`${result.missing} not found locally`);
     if (result.invalid) extras.push(`${result.invalid} invalid`);
     const main = part.key === 'tags'

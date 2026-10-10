@@ -663,6 +663,18 @@
                     <input type="checkbox" id="import-include-tags" onchange="updateLibraryDataImportButton()">
                     <span>Tags <span class="settings-hint" id="import-count-tags"></span></span>
                 </label>
+                <label class="settings-check">
+                    <input type="checkbox" id="import-include-ingredients" onchange="updateLibraryDataImportButton()">
+                    <span>Ingredients <span class="settings-hint" id="import-count-ingredients"></span>
+                        <span class="settings-hint">New ones are added; existing ones are kept, with any missing
+                            quantity filled in.</span></span>
+                </label>
+                <label class="settings-check">
+                    <input type="checkbox" id="import-include-meals" onchange="updateLibraryDataImportButton()">
+                    <span>Meals <span class="settings-hint" id="import-count-meals"></span>
+                        <span class="settings-hint">Meals with a name already here are skipped, not
+                            overwritten.</span></span>
+                </label>
                 <div id="import-library-data-status" class="calendar-status"></div>
                 <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top: 0.5rem;">
                     <button class="btn-control ghost" onclick="closeLibraryDataImport()">Cancel</button>
@@ -766,11 +778,11 @@
                         </div>
                     </div>
                     <div class="manage-section">
-                        <h3>Favourites, Deleted Photos &amp; Tags</h3>
+                        <h3>Export &amp; Import</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos and
-                                file tags to one file, or import a file exported from another instance of this app.
-                                On import you can choose which of them to bring in.</p>
+                            <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos,
+                                file tags, ingredients and meals to one file, or import a file exported from another
+                                instance of this app. On import you can choose which of them to bring in.</p>
                             <div id="library-data-counts" class="local-stats-grid">
                                 <span class="settings-hint">Loading...</span>
                             </div>

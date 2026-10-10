@@ -3974,7 +3974,65 @@ app.get('/api/library-data/counts', (req, res) => {
         deleted: Object.keys(getAllDeletedPhotos()).length,
         tags: fileTags.reduce((n, tags) => n + tags.length, 0),
         taggedFiles: fileTags.length,
+        ingredients: listIngredients().length,
+        meals: listRecipes().length,
     });
+});
+
+// Meals and ingredients export by name (ids mean nothing on another instance)
+app.get('/api/ingredients/export', (req, res) => {
+    const ingredients = listIngredients().map(({ name, amount, unit }) => ({ name, amount, unit }));
+    res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
+});
+
+app.get('/api/meals/export', (req, res) => {
+    const meals = listRecipes().map(r => getRecipe(r.id)).filter(Boolean)
+        .map(m => ({ name: m.name, ingredients: m.ingredients.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
+    res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
+});
+
+// New names are added; an existing ingredient is left as it is, except that an empty
+// one-person quantity is filled in from the file.
+app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) => {
+    const { ingredients } = req.body;
+    if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'ingredients array required' });
+    let added = 0, updated = 0, existing = 0, invalid = 0;
+    for (const item of ingredients) {
+        const id = item && typeof item === 'object' && findIngredientIdByName(String(item.name ?? '').trim());
+        const clean = item && typeof item === 'object' ? cleanIngredient(item, id || null) : 'invalid';
+        if (typeof clean === 'string') { invalid++; continue; }
+        if (!id) {
+            saveIngredient({ id: crypto.randomUUID(), ...clean });
+            added++;
+            continue;
+        }
+        const current = getIngredient(id);
+        if (!current.amount && !current.unit && (clean.amount || clean.unit)) {
+            saveIngredient({ id, name: current.name, amount: clean.amount, unit: clean.unit });
+            updated++;
+        } else existing++;
+    }
+    console.log(`[Ingredients Import] added=${added} updated=${updated} existing=${existing} invalid=${invalid}`);
+    res.json({ success: true, added, updated, existing, invalid, total: ingredients.length });
+});
+
+// Meals whose name is already here are skipped rather than overwritten. Their ingredients are
+// matched by name, and any not seen before are added to the ingredient list.
+app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
+    const { meals } = req.body;
+    if (!Array.isArray(meals)) return res.status(400).json({ error: 'meals array required' });
+    const names = new Set(listRecipes().map(r => r.name.toLowerCase()));
+    let added = 0, existing = 0, invalid = 0;
+    for (const item of meals) {
+        const meal = item && typeof item === 'object' ? cleanRecipe(item) : 'invalid';
+        if (typeof meal === 'string') { invalid++; continue; }
+        if (names.has(meal.name.toLowerCase())) { existing++; continue; }
+        saveRecipe({ id: crypto.randomUUID(), ...meal });
+        names.add(meal.name.toLowerCase());
+        added++;
+    }
+    console.log(`[Meals Import] added=${added} existing=${existing} invalid=${invalid}`);
+    res.json({ success: true, added, existing, invalid, total: meals.length });
 });
 
 // Portable export: local-files favourites are stored as host/port-free relative paths so the
