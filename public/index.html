@@ -498,7 +498,8 @@
                         <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
                             maxlength="40" autocomplete="off" aria-label="Unit">
                         <input type="text" id="recipe-ingredient-input" placeholder="Add an ingredient, e.g. onions, chopped"
-                            maxlength="300" autocomplete="off" aria-label="Ingredient">
+                            maxlength="300" autocomplete="off" aria-label="Ingredient" list="ingredient-names"
+                            oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
                         <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
                     </div>
                     <datalist id="recipe-units">
@@ -507,6 +508,8 @@
                         <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
                         <option value="clove"><option value="slice"><option value="piece">
                     </datalist>
+                    <!-- Saved ingredients, offered while typing an ingredient (filled by renderIngredientList) -->
+                    <datalist id="ingredient-names"></datalist>
                     <div id="recipe-status" class="calendar-status"></div>
                     <div class="recipe-actions">
                         <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
@@ -517,6 +520,26 @@
                     </div>
                 </div>
             </div>
+            <aside class="ingredients-panel">
+                <div class="recipes-list-header">
+                    <h2>Ingredients</h2>
+                </div>
+                <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to a meal fills in its quantity.</p>
+                <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search ingredients..."
+                    autocomplete="off" oninput="renderIngredientList()">
+                <div id="ingredients-list" class="ingredients-list"></div>
+                <div class="tag-input-wrapper ingredient-add"
+                    onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
+                    <input type="text" id="ingredient-add-name" placeholder="New ingredient" maxlength="300"
+                        autocomplete="off" aria-label="Ingredient name">
+                    <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
+                        autocomplete="off" aria-label="Amount for one person">
+                    <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
+                        maxlength="40" autocomplete="off" aria-label="Unit">
+                    <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
+                </div>
+                <div id="ingredients-status" class="calendar-status"></div>
+            </aside>
         </section>
 
         <section id="calendar-view" class="calendar-view" hidden>
@@ -608,6 +631,43 @@
             </div>
             <div id="modal-cast-list" class="device-list">
                 <!-- Renderers for casting will be listed here -->
+            </div>
+        </div>
+    </div>
+
+    <div id="import-library-data-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeLibraryDataImport()">
+        <div class="modal-content" style="max-width: 440px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Import</h2>
+                    <p class="modal-subtitle" id="import-library-data-file"></p>
+                </div>
+                <button class="btn-close" onclick="closeLibraryDataImport()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-group">
+                <label class="settings-check">
+                    <input type="checkbox" id="import-include-favourites" onchange="updateLibraryDataImportButton()">
+                    <span>Favourites <span class="settings-hint" id="import-count-favourites"></span></span>
+                </label>
+                <label class="settings-check">
+                    <input type="checkbox" id="import-include-deleted" onchange="updateLibraryDataImportButton()">
+                    <span>Deleted photos <span class="settings-hint" id="import-count-deleted"></span></span>
+                </label>
+                <label class="settings-check">
+                    <input type="checkbox" id="import-include-tags" onchange="updateLibraryDataImportButton()">
+                    <span>Tags <span class="settings-hint" id="import-count-tags"></span></span>
+                </label>
+                <div id="import-library-data-status" class="calendar-status"></div>
+                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top: 0.5rem;">
+                    <button class="btn-control ghost" onclick="closeLibraryDataImport()">Cancel</button>
+                    <button class="btn-control primary" id="import-library-data-btn" onclick="runLibraryDataImport()">Import</button>
+                </div>
             </div>
         </div>
     </div>
@@ -706,52 +766,21 @@
                         </div>
                     </div>
                     <div class="manage-section">
-                        <h3>Favourites</h3>
+                        <h3>Favourites, Deleted Photos &amp; Tags</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Export your favourited photos to a file, or import a
-                                favourites file exported from another instance of this app.</p>
-                            <div style="display:flex; gap:0.75rem;">
-                                <button class="btn-control btn-seek" onclick="exportFavourites()">Export
-                                    Favourites</button>
-                                <button class="btn-control btn-seek"
-                                    onclick="document.getElementById('import-favourites-input').click()">Import
-                                    Favourites</button>
+                            <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos and
+                                file tags to one file, or import a file exported from another instance of this app.
+                                On import you can choose which of them to bring in.</p>
+                            <div id="library-data-counts" class="local-stats-grid">
+                                <span class="settings-hint">Loading...</span>
                             </div>
-                            <input type="file" id="import-favourites-input" accept="application/json"
-                                style="display:none" onchange="importFavourites(event)">
-                        </div>
-                    </div>
-                    <div class="manage-section">
-                        <h3>Deleted Photos</h3>
-                        <div class="settings-group">
-                            <p class="settings-hint">Export your deleted (hidden from slideshow) photos to a
-                                file, or import a deleted-photos file exported from another instance of this
-                                app.</p>
                             <div style="display:flex; gap:0.75rem;">
-                                <button class="btn-control btn-seek" onclick="exportDeleted()">Export
-                                    Deleted</button>
+                                <button class="btn-control btn-seek" onclick="exportLibraryData()">Export</button>
                                 <button class="btn-control btn-seek"
-                                    onclick="document.getElementById('import-deleted-input').click()">Import
-                                    Deleted</button>
+                                    onclick="document.getElementById('import-library-data-input').click()">Import</button>
                             </div>
-                            <input type="file" id="import-deleted-input" accept="application/json"
-                                style="display:none" onchange="importDeleted(event)">
-                        </div>
-                    </div>
-                    <div class="manage-section">
-                        <h3>Tags</h3>
-                        <div class="settings-group">
-                            <p class="settings-hint">Export your file tags (including favourites) to a
-                                file, or import a tags file exported from another instance of this app.</p>
-                            <div style="display:flex; gap:0.75rem;">
-                                <button class="btn-control btn-seek" onclick="exportTags()">Export
-                                    Tags</button>
-                                <button class="btn-control btn-seek"
-                                    onclick="document.getElementById('import-tags-input').click()">Import
-                                    Tags</button>
-                            </div>
-                            <input type="file" id="import-tags-input" accept="application/json"
-                                style="display:none" onchange="importTags(event)">
+                            <input type="file" id="import-library-data-input" accept="application/json"
+                                style="display:none" onchange="openLibraryDataImport(event)">
                         </div>
                     </div>
                 </div>

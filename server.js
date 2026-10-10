@@ -42,6 +42,7 @@ import {
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
+    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
@@ -2758,15 +2759,16 @@ app.delete('/api/calendar-entries/:id', (req, res) => {
 // Returns a clean recipe, or a string saying what's wrong
 function cleanRecipe(body) {
     const name = String(body.name || '').trim();
-    // Each ingredient is { amount, unit, text }; a plain string is taken as just the text
+    // Each ingredient is { name, amount, unit } (the name is matched to a saved ingredient on save);
+    // a plain string is taken as just the name
     const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : [])
-        .map(i => i && typeof i === 'object' ? i : { text: i })
-        .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), text: String(i.text ?? '').trim() }))
-        .filter(i => i.text);
+        .map(i => i && typeof i === 'object' ? i : { name: i })
+        .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), name: String(i.name ?? '').trim() }))
+        .filter(i => i.name);
     if (!name) return 'A meal name is required';
     if (name.length > 200) return 'The name is too long';
     if (ingredients.length > 500) return 'Too many ingredients';
-    if (ingredients.some(i => i.text.length > 300)) return 'An ingredient is too long';
+    if (ingredients.some(i => i.name.length > 300)) return 'An ingredient is too long';
     if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
     return { name, ingredients };
 }
@@ -2796,6 +2798,47 @@ app.put('/api/recipes/:id', express.json(), (req, res) => {
 
 app.delete('/api/recipes/:id', (req, res) => {
     if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
+    res.json({ success: true });
+});
+
+// --- Ingredients (Recipes tab): each with the preferred quantity for one person ---
+// Returns a clean ingredient, or a string saying what's wrong
+function cleanIngredient(body, id) {
+    const name = String(body.name ?? '').trim();
+    const amount = String(body.amount ?? '').trim();
+    const unit = String(body.unit ?? '').trim();
+    if (!name) return 'An ingredient name is required';
+    if (name.length > 300) return 'The ingredient name is too long';
+    if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
+    const sameName = findIngredientIdByName(name);
+    if (sameName && sameName !== id) return `"${name}" is already in the list`;
+    return { name, amount, unit };
+}
+
+app.get('/api/ingredients', (req, res) => {
+    res.json({ ingredients: listIngredients() });
+});
+
+app.post('/api/ingredients', express.json(), (req, res) => {
+    const ingredient = cleanIngredient(req.body, null);
+    if (typeof ingredient === 'string') return res.status(400).json({ error: ingredient });
+    res.json(saveIngredient({ id: crypto.randomUUID(), ...ingredient }));
+});
+
+app.put('/api/ingredients/:id', express.json(), (req, res) => {
+    if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
+    const ingredient = cleanIngredient(req.body, req.params.id);
+    if (typeof ingredient === 'string') return res.status(400).json({ error: ingredient });
+    res.json(saveIngredient({ id: req.params.id, ...ingredient }));
+});
+
+app.delete('/api/ingredients/:id', (req, res) => {
+    const meals = mealsUsingIngredient(req.params.id);
+    if (meals.length) {
+        const shown = meals.slice(0, 3).join(', ') + (meals.length > 3 ? ` and ${meals.length - 3} more` : '');
+        return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that meal' : 'those meals'} first.` });
+    }
+    if (!deleteIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
     res.json({ success: true });
 });
 
@@ -3922,6 +3965,17 @@ function portableEntry(key) {
     }
     return { type: 'remote', uri: mediaUrlFromKey(key) || key };
 }
+
+// How much the combined favourites/deleted/tags export would contain (shown in Settings)
+app.get('/api/library-data/counts', (req, res) => {
+    const fileTags = Object.values(getAllFileTags());
+    res.json({
+        favourites: getKeysByTag('fav').length,
+        deleted: Object.keys(getAllDeletedPhotos()).length,
+        tags: fileTags.reduce((n, tags) => n + tags.length, 0),
+        taggedFiles: fileTags.length,
+    });
+});
 
 // Portable export: local-files favourites are stored as host/port-free relative paths so the
 // file can be imported into a different instance of this app; favourites pointing at another

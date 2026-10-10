@@ -4266,6 +4266,7 @@ function openServerSettingsModal() {
         loadCalendarSettings();
         startS3StatusPolling();
         loadLocalStats();
+        loadLibraryDataCounts();
         checkForUpdates();
     }
 }
@@ -6113,7 +6114,7 @@ async function removeCalendar(id, btn) {
 
 // --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
 let recipeList = [];       // [{ id, name, ingredientCount }]
-let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [{ amount, unit, text }] }
+let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [{ ingredientId|null, name, amount, unit }] }
 let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
 
 const recipeIsDirty = () => !!recipeDraft && JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients }) !== recipeSavedJson;
@@ -6125,7 +6126,7 @@ function setRecipeStatus(text, isError) {
 // Keeps whatever is open (including unsaved edits) when returning to the tab
 async function showRecipes() {
     setAppView('recipes');
-    await loadRecipes();
+    await Promise.all([loadRecipes(), loadIngredients()]);
     if (!recipeDraft) renderRecipeEditor();
 }
 
@@ -6170,7 +6171,7 @@ function confirmDiscardRecipe() {
 }
 
 function openRecipeDraft(recipe) {
-    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: (recipe.ingredients || []).map(i => ({ amount: i.amount || '', unit: i.unit || '', text: i.text || '' })) };
+    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: (recipe.ingredients || []).map(i => ({ ingredientId: i.ingredientId || null, name: i.name || '', amount: i.amount || '', unit: i.unit || '' })) };
     recipeSavedJson = JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients });
     setRecipeStatus('', false);
     for (const f of ['amount', 'unit', 'ingredient']) document.getElementById(`recipe-${f}-input`).value = '';
@@ -6213,17 +6214,27 @@ function renderRecipeIngredients() {
     const items = recipeDraft.ingredients;
     list.innerHTML = items.map((ing, i) => `
         <li class="recipe-ingredient" data-i="${i}">
-            <input type="text" class="recipe-amount" data-field="amount" value="${escapeHtml(ing.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount ${i + 1}">
-            <input type="text" class="recipe-unit" data-field="unit" value="${escapeHtml(ing.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit ${i + 1}">
-            <input type="text" data-field="text" value="${escapeHtml(ing.text)}" maxlength="300" aria-label="Ingredient ${i + 1}">
+            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(ing.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount ${i + 1}">
+            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(ing.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit ${i + 1}">
+            <input type="text" data-field="name" value="${escapeAttr(ing.name)}" maxlength="300" list="ingredient-names" aria-label="Ingredient ${i + 1}">
             <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === items.length - 1 ? 'disabled' : ''}>▼</button>
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
         </li>`).join('');
     list.querySelectorAll('.recipe-ingredient').forEach(row => {
         const i = Number(row.dataset.i);
+        const field = name => row.querySelector(`input[data-field="${name}"]`);
         row.querySelectorAll('input').forEach(input => {
-            input.oninput = () => { items[i][input.dataset.field] = input.value; updateRecipeButtons(); };
+            input.oninput = () => {
+                // Picking a saved ingredient fills an empty amount/unit with its one-person quantity
+                if (input.dataset.field === 'name' && fillIngredientQuantity(input, field('amount'), field('unit'))) {
+                    items[i].amount = field('amount').value;
+                    items[i].unit = field('unit').value;
+                }
+                items[i][input.dataset.field] = input.value;
+                if (input.dataset.field === 'name') items[i].ingredientId = findIngredientByName(input.value)?.id || null;
+                updateRecipeButtons();
+            };
             // Enter in a row jumps to the "add" boxes, ready for the next ingredient
             input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-amount-input').focus(); } };
         });
@@ -6257,15 +6268,15 @@ function updateRecipeButtons() {
 }
 
 function addRecipeIngredient() {
-    const [amount, unit, text] = ['amount', 'unit', 'ingredient'].map(f => {
+    const [amount, unit, name] = ['amount', 'unit', 'ingredient'].map(f => {
         const input = document.getElementById(`recipe-${f}-input`);
         const value = input.value.trim();
         input.value = '';
         return value;
     });
     document.getElementById('recipe-amount-input').focus();
-    if (!text || !recipeDraft) return;
-    recipeDraft.ingredients.push({ amount, unit, text });
+    if (!name || !recipeDraft) return;
+    recipeDraft.ingredients.push({ ingredientId: findIngredientByName(name)?.id || null, name, amount, unit });
     renderRecipeIngredients();
     updateRecipeButtons();
 }
@@ -6282,8 +6293,8 @@ async function saveRecipe() {
     const name = recipeDraft.name.trim();
     if (!name) { setRecipeStatus('Enter a meal name.', true); document.getElementById('recipe-name').focus(); return; }
     const ingredients = recipeDraft.ingredients
-        .map(i => ({ amount: i.amount.trim(), unit: i.unit.trim(), text: i.text.trim() }))
-        .filter(i => i.text);
+        .map(i => ({ name: i.name.trim(), amount: i.amount.trim(), unit: i.unit.trim() }))
+        .filter(i => i.name);
 
     const btn = document.getElementById('recipe-save-btn');
     btn.disabled = true;
@@ -6298,10 +6309,154 @@ async function saveRecipe() {
         if (!res.ok) throw new Error(data.error || 'Failed to save');
         openRecipeDraft(data);
         setRecipeStatus('Saved.', false);
-        await loadRecipes();
+        // Saving adds any ingredient names not seen before to the ingredient list
+        await Promise.all([loadRecipes(), loadIngredients()]);
     } catch (err) {
         setRecipeStatus(err.message, true);
         updateRecipeButtons();
+    }
+}
+
+// --- Recipes tab: saved ingredients, each with the preferred quantity for one person ---
+let ingredientList = []; // [{ id, name, amount, unit }] sorted by name
+
+// Safe inside a double-quoted attribute (escapeHtml leaves quotes alone)
+const escapeAttr = s => escapeHtml(s).replace(/"/g, '&quot;');
+
+const findIngredientByName = name => {
+    const key = (name || '').trim().toLowerCase();
+    return key ? ingredientList.find(i => i.name.toLowerCase() === key) : undefined;
+};
+
+// When the ingredient box names a saved ingredient and amount/unit are still empty, fills them
+// with its one-person quantity. Returns whether anything was filled.
+function fillIngredientQuantity(textInput, amountInput, unitInput) {
+    const match = findIngredientByName(textInput.value);
+    if (!match || amountInput.value.trim() || unitInput.value.trim()) return false;
+    if (!match.amount && !match.unit) return false;
+    amountInput.value = match.amount;
+    unitInput.value = match.unit;
+    return true;
+}
+
+function setIngredientsStatus(text, isError) {
+    setCalendarSettingsStatus('ingredients-status', text, isError);
+}
+
+async function loadIngredients() {
+    try {
+        const res = await fetch('/api/ingredients');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load ingredients');
+        ingredientList = data.ingredients || [];
+    } catch (err) {
+        ingredientList = [];
+        setIngredientsStatus(`Couldn't load ingredients: ${err.message}`, true);
+    }
+    renderIngredientList();
+}
+
+// Suggestions for the meal editor's ingredient boxes
+function renderIngredientNames() {
+    document.getElementById('ingredient-names').innerHTML =
+        ingredientList.map(i => `<option value="${escapeAttr(i.name)}">`).join('');
+}
+
+function renderIngredientList() {
+    renderIngredientNames();
+
+    const listEl = document.getElementById('ingredients-list');
+    const filter = document.getElementById('ingredients-filter').value.trim().toLowerCase();
+    const shown = ingredientList.filter(i => !filter || i.name.toLowerCase().includes(filter));
+    if (!ingredientList.length) {
+        listEl.innerHTML = '<p class="settings-hint">No ingredients yet. Add one below.</p>';
+        return;
+    }
+    if (!shown.length) {
+        listEl.innerHTML = '<p class="settings-hint">No matching ingredients.</p>';
+        return;
+    }
+    listEl.innerHTML = shown.map(i => `
+        <div class="recipe-ingredient ingredient-row" data-id="${escapeAttr(i.id)}">
+            <input type="text" data-field="name" value="${escapeAttr(i.name)}" maxlength="300" aria-label="Ingredient name">
+            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(i.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount for one person">
+            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(i.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">
+            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Delete">✕</button>
+        </div>`).join('');
+    listEl.querySelectorAll('.ingredient-row').forEach(row => {
+        const ingredient = ingredientList.find(i => i.id === row.dataset.id);
+        // Each edit is saved as soon as you leave the box (or press Enter)
+        row.querySelectorAll('input').forEach(input => {
+            input.onchange = () => updateIngredient(ingredient, row);
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } };
+        });
+        row.querySelector('[data-act="remove"]').onclick = () => removeIngredient(ingredient);
+    });
+}
+
+async function sendIngredient(url, method, body) {
+    const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save');
+    return data;
+}
+
+async function addIngredient() {
+    const inputs = ['name', 'amount', 'unit'].map(f => document.getElementById(`ingredient-add-${f}`));
+    const [name, amount, unit] = inputs.map(input => input.value.trim());
+    if (!name) { inputs[0].focus(); return; }
+    try {
+        await sendIngredient('/api/ingredients', 'POST', { name, amount, unit });
+        inputs.forEach(input => { input.value = ''; });
+        inputs[0].focus();
+        setIngredientsStatus('', false);
+        await loadIngredients();
+    } catch (err) {
+        setIngredientsStatus(err.message, true);
+    }
+}
+
+async function updateIngredient(ingredient, row) {
+    const value = f => row.querySelector(`input[data-field="${f}"]`).value.trim();
+    const body = { name: value('name'), amount: value('amount'), unit: value('unit') };
+    if (body.name === ingredient.name && body.amount === ingredient.amount && body.unit === ingredient.unit) return;
+    const renamed = body.name !== ingredient.name;
+    try {
+        Object.assign(ingredient, await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'PUT', body));
+        setIngredientsStatus('Saved.', false);
+        if (!renamed) return;
+        renameIngredientInDraft(ingredient);
+        ingredientList.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        renderIngredientNames();
+        // Move it to its new place in the list, unless that would yank away a box being edited
+        if (!document.getElementById('ingredients-list').contains(document.activeElement)) renderIngredientList();
+    } catch (err) {
+        setIngredientsStatus(err.message, true);
+        renderIngredientList(); // put back the saved values
+    }
+}
+
+// Meals refer to ingredients by id, so a rename already applies to every saved meal; bring the
+// open meal (and its saved snapshot, so it doesn't look edited) up to date as well.
+function renameIngredientInDraft(ingredient) {
+    if (!recipeDraft) return;
+    const rename = rows => rows.forEach(r => { if (r.ingredientId === ingredient.id) r.name = ingredient.name; });
+    rename(recipeDraft.ingredients);
+    const saved = JSON.parse(recipeSavedJson);
+    rename(saved.ingredients);
+    recipeSavedJson = JSON.stringify(saved);
+    renderRecipeIngredients();
+    updateRecipeButtons();
+}
+
+async function removeIngredient(ingredient) {
+    if (!confirm(`Delete the ingredient "${ingredient.name}"?`)) return;
+    try {
+        await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'DELETE');
+        setIngredientsStatus('', false);
+        await loadIngredients();
+    } catch (err) {
+        setIngredientsStatus(err.message, true);
     }
 }
 
@@ -8984,189 +9139,158 @@ async function saveGeneralSettings() {
     }
 }
 
-async function exportFavourites() {
-    try {
-        const response = await fetch('/api/favourites/export');
-        if (!response.ok) throw new Error('Export failed');
-        const data = await response.json();
+// --- Favourites, deleted photos and tags: exported together in one file; on import each can be
+// ticked or not. Each part still goes through its own server route (which rehomes paths). ---
+const LIBRARY_DATA_PARTS = [
+    { key: 'favourites', label: 'favourite', exportUrl: '/api/favourites/export', importUrl: '/api/favourites/import' },
+    { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
+    { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
+];
+let pendingLibraryData = null; // parsed import file, while the import dialog is open
 
-        if (!data.favourites.length) {
-            showToast('No favourites to export', 'warning', 3000);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// Shows how many of each the export would hold, so you can tell whether it's worth exporting
+async function loadLibraryDataCounts() {
+    const el = document.getElementById('library-data-counts');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/library-data/counts');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const c = await res.json();
+        const row = (label, value) => `
+            <span class="local-stats-label">${label}</span>
+            <span class="local-stats-value">${value}</span>`;
+        el.innerHTML = row('Favourites', c.favourites)
+            + row('Deleted photos', c.deleted)
+            + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0);
+    } catch (e) {
+        el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
+    }
+}
+
+async function exportLibraryData() {
+    try {
+        const parts = await Promise.all(LIBRARY_DATA_PARTS.map(async part => {
+            const response = await fetch(part.exportUrl);
+            if (!response.ok) throw new Error('Export failed');
+            return (await response.json())[part.key] || [];
+        }));
+        if (parts.every(p => !p.length)) {
+            showToast('No favourites, deleted photos or tags to export', 'warning', 3000);
             return;
         }
+        const data = { version: 2, exportedAt: new Date().toISOString() };
+        LIBRARY_DATA_PARTS.forEach((part, i) => { data[part.key] = parts[i]; });
 
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `ammui-favourites-${new Date().toISOString().slice(0, 10)}.json`;
+        a.download = `ammui-data-${new Date().toISOString().slice(0, 10)}.json`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
 
-        showToast(`Exported ${data.favourites.length} favourite${data.favourites.length === 1 ? '' : 's'}`, 'success', 2500);
+        showToast(`Exported ${LIBRARY_DATA_PARTS.map((part, i) => plural(parts[i].length, part.label)).join(', ')}`, 'success', 3000);
     } catch (err) {
-        console.error('Failed to export favourites:', err);
-        showToast('Failed to export favourites');
+        console.error('Failed to export:', err);
+        showToast('Failed to export');
     }
 }
 
-async function importFavourites(event) {
+// Reads the chosen file and offers a tickbox for each part it contains. Files exported by older
+// versions (one part each, or a bare favourites array) work too.
+async function openLibraryDataImport(event) {
     const file = event.target.files[0];
     event.target.value = '';
     if (!file) return;
-
+    let data;
     try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        const favourites = Array.isArray(data) ? data : data.favourites;
-        if (!Array.isArray(favourites)) throw new Error('Not a valid favourites file');
-
-        const response = await fetch('/api/favourites/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ favourites })
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Import failed');
-
-        let msg = `Imported ${result.added} favourite${result.added === 1 ? '' : 's'}`;
-        const extras = [];
-        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
-        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
-        if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
-        if (result.missing) extras.push(`${result.missing} not found locally`);
-        if (result.invalid) extras.push(`${result.invalid} invalid`);
-        if (extras.length) msg += ` (${extras.join(', ')})`;
-        showToast(msg, 'success', 4000);
+        data = JSON.parse(await file.text());
     } catch (err) {
-        console.error('Failed to import favourites:', err);
-        showToast('Failed to import favourites: ' + err.message);
+        showToast("That file isn't valid JSON");
+        return;
     }
+    if (Array.isArray(data)) {
+        // Bare arrays came from the oldest exports; tags entries always carry a tags list
+        data = data.some(item => item && Array.isArray(item.tags)) ? { tags: data } : { favourites: data };
+    }
+    if (!data || !LIBRARY_DATA_PARTS.some(part => Array.isArray(data[part.key]))) {
+        showToast('No favourites, deleted photos or tags found in that file');
+        return;
+    }
+    pendingLibraryData = data;
+    document.getElementById('import-library-data-file').textContent = file.name;
+    for (const part of LIBRARY_DATA_PARTS) {
+        const items = data[part.key];
+        const box = document.getElementById(`import-include-${part.key}`);
+        box.disabled = !Array.isArray(items) || !items.length;
+        box.checked = !box.disabled;
+        document.getElementById(`import-count-${part.key}`).textContent =
+            Array.isArray(items) ? `(${items.length} in file)` : '(not in file)';
+    }
+    setCalendarSettingsStatus('import-library-data-status', '', false);
+    updateLibraryDataImportButton();
+    document.getElementById('import-library-data-modal').style.display = 'flex';
 }
 
-async function exportDeleted() {
-    try {
-        const response = await fetch('/api/deleted/export');
-        if (!response.ok) throw new Error('Export failed');
-        const data = await response.json();
+function closeLibraryDataImport() {
+    document.getElementById('import-library-data-modal').style.display = 'none';
+    pendingLibraryData = null;
+}
 
-        if (!data.deleted.length) {
-            showToast('No deleted photos to export', 'warning', 3000);
-            return;
+function updateLibraryDataImportButton() {
+    document.getElementById('import-library-data-btn').disabled =
+        !LIBRARY_DATA_PARTS.some(part => document.getElementById(`import-include-${part.key}`).checked);
+}
+
+// One line per imported part, e.g. "12 favourites (3 already favourited, 1 not found locally)"
+function describeImportResult(part, result) {
+    const extras = [];
+    if (result.fixed) extras.push(`${plural(result.fixed, 'path')} fixed up`);
+    if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
+    if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
+    if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
+    if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
+    if (result.missing) extras.push(`${result.missing} not found locally`);
+    if (result.invalid) extras.push(`${result.invalid} invalid`);
+    const main = part.key === 'tags'
+        ? `${plural(result.tagsAdded, 'tag')} on ${plural(result.filesProcessed, 'file')}`
+        : plural(result.added, part.label);
+    return main + (extras.length ? ` (${extras.join(', ')})` : '');
+}
+
+async function runLibraryDataImport() {
+    const data = pendingLibraryData;
+    if (!data) return;
+    const chosen = LIBRARY_DATA_PARTS.filter(part => document.getElementById(`import-include-${part.key}`).checked);
+    if (!chosen.length) return;
+    const btn = document.getElementById('import-library-data-btn');
+    btn.disabled = true;
+    const done = [];
+    try {
+        // One at a time: each may scan the library to find files that have moved
+        for (const part of chosen) {
+            setCalendarSettingsStatus('import-library-data-status', `Importing ${part.label}s...`, false);
+            const response = await fetch(part.importUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ [part.key]: data[part.key] })
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || `Importing ${part.label}s failed`);
+            done.push(describeImportResult(part, result));
         }
-
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ammui-deleted-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-
-        showToast(`Exported ${data.deleted.length} deleted photo${data.deleted.length === 1 ? '' : 's'}`, 'success', 2500);
+        closeLibraryDataImport();
+        showToast(`Imported ${done.join('; ')}`, 'success', 6000);
+        loadLibraryDataCounts();
     } catch (err) {
-        console.error('Failed to export deleted photos:', err);
-        showToast('Failed to export deleted photos');
-    }
-}
-
-async function importDeleted(event) {
-    const file = event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-
-    try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        const deleted = Array.isArray(data) ? data : data.deleted;
-        if (!Array.isArray(deleted)) throw new Error('Not a valid deleted-photos file');
-
-        const response = await fetch('/api/deleted/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deleted })
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Import failed');
-
-        let msg = `Imported ${result.added} deleted photo${result.added === 1 ? '' : 's'}`;
-        const extras = [];
-        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
-        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
-        if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
-        if (result.missing) extras.push(`${result.missing} not found locally`);
-        if (result.invalid) extras.push(`${result.invalid} invalid`);
-        if (extras.length) msg += ` (${extras.join(', ')})`;
-        showToast(msg, 'success', 4000);
-    } catch (err) {
-        console.error('Failed to import deleted photos:', err);
-        showToast('Failed to import deleted photos: ' + err.message);
-    }
-}
-
-async function exportTags() {
-    try {
-        const response = await fetch('/api/tags/export');
-        if (!response.ok) throw new Error('Export failed');
-        const data = await response.json();
-
-        if (!data.tags.length) {
-            showToast('No tags to export', 'warning', 3000);
-            return;
-        }
-
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ammui-tags-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-
-        showToast(`Exported tags for ${data.tags.length} file${data.tags.length === 1 ? '' : 's'}`, 'success', 2500);
-    } catch (err) {
-        console.error('Failed to export tags:', err);
-        showToast('Failed to export tags');
-    }
-}
-
-async function importTags(event) {
-    const file = event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-
-    try {
-        const text = await file.text();
-        const data = JSON.parse(text);
-        const tags = Array.isArray(data) ? data : data.tags;
-        if (!Array.isArray(tags)) throw new Error('Not a valid tags file');
-
-        const response = await fetch('/api/tags/import', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tags })
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Import failed');
-
-        let msg = `Imported ${result.tagsAdded} tag${result.tagsAdded === 1 ? '' : 's'} on ${result.filesProcessed} file${result.filesProcessed === 1 ? '' : 's'}`;
-        const extras = [];
-        if (result.fixed) extras.push(`${result.fixed} path${result.fixed === 1 ? '' : 's'} fixed up`);
-        if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
-        if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
-        if (result.missing) extras.push(`${result.missing} not found locally`);
-        if (result.invalid) extras.push(`${result.invalid} invalid`);
-        if (extras.length) msg += ` (${extras.join(', ')})`;
-        showToast(msg, 'success', 4000);
-    } catch (err) {
-        console.error('Failed to import tags:', err);
-        showToast('Failed to import tags: ' + err.message);
+        console.error('Failed to import:', err);
+        const sofar = done.length ? ` (already imported: ${done.join('; ')})` : '';
+        setCalendarSettingsStatus('import-library-data-status', `${err.message}${sofar}`, true);
+        updateLibraryDataImportButton();
     }
 }
 

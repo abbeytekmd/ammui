@@ -2496,21 +2496,83 @@ p.subtitle {
     margin-top: 0.5rem;
 }
 
+/* Saved ingredients — a third column beside the meal editor */
+.ingredients-panel {
+    width: 24rem;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.ingredients-hint {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.ingredients-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.ingredients-list .settings-hint {
+    padding: 0.5rem 0.75rem;
+}
+
+/* Rows reuse the meal editor's in-place inputs, minus its numbering */
+.ingredient-row::before {
+    content: none;
+}
+
+.ingredient-add input:not(.recipe-amount):not(.recipe-unit) {
+    flex: 1;
+    min-width: 0;
+}
+
 @media (hover: none) {
     .recipe-ingredient-btn {
         opacity: 1;
     }
 }
 
+/* Not enough room for three columns: ingredients go full width underneath */
+@media (max-width: 1300px) {
+    .recipes-view {
+        flex-wrap: wrap;
+        overflow-y: auto;
+    }
+
+    .recipes-list-panel,
+    .recipe-panel {
+        max-height: 60vh;
+    }
+
+    .ingredients-panel {
+        width: 100%;
+        max-height: 50vh;
+    }
+}
+
 @media (max-width: 800px) {
     .recipes-view {
         flex-direction: column;
+        flex-wrap: nowrap;
         gap: 1rem;
     }
 
     .recipes-list-panel {
         width: auto;
         max-height: 35vh;
+    }
+
+    .ingredients-panel {
+        flex-shrink: 0;
     }
 
     .recipe-panel {
@@ -3509,6 +3571,13 @@ p.subtitle {
     padding-right: 0.5rem;
     max-height: 60vh;
     overflow-y: auto;
+}
+
+/* A strong rule between settings sections so each heading clearly starts a new one */
+.manage-section:not(:first-child) {
+    margin-top: 1.75rem;
+    padding-top: 1.25rem;
+    border-top: 2px solid color-mix(in srgb, var(--text-muted) 40%, transparent);
 }
 
 .manage-section h3 {
