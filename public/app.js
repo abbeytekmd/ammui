@@ -9856,9 +9856,10 @@ let hiddenPhotosRendered = 0;
 let hiddenPhotoViewerIndex = -1;
 let hiddenPhotosObserver = null;
 
-function hiddenPhotoThumbUrl(p) {
-    if (!p.url) return null;
-    return p.isLocal ? `/api/thumb?w=240&uri=${encodeURIComponent(p.url)}` : mediaUrl(p.url);
+// Small grid-tile image for a photo: local files go through the thumbnailer, others load as-is
+function photoGridThumbUrl(url) {
+    if (!url) return null;
+    return url.includes('/local-files/') ? `/api/thumb?w=240&uri=${encodeURIComponent(url)}` : mediaUrl(url);
 }
 
 async function openHiddenPhotosModal() {
@@ -9913,28 +9914,28 @@ function updateHiddenPhotosCount() {
     }
 }
 
-function onHiddenPhotoThumbError(img) {
+function onPhotoGridThumbError(img) {
     const span = document.createElement('span');
-    span.className = 'hidden-photo-missing';
+    span.className = 'photo-tile-missing';
     span.textContent = 'Unavailable';
     img.replaceWith(span);
 }
 
 function hiddenPhotoTileHtml(p, i) {
-    const thumb = hiddenPhotoThumbUrl(p);
+    const thumb = photoGridThumbUrl(p.url);
     const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
     const rot = p.manualRotation ? ` style="transform: rotate(${p.manualRotation}deg)"` : '';
     const img = thumb && !p.missing
-        ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot} onerror="onHiddenPhotoThumbError(this)">`
-        : `<span class="hidden-photo-missing">${p.missing ? 'File missing' : 'Server offline'}</span>`;
+        ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot} onerror="onPhotoGridThumbError(this)">`
+        : `<span class="photo-tile-missing">${p.missing ? 'File missing' : 'Server offline'}</span>`;
     const tip = escAttr(p.server ? `${p.title} (${p.server})` : p.title);
-    return `<div class="hidden-photo-tile" data-index="${i}" title="${tip}">
-        <button class="hidden-photo-view" onclick="openHiddenPhotoViewer(+this.parentElement.dataset.index)">${img}</button>
-        <div class="hidden-photo-actions">
-            <button onclick="unhideHiddenPhoto(+this.closest('.hidden-photo-tile').dataset.index)" title="Unhide">
+    return `<div class="photo-tile" data-index="${i}" title="${tip}">
+        <button class="photo-tile-view" onclick="openHiddenPhotoViewer(+this.parentElement.dataset.index)">${img}</button>
+        <div class="photo-tile-actions">
+            <button onclick="unhideHiddenPhoto(+this.closest('.photo-tile').dataset.index)" title="Unhide">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
             </button>
-            ${p.isLocal ? `<button class="danger" onclick="deleteHiddenPhoto(+this.closest('.hidden-photo-tile').dataset.index)" title="Delete file permanently">
+            ${p.isLocal ? `<button class="danger" onclick="deleteHiddenPhoto(+this.closest('.photo-tile').dataset.index)" title="Delete file permanently">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
             </button>` : ''}
         </div>
@@ -9955,7 +9956,7 @@ function renderMoreHiddenPhotos() {
 function removeHiddenPhotoAt(index) {
     if (index < 0) return; // modal was closed while the request was in flight
     hiddenPhotos.splice(index, 1);
-    const tiles = document.querySelectorAll('#hidden-photos-grid .hidden-photo-tile');
+    const tiles = document.querySelectorAll('#hidden-photos-grid .photo-tile');
     tiles[index]?.remove();
     for (let i = index + 1; i < tiles.length; i++) tiles[i].dataset.index = i - 1;
     hiddenPhotosRendered = tiles[index] ? tiles.length - 1 : tiles.length;
@@ -10052,7 +10053,7 @@ function closeHiddenPhotoViewer() {
     // Bring the tile last looked at into view in the grid
     if (hiddenPhotoViewerIndex >= 0) {
         while (hiddenPhotosRendered <= hiddenPhotoViewerIndex && hiddenPhotosRendered < hiddenPhotos.length) renderMoreHiddenPhotos();
-        document.querySelector(`#hidden-photos-grid .hidden-photo-tile[data-index="${hiddenPhotoViewerIndex}"]`)?.scrollIntoView({ block: 'nearest' });
+        document.querySelector(`#hidden-photos-grid .photo-tile[data-index="${hiddenPhotoViewerIndex}"]`)?.scrollIntoView({ block: 'nearest' });
     }
     hiddenPhotoViewerIndex = -1;
 }

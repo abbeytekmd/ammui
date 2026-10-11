@@ -7336,13 +7336,13 @@ input:checked+.slider:before {
     padding: 0 1rem 1rem;
 }
 
-.hidden-photos-grid {
+.photo-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     gap: 6px;
 }
 
-.hidden-photos-grid .empty-state {
+.photo-grid .empty-state {
     grid-column: 1 / -1;
 }
 
@@ -7350,7 +7350,7 @@ input:checked+.slider:before {
     height: 1px;
 }
 
-.hidden-photo-tile {
+.photo-tile {
     position: relative;
     aspect-ratio: 1;
     /* Off-screen tiles skip layout/paint while scrolling */
@@ -7361,7 +7361,7 @@ input:checked+.slider:before {
     background: rgba(255, 255, 255, 0.05);
 }
 
-.hidden-photo-view {
+.photo-tile-view {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -7373,20 +7373,20 @@ input:checked+.slider:before {
     cursor: zoom-in;
 }
 
-.hidden-photo-view img {
+.photo-tile-view img {
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
 
-.hidden-photo-missing {
+.photo-tile-missing {
     font-size: 0.7rem;
     color: var(--text-muted);
     text-align: center;
     padding: 0.25rem;
 }
 
-.hidden-photo-actions {
+.photo-tile-actions {
     position: absolute;
     right: 4px;
     bottom: 4px;
@@ -7394,7 +7394,7 @@ input:checked+.slider:before {
     gap: 4px;
 }
 
-.hidden-photo-actions button {
+.photo-tile-actions button {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -7409,22 +7409,22 @@ input:checked+.slider:before {
     transition: background 0.2s;
 }
 
-.hidden-photo-actions button:hover {
+.photo-tile-actions button:hover {
     background: var(--primary);
 }
 
-.hidden-photo-actions button.danger:hover {
+.photo-tile-actions button.danger:hover {
     background: var(--accent);
 }
 
 /* Hide the per-tile buttons until hover where there's a mouse; touch screens always show them */
 @media (hover: hover) {
-    .hidden-photo-actions {
+    .photo-tile-actions {
         opacity: 0;
         transition: opacity 0.15s;
     }
 
-    .hidden-photo-tile:hover .hidden-photo-actions {
+    .photo-tile:hover .photo-tile-actions {
         opacity: 1;
     }
 }
@@ -7512,4 +7512,41 @@ input:checked+.slider:before {
 .hidden-photo-viewer-actions .btn-delete {
     background: rgba(244, 63, 94, 0.6);
     border-color: rgba(244, 63, 94, 0.8);
+}
+
+.photo-tile.current {
+    outline: 3px solid var(--primary);
+    outline-offset: -3px;
+}
+
+/* Slideshow browser: grid of the current Day/Recent/Favs list, over the paused slideshow */
+.ss-browser {
+    position: absolute;
+    inset: 0;
+    z-index: 10020;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+}
+
+.ss-browser-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    padding-top: calc(1rem + env(safe-area-inset-top));
+    flex-shrink: 0;
+}
+
+.ss-browser-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+}
+
+.ss-browser-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 1rem calc(1rem + env(safe-area-inset-bottom));
 }

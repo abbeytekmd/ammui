@@ -1621,7 +1621,7 @@
                 </button>
             </div>
             <div id="hidden-photos-body" class="hidden-photos-body">
-                <div id="hidden-photos-grid" class="hidden-photos-grid"></div>
+                <div id="hidden-photos-grid" class="photo-grid"></div>
                 <div id="hidden-photos-more" class="hidden-photos-more"></div>
             </div>
         </div>
@@ -1815,6 +1815,21 @@
                 <div class="ss-control-label">Voice</div>
             </div>
 
+            <div class="ss-control-item" id="ss-browse-item" style="display: none;" onclick="openSlideshowBrowser()"
+                ontouchstart="event.preventDefault();"
+                ontouchend="openSlideshowBrowser(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                <button class="btn-ss-rotate" title="Browse the photos in this slideshow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                </button>
+                <div class="ss-control-label">Browse</div>
+            </div>
+
             <div class="ss-control-item" onclick="deleteCurrentPhoto()"
                 ontouchstart="deleteCurrentPhoto(); event.preventDefault();"
                 ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
@@ -1829,6 +1844,26 @@
                     </svg>
                 </button>
                 <div class="ss-control-label">Hide</div>
+            </div>
+        </div>
+
+        <!-- Grid of the photos in the current Day/Recent/Favs list -->
+        <div id="ss-browser" class="ss-browser" style="display: none;" onclick="event.stopPropagation()"
+            ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
+            onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
+            <div class="ss-browser-header">
+                <h2><span id="ss-browser-title"></span> <span id="ss-browser-count" class="hidden-photos-count"></span></h2>
+                <button class="btn-close" onclick="closeSlideshowBrowser()" title="Back to slideshow">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div id="ss-browser-body" class="ss-browser-body">
+                <div id="ss-browser-grid" class="photo-grid"></div>
+                <div id="ss-browser-more" class="hidden-photos-more"></div>
             </div>
         </div>
 
