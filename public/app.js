@@ -9847,3 +9847,222 @@ function renderStats(data) {
         albumsList.innerHTML = data.albums.map((a, i) => row(i, a.album, a.artist, a.count, 'track plays')).join('');
     }
 }
+
+// ─── Hidden Photos Review ────────────────────────────────────────────────────
+
+const HIDDEN_PHOTOS_BATCH = 200; // tiles added per scroll step, so thousands of hidden photos stay quick
+let hiddenPhotos = [];
+let hiddenPhotosRendered = 0;
+let hiddenPhotoViewerIndex = -1;
+let hiddenPhotosObserver = null;
+
+function hiddenPhotoThumbUrl(p) {
+    if (!p.url) return null;
+    return p.isLocal ? `/api/thumb?w=240&uri=${encodeURIComponent(p.url)}` : mediaUrl(p.url);
+}
+
+async function openHiddenPhotosModal() {
+    const modal = document.getElementById('hidden-photos-modal');
+    const grid = document.getElementById('hidden-photos-grid');
+    if (!modal || !grid) return;
+    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
+    modal.style.display = 'flex';
+    closeHiddenPhotoViewer();
+    grid.innerHTML = '<div class="empty-state">Loading...</div>';
+    document.getElementById('hidden-photos-count').textContent = '';
+    document.addEventListener('keydown', onHiddenPhotosKey);
+    try {
+        const res = await fetch('/api/slideshow/hidden');
+        if (!res.ok) throw new Error(res.statusText);
+        hiddenPhotos = await res.json();
+    } catch (e) {
+        grid.innerHTML = `<div class="empty-state">Failed to load: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+    grid.innerHTML = '';
+    hiddenPhotosRendered = 0;
+    updateHiddenPhotosCount();
+    renderMoreHiddenPhotos();
+
+    // Add the next batch of tiles as the bottom of the grid scrolls into view
+    if (hiddenPhotosObserver) hiddenPhotosObserver.disconnect();
+    hiddenPhotosObserver = new IntersectionObserver(entries => {
+        if (entries.some(e => e.isIntersecting)) renderMoreHiddenPhotos();
+    }, { root: document.getElementById('hidden-photos-body'), rootMargin: '600px' });
+    hiddenPhotosObserver.observe(document.getElementById('hidden-photos-more'));
+}
+
+function closeHiddenPhotosModal() {
+    closeHiddenPhotoViewer();
+    if (hiddenPhotosObserver) { hiddenPhotosObserver.disconnect(); hiddenPhotosObserver = null; }
+    document.removeEventListener('keydown', onHiddenPhotosKey);
+    const modal = document.getElementById('hidden-photos-modal');
+    if (modal) modal.style.display = 'none';
+    document.getElementById('hidden-photos-grid').innerHTML = '';
+    hiddenPhotos = [];
+}
+
+function updateHiddenPhotosCount() {
+    document.getElementById('hidden-photos-count').textContent = `(${hiddenPhotos.length})`;
+    const localCount = hiddenPhotos.filter(p => p.isLocal).length;
+    const deleteAll = document.getElementById('hidden-photos-delete-all');
+    deleteAll.style.display = localCount ? '' : 'none';
+    deleteAll.textContent = localCount === hiddenPhotos.length ? 'Delete All' : `Delete All Local (${localCount})`;
+    if (hiddenPhotos.length === 0) {
+        document.getElementById('hidden-photos-grid').innerHTML = '<div class="empty-state">No hidden photos</div>';
+    }
+}
+
+function onHiddenPhotoThumbError(img) {
+    const span = document.createElement('span');
+    span.className = 'hidden-photo-missing';
+    span.textContent = 'Unavailable';
+    img.replaceWith(span);
+}
+
+function hiddenPhotoTileHtml(p, i) {
+    const thumb = hiddenPhotoThumbUrl(p);
+    const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const rot = p.manualRotation ? ` style="transform: rotate(${p.manualRotation}deg)"` : '';
+    const img = thumb && !p.missing
+        ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot} onerror="onHiddenPhotoThumbError(this)">`
+        : `<span class="hidden-photo-missing">${p.missing ? 'File missing' : 'Server offline'}</span>`;
+    const tip = escAttr(p.server ? `${p.title} (${p.server})` : p.title);
+    return `<div class="hidden-photo-tile" data-index="${i}" title="${tip}">
+        <button class="hidden-photo-view" onclick="openHiddenPhotoViewer(+this.parentElement.dataset.index)">${img}</button>
+        <div class="hidden-photo-actions">
+            <button onclick="unhideHiddenPhoto(+this.closest('.hidden-photo-tile').dataset.index)" title="Unhide">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+            ${p.isLocal ? `<button class="danger" onclick="deleteHiddenPhoto(+this.closest('.hidden-photo-tile').dataset.index)" title="Delete file permanently">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            </button>` : ''}
+        </div>
+    </div>`;
+}
+
+function renderMoreHiddenPhotos() {
+    const grid = document.getElementById('hidden-photos-grid');
+    if (!grid || hiddenPhotosRendered >= hiddenPhotos.length) return;
+    const end = Math.min(hiddenPhotos.length, hiddenPhotosRendered + HIDDEN_PHOTOS_BATCH);
+    let html = '';
+    for (let i = hiddenPhotosRendered; i < end; i++) html += hiddenPhotoTileHtml(hiddenPhotos[i], i);
+    grid.insertAdjacentHTML('beforeend', html);
+    hiddenPhotosRendered = end;
+}
+
+// Drops a photo from the list after it's been unhidden/deleted; tiles after it shift down one index.
+function removeHiddenPhotoAt(index) {
+    if (index < 0) return; // modal was closed while the request was in flight
+    hiddenPhotos.splice(index, 1);
+    const tiles = document.querySelectorAll('#hidden-photos-grid .hidden-photo-tile');
+    tiles[index]?.remove();
+    for (let i = index + 1; i < tiles.length; i++) tiles[i].dataset.index = i - 1;
+    hiddenPhotosRendered = tiles[index] ? tiles.length - 1 : tiles.length;
+    updateHiddenPhotosCount();
+    renderMoreHiddenPhotos();
+
+    if (hiddenPhotoViewerIndex >= 0) {
+        if (hiddenPhotos.length === 0) closeHiddenPhotoViewer();
+        else showHiddenPhotoInViewer(Math.min(index, hiddenPhotos.length - 1));
+    }
+}
+
+async function unhideHiddenPhoto(index) {
+    const p = hiddenPhotos[index];
+    if (!p) return;
+    try {
+        const res = await fetch('/api/slideshow/unhide', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: p.key })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        removeHiddenPhotoAt(hiddenPhotos.indexOf(p));
+        showToast('Photo unhidden', 'success', 2000);
+    } catch (e) {
+        showToast('Failed to unhide: ' + e.message, 'error', 4000);
+    }
+}
+
+async function deleteHiddenPhoto(index) {
+    const p = hiddenPhotos[index];
+    if (!p || !p.isLocal) return;
+    if (!confirm(`Permanently delete "${p.title}"? This cannot be undone.`)) return;
+    try {
+        const res = await fetch('/api/slideshow/hidden/delete-file', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: p.key })
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        removeHiddenPhotoAt(hiddenPhotos.indexOf(p));
+        showToast('Photo deleted', 'success', 2000);
+    } catch (e) {
+        showToast('Failed to delete: ' + e.message, 'error', 4000);
+    }
+}
+
+async function deleteAllHiddenPhotos() {
+    const count = hiddenPhotos.filter(p => p.isLocal).length;
+    if (!count) return;
+    const others = hiddenPhotos.length - count;
+    const note = others ? `\n\n${others} hidden photo${others === 1 ? '' : 's'} on other servers will be kept.` : '';
+    if (!confirm(`Permanently delete ${count} hidden photo${count === 1 ? '' : 's'} from the local library? This cannot be undone.${note}`)) return;
+    const btn = document.getElementById('hidden-photos-delete-all');
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+    try {
+        const res = await fetch('/api/slideshow/hidden/delete-all-local', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || res.statusText);
+        showToast(`Deleted ${d.deleted} photo${d.deleted === 1 ? '' : 's'}${d.failed ? `, ${d.failed} failed` : ''}`, d.failed ? 'error' : 'success', 4000);
+    } catch (e) {
+        showToast('Failed to delete: ' + e.message, 'error', 4000);
+    }
+    btn.disabled = false;
+    openHiddenPhotosModal(); // reload whatever is left
+}
+
+function openHiddenPhotoViewer(index) {
+    document.getElementById('hidden-photo-viewer').style.display = 'flex';
+    showHiddenPhotoInViewer(index);
+}
+
+function showHiddenPhotoInViewer(index) {
+    const p = hiddenPhotos[index];
+    if (!p) return;
+    hiddenPhotoViewerIndex = index;
+    const img = document.getElementById('hidden-photo-viewer-img');
+    const sideways = p.manualRotation === 90 || p.manualRotation === 270;
+    img.style.transform = p.manualRotation ? `rotate(${p.manualRotation}deg)` : '';
+    img.classList.toggle('sideways', sideways);
+    img.src = p.url && !p.missing ? mediaUrl(p.url) : '';
+    document.getElementById('hidden-photo-viewer-title').textContent =
+        `${index + 1} / ${hiddenPhotos.length} · ${p.title}${p.server ? ` · ${p.server}` : ''}${p.missing ? ' (file missing)' : ''}`;
+    document.getElementById('hidden-photo-viewer-delete').style.display = p.isLocal ? '' : 'none';
+}
+
+function stepHiddenPhotoViewer(delta) {
+    if (!hiddenPhotos.length) return;
+    showHiddenPhotoInViewer((hiddenPhotoViewerIndex + delta + hiddenPhotos.length) % hiddenPhotos.length);
+}
+
+function closeHiddenPhotoViewer() {
+    const viewer = document.getElementById('hidden-photo-viewer');
+    if (!viewer) return;
+    viewer.style.display = 'none';
+    document.getElementById('hidden-photo-viewer-img').removeAttribute('src');
+    // Bring the tile last looked at into view in the grid
+    if (hiddenPhotoViewerIndex >= 0) {
+        while (hiddenPhotosRendered <= hiddenPhotoViewerIndex && hiddenPhotosRendered < hiddenPhotos.length) renderMoreHiddenPhotos();
+        document.querySelector(`#hidden-photos-grid .hidden-photo-tile[data-index="${hiddenPhotoViewerIndex}"]`)?.scrollIntoView({ block: 'nearest' });
+    }
+    hiddenPhotoViewerIndex = -1;
+}
+
+function onHiddenPhotosKey(e) {
+    if (e.target.matches?.('input, textarea')) return;
+    const viewing = hiddenPhotoViewerIndex >= 0;
+    if (e.key === 'Escape') { e.preventDefault(); viewing ? closeHiddenPhotoViewer() : closeHiddenPhotosModal(); }
+    else if (viewing && e.key === 'ArrowLeft') stepHiddenPhotoViewer(-1);
+    else if (viewing && e.key === 'ArrowRight') stepHiddenPhotoViewer(1);
+    else if (viewing && (e.key === 'u' || e.key === 'U')) unhideHiddenPhoto(hiddenPhotoViewerIndex);
+    else if (viewing && e.key === 'Delete') deleteHiddenPhoto(hiddenPhotoViewerIndex);
+}

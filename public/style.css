@@ -7291,3 +7291,225 @@ input:checked+.slider:before {
     color: var(--text-muted);
     word-break: break-all;
 }
+
+/* Hidden Photos Review */
+/* Full screen and opaque, so the blurred backdrop would just be repainted on every scroll frame for nothing */
+#hidden-photos-modal {
+    backdrop-filter: none;
+    background: var(--bg);
+}
+
+#hidden-photos-modal .modal-content.hidden-photos-content {
+    background: var(--bg);
+    box-shadow: none;
+    animation: none;
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    border: none;
+    padding: 0;
+}
+
+#hidden-photos-modal .modal-header {
+    padding: 1rem 1.5rem;
+    margin-bottom: 0;
+}
+
+#hidden-photos-modal .header-group {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.hidden-photos-count {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.9em;
+}
+
+.hidden-photos-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 1rem 1rem;
+}
+
+.hidden-photos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 6px;
+}
+
+.hidden-photos-grid .empty-state {
+    grid-column: 1 / -1;
+}
+
+.hidden-photos-more {
+    height: 1px;
+}
+
+.hidden-photo-tile {
+    position: relative;
+    aspect-ratio: 1;
+    /* Off-screen tiles skip layout/paint while scrolling */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 110px;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.hidden-photo-view {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: zoom-in;
+}
+
+.hidden-photo-view img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.hidden-photo-missing {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 0.25rem;
+}
+
+.hidden-photo-actions {
+    position: absolute;
+    right: 4px;
+    bottom: 4px;
+    display: flex;
+    gap: 4px;
+}
+
+.hidden-photo-actions button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.hidden-photo-actions button:hover {
+    background: var(--primary);
+}
+
+.hidden-photo-actions button.danger:hover {
+    background: var(--accent);
+}
+
+/* Hide the per-tile buttons until hover where there's a mouse; touch screens always show them */
+@media (hover: hover) {
+    .hidden-photo-actions {
+        opacity: 0;
+        transition: opacity 0.15s;
+    }
+
+    .hidden-photo-tile:hover .hidden-photo-actions {
+        opacity: 1;
+    }
+}
+
+.hidden-photo-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.hidden-photo-viewer img {
+    max-width: 100vw;
+    max-height: 100vh;
+    object-fit: contain;
+}
+
+/* Rotated 90/270: the box is turned, so swap which screen edge limits it */
+.hidden-photo-viewer img.sideways {
+    max-width: 100vh;
+    max-height: 100vw;
+}
+
+.hidden-photo-viewer-title {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    padding: 0.75rem 1rem;
+    background: linear-gradient(rgba(0, 0, 0, 0.7), transparent);
+    color: #fff;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hidden-photo-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+}
+
+.hidden-photo-nav:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.hidden-photo-nav.prev {
+    left: 1rem;
+}
+
+.hidden-photo-nav.next {
+    right: 1rem;
+}
+
+.hidden-photo-viewer-actions {
+    position: absolute;
+    bottom: 1.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.75rem;
+}
+
+.hidden-photo-viewer-actions button {
+    padding: 0.6rem 1.2rem;
+    font-size: 0.85rem;
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+}
+
+.hidden-photo-viewer-actions .btn-delete {
+    background: rgba(244, 63, 94, 0.6);
+    border-color: rgba(244, 63, 94, 0.8);
+}

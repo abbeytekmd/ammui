@@ -34,7 +34,7 @@ import {
     saveAllDevices, getAllDevices,
     getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, getAllDeletedPhotos, isPhotoDeleted, migrateMediaKeys, renameMediaKeyServer,
+    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, isPhotoDeleted, migrateMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -1477,6 +1477,25 @@ function generateThumb(srcPath, destPath, width) {
     });
 }
 
+// Without ffmpeg, small tiles can still use the preview JPEG most cameras/phones embed in the
+// EXIF block (~160px, read from the file header so it's fast). That preview carries no
+// orientation of its own, so the original's is copied onto it for the browser to apply.
+const EMBEDDED_THUMB_MAX_WIDTH = 256;
+
+async function writeEmbeddedThumb(srcPath, destPath) {
+    const buf = await exifr.thumbnail(srcPath);
+    if (!buf || !buf.length) throw new Error('no embedded thumbnail');
+    let jpeg = Buffer.from(buf);
+    const orientation = await exifr.orientation(srcPath).catch(() => null);
+    if (orientation && orientation !== 1) {
+        const exifBytes = piexif.dump({ '0th': { [piexif.ImageIFD.Orientation]: orientation } });
+        jpeg = Buffer.from(piexif.insert(exifBytes, jpeg.toString('binary')), 'binary');
+    }
+    const tmp = path.join(thumbCacheDir, crypto.randomBytes(8).toString('hex') + '.jpg');
+    await fs.promises.writeFile(tmp, jpeg);
+    await fs.promises.rename(tmp, destPath);
+}
+
 app.get('/api/thumb', async (req, res) => {
     const rawUri = req.query.uri;
     if (!rawUri) return res.status(400).send('Missing uri');
@@ -1493,8 +1512,8 @@ app.get('/api/thumb', async (req, res) => {
         catch { relPath = rawUri.slice(markerIdx + marker.length); }
     }
 
-    // Remote DLNA image, or ffmpeg not available → just hand back the original.
-    if (relPath === null || ffmpegUnavailable) return res.redirect(302, rawUri);
+    // Remote DLNA image → just hand back the original.
+    if (relPath === null) return res.redirect(302, rawUri);
 
     const srcPath = path.resolve(thumbLocalRoot, relPath);
     if (srcPath !== thumbLocalRoot && !srcPath.startsWith(thumbLocalRoot + path.sep)) {
@@ -1518,18 +1537,34 @@ app.get('/api/thumb', async (req, res) => {
 
     if (fs.existsSync(cacheFile)) return sendCached();
 
-    try {
-        if (!thumbInflight.has(cacheFile)) {
-            thumbInflight.set(cacheFile,
-                runThumbTask(() => generateThumb(srcPath, cacheFile, width))
-                    .finally(() => thumbInflight.delete(cacheFile)));
+    if (!ffmpegUnavailable) {
+        try {
+            if (!thumbInflight.has(cacheFile)) {
+                thumbInflight.set(cacheFile,
+                    runThumbTask(() => generateThumb(srcPath, cacheFile, width))
+                        .finally(() => thumbInflight.delete(cacheFile)));
+            }
+            await thumbInflight.get(cacheFile);
+            return sendCached();
+        } catch (err) {
+            if (!ffmpegUnavailable) console.warn(`[THUMB] ${path.basename(srcPath)}: ${err.message}`);
         }
-        await thumbInflight.get(cacheFile);
-        return sendCached();
-    } catch (err) {
-        console.warn(`[THUMB] ${path.basename(srcPath)}: ${err.message}`);
-        return res.redirect(302, rawUri);   // fall back to the full-size original
     }
+
+    if (width <= EMBEDDED_THUMB_MAX_WIDTH) {
+        const embeddedFile = cacheFile.replace(/\.jpg$/, '-exif.jpg');
+        const sendEmbedded = () => {
+            res.set('Cache-Control', 'public, max-age=31536000, immutable');
+            res.type('image/jpeg');
+            res.sendFile(embeddedFile);
+        };
+        if (fs.existsSync(embeddedFile)) return sendEmbedded();
+        try {
+            await writeEmbeddedThumb(srcPath, embeddedFile);
+            return sendEmbedded();
+        } catch (err) { }
+    }
+    return res.redirect(302, rawUri);   // fall back to the full-size original
 });
 
 // ---------------------------------------------------------------------------
@@ -3565,9 +3600,7 @@ async function refreshScreensaverCache(device, objectId) {
             (i.protocolInfo && i.protocolInfo.includes('image/')) ||
             (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
         );
-        if (!isImage) return false;
-        const url = i.uri || i.res;
-        return !settings.deletedPhotos[mediaKey(url)];
+        return isImage;
     };
 
     try {
@@ -3636,7 +3669,7 @@ app.get('/api/slideshow/random', async (req, res) => {
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
         // If cache is ready and has images, use it!
         if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
-            let imagesToUse = screensaverCache.images;
+            let imagesToUse = screensaverCache.images.filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
 
             if (mode === 'onThisDay') {
                 const today = new Date();
@@ -3932,10 +3965,99 @@ app.post('/api/slideshow/delete', (req, res) => {
 
     markPhotoDeleted(url);
     settings.deletedPhotos[mediaKey(url)] = true;
-    removeFromScreensaverCache(url);
+    // Left in the scan cache (it's filtered out when served) so unhiding brings it straight back.
+    slideshowDeleteVersion++;
 
     console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
     res.json({ success: true });
+});
+
+// A hidden key's file in this app's own library, or null for anything else (or a path escaping it).
+function localFileForKey(key) {
+    const parts = splitMediaKey(key);
+    if (!parts?.isLocal || !parts.path.startsWith('/local-files/')) return null;
+    const localDir = path.join(__dirname, 'local');
+    let rel = parts.path.slice('/local-files/'.length).split('?')[0];
+    try { rel = decodeURIComponent(rel); } catch (e) { }
+    const filePath = path.resolve(localDir, rel);
+    return filePath.startsWith(localDir + path.sep) ? filePath : null;
+}
+
+// Everything hidden from the slideshow, most recently hidden first.
+app.get('/api/slideshow/hidden', (req, res) => {
+    const photos = Object.keys(getAllDeletedPhotos()).reverse().map(key => {
+        const filePath = localFileForKey(key);
+        const parts = splitMediaKey(key);
+        return {
+            key,
+            url: mediaUrlFromKey(key),
+            title: decodeURIComponent((parts?.path || key).split('?')[0].split('/').pop() || key),
+            server: parts?.server || '',
+            isLocal: !!filePath,
+            missing: filePath ? !fs.existsSync(filePath) : false,
+            manualRotation: settings.manualRotations?.[key] || 0,
+        };
+    });
+    res.json(photos);
+});
+
+app.post('/api/slideshow/unhide', (req, res) => {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'key required' });
+
+    unmarkPhotoDeleted(key);
+    delete settings.deletedPhotos[mediaKey(key)];
+    slideshowDeleteVersion++;
+
+    console.log(`[SCREENSAVER] Unhid photo: ${key}`);
+    res.json({ success: true });
+});
+
+// Permanently deletes a hidden photo from this app's library (not moved to _deleted - it's
+// already been reviewed) and forgets everything saved against it.
+async function deleteHiddenLocalPhoto(key, filePath) {
+    await fs.promises.unlink(filePath).catch(err => { if (err.code !== 'ENOENT') throw err; });
+    const k = mediaKey(key);
+    forgetMediaKey(k);
+    delete settings.deletedPhotos[k];
+    delete settings.fileTags[k];
+    delete settings.manualRotations[k];
+    removeFromScreensaverCache(k);
+    console.log(`[SCREENSAVER] Permanently deleted hidden photo: ${filePath}`);
+}
+
+app.post('/api/slideshow/hidden/delete-file', async (req, res) => {
+    const { key } = req.body;
+    if (!key) return res.status(400).json({ error: 'key required' });
+    if (!settings.deletedPhotos[mediaKey(key)]) return res.status(400).json({ error: 'Photo is not hidden' });
+    const filePath = localFileForKey(key);
+    if (!filePath) return res.status(400).json({ error: 'Only photos in the local library can be deleted' });
+
+    try {
+        await deleteHiddenLocalPhoto(key, filePath);
+        res.json({ success: true });
+    } catch (err) {
+        console.error('[SCREENSAVER] Delete hidden photo failed:', err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Every hidden photo in the local library; hidden photos on other servers are left alone.
+app.post('/api/slideshow/hidden/delete-all-local', async (req, res) => {
+    let deleted = 0, failed = 0;
+    for (const key of Object.keys(getAllDeletedPhotos())) {
+        const filePath = localFileForKey(key);
+        if (!filePath) continue;
+        try {
+            await deleteHiddenLocalPhoto(key, filePath);
+            deleted++;
+        } catch (err) {
+            console.error(`[SCREENSAVER] Delete hidden photo failed (${filePath}):`, err.message);
+            failed++;
+        }
+    }
+    console.log(`[SCREENSAVER] Delete all hidden local photos: deleted=${deleted} failed=${failed}`);
+    res.json({ success: true, deleted, failed });
 });
 
 app.post('/api/slideshow/favourite', (req, res) => {
