@@ -11,6 +11,7 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
+import { getImageDate, extractDateFromString, isPhotoItem, monthDay } from './lib/photo-date.js';
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
@@ -39,7 +40,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItemsUnder, getLibraryIndexPhotosOnDay,
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
@@ -3153,72 +3154,6 @@ function getRecentCutoff() {
     return new Date(now.getFullYear(), now.getMonth() - 1, 1);
 }
 
-// Extract the best available date from a cached image item.
-// Returns a Date object or null. Checks dc:date field, then folder path, then title.
-function getImageDate(img) {
-    // 1. dc:date field (stored as img.year by media-server)
-    const dateStr = img.year || img.date || img['dc:date'];
-    if (dateStr) {
-        const d = new Date(dateStr);
-        if (!isNaN(d.getTime())) return d;
-    }
-
-    // 2. Folder path segments (stored as JSON array of {id, title})
-    try {
-        const pathSegments = JSON.parse(img._path || '[]');
-        // Scan from innermost folder outward
-        for (let i = pathSegments.length - 1; i >= 0; i--) {
-            const parsed = extractDateFromString(pathSegments[i].title);
-            if (parsed && parsed.month && parsed.day) {
-                return new Date(`${parsed.year}-${parsed.month}-${parsed.day}`);
-            }
-        }
-    } catch (e) { /* ignore */ }
-
-    // 3. Item title / filename
-    const parsed = extractDateFromString(img.title);
-    if (parsed && parsed.month && parsed.day) {
-        return new Date(`${parsed.year}-${parsed.month}-${parsed.day}`);
-    }
-
-    return null;
-}
-
-function extractDateFromString(str) {
-    if (!str) return null;
-    // YYYY-MM-DD or YYYY_MM_DD or YYYY.MM.DD
-    let m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])[-_.]((0[1-9]|[12]\d|3[01]))\b/);
-    if (m) return { year: m[1], month: m[2], day: m[3] };
-    // YYYYMMDDHHMMSS (must be checked before YYYYMMDD to avoid partial match)
-    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])([01]\d|2[0-3])([0-5]\d)([0-5]\d)\b/);
-    if (m) return { year: m[1], month: m[2], day: m[3] };
-    // YYYYMMDD
-    m = str.match(/\b((?:19|20)\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])\b/);
-    if (m) return { year: m[1], month: m[2], day: m[3] };
-    // YYYY-MM or YYYY_MM
-    m = str.match(/\b((?:19|20)\d{2})[-_.](0[1-9]|1[0-2])\b/);
-    if (m) return { year: m[1], month: m[2], day: null };
-    // YYYY alone
-    m = str.match(/\b((?:19|20)\d{2})\b/);
-    if (m) return { year: m[1], month: null, day: null };
-    // XX-XX-XX at the start: underscore after → DD-MM-YY, otherwise → YY-MM-DD
-    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})_/);
-    if (m) {
-        // DD-MM-YY_ e.g. "15-03-24_photo.jpg"
-        const yy = parseInt(m[3], 10);
-        const year = (yy >= 70 ? 1900 + yy : 2000 + yy).toString();
-        return { year, month: m[2], day: m[1] };
-    }
-    m = str.match(/^(\d{2})[-_.](\d{2})[-_.](\d{2})/);
-    if (m) {
-        // YY-MM-DD e.g. "24-03-15-photo.jpg"
-        const yy = parseInt(m[1], 10);
-        const year = (yy >= 70 ? 1900 + yy : 2000 + yy).toString();
-        return { year, month: m[2], day: m[3] };
-    }
-    return null;
-}
-
 // An imported "albumart~Artist~Album" image (see albumArtName) goes back into
 // local/music/<Artist>/<Album> as that album's cover rather than into the pictures tree.
 // An album that already has a cover keeps it. srcPath is a temp file, removed either way.
@@ -3580,46 +3515,49 @@ function removeFromScreensaverCache(url) {
     }
 }
 
+// Fills the cache with the photos under its folder from the server's library index.
+function loadScreensaverCacheFromIndex(cache, meta) {
+    const images = getLibraryIndexItemsUnder(cache.udn, cache.objectId).filter(isPhotoItem);
+    cache.images = images;
+    cache.indexBuiltAt = meta.built_at;
+    cache.status = 'ready';
+    cache.timestamp = Date.now();
+    console.log(`[SCREENSAVER] Loaded ${images.length} photos from the "${meta.server_name}" library index.`);
+}
+
+// The slideshow's photos come from the library index (see library-index.js) rather than a crawl
+// of their own; a server that has never been indexed is indexed first.
 async function refreshScreensaverCache(device, objectId) {
     if (screensaverCache.status === 'loading') return;
 
-    console.log('[SCREENSAVER] Starting background recursive scan for', objectId);
     screensaverCache.udn = device.udn;
     screensaverCache.objectId = objectId;
     screensaverCache.status = 'loading';
     screensaverCache.images = [];
-    // Images found so far, so Day/Recent/Favs can start showing photos before the scan finishes.
-    // Held on this cache object so a scan superseded by a settings change can't leak into the new one.
+    // Held on this cache object so a load superseded by a settings change can't leak into the new one
     const cache = screensaverCache;
     cache.partialImages = [];
 
-    // Images that are NOT deleted
-    const isWantedImage = (i) => {
-        const isImage = i.type === 'item' && (
-            (i.class && i.class.toLowerCase().indexOf('imageitem') >= 0) ||
-            (i.protocolInfo && i.protocolInfo.includes('image/')) ||
-            (i.title && i.title.match(/\.(jpg|jpeg|png|gif|webp)$/i))
-        );
-        return isImage;
-    };
-
     try {
-        const mediaServer = new MediaServer(device);
-        // Use browseRecursive from MediaServer class
-        const allItems = await mediaServer.browseRecursive(objectId, settings.screensaver.pathName || 'Home', undefined,
-            (found) => { cache.partialImages.push(...found.filter(isWantedImage)); });
-
-        const images = allItems.filter(isWantedImage);
-
-        screensaverCache.images = images;
-        screensaverCache.status = 'ready';
-        screensaverCache.timestamp = Date.now();
-        console.log(`[SCREENSAVER] Scan complete. Found ${images.length} images.`);
+        if (!getLibraryIndexMeta(device.udn)) {
+            console.log(`[SCREENSAVER] "${device.friendlyName}" has no library index yet; building it.`);
+            await buildIndex(device, 'slideshow');
+        }
+        const meta = getLibraryIndexMeta(device.udn);
+        if (!meta) throw new Error('the library index could not be built');
+        loadScreensaverCacheFromIndex(cache, meta);
     } catch (err) {
-        console.error('[SCREENSAVER] Scan failed:', err);
-        screensaverCache.status = 'error';
+        console.error('[SCREENSAVER] Loading photos failed:', err.message);
+        cache.status = 'error';
     }
-    cache.partialImages = [];
+}
+
+// The index is rebuilt daily and after library changes: pick up the new copy.
+function reloadScreensaverCacheIfReindexed() {
+    const cache = screensaverCache;
+    if (cache.status !== 'ready') return;
+    const meta = getLibraryIndexMeta(cache.udn);
+    if (meta && meta.built_at > (cache.indexBuiltAt || 0)) loadScreensaverCacheFromIndex(cache, meta);
 }
 
 app.post('/api/settings/screensaver', (req, res) => {
@@ -3666,6 +3604,7 @@ app.get('/api/slideshow/random', async (req, res) => {
         let foundImage = null;
 
         // CHECK CACHE STRATEGY
+        reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
         // If cache is ready and has images, use it!
         if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
@@ -3864,6 +3803,38 @@ app.get('/api/slideshow/random', async (req, res) => {
     }
 });
 
+// Gets another AMMUI's /api/slideshow/list for `mode`, with our own hidden photos removed and our
+// own rotations/tags applied. Returns null if it isn't an AMMUI, has nothing, or is still scanning.
+async function fetchRemoteSlideshowList(device, mode) {
+    if (!device.location) return null;
+    try {
+        const url = new URL(`/api/slideshow/list?mode=${encodeURIComponent(mode)}`, device.location);
+        const res = await fetch(url, { headers: { 'X-AMMUI-Forwarded': '1' }, signal: AbortSignal.timeout(15000) });
+        if (!res.ok || res.headers.get('X-Scan-Partial')) {
+            console.log(`[SCREENSAVER] ${device.friendlyName} has no ${mode} list (HTTP ${res.status}), scanning instead`);
+            return null;
+        }
+        const items = await res.json();
+        if (!Array.isArray(items) || items.length === 0) return null;
+        const list = [];
+        for (const img of items) {
+            const url = img.uri || img.res;
+            if (!url) continue;
+            registerMediaOrigin(url, device.friendlyName);
+            const key = mediaKey(url);
+            if (settings.deletedPhotos[key]) continue;
+            const rot = settings.manualRotations?.[key];
+            const tags = settings.fileTags?.[key];
+            list.push({ ...img, key, ...(rot ? { manualRotation: rot } : {}), ...(tags ? { tags } : {}) });
+        }
+        console.log(`[SCREENSAVER] Got ${list.length} ${mode} photos from ${device.friendlyName}`);
+        return list.length > 0 ? list : null;
+    } catch (err) {
+        console.log(`[SCREENSAVER] ${device.friendlyName} has no ${mode} list (${err.message}), scanning instead`);
+        return null;
+    }
+}
+
 app.get('/api/slideshow/list', async (req, res) => {
     if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
         return res.status(400).json({ error: 'Screensaver not configured' });
@@ -3872,25 +3843,47 @@ app.get('/api/slideshow/list', async (req, res) => {
     const { serverUdn, objectId } = settings.screensaver;
     const { mode } = req.query;
 
-    const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-    // While the scan is still running, answer with whatever matches it has found so far
-    // (flagged X-Scan-Partial so the browser keeps re-fetching until the full list is ready).
-    const partial = !cacheValid || screensaverCache.status !== 'ready';
-    if (partial) {
-        let device = devices.get(serverUdn);
-        if (!device) {
-            for (const d of devices.values()) {
-                if (d.udn === serverUdn) { device = d; break; }
+    // On This Day from another AMMUI: ask it for its own list first, and only scan it ourselves
+    // if that fails. The header stops two instances pointed at each other forwarding forever.
+    if (mode === 'onThisDay' && !req.get('X-AMMUI-Forwarded')) {
+        const device = findDeviceByUdn(serverUdn);
+        if (device && !isOwnUdn(device.udn)) {
+            const remote = await fetchRemoteSlideshowList(device, mode);
+            if (remote) {
+                res.set('X-Deleted-Version', String(slideshowDeleteVersion));
+                return res.json(remote);
             }
-        }
-        if (device && (!cacheValid || screensaverCache.status === 'idle' || screensaverCache.status === 'error')) {
-            refreshScreensaverCache(device, objectId);
         }
     }
 
-    const source = partial
-        ? (cacheValid && screensaverCache.status === 'loading' ? screensaverCache.partialImages || [] : [])
-        : screensaverCache.images;
+    // On This Day straight from the photo dates stored in the library index: one indexed lookup
+    // instead of loading every photo in the folder and checking each one's date.
+    const indexMeta = mode === 'onThisDay' ? getLibraryIndexMeta(serverUdn) : null;
+    let source;
+    let partial = false;
+    if (indexMeta) {
+        source = getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()));
+    } else {
+        reloadScreensaverCacheIfReindexed();
+        const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
+        // While the cache is still loading, answer with whatever it has so far (flagged
+        // X-Scan-Partial so the browser keeps re-fetching until the full list is ready).
+        partial = !cacheValid || screensaverCache.status !== 'ready';
+        if (partial) {
+            let device = devices.get(serverUdn);
+            if (!device) {
+                for (const d of devices.values()) {
+                    if (d.udn === serverUdn) { device = d; break; }
+                }
+            }
+            if (device && (!cacheValid || screensaverCache.status === 'idle' || screensaverCache.status === 'error')) {
+                refreshScreensaverCache(device, objectId);
+            }
+        }
+        source = partial
+            ? (cacheValid && screensaverCache.status === 'loading' ? screensaverCache.partialImages || [] : [])
+            : screensaverCache.images;
+    }
     let images = source.filter(img => {
         const url = img.uri || img.res;
         return !settings.deletedPhotos[mediaKey(url)];

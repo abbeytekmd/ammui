@@ -3,8 +3,8 @@
 rem ---------------------------------------------------------------------------
 rem AMMUI setup for Windows: a one-off bootstrap.
 rem
-rem Double-click this file. It installs anything missing (Node.js, Git and the
-rem optional ffmpeg, yt-dlp and fpcalc helpers), fetches the latest AMMUI code
+rem Double-click this file. It installs anything missing (winget, Node.js, Git and
+rem the optional ffmpeg, yt-dlp and fpcalc helpers), fetches the latest AMMUI code
 rem from GitHub, installs its packages, adds shortcuts and starts the server.
 rem
 rem Usage:  ammui-setup.cmd [install folder]   (default: %USERPROFILE%\ammui)
@@ -53,13 +53,59 @@ function Update-SessionPath {
     # Pick up PATH changes made by installers that ran after this window opened.
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $extra   = @("$env:ProgramFiles\nodejs", "$env:ProgramFiles\Git\cmd") | Where-Object { Test-Path $_ }
+    $extra   = @("$env:ProgramFiles\nodejs", "$env:ProgramFiles\Git\cmd", "$env:LOCALAPPDATA\Programs\Git\cmd", "$env:LOCALAPPDATA\Microsoft\WindowsApps") | Where-Object { Test-Path $_ }
     $env:Path = (@($machine, $user) + $extra | Where-Object { $_ }) -join ';'
 }
 
 function Test-Command($name) { [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
-function Test-Winget { Test-Command 'winget' }
+function Test-Winget {
+    if (-not (Test-Command 'winget')) { return $false }
+    try { & winget --version 2>$null | Out-Null; return $LASTEXITCODE -eq 0 } catch { return $false }
+}
+
+# --- winget ------------------------------------------------------------------
+
+function Install-Winget {
+    # winget comes with Windows' App Installer. It is used for Node.js and Git when present;
+    # without it they are downloaded directly, so failing here is not fatal.
+    Step 'Checking winget'
+    if (Test-Winget) { Info "winget $(& winget --version) found."; return }
+
+    # On a fresh Windows install App Installer is often there but not yet registered for this user.
+    try {
+        Add-AppxPackage -RegisterByFamilyName -MainPackage 'Microsoft.DesktopAppInstaller_8wekyb3d8bbwe' -ErrorAction Stop
+        Update-SessionPath
+        if (Test-Winget) { Info "winget $(& winget --version) ready."; return }
+    } catch { }
+
+    # Otherwise install the latest release from GitHub, with the packages it depends on.
+    try {
+        Info 'Installing winget...'
+        $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+        $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-cli/releases/latest' -UseBasicParsing -Headers @{ 'User-Agent' = 'ammui-setup' }
+        $bundle = $rel.assets | Where-Object { $_.name -like '*.msixbundle' } | Select-Object -First 1
+        $deps = $rel.assets | Where-Object { $_.name -like '*Dependencies*.zip' } | Select-Object -First 1
+        if (-not $bundle) { throw 'no installer in the latest winget release' }
+        $tmp = New-TempDir
+        if ($deps) {
+            $zip = Join-Path $tmp $deps.name
+            Get-File $deps.browser_download_url $zip
+            Expand-Archive -Path $zip -DestinationPath (Join-Path $tmp 'deps') -Force
+            Get-ChildItem (Join-Path $tmp 'deps') -Recurse -Filter '*.appx' | Where-Object { $_.FullName -match "\\$arch\\" } | ForEach-Object {
+                # Fails harmlessly when the same or a newer version is already installed
+                try { Add-AppxPackage -Path $_.FullName -ErrorAction Stop } catch { }
+            }
+        }
+        $msix = Join-Path $tmp $bundle.name
+        Get-File $bundle.browser_download_url $msix
+        Add-AppxPackage -Path $msix -ErrorAction Stop
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        Update-SessionPath
+        if (Test-Winget) { Info "winget $(& winget --version) ready."; return }
+        Warn 'winget was installed but cannot be run yet; Node.js and Git will be downloaded directly instead.'
+    } catch { Warn "winget could not be installed ($($_.Exception.Message)); Node.js and Git will be downloaded directly instead." }
+}
 
 function Install-WithWinget($id) {
     Info "Installing $id with winget (Windows may ask for permission)..."
@@ -125,13 +171,32 @@ function Install-Node {
 
 # --- Git ---------------------------------------------------------------------
 
+function Install-GitFromExe {
+    # Fallback for machines without a working winget (common on fresh Windows 10).
+    $suffix = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { '-arm64.exe' } else { '-64-bit.exe' }
+    $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing -Headers @{ 'User-Agent' = 'ammui-setup' }
+    $asset = $rel.assets | Where-Object { $_.name -like "Git-*$suffix" } | Select-Object -First 1
+    if (-not $asset) { Warn 'Could not find a Git for Windows installer on GitHub.'; return }
+    $tmp = New-TempDir
+    $exe = Join-Path $tmp $asset.name
+    Get-File $asset.browser_download_url $exe
+    Info "Running the $($asset.name) installer (Windows may ask for permission)..."
+    $p = Start-Process $exe -ArgumentList '/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-', '/SUPPRESSMSGBOXES' -Wait -PassThru
+    Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0) { Warn "The Git installer failed (exit code $($p.ExitCode))." }
+    Update-SessionPath
+}
+
 function Install-Git {
     Step 'Checking Git'
     if (Test-Command 'git') { Info "$(& git --version) found."; return $true }
     if (Test-Winget) {
-        Install-WithWinget 'Git.Git' | Out-Null
+        $code = Install-WithWinget 'Git.Git'
         if (Test-Command 'git') { Info "$(& git --version) ready."; return $true }
+        Info "winget could not install Git (exit code $code); downloading it directly instead."
     }
+    try { Install-GitFromExe } catch { Warn "Downloading Git failed: $($_.Exception.Message)" }
+    if (Test-Command 'git') { Info "$(& git --version) ready."; return $true }
     Warn 'Git could not be installed; the code will be downloaded as a zip file instead.'
     return $false
 }
@@ -547,6 +612,7 @@ Info "Install folder: $InstallDir"
 
 try {
     Update-SessionPath
+    Install-Winget
     Install-Node
     $haveGit = Install-Git
     Stop-RunningServer
