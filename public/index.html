@@ -1030,6 +1030,11 @@
                     <div class="manage-section">
                         <h3>Application Updates</h3>
                         <div class="settings-group">
+                            <label for="update-channel-select">Update Channel</label>
+                            <select id="update-channel-select" onchange="setUpdateChannel(this.value)" style="margin-bottom: 0.75rem;">
+                                <option value="stable">Stable (published releases)</option>
+                                <option value="dev">Dev (changes being tested)</option>
+                            </select>
                             <div class="update-actions" style="display:flex; align-items:center; gap:0.75rem; flex-wrap: wrap;">
                                 <button id="btn-update-now" onclick="performUpdate()" class="btn-control primary" disabled>
                                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1054,7 +1059,8 @@
                             </div>
                             <p class="settings-hint" style="margin-top: 1rem;">
                                 Checks GitHub shortly after the server starts, then once a day. Updating downloads the new code (<code>git pull</code>), installs any new
-                                packages, then restarts the server and reloads this page.
+                                packages, then restarts the server and reloads this page. Changing the channel takes effect when you
+                                update; going from Dev back to Stable can go back to an older version.
                             </p>
                         </div>
                     </div>

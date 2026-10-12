@@ -9680,12 +9680,20 @@ function renderUpdateInfo() {
     const updateBtn = document.getElementById('btn-update-now');
     if (updateBtn) updateBtn.disabled = !available || !info.supported || info.applying;
 
+    const channelSelect = document.getElementById('update-channel-select');
+    if (channelSelect) {
+        channelSelect.value = info.channel || 'stable';
+        channelSelect.disabled = !info.supported || info.applying;
+    }
+
     const statusText = document.getElementById('update-status-text');
     if (statusText) {
         if (!info.supported) statusText.textContent = 'Updates are not available in the packaged .exe build';
         else if (info.applying) statusText.textContent = 'An update is in progress...';
         else if (info.error) statusText.textContent = `Check failed: ${info.error}`;
         else if (!info.checkedAt) statusText.textContent = 'Not checked yet';
+        else if (info.switching) statusText.textContent = `Update to switch to ${info.channel === 'dev' ? 'Dev' : 'Stable'}`
+            + (info.behind ? ` (${info.behind} new change${info.behind !== 1 ? 's' : ''})` : '');
         else if (available) statusText.textContent = `${info.behind} new change${info.behind !== 1 ? 's' : ''} available`;
         else statusText.textContent = `Up to date (checked ${new Date(info.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})`;
     }
@@ -9697,6 +9705,24 @@ function renderUpdateInfo() {
         list.innerHTML = commits.map(c => `<li><code>${escapeHtml(c.hash)}</code>${escapeHtml(c.subject)}</li>`).join('')
             + (info.behind > commits.length ? `<li>…and ${info.behind - commits.length} more</li>` : '');
     }
+}
+
+async function setUpdateChannel(channel) {
+    const statusText = document.getElementById('update-status-text');
+    if (statusText) statusText.textContent = 'Checking...';
+    try {
+        const res = await fetch('/api/updates/channel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        updateInfo = data;
+    } catch (err) {
+        showToast(`Couldn't change channel: ${err.message}`, 'error', 5000);
+    }
+    renderUpdateInfo();
 }
 
 function openUpdatesSettings() {

@@ -5321,12 +5321,17 @@ app.get('/api/art/local', async (req, res) => {
 //
 // The server checks GitHub in the background (shortly after startup, then daily) so the UI can
 // show an "update available" badge without each page load waiting on a git fetch.
+// Each install follows a channel: Stable is the main branch, Dev is the dev branch (pushed to for
+// testing, then published by fast-forwarding main to it). Switching channel checks out that branch.
 // Applying an update fast-forwards the checkout, reinstalls packages only if package files
 // changed, then restarts: either by exiting for an external supervisor (AMMUI_SUPERVISED=1),
 // or by handing off to a small relauncher that starts a fresh server once this one has exited.
 const bootId = Date.now().toString(36); // lets the UI spot that a restart has happened
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
-let updateState = { available: false, behind: 0, commits: [], checkedAt: null, error: null, supported: !isPkg };
+const UPDATE_CHANNELS = { stable: 'main', dev: 'dev' };
+let updateChannel = UPDATE_CHANNELS[getSetting('updateChannel')] ? getSetting('updateChannel') : 'stable';
+const channelBranch = () => UPDATE_CHANNELS[updateChannel];
+let updateState = { available: false, behind: 0, commits: [], checkedAt: null, error: null, supported: !isPkg, channel: updateChannel };
 let updateCheckInFlight = null;
 let updateApplying = false;
 
@@ -5337,12 +5342,17 @@ function checkForUpdates() {
     if (updateCheckInFlight) return updateCheckInFlight;
     updateCheckInFlight = (async () => {
         try {
-            await git(['fetch', '--quiet']);
-            const behind = parseInt(await git(['rev-list', '--count', 'HEAD..@{u}']), 10) || 0;
-            const log = behind ? await git(['log', '--format=%h%x09%s', '-n', '20', 'HEAD..@{u}']) : '';
+            const branch = channelBranch();
+            const target = `origin/${branch}`;
+            await git(['fetch', '--quiet', 'origin', branch]);
+            // On the other channel's branch: switching is the update, even if it brings no new commits
+            const switching = (await git(['rev-parse', '--abbrev-ref', 'HEAD'])) !== branch;
+            const behind = parseInt(await git(['rev-list', '--count', `HEAD..${target}`]), 10) || 0;
+            const log = behind ? await git(['log', '--format=%h%x09%s', '-n', '20', `HEAD..${target}`]) : '';
             const commits = log ? log.split('\n').map(l => { const [hash, ...rest] = l.split('\t'); return { hash, subject: rest.join('\t') }; }) : [];
-            if (behind && !updateState.available) terminalLog(`[UPDATE] Update available: ${behind} new commit${behind !== 1 ? 's' : ''}`);
-            updateState = { ...updateState, available: behind > 0, behind, commits, checkedAt: Date.now(), error: null };
+            const available = switching || behind > 0;
+            if (available && !updateState.available) terminalLog(`[UPDATE] Update available on ${branch}: ${behind} new commit${behind !== 1 ? 's' : ''}`);
+            updateState = { ...updateState, available, switching, behind, commits, checkedAt: Date.now(), error: null };
         } catch (err) {
             const msg = (err.stderr || err.message || '').trim().split('\n')[0];
             console.warn('[UPDATE] Check failed:', msg);
@@ -5363,7 +5373,19 @@ function scheduleUpdateChecks() {
 
 app.get('/api/updates/check', async (req, res) => {
     if (req.query.refresh === '1') await checkForUpdates();
-    res.json({ ...updateState, applying: updateApplying, bootId });
+    res.json({ ...updateState, channel: updateChannel, applying: updateApplying, bootId });
+});
+
+// Picks the branch to follow; nothing changes until the update is applied.
+app.post('/api/updates/channel', async (req, res) => {
+    const { channel } = req.body;
+    if (!UPDATE_CHANNELS[channel]) return res.status(400).json({ error: 'Unknown channel' });
+    if (updateApplying) return res.status(409).json({ error: 'An update is in progress' });
+    updateChannel = channel;
+    setSetting('updateChannel', channel);
+    console.log(`[UPDATE] Following the ${channel} channel (${channelBranch()} branch)`);
+    await checkForUpdates();
+    res.json({ ...updateState, channel: updateChannel, applying: updateApplying, bootId });
 });
 
 // Starts a replacement server after this process exits (so ports are free), then exits.
@@ -5417,8 +5439,21 @@ app.post('/api/updates/apply', async (req, res) => {
         }
 
         send({ message: 'Downloading update...', progress: 30 });
+        const branch = channelBranch();
+        await git(['fetch', '--quiet', 'origin', branch]);
         const oldHead = await git(['rev-parse', 'HEAD']);
-        await git(['pull', '--ff-only']);
+        if ((await git(['rev-parse', '--abbrev-ref', 'HEAD'])) === branch) {
+            await git(['merge', '--ff-only', `origin/${branch}`]);
+        } else {
+            // The switch resets the branch to GitHub's copy, so refuse if that would lose commits made here
+            const localBranch = (await git(['branch', '--list', branch])) ? [`refs/heads/${branch}`] : [];
+            const unpushed = parseInt(await git(['rev-list', '--count', 'HEAD', ...localBranch, '--not', '--remotes']), 10) || 0;
+            if (unpushed) {
+                return fail(`This copy has ${unpushed} commit${unpushed !== 1 ? 's' : ''} that aren't on GitHub. Push or remove them before switching channel.`);
+            }
+            send({ message: `Switching to the ${branch} branch...`, progress: 40 });
+            await git(['checkout', '--quiet', '-B', branch, '--track', `origin/${branch}`]);
+        }
         const newHead = await git(['rev-parse', 'HEAD']);
         terminalLog(`[UPDATE] Pulled ${oldHead.slice(0, 7)} -> ${newHead.slice(0, 7)}`);
 
