@@ -1840,14 +1840,15 @@ async function executeBrowserFind() {
 }
 
 // ─── Voice commands ──────────────────────────────────────────────────────────
-// The mic button listens for "play <song or album> by <artist>", "queue ...", or a playback
-// control ("stop", "next", "volume 30"). The server works out which (lib/voice-command.js) and
-// finds any music in the library index; this acts on it for the selected renderer.
+// The mic button listens for "play <song or album> by <artist>", "queue ...", a playback
+// control ("stop", "next", "volume 30"), or a smart home command ("turn on the curtain"). The
+// server works out which (lib/voice-command.js), switches any device itself, and finds any music
+// in the library index; this acts on the music for the selected renderer.
 
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition = null;
-// No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's mic at all.
-if (!SpeechRecognitionImpl) document.getElementById('ss-voice-item')?.remove();
+// No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's or Smart Home's mic at all.
+if (!SpeechRecognitionImpl) ['ss-voice-item', 'btn-smarthome-voice'].forEach(id => document.getElementById(id)?.remove());
 
 function toggleVoiceCommand() {
     if (voiceRecognition) {
@@ -1865,17 +1866,9 @@ Switch to ${secureUrl} ?`)) {
         }
         return;
     }
-    if (!selectedServerUdn) {
-        showToast('Select a media server first.');
-        return;
-    }
-    if (!selectedRendererUdn) {
-        alert('Please select a Renderer on the left first!');
-        return;
-    }
 
-    // The same handler serves the header mic and the slideshow's, so both show the listening state.
-    const btns = [document.getElementById('btn-voice'), document.getElementById('btn-ss-voice')].filter(Boolean);
+    // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
+    const btns = ['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'].map(id => document.getElementById(id)).filter(Boolean);
     const rec = new SpeechRecognitionImpl();
     rec.lang = navigator.language || 'en-GB';
     rec.interimResults = false;
@@ -1895,7 +1888,9 @@ Switch to ${secureUrl} ?`)) {
 
     voiceRecognition = rec;
     btns.forEach(b => b.classList.add('listening'));
-    showToast('Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "stop", "volume 30"', 'info', 4000);
+    showToast(appView === 'smarthome'
+        ? 'Listening... e.g. "turn on <device>", "turn off all the lights", "set <device> to 50 percent"'
+        : 'Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "volume 30", "turn on <device>"', 'info', 4000);
     rec.start();
 }
 
@@ -1955,11 +1950,20 @@ async function runVoiceCommand(transcripts) {
 
     let lastError = 'No match found.';
     try {
+        // Smart home first: "turn on the curtain" needs no media server or player
+        const home = await runSmartHomeVoice(transcripts);
+        if (home === true) return;
+        if (!selectedServerUdn || !selectedRendererUdn) {
+            showToast(home || (selectedServerUdn ? 'Select a player on the left first.' : 'Select a media server first.'), 'error', 5000);
+            return;
+        }
+        if (home) lastError = home;
+
         for (const text of transcripts) {
             const res = await fetch(`/api/voice/${encodeURIComponent(selectedServerUdn)}/resolve?q=${encodeURIComponent(text)}`);
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error) {
-                lastError = data.error || 'Voice search failed.';
+                if (!home) lastError = data.error || 'Voice search failed.';
                 continue;
             }
 
@@ -1987,6 +1991,27 @@ async function runVoiceCommand(transcripts) {
         showToast(`Voice command failed: ${err.message}`);
     } finally {
         window._isProcessingPlayAction = false;
+    }
+}
+
+// Switches a device if the words are a smart home command. Returns true if it was one (done or
+// not, it's been reported), otherwise why it wasn't (e.g. no device of that name) or null.
+async function runSmartHomeVoice(transcripts) {
+    try {
+        const res = await fetch('/api/smart-home/voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ transcripts })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (!data.handled) return data.error || null;
+        showToast(data.message, data.ok ? 'success' : 'error', 3000);
+        if (appView === 'smarthome') refreshSmartHome();
+        return true;
+    } catch (err) {
+        console.error('Smart home voice command failed:', err);
+        return null;
     }
 }
 
@@ -9800,14 +9825,18 @@ async function performUpdate() {
 checkForUpdates();
 setInterval(() => { if (!document.hidden) checkForUpdates(); }, UPDATE_POLL_INTERVAL);
 
-// Smart Home tab: switch the TP-Link plugs found on the network (see lib/smart-home on the server).
-// While the tab is showing, the plugs' states are re-read every few seconds.
+// Smart Home tab: switch the TP-Link plugs and Twinkly lights found on the network (see
+// lib/smart-home on the server). While the tab is showing, their states are re-read every few seconds.
 const SMARTHOME_POLL_MS = 10000;
 let smartHomePlugs = [];
 let smartHomeTimer = null;
+let smartHomeDragging = false; // a brightness slider is mid-drag, so don't redraw under it
 
 const PLUG_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 18v4"></path></svg>`;
+const LIGHTS_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 18h6M10 22h4"></path><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V18h6v-1.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2Z"></path></svg>`;
+const deviceIcon = p => p.type === 'twinkly' ? LIGHTS_ICON : PLUG_ICON;
 
 async function showSmartHome() {
     setAppView('smarthome');
@@ -9824,7 +9853,7 @@ async function refreshSmartHome() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || res.statusText);
             smartHomePlugs = data.plugs || [];
-            renderSmartHome();
+            if (!smartHomeDragging) renderSmartHome();
         } catch (err) {
             document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
         }
@@ -9843,7 +9872,8 @@ function plugStatusLine(p) {
     const problem = plugProblem(p);
     if (problem) return escapeHtml(problem);
     const power = p.outlets.length === 1 && typeof p.outlets[0].power === 'number' ? ` · ${Math.round(p.outlets[0].power * 10) / 10} W` : '';
-    return `${escapeHtml(p.brand)}${power}`;
+    const units = p.members?.length ? ` · ${p.members.length + 1} units` : '';
+    return `${escapeHtml(p.brand)}${units}${power}`;
 }
 
 function renderSmartHome() {
@@ -9861,11 +9891,18 @@ function renderSmartHome() {
             <button type="button" class="plug-switch ${o.on ? 'on' : ''}" data-plug="${i}" data-outlet="${escapeHtml(o.id)}"
                 onclick="togglePlugOutlet(this)" ${p.online === false ? 'disabled' : ''} aria-pressed="${o.on}">
                 <span class="plug-switch-label">${label}</span><span class="plug-switch-state">${o.on ? 'On' : 'Off'}</span>
-            </button>`;
+            </button>
+            ${typeof o.brightness === 'number' ? `
+            <label class="plug-brightness" title="Brightness">
+                <input type="range" min="1" max="100" step="1" value="${o.brightness}" data-plug="${i}"
+                    oninput="previewPlugBrightness(this)" onchange="setPlugBrightness(this)" ${p.online === false ? 'disabled' : ''}
+                    aria-label="Brightness of ${escapeHtml(p.name)}">
+                <span class="plug-brightness-value">${o.brightness}%</span>
+            </label>` : ''}`;
         return `
             <div class="plug-card ${anyOn ? 'on' : ''} ${p.supported && p.online !== false ? '' : 'unavailable'}">
                 <div class="plug-card-head">
-                    <div class="plug-card-icon">${PLUG_ICON}</div>
+                    <div class="plug-card-icon">${deviceIcon(p)}</div>
                     <div class="plug-card-title">
                         <div class="plug-card-name">${escapeHtml(p.name)}</div>
                         <div class="plug-card-status">${plugStatusLine(p)}</div>
@@ -9899,6 +9936,31 @@ async function togglePlugOutlet(btn) {
     } catch (err) {
         outlet.on = !on;
         showToast(`Couldn't switch ${p.name}: ${err.message}`, 'error', 5000);
+    }
+    renderSmartHome();
+}
+
+function previewPlugBrightness(input) {
+    smartHomeDragging = true;
+    input.nextElementSibling.textContent = `${input.value}%`;
+}
+
+async function setPlugBrightness(input) {
+    smartHomeDragging = false;
+    const p = smartHomePlugs[+input.dataset.plug];
+    if (!p) return;
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}/brightness`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: +input.value })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        const i = smartHomePlugs.findIndex(x => x.id === p.id);
+        if (i >= 0) smartHomePlugs[i] = data.plug;
+    } catch (err) {
+        showToast(`Couldn't dim ${p.name}: ${err.message}`, 'error', 5000);
     }
     renderSmartHome();
 }
@@ -9938,11 +10000,12 @@ function renderPlugList() {
         return;
     }
     list.innerHTML = managedPlugs.map((p, i) => {
-        const details = [p.brand, p.model, p.ip].filter(Boolean).map(escapeHtml).join(' · ');
+        const paired = p.members?.length ? `paired with ${p.members.join(', ')}` : '';
+        const details = [p.brand, p.model, p.ip, paired].filter(Boolean).map(escapeHtml).join(' · ');
         const state = plugProblem(p) || (p.online ? 'Connected' : '');
         return `
             <div class="manage-item ${p.hidden ? 'item-disabled' : ''}">
-                <div class="manage-item-icon">${PLUG_ICON}</div>
+                <div class="manage-item-icon">${deviceIcon(p)}</div>
                 <div class="manage-item-info">
                     <div class="manage-item-name-row">
                         <span class="manage-item-name">${escapeHtml(p.name)}</span>

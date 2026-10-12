@@ -12,7 +12,7 @@ import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
 import { getImageDate, extractDateFromString, isPhotoItem, monthDay } from './lib/photo-date.js';
-import { resolveVoiceCommand, parseControlCommand, voiceSongRequests } from './lib/voice-command.js';
+import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
@@ -5445,7 +5445,7 @@ app.get('/api/art/local', async (req, res) => {
     }
 });
 
-// Smart Home: TP-Link plugs found on the local network (see lib/smart-home)
+// Smart Home: TP-Link plugs and Twinkly lights found on the local network (see lib/smart-home)
 const smartHomeError = (res, err) => res.status(err.status || 502).json({ error: err.message });
 
 // `live=1` asks each plug for its current state (the Smart Home tab); without it, the last known
@@ -5464,6 +5464,45 @@ app.post('/api/smart-home/plugs/:id/outlets/:outlet', async (req, res) => {
     } catch (err) {
         smartHomeError(res, err);
     }
+});
+
+app.post('/api/smart-home/plugs/:id/brightness', async (req, res) => {
+    try {
+        res.json({ plug: await smartHome.setBrightness(req.params.id, req.body.value) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+// Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent".
+// `transcripts` are the recogniser's guesses. Replies { handled: true, message }, or
+// { handled: false, error? } so the browser can try the words as a music request instead.
+app.post('/api/smart-home/voice', async (req, res) => {
+    const transcripts = (Array.isArray(req.body?.transcripts) ? req.body.transcripts : []).map(String).slice(0, 5);
+    let devices = await smartHome.listPlugs({ live: false });
+    // Nothing has asked the devices for their state yet, so outlets (and brightness) aren't known
+    if (devices.some(d => d.supported && !d.outlets.length)) devices = await smartHome.listPlugs({ live: true });
+    const cmd = resolveDeviceCommand(transcripts, devices);
+    if (!cmd || cmd.error) {
+        if (cmd) console.log(`[VOICE] "${transcripts[0]}" -> ${cmd.error}`);
+        return res.json({ handled: false, error: cmd?.error });
+    }
+    const results = await Promise.allSettled(cmd.targets.map(async ({ device, outlet }) => {
+        if (cmd.action === 'brightness') {
+            const updated = await smartHome.setBrightness(device.id, cmd.value);
+            // Asking for a brightness means wanting to see it
+            if (!updated.outlets.some(o => o.on)) await smartHome.setOutlet(device.id, '0', true);
+            return;
+        }
+        const on = cmd.action === 'on';
+        const outlets = outlet ? [outlet] : device.outlets.length ? device.outlets.map(o => o.id) : ['0'];
+        for (const id of outlets) await smartHome.setOutlet(device.id, id, on);
+    }));
+    const failed = results.filter(r => r.status === 'rejected');
+    const did = cmd.action === 'brightness' ? `Set ${cmd.label} to ${cmd.value}%` : `Turned ${cmd.label} ${cmd.action}`;
+    console.log(`[VOICE] "${transcripts[0]}" -> ${did}${failed.length ? ` (${failed.length} failed: ${failed[0].reason.message})` : ''}`);
+    if (failed.length === results.length) return res.json({ handled: true, ok: false, message: `Couldn't reach ${cmd.label}: ${failed[0].reason.message}` });
+    res.json({ handled: true, ok: true, message: failed.length ? `${did} (${failed.length} didn't answer)` : did });
 });
 
 app.post('/api/smart-home/plugs/:id', async (req, res) => {

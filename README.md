@@ -17,8 +17,8 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
 * Album art can be retrieved from discogs.
 * Watch a track's music video on YouTube, right from the track list (needs a YouTube API key - see [Music Videos](#music-videos)).
-* Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop" (see [Voice Commands](#voice-commands)).
-* Switch TP-Link Tapo and Kasa smart plugs on and off from the Smart Home tab (see [Smart Home](#smart-home)).
+* Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
+* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Smart Home tab (see [Smart Home](#smart-home)).
 * Runs over HTTPS with its own certificate, so browser features such as the microphone work from any device on your network (see [Secure Access (HTTPS)](#secure-access-https)).
 
 ## Local Media Server
@@ -213,7 +213,7 @@ Watch a track's music video on YouTube, right from the track list. When the vide
 
 ## Voice Commands
 
-Press the glowing **Voice** button at the right-hand end of the music browser's toolbar and say what you want. Music plays on the currently selected player, from the currently selected media server.
+Press the glowing **Voice** button at the right-hand end of the music browser's toolbar (or the one on the Smart Home tab) and say what you want. Music plays on the currently selected player, from the currently selected media server. Smart home commands work from either button and don't need a player selected.
 
 | Say | What happens |
 |---|---|
@@ -225,43 +225,49 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 | "stop", "pause", "resume" / "carry on" | Playback controls |
 | "next", "skip", "previous", "go back" | Moves through the playlist |
 | "louder", "quieter", "volume 30", "volume max" | Changes the volume |
+| "turn on the curtain", "switch the kettle off", "Christmas tree on" | Switches a plug, an outlet of a power strip, or a set of Twinkly lights |
+| "turn off all the lights", "turn everything off" | Switches all the Twinkly lights, or every device |
+| "set the Christmas tree to 40 percent", "dim the curtain to 20" | Sets the brightness of Twinkly lights (and turns them on) |
 
 * A control word on its own is a command, but with "play" in front it's a search: "stop" stops the music, while "play Stop" finds a song called Stop.
 * If a song and an album have the same name, the song is played unless you say "album".
 * "play something by the Beatles" plays the song "Something" if the artist has one, and only otherwise plays a mix of their songs.
+* Devices are matched by the names on the Smart Home tab, loosely: "the tree lights" finds "small christmas tree", and "matrix two" finds "matrix2". If two devices fit equally well, nothing is switched and it says which two it could be; renaming one in **Manage Plugs** fixes that. Hidden devices aren't switched by voice.
 * Matching allows for how speech recognition writes things, so "rumors" finds "Rumours", "and" matches "&", "AC DC" finds "AC/DC", and your pronunciation of an artist's name doesn't have to produce the exact spelling.
 
 ### Requirements and privacy
 
 * The page must be opened over HTTPS, as browsers only allow the microphone on secure pages (see [Secure Access (HTTPS)](#secure-access-https)).
 * Works in Chrome, Edge and Safari. Firefox has no speech recognition, so the button is hidden there.
-* The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music happens entirely on your server using the library search index.
+* The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music and switching devices happens entirely on your server and network.
 
 ## Smart Home
 
-The **Smart Home** tab shows a card for each smart plug on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
+The **Smart Home** tab shows a card for each smart plug and set of Twinkly lights on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing, and Twinkly lights have a brightness slider. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
 
 ### Supported plugs
 
 * **TP-Link Tapo** plugs (P100, P110, P115 and similar) on current firmware, which uses TP-Link's newest login (TPAP). Only single plugs for now, not Tapo power strips.
 * **TP-Link Kasa** plugs and power strips on the original Kasa firmware.
+* **Twinkly** lights (strings, curtains, trees and so on). They need no login. Turning them on brings back whatever they were last showing (a movie, playlist, colour or effect) since the server started, or the current movie otherwise.
+  Units paired in the Twinkly app (to show one picture across several sets) appear as a single card, under the main unit's name, and switch and dim together. Voice commands answer to any of the paired units' names.
 
-Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Plugs from other makers (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.
+Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Other plugs (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.
 
 ### Setting up
 
-1. Set the plugs up in the Tapo or Kasa app as usual, on the same network as the AMMUI server.
+1. Set the plugs up in the Tapo or Kasa app (or the lights in the Twinkly app) as usual, on the same network as the AMMUI server.
 2. Open **Devices** from the menu and go to the **Plugs** tab. Plugs are found automatically when the server starts and every 10 minutes after that; press **Seek** to search now.
-3. For Tapo plugs, enter the **email and password of the TP-Link account** the plugs were set up with, and press **Save & Connect**. It should say how many plugs it connected to. Kasa plugs on the original firmware don't need a login.
+3. For Tapo plugs, enter the **email and password of the TP-Link account** the plugs were set up with, and press **Save & Connect**. It should say how many plugs it connected to. Kasa plugs on the original firmware and Twinkly lights don't need a login.
 4. Rename a plug with the pencil button, or **Hide** one you don't want on the Smart Home tab. **Forget** removes a plug from the list; it comes back the next time it's found.
 
-Plugs take their names from the Tapo app unless you rename them here.
+Plugs and lights take their names from the Tapo or Twinkly app unless you rename them here.
 
 ### Good to know
 
 * **Everything stays on your network.** The password is checked by the plugs themselves, and switching never goes through TP-Link's cloud. The login is stored in the server's settings database.
 * **A wrong password isn't retried.** Tapo plugs lock themselves for a while after too many failed logins, so once a plug refuses the password AMMUI stops trying it until you save a different one. A card that says *Wrong TP-Link password* has a button that goes straight to the login.
-* **Check that the server can see broadcasts.** Plugs are found by a broadcast on the local network (UDP ports 9999 and 20002), so they must be on the same subnet as the server, and the server machine's firewall must allow those replies.
+* **Check that the server can see broadcasts.** Plugs are found by a broadcast on the local network (UDP ports 9999, 20002 and 5555), so they must be on the same subnet as the server, and the server machine's firewall must allow those replies.
 * If a plug's address changes (for example after a router restart), it's picked up again at the next search.
 
 ## Secure Access (HTTPS)

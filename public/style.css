@@ -899,7 +899,8 @@ p.subtitle {
 
 /* Voice: the one filled, glowing button in the toolbar, so it's the first thing you see.
    A slow halo "breathes" while idle; it turns red and pulses fast while listening. */
-#btn-voice {
+#btn-voice,
+#btn-smarthome-voice {
     position: relative;
     color: #fff;
     background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 55%, #6366f1 100%);
@@ -908,7 +909,8 @@ p.subtitle {
     animation: voice-breathe 2.8s ease-in-out infinite;
 }
 
-#btn-voice:hover {
+#btn-voice:hover,
+#btn-smarthome-voice:hover {
     color: #fff;
     background: linear-gradient(135deg, #f472b6 0%, #a78bfa 55%, #818cf8 100%);
     border-color: rgba(255, 255, 255, 0.4);
@@ -916,7 +918,8 @@ p.subtitle {
     box-shadow: 0 6px 22px rgba(168, 85, 247, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
-#btn-voice.listening {
+#btn-voice.listening,
+#btn-smarthome-voice.listening {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
     border-color: rgba(255, 255, 255, 0.35);
     animation: voice-pulse 1s ease-out infinite;
@@ -933,7 +936,8 @@ p.subtitle {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    #btn-voice, #btn-voice.listening { animation: none; }
+    #btn-voice, #btn-voice.listening,
+    #btn-smarthome-voice, #btn-smarthome-voice.listening { animation: none; }
 }
 
 .play-btn,
@@ -7693,6 +7697,18 @@ input:checked+.slider:before {
     gap: 0.5rem;
 }
 
+.smarthome-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#btn-smarthome-voice {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
 .smarthome-header h2 {
     margin: 0;
     font-size: 1.25rem;
@@ -7829,6 +7845,33 @@ input:checked+.slider:before {
 
 .plug-card-outlets.single .plug-switch {
     padding: 0.9rem 1rem;
+}
+
+.plug-brightness {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0 0.25rem;
+}
+
+.plug-brightness input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
+.plug-brightness input[type="range"]:disabled {
+    cursor: default;
+}
+
+.plug-brightness-value {
+    flex: none;
+    width: 2.75rem;
+    text-align: right;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
 }
 
 .manage-item-host.plug-state.ok {
