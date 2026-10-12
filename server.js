@@ -28,6 +28,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { promises as fsp } from 'fs';
 import { pipeline } from 'stream/promises';
 import VirtualRenderer from './lib/virtual-renderer.js';
+import * as smartHome from './lib/smart-home/index.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
@@ -314,6 +315,7 @@ for (const d of devices.values()) {
     if (d.isServer && d.location) registerMediaOrigin(d.location, d.friendlyName, { weak: true });
 }
 loadSettings();
+smartHome.init({ getSetting, setSetting });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -5443,6 +5445,48 @@ app.get('/api/art/local', async (req, res) => {
     }
 });
 
+// Smart Home: TP-Link plugs found on the local network (see lib/smart-home)
+const smartHomeError = (res, err) => res.status(err.status || 502).json({ error: err.message });
+
+// `live=1` asks each plug for its current state (the Smart Home tab); without it, the last known
+app.get('/api/smart-home/plugs', async (req, res) => {
+    res.json({ plugs: await smartHome.listPlugs({ live: req.query.live === '1' }) });
+});
+
+app.post('/api/smart-home/discover', async (req, res) => {
+    await smartHome.discover();
+    res.json({ plugs: await smartHome.listPlugs({ live: false }) });
+});
+
+app.post('/api/smart-home/plugs/:id/outlets/:outlet', async (req, res) => {
+    try {
+        res.json({ plug: await smartHome.setOutlet(req.params.id, req.params.outlet, !!req.body.on) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/smart-home/plugs/:id', async (req, res) => {
+    try {
+        res.json({ plug: await smartHome.updatePlug(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.delete('/api/smart-home/plugs/:id', (req, res) => {
+    if (!smartHome.forgetPlug(req.params.id)) return res.status(404).json({ error: 'Unknown plug' });
+    res.json({ success: true });
+});
+
+app.get('/api/smart-home/account', (req, res) => {
+    res.json(smartHome.getAccount());
+});
+
+app.post('/api/smart-home/account', (req, res) => {
+    res.json(smartHome.setAccount(req.body || {}));
+});
+
 // Update API routes
 //
 // The server checks GitHub in the background (shortly after startup, then daily) so the UI can
@@ -5613,6 +5657,7 @@ function startServices() {
     scheduleS3Sync();
     scheduleUpdateChecks();
     startIndexScheduler(findDeviceByUdn);
+    smartHome.startBackgroundDiscovery();
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {
         const local = findDeviceByUdn(SERVER_UDN);

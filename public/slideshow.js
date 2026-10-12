@@ -704,6 +704,7 @@ class Slideshow {
         if (this.modeLabel) {
             const labels = { all: 'All', onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', nowPlaying: 'Music', custom: 'Custom' };
             this.modeLabel.textContent = labels[this.mode] || 'All';
+            this.modeLabel.classList.toggle('long', this.modeLabel.textContent.length > 4);
         }
         const retryBtn = document.getElementById('btn-ss-retry-art');
         if (retryBtn) retryBtn.style.display = this.mode === 'nowPlaying' ? '' : 'none';

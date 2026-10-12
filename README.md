@@ -18,6 +18,7 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 * Album art can be retrieved from discogs.
 * Watch a track's music video on YouTube, right from the track list (needs a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop" (see [Voice Commands](#voice-commands)).
+* Switch TP-Link Tapo and Kasa smart plugs on and off from the Smart Home tab (see [Smart Home](#smart-home)).
 * Runs over HTTPS with its own certificate, so browser features such as the microphone work from any device on your network (see [Secure Access (HTTPS)](#secure-access-https)).
 
 ## Local Media Server
@@ -236,6 +237,33 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 * Works in Chrome, Edge and Safari. Firefox has no speech recognition, so the button is hidden there.
 * The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music happens entirely on your server using the library search index.
 
+## Smart Home
+
+The **Smart Home** tab shows a card for each smart plug on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
+
+### Supported plugs
+
+* **TP-Link Tapo** plugs (P100, P110, P115 and similar) on current firmware, which uses TP-Link's newest login (TPAP). Only single plugs for now, not Tapo power strips.
+* **TP-Link Kasa** plugs and power strips on the original Kasa firmware.
+
+Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Plugs from other makers (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.
+
+### Setting up
+
+1. Set the plugs up in the Tapo or Kasa app as usual, on the same network as the AMMUI server.
+2. Open **Devices** from the menu and go to the **Plugs** tab. Plugs are found automatically when the server starts and every 10 minutes after that; press **Seek** to search now.
+3. For Tapo plugs, enter the **email and password of the TP-Link account** the plugs were set up with, and press **Save & Connect**. It should say how many plugs it connected to. Kasa plugs on the original firmware don't need a login.
+4. Rename a plug with the pencil button, or **Hide** one you don't want on the Smart Home tab. **Forget** removes a plug from the list; it comes back the next time it's found.
+
+Plugs take their names from the Tapo app unless you rename them here.
+
+### Good to know
+
+* **Everything stays on your network.** The password is checked by the plugs themselves, and switching never goes through TP-Link's cloud. The login is stored in the server's settings database.
+* **A wrong password isn't retried.** Tapo plugs lock themselves for a while after too many failed logins, so once a plug refuses the password AMMUI stops trying it until you save a different one. A card that says *Wrong TP-Link password* has a button that goes straight to the login.
+* **Check that the server can see broadcasts.** Plugs are found by a broadcast on the local network (UDP ports 9999 and 20002), so they must be on the same subnet as the server, and the server machine's firewall must allow those replies.
+* If a plug's address changes (for example after a router restart), it's picked up again at the next search.
+
 ## Secure Access (HTTPS)
 
 AMMUI serves the app over HTTPS on port **3443**, e.g. `https://192.168.0.2:3443/`. Opening the page over plain HTTP (port 3000) redirects there automatically.
@@ -403,3 +431,5 @@ This describes what happens behind the Video button (see [Music Videos](#music-v
 ## 📄 License
 
 This project is licensed under the MIT License.
+
+The Tapo smart plug login (`lib/smart-home/tpap.js`, `lib/smart-home/p256.js`) is ported from [tapo](https://github.com/mihai-dinculescu/tapo) by Mihai Dinculescu, also MIT licensed. Its copyright notice is included in [LICENSE](LICENSE).

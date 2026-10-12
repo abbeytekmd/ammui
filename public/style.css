@@ -6460,6 +6460,7 @@ input:checked+.slider:before {
     border-radius: 50%;
     width: 44px;
     height: 44px;
+    padding: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -6511,6 +6512,11 @@ input:checked+.slider:before {
     display: block;
     width: 100%;
     text-transform: uppercase;
+}
+
+/* Longer labels (Music, Recent, Custom) need to be smaller to fit inside the circle */
+#ss-mode-label.long {
+    font-size: 8px;
 }
 
 .btn-ss-favourite {
@@ -7663,4 +7669,168 @@ input:checked+.slider:before {
     flex: 1;
     overflow-y: auto;
     padding: 0 1rem calc(1rem + env(safe-area-inset-bottom));
+}
+
+/* ─── Smart Home tab ───────────────────────────────────────────────────── */
+.smarthome-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding-top: 1rem;
+    overflow-y: auto;
+}
+
+.smarthome-view[hidden] {
+    display: none;
+}
+
+.smarthome-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.smarthome-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.smarthome-status:empty {
+    display: none;
+}
+
+.smarthome-status {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.smarthome-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 1rem;
+    align-content: start;
+    align-items: start;
+}
+
+.plug-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.plug-card.on {
+    border-color: rgba(99, 102, 241, 0.5);
+    box-shadow: 0 0 0 1px var(--primary-glow);
+}
+
+.plug-card.unavailable .plug-card-head,
+.plug-card.unavailable .plug-card-outlets {
+    opacity: 0.6;
+}
+
+.plug-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.plug-card-icon {
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-muted);
+}
+
+.plug-card.on .plug-card-icon {
+    background: var(--primary);
+    color: white;
+}
+
+.plug-card-title {
+    min-width: 0;
+}
+
+.plug-card-name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plug-card-status {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.plug-card-outlets {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.plug-switch {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.7rem 0.9rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.plug-switch:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.plug-switch.on {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.plug-switch:disabled {
+    cursor: default;
+}
+
+.plug-switch-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plug-switch-state {
+    font-weight: 700;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.plug-card-outlets.single .plug-switch {
+    padding: 0.9rem 1rem;
+}
+
+.manage-item-host.plug-state.ok {
+    color: #34d399;
 }

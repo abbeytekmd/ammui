@@ -4454,6 +4454,7 @@ function switchSettingsTab(tab, btnEl) {
     }
 
     if (tab.toLowerCase() === 'tools') loadToolsStatus();
+    if (tab.toLowerCase() === 'plugs') loadPlugSettings();
 }
 
 // Settings → Tools: which external programs (ffmpeg, yt-dlp, ...) the server can run.
@@ -5452,7 +5453,7 @@ function updateBrowserModeTabs() {
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view' };
 
 function setAppView(view) {
     appView = view;
@@ -9798,6 +9799,258 @@ async function performUpdate() {
 
 checkForUpdates();
 setInterval(() => { if (!document.hidden) checkForUpdates(); }, UPDATE_POLL_INTERVAL);
+
+// Smart Home tab: switch the TP-Link plugs found on the network (see lib/smart-home on the server).
+// While the tab is showing, the plugs' states are re-read every few seconds.
+const SMARTHOME_POLL_MS = 10000;
+let smartHomePlugs = [];
+let smartHomeTimer = null;
+
+const PLUG_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0Z"></path><path d="M12 18v4"></path></svg>`;
+
+async function showSmartHome() {
+    setAppView('smarthome');
+    if (!smartHomePlugs.length) document.getElementById('smarthome-status').textContent = 'Looking for plugs...';
+    await refreshSmartHome();
+}
+
+async function refreshSmartHome() {
+    clearTimeout(smartHomeTimer);
+    if (appView !== 'smarthome') return;
+    if (!document.hidden) {
+        try {
+            const res = await fetch('/api/smart-home/plugs?live=1');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || res.statusText);
+            smartHomePlugs = data.plugs || [];
+            renderSmartHome();
+        } catch (err) {
+            document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
+        }
+    }
+    if (appView === 'smarthome') smartHomeTimer = setTimeout(refreshSmartHome, SMARTHOME_POLL_MS);
+}
+
+// What's wrong with a plug that can't be switched right now, or '' if nothing is.
+function plugProblem(p) {
+    if (!p.supported) return p.reason;
+    if (p.online === false) return p.needsLogin ? p.error : `Offline: ${p.error || 'no reply'}`;
+    return '';
+}
+
+function plugStatusLine(p) {
+    const problem = plugProblem(p);
+    if (problem) return escapeHtml(problem);
+    const power = p.outlets.length === 1 && typeof p.outlets[0].power === 'number' ? ` · ${Math.round(p.outlets[0].power * 10) / 10} W` : '';
+    return `${escapeHtml(p.brand)}${power}`;
+}
+
+function renderSmartHome() {
+    const grid = document.getElementById('smarthome-grid');
+    const status = document.getElementById('smarthome-status');
+    const shown = smartHomePlugs.filter(p => !p.hidden);
+    status.textContent = shown.length ? '' : smartHomePlugs.length
+        ? 'All plugs are hidden. Show them again from Manage Plugs.'
+        : 'No plugs found yet. Use Manage Plugs to search the network.';
+    grid.innerHTML = shown.map(p => {
+        const i = smartHomePlugs.indexOf(p);
+        const single = p.outlets.length === 1;
+        const anyOn = p.outlets.some(o => o.on);
+        const outletBtn = (o, label) => `
+            <button type="button" class="plug-switch ${o.on ? 'on' : ''}" data-plug="${i}" data-outlet="${escapeHtml(o.id)}"
+                onclick="togglePlugOutlet(this)" ${p.online === false ? 'disabled' : ''} aria-pressed="${o.on}">
+                <span class="plug-switch-label">${label}</span><span class="plug-switch-state">${o.on ? 'On' : 'Off'}</span>
+            </button>`;
+        return `
+            <div class="plug-card ${anyOn ? 'on' : ''} ${p.supported && p.online !== false ? '' : 'unavailable'}">
+                <div class="plug-card-head">
+                    <div class="plug-card-icon">${PLUG_ICON}</div>
+                    <div class="plug-card-title">
+                        <div class="plug-card-name">${escapeHtml(p.name)}</div>
+                        <div class="plug-card-status">${plugStatusLine(p)}</div>
+                    </div>
+                </div>
+                ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
+                    ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
+                </div>` : ''}
+                ${p.needsLogin ? '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Set TP-Link Login</button>' : ''}
+            </div>`;
+    }).join('');
+}
+
+async function togglePlugOutlet(btn) {
+    const p = smartHomePlugs[+btn.dataset.plug];
+    const outlet = p?.outlets.find(o => o.id === btn.dataset.outlet);
+    if (!outlet) return;
+    const on = !outlet.on;
+    outlet.on = on; // show it straight away; the reply has the real state
+    renderSmartHome();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}/outlets/${encodeURIComponent(outlet.id)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ on })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        const i = smartHomePlugs.findIndex(x => x.id === p.id);
+        if (i >= 0) smartHomePlugs[i] = data.plug;
+    } catch (err) {
+        outlet.on = !on;
+        showToast(`Couldn't switch ${p.name}: ${err.message}`, 'error', 5000);
+    }
+    renderSmartHome();
+}
+
+function openPlugSettings() {
+    openClientSettingsModal();
+    const tab = [...document.querySelectorAll('#client-settings-modal .settings-tab')]
+        .find(b => b.textContent.trim().toLowerCase() === 'plugs');
+    if (tab) switchSettingsTab('plugs', tab);
+}
+
+// Devices → Plugs: everything found, with names, hiding and the TP-Link login.
+let managedPlugs = [];
+
+async function loadPlugSettings() {
+    const list = document.getElementById('manage-plug-list');
+    if (!managedPlugs.length) list.innerHTML = '<div class="empty-state-mini">Loading...</div>';
+    try {
+        const [plugsRes, accountRes] = await Promise.all([fetch('/api/smart-home/plugs?live=1'), fetch('/api/smart-home/account')]);
+        managedPlugs = (await plugsRes.json()).plugs || [];
+        const account = await accountRes.json();
+        document.getElementById('tplink-username').value = account.username || '';
+        const password = document.getElementById('tplink-password');
+        password.value = '';
+        password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
+    } catch (err) {
+        list.innerHTML = `<div class="empty-state-mini">Couldn't load plugs: ${escapeHtml(err.message)}</div>`;
+        return;
+    }
+    renderPlugList();
+}
+
+function renderPlugList() {
+    const list = document.getElementById('manage-plug-list');
+    if (!managedPlugs.length) {
+        list.innerHTML = '<div class="empty-state-mini">No plugs found yet. Press Seek to search the network.</div>';
+        return;
+    }
+    list.innerHTML = managedPlugs.map((p, i) => {
+        const details = [p.brand, p.model, p.ip].filter(Boolean).map(escapeHtml).join(' · ');
+        const state = plugProblem(p) || (p.online ? 'Connected' : '');
+        return `
+            <div class="manage-item ${p.hidden ? 'item-disabled' : ''}">
+                <div class="manage-item-icon">${PLUG_ICON}</div>
+                <div class="manage-item-info">
+                    <div class="manage-item-name-row">
+                        <span class="manage-item-name">${escapeHtml(p.name)}</span>
+                        <button class="btn-rename" onclick="renamePlug(${i})" title="Rename plug">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <span class="manage-item-host">${details}</span>
+                    ${state ? `<span class="manage-item-host plug-state ${p.supported && p.online ? 'ok' : ''}">${escapeHtml(state)}</span>` : ''}
+                </div>
+                <div class="manage-item-actions">
+                    <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                        <button class="btn-toggle ${p.hidden ? 'btn-enable' : 'btn-disable'}" onclick="togglePlugHidden(${i})"
+                            title="Show or hide this plug on the Smart Home tab">${p.hidden ? 'Show' : 'Hide'}</button>
+                    </div>
+                    <button class="btn-delete" onclick="forgetPlug(${i})" title="Remove this plug">Forget</button>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+async function updatePlug(i, changes) {
+    const p = managedPlugs[i];
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(changes)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        managedPlugs[i] = data.plug;
+        renderPlugList();
+        if (appView === 'smarthome') refreshSmartHome();
+    } catch (err) {
+        showToast(`Couldn't update ${p.name}: ${err.message}`, 'error', 5000);
+    }
+}
+
+function renamePlug(i) {
+    const p = managedPlugs[i];
+    const name = prompt('Name for this plug (blank for its own name):', p.customName || p.name);
+    if (name !== null) updatePlug(i, { name });
+}
+
+function togglePlugHidden(i) {
+    updatePlug(i, { hidden: !managedPlugs[i].hidden });
+}
+
+async function forgetPlug(i) {
+    const p = managedPlugs[i];
+    if (!confirm(`Forget ${p.name}? If it's still on the network it will be found again.`)) return;
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        managedPlugs.splice(i, 1);
+        renderPlugList();
+        if (appView === 'smarthome') refreshSmartHome();
+    } catch (err) {
+        showToast(`Couldn't forget ${p.name}: ${err.message}`, 'error', 5000);
+    }
+}
+
+async function seekPlugs(btn) {
+    btn.disabled = true;
+    const label = btn.lastChild;
+    const original = label.textContent;
+    label.textContent = ' Seeking...';
+    try {
+        const res = await fetch('/api/smart-home/discover', { method: 'POST' });
+        if (!res.ok) throw new Error(res.statusText);
+        await loadPlugSettings();
+    } catch (err) {
+        showToast(`Search failed: ${err.message}`, 'error', 5000);
+    } finally {
+        btn.disabled = false;
+        label.textContent = original;
+    }
+}
+
+async function saveTplinkAccount(btn) {
+    const status = document.getElementById('tplink-status');
+    btn.disabled = true;
+    status.textContent = 'Connecting...';
+    try {
+        const res = await fetch('/api/smart-home/account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('tplink-username').value,
+                password: document.getElementById('tplink-password').value,
+            })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        await loadPlugSettings();
+        const tapo = managedPlugs.filter(p => p.type === 'tapo' && p.supported);
+        const connected = tapo.filter(p => p.online).length;
+        status.textContent = tapo.length ? `Connected to ${connected} of ${tapo.length} Tapo plug${tapo.length !== 1 ? 's' : ''}` : 'Saved';
+        if (appView === 'smarthome') refreshSmartHome();
+    } catch (err) {
+        status.textContent = `Failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
 
 // Stats Modal logic
 async function openStatsModal() {
