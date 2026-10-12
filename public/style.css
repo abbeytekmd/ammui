@@ -5966,7 +5966,7 @@ input:checked+.slider:before {
     width: auto;
     height: 100%;
     max-width: none;
-    object-fit: fill;
+    object-fit: contain;   /* never stretched, even if something squeezes the box */
     will-change: transform;
 }
 
@@ -6575,6 +6575,120 @@ input:checked+.slider:before {
 
 @media (prefers-reduced-motion: reduce) {
     .btn-ss-voice.listening { animation: none; }
+}
+
+/*
+ * Landscape screens: a panel down the right holds the music bar, the photo details and the
+ * controls, and the photo sits to its left instead of underneath them. The panel is as wide
+ * as the space a full-height 2046x1536 (4:3) photo leaves, so those fill the rest of the
+ * screen. The overlay becomes a two-column grid; the photo's map sits in the panel under the
+ * music bar, while the lyrics and arrows float over the photo. Not on short screens (a phone
+ * turned sideways), where the panel doesn't fit.
+ */
+.ss-side-panel {
+    display: none;
+}
+
+@media (orientation: landscape) and (min-height: 480px) {
+    .screensaver-overlay.active {
+        --ss-panel-w: clamp(200px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
+        display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
+        grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
+        grid-template-rows: auto auto minmax(0, 1fr) auto;   /* music, map, details, controls */
+    }
+
+    .ss-side-panel {
+        display: block;
+        grid-column: 2;
+        grid-row: 1 / -1;
+        align-self: stretch;   /* the overlay centres its children */
+        background: rgba(10, 10, 12, 0.92);
+        border-left: 1px solid rgba(255, 255, 255, 0.08);
+        z-index: 10002;
+    }
+
+    .screensaver-img {
+        grid-column: 1;
+        grid-row: 1 / -1;
+        min-width: 0;
+        min-height: 0;
+        object-position: center;   /* a photo that doesn't fill the space sits in the middle of it */
+    }
+
+    .screensaver-img.panorama {
+        justify-self: center;
+    }
+
+    .screensaver-music-bar {
+        grid-column: 2;
+        grid-row: 1;
+        position: static;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+        margin: calc(20px + env(safe-area-inset-top)) 16px 0;
+        padding: 8px;
+        border-radius: 16px;
+    }
+
+    .ss-music-controls {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 6px;
+    }
+
+    .screensaver-info {
+        grid-column: 2;
+        grid-row: 3;
+        align-self: end;
+        position: static;
+        max-width: none;
+        margin: 0 16px;
+        z-index: 10003;
+        overflow-wrap: anywhere;
+    }
+
+    .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
+    .ss-date { font-size: clamp(18px, 1.4vw, 28px); }
+
+    .screensaver-controls {
+        grid-column: 2;
+        grid-row: 4;
+        position: static;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 14px 12px;
+        padding: 20px 12px calc(28px + env(safe-area-inset-bottom));
+    }
+
+    .ss-nav-next { right: calc(var(--ss-panel-w) + 16px); }
+
+    .ss-now-playing-label {
+        max-width: calc(100% - var(--ss-panel-w) - 40px);
+    }
+
+    /* The map fills the panel's width; its row is empty (and takes no space) when it's hidden */
+    .ss-map-window {
+        grid-column: 2;
+        grid-row: 2;
+        position: static;
+        width: auto;
+        height: auto;
+        aspect-ratio: 4 / 3;
+        max-height: 40vh;
+        margin: 16px 16px 0;
+    }
+
+    .ss-map-window.expanded {
+        width: auto;
+        height: auto;
+        aspect-ratio: 1;
+        max-height: 60vh;
+    }
+
+    .ss-lyrics-panel {
+        right: calc(var(--ss-panel-w) + 40px);
+    }
 }
 
 /* Stats Modal Styles */

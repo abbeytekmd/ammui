@@ -459,10 +459,10 @@ class Slideshow {
                         // How far the full-height image overflows the viewport; we
                         // slide it half that distance each way. Pure transform =>
                         // compositor-only, no per-frame repaint (smooth on a Pi).
-                        const overflowX = Math.max(
-                            this.img.getBoundingClientRect().width - (this.img.parentElement?.clientWidth || window.innerWidth),
-                            0
-                        );
+                        // (On a landscape screen the side panel takes part of the width.)
+                        const sidePanel = document.getElementById('ss-side-panel');
+                        const visibleWidth = (this.img.parentElement?.clientWidth || window.innerWidth) - (sidePanel?.offsetWidth || 0);
+                        const overflowX = Math.max(this.img.getBoundingClientRect().width - visibleWidth, 0);
                         this.img.style.setProperty('--pano-shift', `${overflowX / 2}px`);
                         this._panoramaDir = (this._panoramaDir === undefined) ? false : !this._panoramaDir;
                         const animName = this._panoramaDir ? 'panoramaPanRL' : 'panoramaPanLR';

@@ -40,7 +40,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItemsUnder, getLibraryIndexPhotosOnDay,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItemsUnder, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
@@ -3856,13 +3856,16 @@ app.get('/api/slideshow/list', async (req, res) => {
         }
     }
 
-    // On This Day straight from the photo dates stored in the library index: one indexed lookup
-    // instead of loading every photo in the folder and checking each one's date.
-    const indexMeta = mode === 'onThisDay' ? getLibraryIndexMeta(serverUdn) : null;
+    // Day and Recent straight from the photo dates stored in the library index: one indexed
+    // lookup instead of loading every photo in the folder and checking each one's date.
+    const indexMeta = (mode === 'onThisDay' || mode === 'recent') ? getLibraryIndexMeta(serverUdn) : null;
     let source;
     let partial = false;
     if (indexMeta) {
-        source = getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()));
+        const cutoff = getRecentCutoff();
+        source = mode === 'onThisDay'
+            ? getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()))
+            : getLibraryIndexPhotosSince(serverUdn, objectId, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
     } else {
         reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
