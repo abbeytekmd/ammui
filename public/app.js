@@ -6729,14 +6729,7 @@ async function init() {
     resetIdleTimer();
 
     // Initialize screensaver mode label
-    const ssModeLabel = document.getElementById('ss-mode-label');
-    if (ssModeLabel && slideshow) {
-        if (slideshow.mode === 'all') ssModeLabel.textContent = 'All';
-        else if (slideshow.mode === 'onThisDay') ssModeLabel.textContent = 'Day';
-        else if (slideshow.mode === 'recent') ssModeLabel.textContent = 'Recent';
-        else if (slideshow.mode === 'favourites') ssModeLabel.textContent = 'Favs';
-        else if (slideshow.mode === 'nowPlaying') ssModeLabel.textContent = 'Music';
-    }
+    if (slideshow) slideshow.updateModeUI();
 
     // Migrate Discogs token to server if it exists locally
     const localToken = localStorage.getItem('discogsToken');

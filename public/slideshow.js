@@ -80,6 +80,12 @@ class Slideshow {
     }
 
     async start(items = null, index = -1) {
+        // Photos picked from the library (a folder, a selection) show as Custom until the mode is
+        // changed or the slideshow stops; the saved mode is left alone.
+        if (items) {
+            this.mode = 'custom';
+            this.updateModeUI();
+        }
         if (this.isActive) {
             if (items) {
                 this.listVersion = null;
@@ -142,6 +148,10 @@ class Slideshow {
         }
         this.items = [];
         this.index = -1;
+        if (this.mode === 'custom') {
+            this.mode = localStorage.getItem('screensaverMode') || 'all';
+            this.updateModeUI();
+        }
 
         if (this.interval) clearInterval(this.interval);
 
@@ -692,7 +702,7 @@ class Slideshow {
 
     updateModeUI() {
         if (this.modeLabel) {
-            const labels = { all: 'All', onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', nowPlaying: 'Music' };
+            const labels = { all: 'All', onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', nowPlaying: 'Music', custom: 'Custom' };
             this.modeLabel.textContent = labels[this.mode] || 'All';
         }
         const retryBtn = document.getElementById('btn-ss-retry-art');
@@ -870,7 +880,7 @@ class Slideshow {
         this._browserCurrentHidden = false;
         if (this.interval) clearInterval(this.interval); // paused while browsing
 
-        const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs' };
+        const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', custom: 'Custom' };
         document.getElementById('ss-browser-title').textContent = labels[this.mode] || 'Slideshow';
         this.browserGrid = document.getElementById('ss-browser-grid');
         this.browserGrid.innerHTML = '';
