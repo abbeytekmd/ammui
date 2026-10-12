@@ -8323,11 +8323,12 @@ async function rotatePhotoFromBrowser(index) {
     }
 
     try {
-        await fetch('/api/slideshow/rotate', {
+        const res = await fetch('/api/slideshow/rotate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: item.uri, rotation: next })
         });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
         manualRotations[item.key || item.uri] = next;
     } catch (e) {
         showToast('Rotate failed: ' + e.message, 'error', 3000);
@@ -8755,13 +8756,15 @@ async function toggleFileFav() {
 async function saveFileTags() {
     if (!currentInfoUri) return;
     try {
-        await fetch('/api/file-tags', {
+        const res = await fetch('/api/file-tags', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ uri: currentInfoUri, tags: currentFileTags })
         });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
     } catch (err) {
         console.error('Failed to save tags:', err);
+        showToast('Failed to save tags: ' + err.message, 'error', 4000);
     }
 }
 

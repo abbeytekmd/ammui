@@ -708,15 +708,17 @@ class Slideshow {
 
         const urlForSave = this.originalUrl || this.currentPhoto;
         try {
-            await fetch('/api/slideshow/rotate', {
+            const res = await fetch('/api/slideshow/rotate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url: urlForSave, rotation: this.rotation })
             });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
             // Update client-side cache
             manualRotations[this.currentPhotoData?.key || urlForSave] = this.rotation;
         } catch (e) {
             console.error('Rotate save failed:', e);
+            showToast('Rotate failed: ' + e.message, 'error', 4000);
         }
         this.resetInterval();
     }

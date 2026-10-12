@@ -3577,11 +3577,19 @@ app.get('/api/settings/screensaver', (req, res) => {
 });
 
 app.get('/api/slideshow/random', async (req, res) => {
-    if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
-        return res.status(400).json({ error: 'Screensaver not configured' });
+    const { mode } = req.query;
+    const forwarded = !!req.get('X-AMMUI-Forwarded');
+    // Another AMMUI's slideshow showing photos from a folder of our library
+    const peerObjectId = forwarded ? req.query.objectId : null;
+    if (!peerObjectId) {
+        if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
+            return res.status(400).json({ error: 'Screensaver not configured' });
+        }
+        const source = !forwarded && slideshowSourceAmmui();
+        if (source) return forwardSlideshowRequest(res, source, '/api/slideshow/random', mode);
     }
 
-    const { serverUdn, objectId } = settings.screensaver;
+    const { serverUdn, objectId } = peerObjectId ? { serverUdn: SERVER_UDN, objectId: peerObjectId } : settings.screensaver;
 
     // Find the device
     let device = devices.get(serverUdn);
@@ -3598,17 +3606,19 @@ app.get('/api/slideshow/random', async (req, res) => {
         return res.status(404).json({ error: 'Screensaver source device not found' });
     }
 
-    const { mode } = req.query;
-
     try {
         let foundImage = null;
 
         // CHECK CACHE STRATEGY
         reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
+        const peerImages = peerObjectId ? ownPhotosUnder(peerObjectId) : null;
+        if (peerObjectId && !peerImages?.length) {
+            return res.status(peerImages ? 404 : 503).json({ error: peerImages ? 'No images found' : 'Library not indexed yet' });
+        }
         // If cache is ready and has images, use it!
-        if (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0) {
-            let imagesToUse = screensaverCache.images.filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
+        if (peerImages || (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0)) {
+            let imagesToUse = (peerImages || screensaverCache.images).filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
 
             if (mode === 'onThisDay') {
                 const today = new Date();
@@ -3653,7 +3663,7 @@ app.get('/api/slideshow/random', async (req, res) => {
 
             // HACK: If we just updated the code but the cache is old, trigger refresh
             const isLegacyPath = typeof foundImage._path === 'string' && foundImage._path && !foundImage._path.startsWith('[');
-            if ((!foundImage.folderId || isLegacyPath) && !screensaverCache.refreshTriggered) {
+            if (!peerImages && (!foundImage.folderId || isLegacyPath) && !screensaverCache.refreshTriggered) {
                 console.log('[SCREENSAVER] Cache is stale (missing folderId or structured path), triggering refresh');
                 screensaverCache.refreshTriggered = true;
                 refreshScreensaverCache(device, objectId);
@@ -3803,58 +3813,64 @@ app.get('/api/slideshow/random', async (req, res) => {
     }
 });
 
-// Gets another AMMUI's /api/slideshow/list for `mode`, with our own hidden photos removed and our
-// own rotations/tags applied. Returns null if it isn't an AMMUI, has nothing, or is still scanning.
-async function fetchRemoteSlideshowList(device, mode) {
-    if (!device.location) return null;
+// The slideshow's source server, when it's another AMMUI. Its slideshow lists are built there
+// (from our chosen folder), so they leave out what's hidden there.
+function slideshowSourceAmmui() {
+    const d = settings.screensaver?.serverUdn && findDeviceByUdn(settings.screensaver.serverUdn);
+    return d && d.manufacturer === 'AMMUI' && d.location && !isOwnUdn(d.udn) ? d : null;
+}
+
+// Photos under a folder of our own library, for another AMMUI's slideshow. Kept apart from our
+// own slideshow's cache so the two don't keep replacing each other. Null until the library is indexed.
+const peerPhotoCache = new Map(); // objectId -> { builtAt, images }
+function ownPhotosUnder(objectId) {
+    const meta = getLibraryIndexMeta(SERVER_UDN);
+    if (!meta) return null;
+    let cached = peerPhotoCache.get(objectId);
+    if (!cached || cached.builtAt !== meta.built_at) {
+        if (peerPhotoCache.size >= 4) peerPhotoCache.clear();
+        cached = { builtAt: meta.built_at, images: getLibraryIndexItemsUnder(SERVER_UDN, objectId).filter(isPhotoItem) };
+        peerPhotoCache.set(objectId, cached);
+    }
+    return cached.images;
+}
+
+// Passes a slideshow request on to the source AMMUI and relays its answer (its hidden photos
+// left out, its rotations and tags on).
+async function forwardSlideshowRequest(res, device, apiPath, mode) {
     try {
-        const url = new URL(`/api/slideshow/list?mode=${encodeURIComponent(mode)}`, device.location);
-        const res = await fetch(url, { headers: { 'X-AMMUI-Forwarded': '1' }, signal: AbortSignal.timeout(15000) });
-        if (!res.ok || res.headers.get('X-Scan-Partial')) {
-            console.log(`[SCREENSAVER] ${device.friendlyName} has no ${mode} list (HTTP ${res.status}), scanning instead`);
-            return null;
+        const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}`, device.location);
+        const r = await fetch(url, { headers: { 'X-AMMUI-Forwarded': '1' }, signal: AbortSignal.timeout(15000) });
+        const body = await r.json();
+        // So its photo URLs map back to it when they're hidden, rotated or tagged from here
+        const first = Array.isArray(body) ? body[0] : body;
+        const firstUrl = first && (first.url || first.uri || first.res);
+        if (r.ok && firstUrl) registerMediaOrigin(firstUrl, device.friendlyName);
+        for (const h of ['X-Scan-Partial', 'X-Deleted-Version']) {
+            if (r.headers.get(h)) res.set(h, r.headers.get(h));
         }
-        const items = await res.json();
-        if (!Array.isArray(items) || items.length === 0) return null;
-        const list = [];
-        for (const img of items) {
-            const url = img.uri || img.res;
-            if (!url) continue;
-            registerMediaOrigin(url, device.friendlyName);
-            const key = mediaKey(url);
-            if (settings.deletedPhotos[key]) continue;
-            const rot = settings.manualRotations?.[key];
-            const tags = settings.fileTags?.[key];
-            list.push({ ...img, key, ...(rot ? { manualRotation: rot } : {}), ...(tags ? { tags } : {}) });
-        }
-        console.log(`[SCREENSAVER] Got ${list.length} ${mode} photos from ${device.friendlyName}`);
-        return list.length > 0 ? list : null;
+        res.status(r.status).json(body);
     } catch (err) {
-        console.log(`[SCREENSAVER] ${device.friendlyName} has no ${mode} list (${err.message}), scanning instead`);
-        return null;
+        console.warn(`[SCREENSAVER] ${apiPath} from ${device.friendlyName} failed: ${err.message}`);
+        res.status(503).json({ error: `Couldn't reach ${device.friendlyName}` });
     }
 }
 
 app.get('/api/slideshow/list', async (req, res) => {
-    if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
-        return res.status(400).json({ error: 'Screensaver not configured' });
-    }
-
-    const { serverUdn, objectId } = settings.screensaver;
     const { mode } = req.query;
-
-    // On This Day from another AMMUI: ask it for its own list first, and only scan it ourselves
-    // if that fails. The header stops two instances pointed at each other forwarding forever.
-    if (mode === 'onThisDay' && !req.get('X-AMMUI-Forwarded')) {
-        const device = findDeviceByUdn(serverUdn);
-        if (device && !isOwnUdn(device.udn)) {
-            const remote = await fetchRemoteSlideshowList(device, mode);
-            if (remote) {
-                res.set('X-Deleted-Version', String(slideshowDeleteVersion));
-                return res.json(remote);
-            }
+    // The header stops two instances pointed at each other forwarding forever
+    const forwarded = !!req.get('X-AMMUI-Forwarded');
+    // Another AMMUI's slideshow showing photos from a folder of our library
+    const peerObjectId = forwarded ? req.query.objectId : null;
+    if (!peerObjectId) {
+        if (!settings.screensaver || !settings.screensaver.serverUdn || !settings.screensaver.objectId) {
+            return res.status(400).json({ error: 'Screensaver not configured' });
         }
+        const source = !forwarded && slideshowSourceAmmui();
+        if (source) return forwardSlideshowRequest(res, source, '/api/slideshow/list', mode);
     }
+
+    const { serverUdn, objectId } = peerObjectId ? { serverUdn: SERVER_UDN, objectId: peerObjectId } : settings.screensaver;
 
     // Day and Recent straight from the photo dates stored in the library index: one indexed
     // lookup instead of loading every photo in the folder and checking each one's date.
@@ -3866,6 +3882,9 @@ app.get('/api/slideshow/list', async (req, res) => {
         source = mode === 'onThisDay'
             ? getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()))
             : getLibraryIndexPhotosSince(serverUdn, objectId, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
+    } else if (peerObjectId) {
+        source = ownPhotosUnder(objectId);
+        if (!source) return res.status(503).json({ error: 'Library not indexed yet' });
     } else {
         reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
@@ -3935,17 +3954,41 @@ app.get('/api/slideshow/list', async (req, res) => {
     }));
 });
 
-app.get('/api/slideshow/deleted-version', (req, res) => {
+// Lists from another AMMUI carry its version, so ask it (ours if it can't be reached).
+app.get('/api/slideshow/deleted-version', async (req, res) => {
+    const source = !req.get('X-AMMUI-Forwarded') && slideshowSourceAmmui();
+    if (source) {
+        try {
+            const r = await fetch(new URL('/api/slideshow/deleted-version', source.location),
+                { headers: { 'X-AMMUI-Forwarded': '1' }, signal: AbortSignal.timeout(5000) });
+            if (r.ok) return res.json(await r.json());
+        } catch (e) { }
+    }
     res.json({ version: slideshowDeleteVersion });
 });
 
-app.get('/api/slideshow/rotations', (req, res) => {
-    res.json(settings.manualRotations || {});
+// Ours, plus each other AMMUI's rotations of photos in its own library (which is all it sends
+// when asked with the forwarded header).
+app.get('/api/slideshow/rotations', async (req, res) => {
+    const own = settings.manualRotations || {};
+    if (req.get('X-AMMUI-Forwarded')) {
+        return res.json(Object.fromEntries(Object.entries(own).filter(([k]) => splitMediaKey(k)?.isLocal)));
+    }
+    const peers = await Promise.all(otherAmmuiDevicesFull().map(d => fetchFromAmmui(d, '/api/slideshow/rotations')));
+    res.json(Object.assign({}, own, ...peers.filter(Boolean)));
 });
 
-app.post('/api/slideshow/rotate', (req, res) => {
+app.post('/api/slideshow/rotate', async (req, res) => {
     const { url, rotation } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
+
+    const owner = !req.get('X-AMMUI-Forwarded') && ammuiOwnerOf(url);
+    if (owner) {
+        const error = await forwardToOwner(owner, '/api/slideshow/rotate', { url: mediaKey(url), rotation });
+        if (error) return res.status(502).json({ error });
+        console.log(`[SCREENSAVER] Saved rotation on ${owner.friendlyName} for ${url}: ${rotation}`);
+        return res.json({ success: true, rotation });
+    }
 
     // rotation should be 0, 90, 180, or 270
     setPhotoRotation(url, Number(rotation));
@@ -3955,9 +3998,17 @@ app.post('/api/slideshow/rotate', (req, res) => {
     res.json({ success: true, rotation });
 });
 
-app.post('/api/slideshow/delete', (req, res) => {
+app.post('/api/slideshow/delete', async (req, res) => {
     const { url } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
+
+    const owner = !req.get('X-AMMUI-Forwarded') && ammuiOwnerOf(url);
+    if (owner) {
+        const error = await forwardToOwner(owner, '/api/slideshow/delete', { url: mediaKey(url) });
+        if (error) return res.status(502).json({ error });
+        console.log(`[SCREENSAVER] Hid photo on ${owner.friendlyName}: ${url}`);
+        return res.json({ success: true });
+    }
 
     markPhotoDeleted(url);
     settings.deletedPhotos[mediaKey(url)] = true;
@@ -3967,6 +4018,64 @@ app.post('/api/slideshow/delete', (req, res) => {
     console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
     res.json({ success: true });
 });
+
+// The other AMMUI whose library `key` is in, or null (our own library, or not an AMMUI).
+// Hiding is kept by the AMMUI that owns the photo, so it applies to every list that AMMUI builds.
+function ammuiOwnerOf(key) {
+    const parts = splitMediaKey(mediaKey(key));
+    if (!parts || parts.isLocal || parts.isHost) return null;
+    return Array.from(devices.values())
+        .filter(d => d.manufacturer === 'AMMUI' && d.friendlyName === parts.server && d.location && !isOwnUdn(d.udn))
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0] || null;
+}
+
+// Every other AMMUI seen on the network (one device per install).
+function otherAmmuiDevicesFull() {
+    const out = new Map();
+    for (const d of devices.values()) {
+        if (d.manufacturer !== 'AMMUI' || !d.udn || !d.location || isOwnUdn(d.udn)) continue;
+        if (!out.has(d.udn) || (d.lastSeen || 0) > (out.get(d.udn).lastSeen || 0)) out.set(d.udn, d);
+    }
+    return [...out.values()];
+}
+
+// Passes a change to a photo's hidden marker, rotation or tags on to the AMMUI that owns it, which
+// is where those are saved. Null if it went through, else the error to report.
+async function forwardToOwner(device, apiPath, body) {
+    try {
+        const res = await fetch(new URL(apiPath, device.location), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-AMMUI-Forwarded': '1' },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return null;
+    } catch (err) {
+        console.warn(`[AMMUI] ${apiPath} on ${device.friendlyName} failed: ${err.message}`);
+        return `Couldn't reach ${device.friendlyName}`;
+    }
+}
+
+// GETs JSON from another AMMUI, or null if it can't be reached.
+async function fetchFromAmmui(device, apiPath) {
+    try {
+        const res = await fetch(new URL(apiPath, device.location), { headers: { 'X-AMMUI-Forwarded': '1' }, signal: AbortSignal.timeout(5000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return await res.json();
+    } catch (err) {
+        console.warn(`[AMMUI] ${apiPath} from ${device.friendlyName} failed: ${err.message}`);
+        return null;
+    }
+}
+
+// A file's tags: saved by the AMMUI it belongs to, else here.
+async function fileTagsFor(uri) {
+    const owner = ammuiOwnerOf(uri);
+    if (!owner) return settings.fileTags?.[mediaKey(uri)] || [];
+    const data = await fetchFromAmmui(owner, `/api/file-tags?uri=${encodeURIComponent(mediaKey(uri))}`);
+    return data?.tags || [];
+}
 
 // A hidden key's file in this app's own library, or null for anything else (or a path escaping it).
 function localFileForKey(key) {
@@ -3997,9 +4106,18 @@ app.get('/api/slideshow/hidden', (req, res) => {
     res.json(photos);
 });
 
-app.post('/api/slideshow/unhide', (req, res) => {
+app.post('/api/slideshow/unhide', async (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: 'key required' });
+
+    // Photos hidden here before hiding moved to the owning AMMUI are just unhidden here
+    const owner = !settings.deletedPhotos[mediaKey(key)] && !req.get('X-AMMUI-Forwarded') && ammuiOwnerOf(key);
+    if (owner) {
+        const error = await forwardToOwner(owner, '/api/slideshow/unhide', { key: mediaKey(key) });
+        if (error) return res.status(502).json({ error });
+        console.log(`[SCREENSAVER] Unhid photo on ${owner.friendlyName}: ${key}`);
+        return res.json({ success: true });
+    }
 
     unmarkPhotoDeleted(key);
     delete settings.deletedPhotos[mediaKey(key)];
@@ -4056,9 +4174,17 @@ app.post('/api/slideshow/hidden/delete-all-local', async (req, res) => {
     res.json({ success: true, deleted, failed });
 });
 
-app.post('/api/slideshow/favourite', (req, res) => {
+app.post('/api/slideshow/favourite', async (req, res) => {
     const { url, favourite } = req.body;
     if (!url) return res.status(400).json({ error: 'URL required' });
+
+    const owner = !req.get('X-AMMUI-Forwarded') && ammuiOwnerOf(url);
+    if (owner) {
+        const error = await forwardToOwner(owner, '/api/slideshow/favourite', { url: mediaKey(url), favourite });
+        if (error) return res.status(502).json({ error });
+        console.log(`[SCREENSAVER] Set favourite on ${owner.friendlyName} for ${url}: ${favourite}`);
+        return res.json({ success: true, favourite });
+    }
 
     const key = mediaKey(url);
     if (favourite) {
@@ -5676,7 +5802,7 @@ app.get('/api/track-metadata', async (req, res) => {
                 longitude: metadata.format.longitude,
                 orientation: metadata.format.orientation
             },
-            tags: settings.fileTags?.[mediaKey(uri)] || []
+            tags: await fileTagsFor(uri)
         };
 
         res.json(result);
@@ -6260,10 +6386,24 @@ app.get('/api/youtube/stream/:videoId', (req, res) => {
     req.on('close', killAll);
 });
 
-app.post('/api/file-tags', (req, res) => {
+// A file's tags, for another AMMUI showing a file from our library (see fileTagsFor).
+app.get('/api/file-tags', (req, res) => {
+    if (!req.query.uri) return res.status(400).json({ error: 'URI is required' });
+    res.json({ tags: settings.fileTags?.[mediaKey(req.query.uri)] || [] });
+});
+
+app.post('/api/file-tags', async (req, res) => {
     const { uri, tags } = req.body;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
     if (!Array.isArray(tags)) return res.status(400).json({ error: 'Tags must be an array' });
+
+    const owner = !req.get('X-AMMUI-Forwarded') && ammuiOwnerOf(uri);
+    if (owner) {
+        const error = await forwardToOwner(owner, '/api/file-tags', { uri: mediaKey(uri), tags });
+        if (error) return res.status(502).json({ error });
+        terminalLog(`[TAGS] Updated tags on ${owner.friendlyName} for ${uri}: ${tags.join(', ')}`);
+        return res.json({ success: true });
+    }
 
     setFileTags(uri, tags);
     settings.fileTags[mediaKey(uri)] = tags;
