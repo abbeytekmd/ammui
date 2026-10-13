@@ -42,7 +42,7 @@ import {
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
-    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItem, getLibraryIndexItemsUnder, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
+    getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItem, getLibraryIndexItemsUnder, removeFromLibraryIndex, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
@@ -336,7 +336,7 @@ function findDeviceByUdn(udn) {
 // local search index stale, so schedule a rebuild once the request has succeeded.
 app.use('/api', (req, res, next) => {
     const changesLibrary = req.method === 'POST' &&
-        (/^\/(upload|upload-local-file|delete)$/.test(req.path) || req.path.startsWith('/local/'));
+        (/^\/(upload|upload-local-file|delete|slideshow\/hidden\/delete-file|slideshow\/hidden\/delete-all-local)$/.test(req.path) || req.path.startsWith('/local/'));
     if (changesLibrary) {
         res.on('finish', () => {
             if (res.statusCode < 400) markDirty(SERVER_UDN, findDeviceByUdn);
@@ -4111,6 +4111,15 @@ async function deleteHiddenLocalPhoto(key, filePath) {
     console.log(`[SCREENSAVER] Permanently deleted hidden photo: ${filePath}`);
 }
 
+// Its hidden marker is gone with the file, so take deleted photos out of the library index too:
+// Day/Recent slideshows and other AMMUIs read photos from there and would show them again.
+function dropDeletedPhotosFromIndex(keys) {
+    if (keys.length === 0) return;
+    const removed = removeFromLibraryIndex(SERVER_UDN, keys);
+    peerPhotoCache.clear();
+    if (removed) console.log(`[SCREENSAVER] Removed ${removed} deleted photo(s) from the library index.`);
+}
+
 app.post('/api/slideshow/hidden/delete-file', async (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: 'key required' });
@@ -4120,6 +4129,7 @@ app.post('/api/slideshow/hidden/delete-file', async (req, res) => {
 
     try {
         await deleteHiddenLocalPhoto(key, filePath);
+        dropDeletedPhotosFromIndex([key]);
         res.json({ success: true });
     } catch (err) {
         console.error('[SCREENSAVER] Delete hidden photo failed:', err.message);
@@ -4130,17 +4140,20 @@ app.post('/api/slideshow/hidden/delete-file', async (req, res) => {
 // Every hidden photo in the local library; hidden photos on other servers are left alone.
 app.post('/api/slideshow/hidden/delete-all-local', async (req, res) => {
     let deleted = 0, failed = 0;
+    const deletedKeys = [];
     for (const key of Object.keys(getAllDeletedPhotos())) {
         const filePath = localFileForKey(key);
         if (!filePath) continue;
         try {
             await deleteHiddenLocalPhoto(key, filePath);
+            deletedKeys.push(key);
             deleted++;
         } catch (err) {
             console.error(`[SCREENSAVER] Delete hidden photo failed (${filePath}):`, err.message);
             failed++;
         }
     }
+    dropDeletedPhotosFromIndex(deletedKeys);
     console.log(`[SCREENSAVER] Delete all hidden local photos: deleted=${deleted} failed=${failed}`);
     res.json({ success: true, deleted, failed });
 });
