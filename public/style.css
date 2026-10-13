@@ -6611,9 +6611,9 @@ input:checked+.slider:before {
  * Landscape screens: a panel down the right holds the music bar, the photo details and the
  * controls, and the photo sits to its left instead of underneath them. The panel is as wide
  * as the space a full-height 2046x1536 (4:3) photo leaves, so those fill the rest of the
- * screen. The overlay becomes a two-column grid; the photo's map sits in the panel under the
- * music bar, while the lyrics and arrows float over the photo. Not on short screens (a phone
- * turned sideways), where the panel doesn't fit.
+ * screen. The overlay becomes a two-column grid; today's calendar sits in the panel under the
+ * music bar and the photo's map under its details, while the lyrics and arrows float over the
+ * photo. Not on short screens (a phone turned sideways), where the panel doesn't fit.
  */
 .ss-side-panel,
 .ss-agenda {
@@ -6625,7 +6625,7 @@ input:checked+.slider:before {
         --ss-panel-w: clamp(200px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
         display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
         grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
-        grid-template-rows: auto auto auto minmax(0, 1fr) auto;   /* music, map, today's calendar, details, controls */
+        grid-template-rows: auto auto minmax(0, 1fr) auto auto;   /* music, today's calendar, details, map, controls */
     }
 
     .ss-side-panel {
@@ -6670,7 +6670,7 @@ input:checked+.slider:before {
 
     .screensaver-info {
         grid-column: 2;
-        grid-row: 4;
+        grid-row: 3;
         align-self: end;
         position: static;
         max-width: none;
@@ -6701,7 +6701,7 @@ input:checked+.slider:before {
     /* The map fills the panel's width; its row is empty (and takes no space) when it's hidden */
     .ss-map-window {
         grid-column: 2;
-        grid-row: 2;
+        grid-row: 4;
         position: static;
         width: auto;
         height: auto;
@@ -6721,16 +6721,21 @@ input:checked+.slider:before {
         right: calc(var(--ss-panel-w) + 40px);
     }
 
-    /* Today's calendar, under the map; its row takes no space when there's nothing today */
+    /* Today's calendar, under the music bar; its row takes no space when there's nothing today */
     .ss-agenda:not(:empty) {
         display: block;
         grid-column: 2;
-        grid-row: 3;
+        grid-row: 2;
         margin: 16px 16px 0;
+        padding: 10px 14px;
         max-height: 30vh;
         overflow: hidden;
         z-index: 10003;
         color: #fff;
+        /* A card like the map's, so it reads apart from the photo details below */
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
     }
 }
 
