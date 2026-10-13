@@ -5648,10 +5648,19 @@ app.post('/api/updates/apply', async (req, res) => {
 
     try {
         send({ message: 'Checking for local changes...', progress: 10 });
-        const dirty = await git(['status', '--porcelain', '--untracked-files=no']);
-        if (dirty) {
-            const files = dirty.split('\n').map(l => l.trim().replace(/^\S+\s+/, '')).slice(0, 5).join(', ');
-            return fail(`The app folder has uncommitted changes (${files}). Commit or discard them first.`);
+        const dirty = (await git(['status', '--porcelain', '--untracked-files=no'])).split('\n').filter(Boolean)
+            .map(l => l.trim().replace(/^\S+\s+/, ''));
+        // npm rewrites these during an install (an earlier update's, or one run by hand); they come
+        // back from GitHub's copy anyway, so put them back rather than refusing to update
+        const npmFiles = ['package.json', 'package-lock.json'];
+        const restore = dirty.filter(f => npmFiles.includes(f));
+        if (restore.length) {
+            await git(['checkout', '--', ...restore]);
+            terminalLog(`[UPDATE] Discarded local changes to ${restore.join(', ')}`);
+        }
+        const others = dirty.filter(f => !npmFiles.includes(f));
+        if (others.length) {
+            return fail(`The app folder has uncommitted changes (${others.slice(0, 5).join(', ')}). Commit or discard them first.`);
         }
 
         send({ message: 'Downloading update...', progress: 30 });
@@ -5676,8 +5685,9 @@ app.post('/api/updates/apply', async (req, res) => {
         const changed = oldHead === newHead ? [] : (await git(['diff', '--name-only', oldHead, newHead])).split('\n');
         if (changed.some(f => f === 'package.json' || f === 'package-lock.json')) {
             send({ message: 'Installing packages...', progress: 60 });
-            // npm install, not npm ci: ci wipes node_modules, which fails on Windows while this server has files open
-            await execAsync('npm install --no-audit --no-fund', { cwd: __dirname, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
+            // npm install, not npm ci: ci wipes node_modules, which fails on Windows while this server has files open.
+            // --no-save keeps it from rewriting package.json/package-lock.json, which would block the next update.
+            await execAsync('npm install --no-save --no-audit --no-fund', { cwd: __dirname, windowsHide: true, maxBuffer: 16 * 1024 * 1024 });
         }
 
         send({ message: 'Restarting...', progress: 90, complete: true, bootId });
