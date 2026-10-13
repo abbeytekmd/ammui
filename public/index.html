@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=42">
+    <link rel="stylesheet" href="style.css?v=44">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -72,6 +72,7 @@
             </nav>
 
             <div class="menu-container logo-menu">
+                <span id="device-name-title" class="top-bar-device-name">AMMUI</span>
                 <button id="btn-start-slideshow" class="btn-control top-bar-icon-btn" onclick="manualStartSlideshow()"
                     title="Start photo slideshow" aria-label="Start photo slideshow">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1234,7 +1235,7 @@
                     <div class="manage-section">
                         <h3>Smart Meter (Bright)</h3>
                         <p class="settings-hint">Shows your electricity and gas use on the Smart Home tab, using the
-                            login of the free Bright app. Readings come from your smart meter via Bright's servers and
+                            login of the free Bright app (by Hildebrand). Readings come from your smart meter via Bright's servers and
                             are usually an hour or two behind.</p>
                         <div class="settings-group">
                             <label for="glow-username">Email</label>
@@ -1777,6 +1778,8 @@
         <div id="ss-map-window" class="ss-map-window" style="display:none;">
             <div id="ss-map" class="ss-map"></div>
         </div>
+        <!-- Today's calendar, in the side panel (filled by slideshow.js) -->
+        <div id="ss-agenda" class="ss-agenda"></div>
 
         <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
             ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
@@ -2071,8 +2074,8 @@
         </div>
     </div>
 
-    <script src="app.js?v=47"></script>
-    <script src="slideshow.js?v=3"></script>
+    <script src="app.js?v=48"></script>
+    <script src="slideshow.js?v=5"></script>
 </body>
 
 </html>

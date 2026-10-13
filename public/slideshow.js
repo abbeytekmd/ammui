@@ -115,6 +115,11 @@ class Slideshow {
             setTimeout(() => this.overlay.classList.add('active'), 0);
         }
 
+        // 15-minutely, which also moves it on to the new day after midnight
+        this.loadAgenda();
+        clearInterval(this._agendaTimer);
+        this._agendaTimer = setInterval(() => this.loadAgenda(), 15 * 60 * 1000);
+
         if (this.info) {
             this.info.style.cursor = 'pointer';
             this.info.onclick = (e) => {
@@ -129,6 +134,7 @@ class Slideshow {
     stop() {
         if (!this.isActive) return;
         clearTimeout(this._modeRetryTimer);
+        clearInterval(this._agendaTimer);
         console.log('[SLIDESHOW] Stopping...');
         this._browserCurrentHidden = false;
         this.closeBrowser();
@@ -165,6 +171,50 @@ class Slideshow {
             }, 500);
         }
         this.resetIdleTimer();
+    }
+
+    // Today's entries (from the Calendar tab) and events (from subscribed calendars) in the side
+    // panel, which only shows on landscape screens. Left empty, and so hidden, when there are none.
+    async loadAgenda() {
+        const el = document.getElementById('ss-agenda');
+        if (!el) return;
+        const now = new Date();
+        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))}`;
+        try {
+            const [cals, entryData, tagData, feedData] = await Promise.all([
+                fetch('/api/calendars').then(r => r.json()),
+                fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
+                fetch('/api/calendar-entries/tags').then(r => r.json()),
+                fetch(`/api/calendars/events?${range}`).then(r => r.ok ? r.json() : { events: [] }),
+            ]);
+            const calsById = Object.fromEntries(cals.map(c => [c.id, c]));
+            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from
+            const entries = (entryData.entries || []).map(e => ({
+                title: e.recipe ? e.recipe.name : e.title, allDay: true,
+                source: e.tags?.[0] || '', color: tagData.colors?.[e.tags?.[0]],
+            }));
+            const events = (feedData.events || []).map(ev => ({
+                title: ev.title, allDay: ev.allDay, start: ev.allDay ? null : new Date(ev.start),
+                end: ev.allDay ? null : new Date(ev.end),
+                source: calsById[ev.calendarId]?.name || '', color: calsById[ev.calendarId]?.color,
+            }));
+            // All-day first, then by time
+            const items = [...entries, ...events].sort((a, b) => (a.allDay === b.allDay ? (a.start || 0) - (b.start || 0) : a.allDay ? -1 : 1));
+            if (!items.length) {
+                el.innerHTML = '';
+                return;
+            }
+            const time = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            el.innerHTML = `<div class="ss-agenda-title">Today</div><ul class="ss-agenda-list">${items.map(it => `
+                <li class="${it.end && it.end < now ? 'past' : ''}">
+                    <span class="ss-agenda-dot" style="background:${it.color || 'var(--accent)'}"></span>
+                    <span class="ss-agenda-time">${it.allDay ? 'All day' : time(it.start)}</span>
+                    <span class="ss-agenda-text">${escapeHtml(it.title)}</span>
+                    ${it.source ? `<span class="ss-agenda-source" style="color:${it.color || 'var(--accent)'}">${escapeHtml(it.source)}</span>` : ''}
+                </li>`).join('')}</ul>`;
+        } catch (err) {
+            console.warn('[SLIDESHOW] Calendar load failed:', err.message);
+        }
     }
 
     resetInterval() {

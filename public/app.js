@@ -9375,6 +9375,11 @@ async function fetchGeneralSettings() {
 function updateUIWithDeviceName() {
     const label = document.getElementById('device-name-label');
     if (label) label.textContent = currentDeviceName;
+    const title = document.getElementById('device-name-title');
+    if (title) {
+        title.textContent = currentDeviceName;
+        title.title = currentDeviceName;
+    }
     const logoBtn = document.getElementById('btn-logo-menu');
     if (logoBtn) logoBtn.title = currentDeviceName;
     document.title = `${currentDeviceName}`;

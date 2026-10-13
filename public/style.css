@@ -3309,6 +3309,26 @@ p.subtitle {
     position: relative;
 }
 
+/* This server's name, beside the slideshow and logo menu buttons */
+.top-bar-device-name {
+    margin-right: 0.75rem;
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+@media (max-width: 600px) {
+    .top-bar-device-name {
+        max-width: 7rem;
+        margin-right: 0.4rem;
+        font-size: 0.85rem;
+    }
+}
+
 /* Icon buttons beside the logo menu (e.g. slideshow), matched to the logo button's size */
 .top-bar-icon-btn {
     padding: 0.4rem;
@@ -6595,7 +6615,8 @@ input:checked+.slider:before {
  * music bar, while the lyrics and arrows float over the photo. Not on short screens (a phone
  * turned sideways), where the panel doesn't fit.
  */
-.ss-side-panel {
+.ss-side-panel,
+.ss-agenda {
     display: none;
 }
 
@@ -6604,7 +6625,7 @@ input:checked+.slider:before {
         --ss-panel-w: clamp(200px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
         display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
         grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
-        grid-template-rows: auto auto minmax(0, 1fr) auto;   /* music, map, details, controls */
+        grid-template-rows: auto auto auto minmax(0, 1fr) auto;   /* music, map, today's calendar, details, controls */
     }
 
     .ss-side-panel {
@@ -6649,7 +6670,7 @@ input:checked+.slider:before {
 
     .screensaver-info {
         grid-column: 2;
-        grid-row: 3;
+        grid-row: 4;
         align-self: end;
         position: static;
         max-width: none;
@@ -6663,7 +6684,7 @@ input:checked+.slider:before {
 
     .screensaver-controls {
         grid-column: 2;
-        grid-row: 4;
+        grid-row: 5;
         position: static;
         flex-wrap: wrap;
         justify-content: center;
@@ -6699,6 +6720,80 @@ input:checked+.slider:before {
     .ss-lyrics-panel {
         right: calc(var(--ss-panel-w) + 40px);
     }
+
+    /* Today's calendar, under the map; its row takes no space when there's nothing today */
+    .ss-agenda:not(:empty) {
+        display: block;
+        grid-column: 2;
+        grid-row: 3;
+        margin: 16px 16px 0;
+        max-height: 30vh;
+        overflow: hidden;
+        z-index: 10003;
+        color: #fff;
+    }
+}
+
+/* Today's calendar in the slideshow's side panel (placed in the landscape rules above) */
+.ss-agenda-title {
+    font-size: clamp(13px, 1vw, 18px);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.6);
+    margin-bottom: 6px;
+}
+
+.ss-agenda-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ss-agenda-list li {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: clamp(14px, 1.1vw, 20px);
+}
+
+.ss-agenda-list li.past {
+    opacity: 0.45;
+}
+
+.ss-agenda-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    align-self: center;
+}
+
+.ss-agenda-time {
+    flex: none;
+    min-width: 4.5em;
+    color: rgba(255, 255, 255, 0.65);
+    font-variant-numeric: tabular-nums;
+}
+
+.ss-agenda-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The calendar (or tag) an item comes from, in its colour, at the end of the row */
+.ss-agenda-source {
+    flex: none;
+    max-width: 40%;
+    margin-left: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8em;
+    font-weight: 600;
 }
 
 /* Stats Modal Styles */
