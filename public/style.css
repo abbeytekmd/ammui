@@ -7724,6 +7724,80 @@ input:checked+.slider:before {
     font-size: 0.9rem;
 }
 
+.smarthome-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.smarthome-section[hidden] {
+    display: none;
+}
+
+.smarthome-section h3 {
+    margin: 0;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+}
+
+/* Twinkly: a string of coloured bulbs above the lights, glowing and twinkling while any are on */
+.lights-banner {
+    height: 64px;
+    overflow: hidden;
+    border-radius: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+}
+
+.lights-banner svg {
+    display: block;
+}
+
+.lights-wire {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-width: 1.5;
+    opacity: 0.6;
+}
+
+.lights-banner .bulb-cap {
+    fill: var(--text-muted);
+}
+
+.lights-banner .bulb {
+    opacity: 0.35;
+    transition: opacity 0.4s;
+}
+
+.lights-banner .bulb-glow {
+    filter: url(#bulb-glow-blur);
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.lights-banner.on .bulb {
+    opacity: 1;
+}
+
+.lights-banner.on .bulb-glow {
+    opacity: 0.7;
+    animation: bulb-twinkle 2.4s ease-in-out infinite;
+}
+
+@keyframes bulb-twinkle {
+    0%, 100% { opacity: 0.75; }
+    50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lights-banner.on .bulb-glow {
+        animation: none;
+    }
+}
+
 .smarthome-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));

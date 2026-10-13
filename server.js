@@ -2510,6 +2510,8 @@ app.get('/api/peer/keys', (req, res) => {
     if (settings.s3.accessKeyId && settings.s3.secretAccessKey) {
         keys.s3 = Object.fromEntries(S3_CONNECTION_FIELDS.map(f => [f, settings.s3[f] || '']));
     }
+    const tplink = getSetting('tplinkAccount', null);
+    if (tplink?.username && tplink?.password) keys.tplinkAccount = { username: tplink.username, password: tplink.password };
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
 });
@@ -2551,6 +2553,11 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
         s3Verified = (await testS3Connection(tested)).ok;
         settings.s3 = { ...settings.s3, ...tested, verified: s3Verified };
         imported.push('s3');
+    }
+    const tplink = keys?.tplinkAccount;
+    if (typeof tplink?.username === 'string' && tplink.username.trim() && typeof tplink.password === 'string' && tplink.password) {
+        smartHome.setAccount({ username: tplink.username, password: tplink.password });
+        imported.push('tplinkAccount');
     }
     if (imported.length) saveSettings();
     console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);

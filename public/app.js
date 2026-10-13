@@ -3514,7 +3514,7 @@ async function importKeysFromDevice() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to get keys');
-        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3' };
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3', tplinkAccount: 'TP-Link login' };
         showToast(data.imported.length
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
@@ -9876,44 +9876,76 @@ function plugStatusLine(p) {
     return `${escapeHtml(p.brand)}${units}${power}`;
 }
 
+// A string of coloured bulbs hanging from a drooping wire, drawn wide and cropped to the section's width.
+// Each 150-unit span of wire is a quadratic curve whose control point sits midway, so x is linear in t.
+const LIGHT_COLOURS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '#ec4899'];
+function lightsBannerSvg() {
+    const width = 2400, span = 150, top = 14, sag = 22;
+    const wireY = x => { const t = (x % span) / span; return top + 4 * sag * t * (1 - t); };
+    let wire = `M0 ${top}`;
+    for (let x = 0; x < width; x += span) wire += ` Q${x + span / 2} ${top + 2 * sag} ${x + span} ${top}`;
+    let bulbs = '';
+    for (let x = 15, n = 0; x < width; x += 30, n++) {
+        const y = wireY(x), colour = LIGHT_COLOURS[n % LIGHT_COLOURS.length];
+        const tilt = (n % 2 ? 1 : -1) * 10, delay = -((n * 0.73) % 2.4).toFixed(2);
+        bulbs += `<g transform="rotate(${tilt} ${x} ${y})">
+            <circle class="bulb-glow" cx="${x}" cy="${y + 13}" r="11" fill="${colour}" style="animation-delay:${delay}s"></circle>
+            <rect class="bulb-cap" x="${x - 3}" y="${y - 1}" width="6" height="6" rx="1"></rect>
+            <ellipse class="bulb" cx="${x}" cy="${y + 13}" rx="5" ry="8" fill="${colour}"></ellipse>
+            <ellipse cx="${x - 1.8}" cy="${y + 10}" rx="1.3" ry="2.6" fill="#fff" opacity="0.55"></ellipse></g>`;
+    }
+    return `<svg viewBox="0 0 ${width} 64" height="64" width="100%" preserveAspectRatio="xMinYMid slice">
+        <defs><filter id="bulb-glow-blur" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="4"></feGaussianBlur></filter></defs>
+        <path class="lights-wire" d="${wire}"></path>${bulbs}</svg>`;
+}
+
 function renderSmartHome() {
-    const grid = document.getElementById('smarthome-grid');
     const status = document.getElementById('smarthome-status');
     const shown = smartHomePlugs.filter(p => !p.hidden);
     status.textContent = shown.length ? '' : smartHomePlugs.length
         ? 'All plugs are hidden. Show them again from Manage Plugs.'
         : 'No plugs found yet. Use Manage Plugs to search the network.';
-    grid.innerHTML = shown.map(p => {
-        const i = smartHomePlugs.indexOf(p);
-        const single = p.outlets.length === 1;
-        const anyOn = p.outlets.some(o => o.on);
-        const outletBtn = (o, label) => `
-            <button type="button" class="plug-switch ${o.on ? 'on' : ''}" data-plug="${i}" data-outlet="${escapeHtml(o.id)}"
-                onclick="togglePlugOutlet(this)" ${p.online === false ? 'disabled' : ''} aria-pressed="${o.on}">
-                <span class="plug-switch-label">${label}</span><span class="plug-switch-state">${o.on ? 'On' : 'Off'}</span>
-            </button>
-            ${typeof o.brightness === 'number' ? `
-            <label class="plug-brightness" title="Brightness">
-                <input type="range" min="1" max="100" step="1" value="${o.brightness}" data-plug="${i}"
-                    oninput="previewPlugBrightness(this)" onchange="setPlugBrightness(this)" ${p.online === false ? 'disabled' : ''}
-                    aria-label="Brightness of ${escapeHtml(p.name)}">
-                <span class="plug-brightness-value">${o.brightness}%</span>
-            </label>` : ''}`;
-        return `
-            <div class="plug-card ${anyOn ? 'on' : ''} ${p.supported && p.online !== false ? '' : 'unavailable'}">
-                <div class="plug-card-head">
-                    <div class="plug-card-icon">${deviceIcon(p)}</div>
-                    <div class="plug-card-title">
-                        <div class="plug-card-name">${escapeHtml(p.name)}</div>
-                        <div class="plug-card-status">${plugStatusLine(p)}</div>
-                    </div>
+    const lights = shown.filter(p => p.type === 'twinkly');
+    const plugs = shown.filter(p => p.type !== 'twinkly');
+    document.getElementById('smarthome-plugs').hidden = !plugs.length;
+    document.getElementById('smarthome-grid').innerHTML = plugs.map(plugCard).join('');
+    document.getElementById('smarthome-lights').hidden = !lights.length;
+    document.getElementById('smarthome-lights-grid').innerHTML = lights.map(plugCard).join('');
+    const banner = document.getElementById('smarthome-lights-banner');
+    if (lights.length && !banner.innerHTML) banner.innerHTML = lightsBannerSvg();
+    banner.classList.toggle('on', lights.some(p => p.outlets.some(o => o.on)));
+}
+
+function plugCard(p) {
+    const i = smartHomePlugs.indexOf(p);
+    const single = p.outlets.length === 1;
+    const anyOn = p.outlets.some(o => o.on);
+    const outletBtn = (o, label) => `
+        <button type="button" class="plug-switch ${o.on ? 'on' : ''}" data-plug="${i}" data-outlet="${escapeHtml(o.id)}"
+            onclick="togglePlugOutlet(this)" ${p.online === false ? 'disabled' : ''} aria-pressed="${o.on}">
+            <span class="plug-switch-label">${label}</span><span class="plug-switch-state">${o.on ? 'On' : 'Off'}</span>
+        </button>
+        ${typeof o.brightness === 'number' ? `
+        <label class="plug-brightness" title="Brightness">
+            <input type="range" min="1" max="100" step="1" value="${o.brightness}" data-plug="${i}"
+                oninput="previewPlugBrightness(this)" onchange="setPlugBrightness(this)" ${p.online === false ? 'disabled' : ''}
+                aria-label="Brightness of ${escapeHtml(p.name)}">
+            <span class="plug-brightness-value">${o.brightness}%</span>
+        </label>` : ''}`;
+    return `
+        <div class="plug-card ${anyOn ? 'on' : ''} ${p.supported && p.online !== false ? '' : 'unavailable'}">
+            <div class="plug-card-head">
+                <div class="plug-card-icon">${deviceIcon(p)}</div>
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(p.name)}</div>
+                    <div class="plug-card-status">${plugStatusLine(p)}</div>
                 </div>
-                ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
-                    ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
-                </div>` : ''}
-                ${p.needsLogin ? '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Set TP-Link Login</button>' : ''}
-            </div>`;
-    }).join('');
+            </div>
+            ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
+                ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
+            </div>` : ''}
+            ${p.needsLogin ? '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Set TP-Link Login</button>' : ''}
+        </div>`;
 }
 
 async function togglePlugOutlet(btn) {
