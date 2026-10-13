@@ -575,10 +575,14 @@
                         Voice
                     </button>
                     <button type="button" class="btn-control btn-small" onclick="openPlugSettings()"
-                        title="Find plugs, set the TP-Link login and names">Manage Plugs</button>
+                        title="Find plugs, set the TP-Link and Bright logins and names">Manage Plugs</button>
                 </div>
             </div>
             <div id="smarthome-status" class="smarthome-status"></div>
+            <div id="smarthome-energy" class="smarthome-section" hidden>
+                <h3>Energy</h3>
+                <div id="smarthome-energy-grid" class="energy-grid"></div>
+            </div>
             <div id="smarthome-plugs" class="smarthome-section" hidden>
                 <h3>Plugs</h3>
                 <div id="smarthome-grid" class="smarthome-grid"></div>
@@ -858,7 +862,7 @@
                                 <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
                             </div>
                             <p class="settings-hint">Fetches the Discogs, AcoustID and YouTube keys, the S3 connection
-                                details and the TP-Link login from another AMMUI on this network. Keys that device has replace the ones here; any
+                                details and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
                             <label class="settings-check" style="margin-top: 0.5rem;">
                                 <input type="checkbox" id="key-sharing-allow" onchange="saveKeySharing()">
@@ -1141,7 +1145,7 @@
                 <button class="settings-tab active" onclick="switchSettingsTab('servers', this)">Servers</button>
                 <button class="settings-tab" onclick="switchSettingsTab('players', this)">Players</button>
                 <button class="settings-tab" onclick="switchSettingsTab('airplay', this)">AirPlay</button>
-                <button class="settings-tab" onclick="switchSettingsTab('plugs', this)">Plugs</button>
+                <button class="settings-tab" data-tab="smarthome" onclick="switchSettingsTab('smarthome', this)">Smart Home</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-servers" class="settings-panel active">
@@ -1192,7 +1196,7 @@
                         <div id="manage-airplay-list" class="manage-device-list"></div>
                     </div>
                 </div>
-                <div id="settings-plugs" class="settings-panel">
+                <div id="settings-smarthome" class="settings-panel">
                     <div class="manage-section">
                         <div class="settings-header-row">
                             <h3>Smart Plugs</h3>
@@ -1225,6 +1229,24 @@
                         <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
                             <button id="btn-tplink-save" class="btn-control primary" onclick="saveTplinkAccount(this)">Save &amp; Connect</button>
                             <span id="tplink-status" class="settings-hint" style="margin:0;"></span>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Smart Meter (Bright)</h3>
+                        <p class="settings-hint">Shows your electricity and gas use on the Smart Home tab, using the
+                            login of the free Bright app. Readings come from your smart meter via Bright's servers and
+                            are usually an hour or two behind.</p>
+                        <div class="settings-group">
+                            <label for="glow-username">Email</label>
+                            <input type="email" id="glow-username" autocomplete="off" spellcheck="false">
+                        </div>
+                        <div class="settings-group">
+                            <label for="glow-password">Password</label>
+                            <input type="password" id="glow-password" autocomplete="new-password">
+                        </div>
+                        <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+                            <button id="btn-glow-save" class="btn-control primary" onclick="saveGlowAccount(this)">Save &amp; Connect</button>
+                            <span id="glow-status" class="settings-hint" style="margin:0;"></span>
                         </div>
                     </div>
                 </div>

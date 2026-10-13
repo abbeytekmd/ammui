@@ -7743,6 +7743,118 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
+/* Energy: smart meter readings from the Bright app */
+.energy-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.energy-card {
+    --energy-colour: var(--primary);
+}
+
+.energy-card.energy-gas {
+    --energy-colour: #f59e0b;
+}
+
+.energy-card .plug-card-icon {
+    background: var(--energy-colour);
+    color: white;
+}
+
+.energy-figures {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.energy-big {
+    font-size: 1.6rem;
+    font-weight: 800;
+}
+
+.energy-cost {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.energy-chart {
+    display: block;
+    width: 100%;
+    height: 64px;
+    fill: var(--energy-colour);
+    border-bottom: 1px solid var(--card-border);
+}
+
+.energy-axis {
+    display: flex;
+    justify-content: space-between;
+    margin-top: -0.6rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.energy-week {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.energy-day {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.energy-day-bar {
+    width: 100%;
+    height: 40px;
+    display: flex;
+    align-items: flex-end;
+}
+
+.energy-day-bar span {
+    width: 100%;
+    border-radius: 0.25rem 0.25rem 0 0;
+    background: var(--energy-colour);
+    opacity: 0.45;
+}
+
+.energy-day.today .energy-day-bar span {
+    opacity: 1;
+}
+
+.energy-day-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.energy-totals {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.energy-totals div {
+    display: flex;
+    flex-direction: column;
+}
+
+.energy-totals span {
+    font-size: 0.75rem;
+}
+
+.energy-totals b {
+    color: var(--text);
+}
+
 /* Twinkly: a string of coloured bulbs above the lights, glowing and twinkling while any are on */
 .lights-banner {
     height: 64px;

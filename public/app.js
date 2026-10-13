@@ -3514,7 +3514,7 @@ async function importKeysFromDevice() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to get keys');
-        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3', tplinkAccount: 'TP-Link login' };
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3', tplinkAccount: 'TP-Link login', glowAccount: 'Bright login' };
         showToast(data.imported.length
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
@@ -4466,7 +4466,7 @@ function switchSettingsTab(tab, btnEl) {
 
     // Update tab buttons
     modalContent.querySelectorAll('.settings-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.textContent.trim().toLowerCase() === tab.toLowerCase());
+        btn.classList.toggle('active', (btn.dataset.tab || btn.textContent.trim().toLowerCase()) === tab.toLowerCase());
     });
     // Update panels
     modalContent.querySelectorAll('.settings-panel').forEach(panel => {
@@ -4479,7 +4479,7 @@ function switchSettingsTab(tab, btnEl) {
     }
 
     if (tab.toLowerCase() === 'tools') loadToolsStatus();
-    if (tab.toLowerCase() === 'plugs') loadPlugSettings();
+    if (tab.toLowerCase() === 'smarthome') loadPlugSettings();
 }
 
 // Settings → Tools: which external programs (ffmpeg, yt-dlp, ...) the server can run.
@@ -9841,6 +9841,7 @@ const deviceIcon = p => p.type === 'twinkly' ? LIGHTS_ICON : PLUG_ICON;
 async function showSmartHome() {
     setAppView('smarthome');
     if (!smartHomePlugs.length) document.getElementById('smarthome-status').textContent = 'Looking for plugs...';
+    loadEnergy();
     await refreshSmartHome();
 }
 
@@ -9854,6 +9855,7 @@ async function refreshSmartHome() {
             if (!res.ok) throw new Error(data.error || res.statusText);
             smartHomePlugs = data.plugs || [];
             if (!smartHomeDragging) renderSmartHome();
+            if (Date.now() - energyLoadedAt > ENERGY_REFRESH_MS) loadEnergy();
         } catch (err) {
             document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
         }
@@ -9914,6 +9916,82 @@ function renderSmartHome() {
     const banner = document.getElementById('smarthome-lights-banner');
     if (lights.length && !banner.innerHTML) banner.innerHTML = lightsBannerSvg();
     banner.classList.toggle('on', lights.some(p => p.outlets.some(o => o.on)));
+}
+
+// Smart meter readings (Bright app login, see lib/smart-home/glow.js). They move half-hourly at
+// most and arrive late, so they're re-read far less often than the plugs.
+const ENERGY_REFRESH_MS = 5 * 60 * 1000;
+let energyLoadedAt = 0;
+const ENERGY_ICONS = {
+    electricity: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2 4 14h7l-1 8 9-12h-7Z"></path></svg>`,
+    gas: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22a7 7 0 0 0 7-7c0-4-3-6-4-10-2 2-3 4-3 6-1-1-2-2-2-4-3 2-5 5-5 8a7 7 0 0 0 7 7Z"></path></svg>`,
+};
+const pounds = pence => `£${(pence / 100).toFixed(2)}`;
+const kwhText = kwh => `${kwh < 10 ? kwh.toFixed(2) : kwh.toFixed(1)} kWh`;
+const clockTime = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+async function loadEnergy({ refresh = false } = {}) {
+    energyLoadedAt = Date.now();
+    try {
+        const res = await fetch(`/api/energy${refresh ? '?refresh=1' : ''}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        renderEnergy(data);
+    } catch (err) {
+        renderEnergy({ configured: true, error: err.message });
+    }
+}
+
+function renderEnergy(data) {
+    const section = document.getElementById('smarthome-energy');
+    const grid = document.getElementById('smarthome-energy-grid');
+    section.hidden = !data.configured;
+    if (!data.configured) return;
+    if (data.error) {
+        grid.innerHTML = `<div class="plug-card unavailable"><div class="plug-card-status">Couldn't get meter readings: ${escapeHtml(data.error)}</div>
+            <button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Check Bright Login</button></div>`;
+        return;
+    }
+    grid.innerHTML = data.fuels.map(energyCard).join('') || '<div class="smarthome-status">No meter readings yet.</div>';
+}
+
+function energyCard(f) {
+    const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
+    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
+    const peak = Math.max(...f.halfHours.map(h => h.kwh), 0.001);
+    const bars = f.halfHours.map((h, i) => `<rect x="${i + 0.15}" y="${20 - (h.kwh / peak) * 20}" width="0.7" height="${(h.kwh / peak) * 20}">
+        <title>${clockTime(h.t)}: ${kwhText(h.kwh)}</title></rect>`).join('');
+    const weekPeak = Math.max(...f.week.map(d => d.kwh), 0.001);
+    const today = f.week.length ? f.week[f.week.length - 1].date : '';
+    const week = f.week.map(d => {
+        const day = new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' });
+        return `<div class="energy-day ${d.date === today ? 'today' : ''}" title="${day}: ${kwhText(d.kwh)}${cost(d.pence)}">
+            <div class="energy-day-bar"><span style="height:${Math.max(2, (d.kwh / weekPeak) * 100)}%"></span></div>
+            <div class="energy-day-label">${day.slice(0, 2)}</div></div>`;
+    }).join('');
+    return `
+        <div class="plug-card energy-card energy-${f.fuel}">
+            <div class="plug-card-head">
+                <div class="plug-card-icon">${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}</div>
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${name}</div>
+                    <div class="plug-card-status">${f.today.dataTo ? `Today, readings up to ${clockTime(f.today.dataTo)}` : 'No readings yet today'}</div>
+                </div>
+            </div>
+            <div class="energy-figures">
+                <span class="energy-big">${kwhText(f.today.kwh)}</span>
+                ${f.hasCost ? `<span class="energy-cost">${pounds(f.today.pence)}</span>` : ''}
+            </div>
+            <svg class="energy-chart" viewBox="0 0 48 20" preserveAspectRatio="none" role="img" aria-label="${name} use today by half hour">${bars}</svg>
+            <div class="energy-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
+            <div class="energy-week">${week}</div>
+            <div class="energy-totals">
+                <div><span>Yesterday</span><b>${kwhText(f.yesterday.kwh)}</b>${f.hasCost ? pounds(f.yesterday.pence) : ''}</div>
+                <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
+            </div>
+        </div>`;
 }
 
 function plugCard(p) {
@@ -10000,11 +10078,11 @@ async function setPlugBrightness(input) {
 function openPlugSettings() {
     openClientSettingsModal();
     const tab = [...document.querySelectorAll('#client-settings-modal .settings-tab')]
-        .find(b => b.textContent.trim().toLowerCase() === 'plugs');
-    if (tab) switchSettingsTab('plugs', tab);
+        .find(b => b.dataset.tab === 'smarthome');
+    if (tab) switchSettingsTab('smarthome', tab);
 }
 
-// Devices → Plugs: everything found, with names, hiding and the TP-Link login.
+// Devices → Smart Home: everything found, with names, hiding and the TP-Link login.
 let managedPlugs = [];
 
 async function loadPlugSettings() {
@@ -10018,6 +10096,7 @@ async function loadPlugSettings() {
         const password = document.getElementById('tplink-password');
         password.value = '';
         password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
+        loadGlowAccount();
     } catch (err) {
         list.innerHTML = `<div class="empty-state-mini">Couldn't load plugs: ${escapeHtml(err.message)}</div>`;
         return;
@@ -10140,6 +10219,42 @@ async function saveTplinkAccount(btn) {
         const connected = tapo.filter(p => p.online).length;
         status.textContent = tapo.length ? `Connected to ${connected} of ${tapo.length} Tapo plug${tapo.length !== 1 ? 's' : ''}` : 'Saved';
         if (appView === 'smarthome') refreshSmartHome();
+    } catch (err) {
+        status.textContent = `Failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function loadGlowAccount() {
+    try {
+        const account = await (await fetch('/api/energy/account')).json();
+        document.getElementById('glow-username').value = account.username || '';
+        const password = document.getElementById('glow-password');
+        password.value = '';
+        password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
+    } catch (err) {
+        document.getElementById('glow-status').textContent = `Couldn't load: ${err.message}`;
+    }
+}
+
+async function saveGlowAccount(btn) {
+    const status = document.getElementById('glow-status');
+    btn.disabled = true;
+    status.textContent = 'Connecting...';
+    try {
+        const res = await fetch('/api/energy/account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: document.getElementById('glow-username').value,
+                password: document.getElementById('glow-password').value,
+            })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        await loadGlowAccount();
+        status.textContent = 'Connected';
+        if (appView === 'smarthome') loadEnergy();
     } catch (err) {
         status.textContent = `Failed: ${err.message}`;
     } finally {
