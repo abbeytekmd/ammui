@@ -9962,38 +9962,69 @@ function renderEnergy(data) {
     grid.innerHTML = data.fuels.map(energyCard).join('') || '<div class="smarthome-status">No meter readings yet.</div>';
 }
 
+// A round top for a chart's scale and the step between its gridlines, e.g. 13.2 -> { max: 15, step: 5 }
+function niceScale(peak, lines = 3) {
+    const raw = Math.max(peak, 0.1) / lines;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+    return { max: step * Math.ceil(Math.max(peak, 0.1) / step), step };
+}
+
+const shortDate = date => new Date(`${date}T12:00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' });
+
 function energyCard(f) {
     const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
     const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
-    const peak = Math.max(...f.halfHours.map(h => h.kwh), 0.001);
-    const bars = f.halfHours.map((h, i) => `<rect x="${i + 0.15}" y="${20 - (h.kwh / peak) * 20}" width="0.7" height="${(h.kwh / peak) * 20}">
-        <title>${clockTime(h.t)}: ${kwhText(h.kwh)}</title></rect>`).join('');
-    const weekPeak = Math.max(...f.week.map(d => d.kwh), 0.001);
-    const today = f.week.length ? f.week[f.week.length - 1].date : '';
-    const week = f.week.map(d => {
+    const lastWeek = f.weeks[f.weeks.length - 1];
+    const earlier = f.weeks.slice(0, -1).filter(w => w.kwh > 0);
+    const average = earlier.length ? earlier.reduce((sum, w) => sum + w.kwh, 0) / earlier.length : 0;
+    const change = average ? Math.round((lastWeek.kwh / average - 1) * 100) : null;
+    const comparison = change === null ? 'Not enough history to compare yet'
+        : `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} the ${earlier.length}-week average of ${kwhText(average)}`;
+
+    const scale = niceScale(Math.max(...f.lastWeek.map(d => d.kwh), 0));
+    const ticks = Array.from({ length: Math.round(scale.max / scale.step) + 1 }, (_, i) => scale.max - i * scale.step);
+    const tickText = v => +v.toFixed(2);
+    const days = f.lastWeek.map(d => {
         const day = new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' });
-        return `<div class="energy-day ${d.date === today ? 'today' : ''}" title="${day}: ${kwhText(d.kwh)}${cost(d.pence)}">
-            <div class="energy-day-bar"><span style="height:${Math.max(2, (d.kwh / weekPeak) * 100)}%"></span></div>
+        return `<div class="energy-day" title="${day} ${shortDate(d.date)}: ${kwhText(d.kwh)}${cost(d.pence)}">
+            <div class="energy-day-bar"><span style="height:${d.kwh ? Math.max(1, (d.kwh / scale.max) * 100) : 0}%"></span></div>
             <div class="energy-day-label">${day.slice(0, 2)}</div></div>`;
     }).join('');
+
+    const weekPeak = Math.max(...f.weeks.map(w => w.kwh), 0.001);
+    const weeks = f.weeks.map((w, i) => {
+        const latest = i === f.weeks.length - 1;
+        return `<div class="energy-day ${latest ? 'today' : ''}" title="${shortDate(w.from)} – ${shortDate(w.to)}: ${kwhText(w.kwh)}${cost(w.pence)}">
+            <div class="energy-day-bar small"><span style="height:${Math.max(2, (w.kwh / weekPeak) * 100)}%"></span></div>
+            <div class="energy-day-label">${latest ? 'Last' : shortDate(w.from)}</div></div>`;
+    }).join('');
+
     return `
         <div class="plug-card energy-card energy-${f.fuel}">
             <div class="plug-card-head">
                 <div class="plug-card-icon">${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}</div>
                 <div class="plug-card-title">
                     <div class="plug-card-name">${name}</div>
-                    <div class="plug-card-status">${f.today.dataTo ? `Today, readings up to ${clockTime(f.today.dataTo)}` : 'No readings yet today'}</div>
+                    <div class="plug-card-status">Last 7 days, ${shortDate(lastWeek.from)} – ${shortDate(lastWeek.to)}</div>
                 </div>
             </div>
             <div class="energy-figures">
-                <span class="energy-big">${kwhText(f.today.kwh)}</span>
-                ${f.hasCost ? `<span class="energy-cost">${pounds(f.today.pence)}</span>` : ''}
+                <span class="energy-big">${kwhText(lastWeek.kwh)}</span>
+                ${f.hasCost ? `<span class="energy-cost">${pounds(lastWeek.pence)}</span>` : ''}
             </div>
-            <svg class="energy-chart" viewBox="0 0 48 20" preserveAspectRatio="none" role="img" aria-label="${name} use today by half hour">${bars}</svg>
-            <div class="energy-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>24:00</span></div>
-            <div class="energy-week">${week}</div>
+            <div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${comparison}</div>
+            <div class="energy-plot" role="img" aria-label="${name} use per day over the last 7 days">
+                <div class="energy-scale">${ticks.map(v => `<span>${tickText(v)}</span>`).join('')}</div>
+                <div class="energy-plot-area">
+                    <div class="energy-gridlines">${ticks.map(() => '<i></i>').join('')}</div>
+                    <div class="energy-week">${days}</div>
+                </div>
+            </div>
+            <div class="energy-section-label">Weekly totals, last ${f.weeks.length} weeks</div>
+            <div class="energy-week">${weeks}</div>
             <div class="energy-totals">
-                <div><span>Yesterday</span><b>${kwhText(f.yesterday.kwh)}</b>${f.hasCost ? pounds(f.yesterday.pence) : ''}</div>
+                <div><span>Today${f.today.dataTo ? ` (to ${clockTime(f.today.dataTo)})` : ''}</span><b>${kwhText(f.today.kwh)}</b>${f.hasCost ? pounds(f.today.pence) : ''}</div>
                 <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
             </div>
         </div>`;

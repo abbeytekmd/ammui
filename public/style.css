@@ -7882,19 +7882,80 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
-.energy-chart {
-    display: block;
-    width: 100%;
-    height: 64px;
-    fill: var(--energy-colour);
-    border-bottom: 1px solid var(--card-border);
+.energy-compare {
+    margin-top: -0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
-.energy-axis {
+.energy-compare.up::before {
+    content: '▲ ';
+}
+
+.energy-compare.down::before {
+    content: '▼ ';
+}
+
+/* Daily bars with a kWh scale down the left; the bars share the scale's height so they line up with it */
+.energy-plot {
+    --plot-height: 96px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.4rem;
+}
+
+.energy-scale {
+    height: var(--plot-height);
     display: flex;
+    flex-direction: column;
     justify-content: space-between;
-    margin-top: -0.6rem;
-    font-size: 0.7rem;
+    font-size: 0.65rem;
+    line-height: 0;
+    text-align: right;
+    color: var(--text-muted);
+}
+
+.energy-scale span:first-child::after {
+    content: ' kWh';
+}
+
+.energy-plot-area {
+    position: relative;
+}
+
+.energy-gridlines {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: var(--plot-height);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+}
+
+.energy-gridlines i {
+    border-top: 1px dashed var(--card-border);
+}
+
+.energy-gridlines i:last-child {
+    border-top-style: solid;
+}
+
+.energy-plot .energy-day-bar {
+    height: var(--plot-height);
+    position: relative;
+}
+
+.energy-plot .energy-day-bar.small {
+    height: 32px;
+}
+
+.energy-day-bar span {
+    opacity: 0.85;
+}
+
+.energy-section-label {
+    font-size: 0.75rem;
     color: var(--text-muted);
 }
 
