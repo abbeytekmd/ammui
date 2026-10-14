@@ -6,7 +6,16 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 
 **Get started:** on Windows, download and run the installer. See [Installation](#-installation).
 
-<img src="images/ammui-desktop-mode.png" />
+<table>
+<tr>
+<td><img src="images/ammui-music.png" /><br/><b>Music</b> - browse your library and play to Sonos, DLNA or AirPlay</td>
+<td><img src="images/ammui-slideshow-calendar.png" /><br/><b>Slideshow</b> - family photos with today's calendar alongside</td>
+</tr>
+<tr>
+<td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars with meal planning</td>
+<td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - energy usage, smart plugs and Twinkly lights</td>
+</tr>
+</table>
 
 ## Features
 
