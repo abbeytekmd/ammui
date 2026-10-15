@@ -6755,6 +6755,10 @@ input:checked+.slider:before {
     padding: 0;
 }
 
+.ss-agenda-list + .ss-agenda-title {
+    margin-top: 10px;
+}
+
 .ss-agenda-list li {
     display: flex;
     align-items: baseline;

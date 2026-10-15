@@ -173,13 +173,14 @@ class Slideshow {
         this.resetIdleTimer();
     }
 
-    // Today's entries (from the Calendar tab) and events (from subscribed calendars) in the side
-    // panel, which only shows on landscape screens. Left empty, and so hidden, when there are none.
+    // Today's and tomorrow's entries (from the Calendar tab) and events (from subscribed calendars) in
+    // the side panel, which only shows on landscape screens. A day with nothing on is left out, and the
+    // panel is left empty, and so hidden, when neither has anything.
     async loadAgenda() {
         const el = document.getElementById('ss-agenda');
         if (!el) return;
         const now = new Date();
-        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))}`;
+        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2))}`;
         try {
             const [cals, entryData, tagData, feedData] = await Promise.all([
                 fetch('/api/calendars').then(r => r.json()),
@@ -190,28 +191,40 @@ class Slideshow {
             const calsById = Object.fromEntries(cals.map(c => [c.id, c]));
             // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from
             const entries = (entryData.entries || []).map(e => ({
-                title: e.recipe ? e.recipe.name : e.title, allDay: true,
+                title: e.recipe ? e.recipe.name : e.title, allDay: true, startKey: e.date, endKey: e.date,
                 source: e.tags?.[0] || '', color: tagData.colors?.[e.tags?.[0]],
             }));
+            // All-day events carry date keys with an exclusive end; timed ones carry ISO times
             const events = (feedData.events || []).map(ev => ({
-                title: ev.title, allDay: ev.allDay, start: ev.allDay ? null : new Date(ev.start),
-                end: ev.allDay ? null : new Date(ev.end),
+                title: ev.title, allDay: ev.allDay,
+                startKey: ev.allDay ? ev.start : null, endKey: ev.allDay ? ev.end : null,
+                start: ev.allDay ? null : new Date(ev.start), end: ev.allDay ? null : new Date(ev.end),
                 source: calsById[ev.calendarId]?.name || '', color: calsById[ev.calendarId]?.color,
             }));
-            // All-day first, then by time
-            const items = [...entries, ...events].sort((a, b) => (a.allDay === b.allDay ? (a.start || 0) - (b.start || 0) : a.allDay ? -1 : 1));
-            if (!items.length) {
+            const all = [...entries, ...events];
+            const time = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            // Each day lists what overlaps it (so a multi-day event shows on both), all-day first, then by time
+            const days = [['Today', 0], ['Tomorrow', 1]].map(([label, offset]) => {
+                const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+                const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1);
+                const key = calendarDateKey(dayStart);
+                const items = all.filter(it => it.allDay
+                    ? it.startKey <= key && (it.endKey > key || it.endKey === it.startKey)
+                    : it.start < dayEnd && (it.end > dayStart || +it.start === +dayStart))
+                    .sort((a, b) => (a.allDay === b.allDay ? (a.start || 0) - (b.start || 0) : a.allDay ? -1 : 1));
+                return { label, items };
+            }).filter(d => d.items.length);
+            if (!days.length) {
                 el.innerHTML = '';
                 return;
             }
-            const time = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            el.innerHTML = `<div class="ss-agenda-title">Today</div><ul class="ss-agenda-list">${items.map(it => `
+            el.innerHTML = days.map(({ label, items }) => `<div class="ss-agenda-title">${label}</div><ul class="ss-agenda-list">${items.map(it => `
                 <li class="${it.end && it.end < now ? 'past' : ''}">
                     <span class="ss-agenda-dot" style="background:${it.color || 'var(--accent)'}"></span>
                     <span class="ss-agenda-time">${it.allDay ? 'All day' : time(it.start)}</span>
                     <span class="ss-agenda-text">${escapeHtml(it.title)}</span>
                     ${it.source ? `<span class="ss-agenda-source" style="color:${it.color || 'var(--accent)'}">${escapeHtml(it.source)}</span>` : ''}
-                </li>`).join('')}</ul>`;
+                </li>`).join('')}</ul>`).join('');
         } catch (err) {
             console.warn('[SLIDESHOW] Calendar load failed:', err.message);
         }

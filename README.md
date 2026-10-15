@@ -41,13 +41,11 @@ A web based home hub with DLNA server, player and controller for music, videos a
 
 ## Target Hardware
 
-The install contains the media server and a webserver that you can connect the UI to. It should run on anything but will need storage space for your media library which could be a lot. The UI runs from a browser so any device with this will work. It needs to be on the same machine as the server or on the local network to it. A touchscreen is highly recommended.
+The install contains the media server and a built in webserver to serve the UI. It should run on anything that can run node.js (Windows/Linux/MacOS) and will need storage space for the media library. The UI runs from a browser so any device with one should work. It can be on the same machine as the server and/or on any device on the local network to it. A touchscreen is highly recommended.
 
-I have had this running on a headless linux box, accessing the UI from an Android tablet, my work PC, my IPhone and a Raspberry PI 5 connected to a 15" display. I currently run the whole thing on a DELL All-In-One Optiplex 3011, bought from ebay for 70 quid, and it works great. For info, the Amazon Echo Show 21 is currently around 500 quid.
+I initially had this running on a headless linux box and accessed the UI from an Android tablet, my work PC, my IPhone and a Raspberry PI 5 connected to a 15" display. I currently run the whole thing on a DELL Touchscreen All-In-One Optiplex 3011, bought from ebay for 70 quid, and it works really well.
 
 ## 🚀 Installation
-
-> **Windows only for now.** An installer for Windows is available below. Installers for other platforms are coming; until then, see [Other platforms (manual install)](#other-platforms-manual-install).
 
 ### Windows
 
@@ -102,7 +100,7 @@ Run the installer from a command prompt to change what it does:
 
 ### Other platforms (manual install)
 
-Installers for other platforms are on the way. Until then, AMMUI can be installed by hand on any system that runs Node.js.
+AMMUI can be installed by hand on any system that runs Node.js.
 
 #### Prerequisites
 *   Node.js (v22.13 or higher, for its built-in SQLite)
@@ -122,19 +120,19 @@ Installers for other platforms are on the way. Until then, AMMUI can be installe
     npm install
     ```
 
-3. Optional: Install ffmpeg for Airplay support, photo/video thumbnails and local playback of YouTube videos.
+3. Install ffmpeg for Airplay support, photo/video thumbnails and local playback of YouTube videos.
     ```bash
     sudo apt-get install ffmpeg
     ```
     or just download/install the package on Windows.
 
-4. Optional: Install Chromaprint (`fpcalc`) for "Identify with AcoustID".
+4. Install Chromaprint (`fpcalc`) for "Identify with AcoustID".
     ```bash
     sudo apt-get install libchromaprint-tools
     ```
     or on Windows download the Chromaprint build and put `fpcalc.exe` on your PATH. Then add a free AcoustID API key under Settings → Integrations.
 
-5. Optional: Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) so YouTube videos that have embedding disabled can still play locally (in the "Video" button on a track) instead of opening on youtube.com.
+5. Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) so YouTube videos that have embedding disabled can still play locally (in the "Video" button on a track) instead of opening on youtube.com.
     ```bash
     sudo apt-get install yt-dlp
     ```
