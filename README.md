@@ -1,6 +1,7 @@
 # Media Hub (AMMUI)
 
-A web based home hub with DLNA server, player and controller. Plays music and shows family photos and videos, great if you have a large mp3 and/or photo collection.
+A web based home hub with DLNA server, player and controller for music, videos and photos, a flexible slideshow feature and some smart home capability covering some smart plugs, twinkly lights and energy usage via the Bright API.
+
 * Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
 * Right side of the screen - playback device: DLNA player, Sonos, Airplay
 
@@ -23,24 +24,26 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 
 ## Features
 
-* Send music to local players (Sonos and DLNA players. Some Airplay support - ffmepg must be installed on the host machine)
-* Play music from local servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
-* Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent (photos from this month and last month), Music (album art of playing track)
-* Browse the media library as Music, Photos or Videos, each with its own home folder.
-* Set home folders for Music Browsing, Photo Browsing, Video Browsing and Slideshow.
-* Album art can be retrieved from discogs.
-* Watch a track's music video on YouTube, right from the track list (needs a YouTube API key - see [Music Videos](#music-videos)).
+* Maintain a local library of music, photos and videos.
+* Send to local players (Sonos and DLNA players. Some Airplay support)
+* Send from other local DLNA servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
+* Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent, Music (album art of playing track)
+* Album art can be retrieved from discogs (via a Discogs API key)
+* Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
+* Watch a track's music video on YouTube, right from the track list (via a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
-* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Smart Home tab (see [Smart Home](#smart-home)).
-* Runs over HTTPS with its own certificate, so browser features such as the microphone work from any device on your network (see [Secure Access (HTTPS)](#secure-access-https)).
+* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Smart Home tab (see [Smart Home](#smart-home)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
+* Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
+* See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
+* Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
+* Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
+* Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
-## Local Media Server
+## Target Hardware
 
-* Build local media library - Download/Tag/Organise music/photos. Served over DLNA.
-* Identify an untagged music track from its audio via AcoustID and fill in Title/Artist/Album/Year (needs an AcoustID API key in Settings and the `fpcalc`/Chromaprint tool installed).
-* View server and browser logs from the menu (Logs), filtered by type (YOUTUBE, DEBUG, DEVICES, UPLOAD, and so on) to help track down problems.
+The install contains the media server and a webserver that you can connect the UI to. It should run on anything but will need storage space for your media library which could be a lot. The UI runs from a browser so any device with this will work. It needs to be on the same machine as the server or on the local network to it. A touchscreen is highly recommended.
 
-I have this running on a headless linux box and I run the UI variously from a Samsung tablet, my work PC, a Raspberry PI 5 connected to a 15" display and, as a centrepiece in our house, a DELL All-In-One Optiplex 3011, bought from ebay for 60 quid.
+I have had this running on a headless linux box, accessing the UI from an Android tablet, my work PC, my IPhone and a Raspberry PI 5 connected to a 15" display. I currently run the whole thing on a DELL All-In-One Optiplex 3011, bought from ebay for 70 quid, and it works great. For info, the Amazon Echo Show 21 is currently around 500 quid.
 
 ## 🚀 Installation
 
@@ -270,6 +273,8 @@ Tapo and Kasa devices still on the older KLAP login are listed but can't be swit
 ### Timers
 
 The clock button on a card opens its **Timers**. These are kept on the plug or lights themselves, so they still run when the AMMUI server is off, and timers set in the Tapo, Kasa or Twinkly app show up here too.
+
+Once a device has a schedule, its clock button becomes a small clock face for the current half of the day (labelled AM or PM), shaded for the hours it's scheduled to be on, with a hand at the current time. Hover over it to see the whole day's on-times.
 
 * **Countdown** (Tapo and Kasa): turn the plug on or off after 15 minutes to 8 hours. A plug holds one countdown at a time.
 * **Schedule** (Tapo and Kasa): turn the plug on or off at a time of day, every day or on the days you pick. A schedule can be switched off without deleting it. Sunrise and sunset schedules made in the app are listed but can only have their time changed to a fixed one.
