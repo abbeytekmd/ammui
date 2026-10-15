@@ -8016,18 +8016,100 @@ input:checked+.slider:before {
     color: var(--text);
 }
 
-/* Twinkly: a string of coloured bulbs above the lights, glowing and twinkling while any are on */
-.lights-banner {
-    height: 64px;
+/* Decorative strips drawn above each smart home section (see the *BannerSvg functions in app.js) */
+.smarthome-banner {
+    height: 48px;
     overflow: hidden;
     border-radius: 1rem;
     background: var(--card-bg);
     border: 1px solid var(--card-border);
 }
 
-.lights-banner svg {
+.smarthome-banner svg {
     display: block;
 }
+
+/* Energy: pylons with current pulsing along the cables */
+.energy-pylon,
+.energy-wire,
+.energy-ground {
+    fill: none;
+    stroke: var(--text-muted);
+    stroke-linejoin: round;
+}
+
+.energy-pylon {
+    stroke-width: 1.2;
+    opacity: 0.7;
+}
+
+.energy-wire {
+    stroke-width: 1;
+    opacity: 0.5;
+}
+
+.energy-ground {
+    stroke-width: 1;
+    opacity: 0.25;
+}
+
+.energy-flow {
+    fill: none;
+    stroke: #f59e0b;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: 3 57;
+    animation: energy-flow 1.6s linear infinite;
+}
+
+@keyframes energy-flow {
+    to { stroke-dashoffset: -60; }
+}
+
+/* Plugs: a power strip whose switch LEDs glow while any plug is on */
+.plug-strip {
+    fill: var(--text-muted);
+    fill-opacity: 0.06;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.3;
+}
+
+.plugs-banner .socket {
+    fill: var(--text-muted);
+    fill-opacity: 0.12;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.4;
+}
+
+.plugs-banner .socket-slot {
+    fill: var(--text-muted);
+    opacity: 0.7;
+}
+
+.plugs-banner .socket-led {
+    fill: var(--text-muted);
+    opacity: 0.4;
+    transition: fill 0.4s, opacity 0.4s;
+}
+
+.plugs-banner .socket-led-glow {
+    fill: #22c55e;
+    filter: url(#socket-led-blur);
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.plugs-banner.on .socket-led {
+    fill: #22c55e;
+    opacity: 1;
+}
+
+.plugs-banner.on .socket-led-glow {
+    opacity: 0.8;
+    animation: bulb-twinkle 3s ease-in-out infinite;
+}
+
+/* Twinkly: a string of coloured bulbs above the lights, glowing and twinkling while any are on */
 
 .lights-wire {
     fill: none;
@@ -8066,7 +8148,9 @@ input:checked+.slider:before {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .lights-banner.on .bulb-glow {
+    .lights-banner.on .bulb-glow,
+    .plugs-banner.on .socket-led-glow,
+    .energy-flow {
         animation: none;
     }
 }

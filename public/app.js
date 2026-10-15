@@ -9885,9 +9885,10 @@ function plugStatusLine(p) {
 
 // A string of coloured bulbs hanging from a drooping wire, drawn wide and cropped to the section's width.
 // Each 150-unit span of wire is a quadratic curve whose control point sits midway, so x is linear in t.
+const BANNER_HEIGHT = 48;
 const LIGHT_COLOURS = ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7', '#ec4899'];
 function lightsBannerSvg() {
-    const width = 2400, span = 150, top = 14, sag = 22;
+    const width = 2400, span = 150, top = 8, sag = 16;
     const wireY = x => { const t = (x % span) / span; return top + 4 * sag * t * (1 - t); };
     let wire = `M0 ${top}`;
     for (let x = 0; x < width; x += span) wire += ` Q${x + span / 2} ${top + 2 * sag} ${x + span} ${top}`;
@@ -9901,9 +9902,49 @@ function lightsBannerSvg() {
             <ellipse class="bulb" cx="${x}" cy="${y + 13}" rx="5" ry="8" fill="${colour}"></ellipse>
             <ellipse cx="${x - 1.8}" cy="${y + 10}" rx="1.3" ry="2.6" fill="#fff" opacity="0.55"></ellipse></g>`;
     }
-    return `<svg viewBox="0 0 ${width} 64" height="64" width="100%" preserveAspectRatio="xMinYMid slice">
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">
         <defs><filter id="bulb-glow-blur" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="4"></feGaussianBlur></filter></defs>
         <path class="lights-wire" d="${wire}"></path>${bulbs}</svg>`;
+}
+
+// A power strip of UK sockets, each with a rocker switch whose LED glows while any plug is on.
+function plugsBannerSvg() {
+    const width = 2400, pitch = 64;
+    let sockets = '';
+    for (let x = 14, n = 0; x < width; x += pitch, n++) {
+        const delay = -((n * 0.61) % 3).toFixed(2);
+        sockets += `<g transform="translate(${x} 10)">
+            <rect class="socket" width="34" height="28" rx="4"></rect>
+            <rect class="socket-slot" x="15.5" y="5" width="3" height="7" rx="0.5"></rect>
+            <rect class="socket-slot" x="6" y="17" width="7" height="3" rx="0.5"></rect>
+            <rect class="socket-slot" x="21" y="17" width="7" height="3" rx="0.5"></rect>
+            <rect class="socket" x="38" y="5" width="10" height="18" rx="2"></rect>
+            <circle class="socket-led-glow" cx="43" cy="10" r="5" style="animation-delay:${delay}s"></circle>
+            <circle class="socket-led" cx="43" cy="10" r="1.8"></circle></g>`;
+    }
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">
+        <defs><filter id="socket-led-blur" x="-1" y="-1" width="3" height="3"><feGaussianBlur stdDeviation="2.5"></feGaussianBlur></filter></defs>
+        <rect class="plug-strip" x="-10" y="4" width="${width + 20}" height="40" rx="8"></rect>${sockets}</svg>`;
+}
+
+// A line of electricity pylons with current pulsing along the sagging cables between them.
+function energyBannerSvg() {
+    const width = 2400, pitch = 220, ground = 46, sag = 8;
+    const arms = [[-15, 12], [15, 12], [-11, 21], [11, 21]];
+    // Legs taper from 9 units either side at the ground to 2 at the top (y = 4)
+    const leg = (x, y, side) => x + side * (2 + 7 * (y - 4) / (ground - 4));
+    let towers = '', wires = '';
+    for (let x = 40; x < width + pitch; x += pitch) {
+        const brace = (y1, y2) => `M${leg(x, y1, -1)} ${y1}L${leg(x, y2, 1)} ${y2}M${leg(x, y1, 1)} ${y1}L${leg(x, y2, -1)} ${y2}`;
+        towers += `<path d="M${leg(x, ground, -1)} ${ground}L${x - 2} 4L${x} 1L${x + 2} 4L${leg(x, ground, 1)} ${ground}
+            M${x - 15} 12H${x + 15}M${x - 11} 21H${x + 11}${brace(12, 21)}${brace(21, 30)}${brace(30, ground)}
+            ${arms.map(([dx, y]) => `M${x + dx} ${y}v3`).join('')}"></path>`;
+        for (const [dx, y] of arms) wires += `M${x - pitch + dx} ${y + 3}Q${x - pitch / 2 + dx} ${y + 3 + 2 * sag} ${x + dx} ${y + 3}`;
+    }
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">
+        <path class="energy-ground" d="M0 ${ground + 0.5}H${width}"></path>
+        <path class="energy-wire" d="${wires}"></path><path class="energy-flow" d="${wires}"></path>
+        <g class="energy-pylon">${towers}</g></svg>`;
 }
 
 function renderSmartHome() {
@@ -9915,6 +9956,9 @@ function renderSmartHome() {
     const lights = shown.filter(p => p.type === 'twinkly');
     const plugs = shown.filter(p => p.type !== 'twinkly');
     document.getElementById('smarthome-plugs').hidden = !plugs.length;
+    const plugsBanner = document.getElementById('smarthome-plugs-banner');
+    if (plugs.length && !plugsBanner.innerHTML) plugsBanner.innerHTML = plugsBannerSvg();
+    plugsBanner.classList.toggle('on', plugs.some(p => p.outlets.some(o => o.on)));
     document.getElementById('smarthome-grid').innerHTML = plugs.map(plugCard).join('');
     document.getElementById('smarthome-lights').hidden = !lights.length;
     document.getElementById('smarthome-lights-grid').innerHTML = lights.map(plugCard).join('');
@@ -9954,6 +9998,8 @@ function renderEnergy(data) {
     const grid = document.getElementById('smarthome-energy-grid');
     section.hidden = !data.configured;
     if (!data.configured) return;
+    const banner = document.getElementById('smarthome-energy-banner');
+    if (!banner.innerHTML) banner.innerHTML = energyBannerSvg();
     if (data.error) {
         grid.innerHTML = `<div class="plug-card unavailable"><div class="plug-card-status">Couldn't get meter readings: ${escapeHtml(data.error)}</div>
             <button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Check Bright Login</button></div>`;
