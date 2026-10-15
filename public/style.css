@@ -8383,6 +8383,219 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
+/* Timers: a clock button on each card opening the countdown/schedule dialog */
+.plug-card-timers {
+    flex: none;
+    margin-left: auto;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.plug-card-timers:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+/* With schedules, the button shows a clock face for this half of the day, shaded while scheduled on */
+.plug-card-timers.dials {
+    width: auto;
+    height: auto;
+    padding: 0.2rem 0.35rem 0.1rem;
+    border-radius: 0.6rem;
+}
+
+.schedule-dials .dial-face {
+    fill: rgba(255, 255, 255, 0.06);
+    stroke: var(--card-border);
+    stroke-width: 1;
+}
+
+.schedule-dials .dial-on {
+    fill: var(--primary);
+    opacity: 0.85;
+}
+
+.schedule-dials .dial-tick {
+    stroke: var(--text-muted);
+    stroke-width: 1;
+    opacity: 0.6;
+}
+
+.schedule-dials .dial-hand {
+    stroke: var(--accent);
+    stroke-width: 1.6;
+    stroke-linecap: round;
+}
+
+.schedule-dials .dial-hub {
+    fill: var(--accent);
+}
+
+.schedule-dials .dial-label {
+    fill: var(--text-muted);
+    font-size: 7.5px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-anchor: middle;
+}
+
+.plug-timers {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.plug-timers-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    align-items: flex-start;
+}
+
+.plug-timers-section h4 {
+    margin: 0;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.plug-timers-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.plug-timers-row.end {
+    justify-content: flex-end;
+}
+
+.plug-timers-input {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    color-scheme: dark;
+}
+
+.plug-timers-input option {
+    background: var(--bg);
+}
+
+.plug-timers-countdown {
+    flex: 1;
+    font-weight: 600;
+}
+
+.plug-timers-empty {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.plug-schedule {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.plug-schedule.off .plug-schedule-time,
+.plug-schedule.off .plug-schedule-what {
+    opacity: 0.5;
+}
+
+.plug-schedule input[type="checkbox"] {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    accent-color: var(--primary);
+}
+
+.plug-schedule-time {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.plug-schedule-what {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plug-schedule-what b {
+    color: var(--text);
+}
+
+.plug-schedule-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid rgba(99, 102, 241, 0.5);
+    border-radius: 0.6rem;
+}
+
+.plug-schedule-days {
+    display: flex;
+    gap: 0.35rem;
+}
+
+.plug-day input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.plug-day span {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.1rem;
+    height: 2.1rem;
+    border-radius: 50%;
+    border: 1px solid var(--card-border);
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.plug-day input:checked + span {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.plug-day input:focus-visible + span {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
 .manage-item-host.plug-state.ok {
     color: #34d399;
 }

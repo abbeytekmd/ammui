@@ -267,6 +267,16 @@ The **Smart Home** tab shows a card for each smart plug and set of Twinkly light
 
 Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Other plugs (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.
 
+### Timers
+
+The clock button on a card opens its **Timers**. These are kept on the plug or lights themselves, so they still run when the AMMUI server is off, and timers set in the Tapo, Kasa or Twinkly app show up here too.
+
+* **Countdown** (Tapo and Kasa): turn the plug on or off after 15 minutes to 8 hours. A plug holds one countdown at a time.
+* **Schedule** (Tapo and Kasa): turn the plug on or off at a time of day, every day or on the days you pick. A schedule can be switched off without deleting it. Sunrise and sunset schedules made in the app are listed but can only have their time changed to a fixed one.
+* **Twinkly** lights have one daily on time and one daily off time, with no countdown and no choice of days. Saving a time also sets the lights' clock from the AMMUI server's clock, so if the server runs on a different timezone from your house, the times follow the server. Paired units are all set together.
+
+Timers aren't offered on Kasa power strips yet.
+
 ### Setting up
 
 1. Set the plugs up in the Tapo or Kasa app (or the lights in the Twinkly app) as usual, on the same network as the AMMUI server.

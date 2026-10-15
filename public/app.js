@@ -10182,6 +10182,11 @@ function plugCard(p) {
                     <div class="plug-card-name">${escapeHtml(p.name)}</div>
                     <div class="plug-card-status">${plugStatusLine(p)}</div>
                 </div>
+                ${p.hasTimers && p.online !== false ? (spans => spans
+                    ? `<button type="button" class="plug-card-timers dials" onclick="openPlugTimers(${i})"
+                        title="${scheduleSpansText(spans)} · Timers" aria-label="Timers for ${escapeHtml(p.name)}. ${scheduleSpansText(spans)}">${scheduleDialsSvg(spans)}</button>`
+                    : `<button type="button" class="plug-card-timers" onclick="openPlugTimers(${i})"
+                        title="Timers" aria-label="Timers for ${escapeHtml(p.name)}">${TIMER_ICON}</button>`)(scheduledOnToday(p.schedules)) : ''}
             </div>
             ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
                 ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
@@ -10237,6 +10242,272 @@ async function setPlugBrightness(input) {
         showToast(`Couldn't dim ${p.name}: ${err.message}`, 'error', 5000);
     }
     renderSmartHome();
+}
+
+// Timers dialog: the countdown and schedules kept on the device itself (see "Timers" in
+// lib/smart-home/index.js), so they run even when AMMUI isn't.
+const TIMER_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="13" r="8"></circle><path d="M12 9v4l2.5 2.5M9 2h6"></path></svg>`;
+const COUNTDOWN_CHOICES = [15, 30, 60, 120, 240, 480];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]; // days are kept Sunday first; shown Monday first
+const DAY_LETTERS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+let plugTimers = null; // { plug, timers, editing: rule id | 'new' | null, busy }
+let plugTimersTick = null;
+
+const clockText = minute => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+const durationText = m => m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ''}`;
+
+function daysText(days) {
+    if (!days) return 'Once';
+    const key = days.map(d => d ? 1 : 0).join('');
+    if (key === '1111111') return 'Every day';
+    if (key === '0111110') return 'Weekdays';
+    if (key === '1000001') return 'Weekends';
+    return WEEK_ORDER.filter(d => days[d]).map(d => DAY_NAMES[d]).join(', ');
+}
+
+function scheduleTimeText(rule) {
+    if (!rule.at) return clockText(rule.minute);
+    const name = rule.at.type === 'sunrise' ? 'Sunrise' : 'Sunset';
+    return rule.at.offset ? `${name} ${rule.at.offset > 0 ? '+' : '−'}${Math.abs(rule.at.offset)} min` : name;
+}
+
+// When today's schedules leave the device on, as [start, end] minutes after midnight, or null
+// if it has no fixed-time schedules to go by. A day starts in the state the last earlier
+// schedule left it in, looking back up to a week. Sunrise/sunset and one-off rules are left out.
+function scheduledOnToday(schedules, now = new Date()) {
+    const rules = (schedules || []).filter(r => r.enabled && !r.at && r.days);
+    if (!rules.length) return null;
+    const eventsOn = day => rules.filter(r => r.days[day]).sort((a, b) => a.minute - b.minute);
+    const today = now.getDay();
+    let start = null;
+    for (let back = 1; back <= 7; back++) {
+        const earlier = eventsOn((today - back + 7) % 7);
+        if (earlier.length) { start = earlier[earlier.length - 1].on ? 0 : null; break; }
+    }
+    const spans = [];
+    for (const r of eventsOn(today)) {
+        if (r.on && start === null) start = r.minute;
+        else if (!r.on && start !== null) {
+            if (r.minute > start) spans.push([start, r.minute]);
+            start = null;
+        }
+    }
+    if (start !== null) spans.push([start, 1440]);
+    return spans;
+}
+
+// A 12-hour clock face for the current half of the day, labelled AM or PM, shaded where the
+// device is scheduled on, with a hand at the current time.
+function scheduleDialsSvg(spans, now = new Date()) {
+    const r = 12, cx = 14, cy = 14, nowMin = now.getHours() * 60 + now.getMinutes();
+    const from = nowMin < 720 ? 0 : 720;
+    const point = (m, radius = r) => {
+        const a = (m / 720) * 2 * Math.PI;
+        return [(cx + radius * Math.sin(a)).toFixed(2), (cy - radius * Math.cos(a)).toFixed(2)];
+    };
+    const shading = spans.map(([s, e]) => [Math.max(s, from), Math.min(e, from + 720)])
+        .filter(([s, e]) => e > s)
+        .map(([s, e]) => {
+            if (e - s >= 720) return `<circle class="dial-on" cx="${cx}" cy="${cy}" r="${r}"></circle>`;
+            const [x1, y1] = point(s - from), [x2, y2] = point(e - from);
+            return `<path class="dial-on" d="M${cx} ${cy}L${x1} ${y1}A${r} ${r} 0 ${e - s > 360 ? 1 : 0} 1 ${x2} ${y2}Z"></path>`;
+        }).join('');
+    const ticks = [0, 180, 360, 540].map(m => {
+        const [x1, y1] = point(m, r - 2.5), [x2, y2] = point(m);
+        return `<line class="dial-tick" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"></line>`;
+    }).join('');
+    const [hx, hy] = point(nowMin - from, r - 1.5);
+    return `<svg class="schedule-dials" width="28" height="38" viewBox="0 0 28 38" aria-hidden="true">
+        <circle class="dial-face" cx="${cx}" cy="${cy}" r="${r}"></circle>${shading}${ticks}
+        <line class="dial-hand" x1="${cx}" y1="${cy}" x2="${hx}" y2="${hy}"></line><circle class="dial-hub" cx="${cx}" cy="${cy}" r="1.6"></circle>
+        <text class="dial-label" x="${cx}" y="36">${from ? 'PM' : 'AM'}</text></svg>`;
+}
+
+function scheduleSpansText(spans) {
+    if (!spans.length) return 'Scheduled off all day today';
+    return `Scheduled on today ${spans.map(([s, e]) => `${clockText(s)}–${e === 1440 ? '24:00' : clockText(e)}`).join(', ')}`;
+}
+
+function openPlugTimers(i) {
+    const plug = smartHomePlugs[i];
+    if (!plug) return;
+    plugTimers = { plug, timers: null, editing: null, busy: false };
+    document.getElementById('plug-timers-name').textContent = plug.name;
+    document.getElementById('plug-timers-modal').style.display = 'flex';
+    renderPlugTimers();
+    plugTimersRequest('GET', 'timers');
+    clearInterval(plugTimersTick);
+    plugTimersTick = setInterval(updateCountdownText, 15000);
+}
+
+function closePlugTimers() {
+    document.getElementById('plug-timers-modal').style.display = 'none';
+    clearInterval(plugTimersTick);
+    plugTimers = null;
+}
+
+// Sends a change (or the first read) and shows the timers the device replies with.
+async function plugTimersRequest(method, path, body) {
+    const state = plugTimers;
+    if (!state || state.busy) return false;
+    state.busy = true;
+    renderPlugTimers();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(state.plug.id)}/${path}`, {
+            method,
+            headers: body ? { 'Content-Type': 'application/json' } : {},
+            body: body ? JSON.stringify(body) : undefined
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        state.timers = data.timers;
+        state.error = null;
+        // Keep the card's dials in step
+        const card = smartHomePlugs.find(x => x.id === state.plug.id);
+        if (card) { card.schedules = data.timers.schedules; renderSmartHome(); }
+        return true;
+    } catch (err) {
+        if (state.timers) showToast(`Couldn't change the timers: ${err.message}`, 'error', 5000);
+        else state.error = err.message;
+        return false;
+    } finally {
+        state.busy = false;
+        if (plugTimers === state) renderPlugTimers();
+    }
+}
+
+function countdownLeftText(c) {
+    const left = Math.max(1, Math.round((c.endsAt - Date.now()) / 60000));
+    const at = new Date(c.endsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return `Turns ${c.on ? 'on' : 'off'} in ${durationText(left)} (at ${at})`;
+}
+
+function updateCountdownText() {
+    const el = document.getElementById('plug-countdown-left');
+    const c = plugTimers?.timers?.countdown;
+    if (!el || !c) return;
+    if (c.endsAt <= Date.now()) plugTimersRequest('GET', 'timers');
+    else el.textContent = countdownLeftText(c);
+}
+
+function renderPlugTimers() {
+    const body = document.getElementById('plug-timers-body');
+    const state = plugTimers;
+    if (!body || !state) return;
+    const { timers, busy } = state;
+    if (!timers) {
+        body.innerHTML = `<div class="smarthome-status">${state.error ? `Couldn't read the timers: ${escapeHtml(state.error)}` : 'Reading the timers...'}</div>`;
+        return;
+    }
+    const { limits } = timers;
+    const disabled = busy ? 'disabled' : '';
+    let html = '';
+
+    if (limits.countdown) {
+        const c = timers.countdown;
+        html += `<div class="plug-timers-section"><h4>Countdown</h4>${c ? `
+            <div class="plug-timers-row">
+                <span id="plug-countdown-left" class="plug-timers-countdown">${countdownLeftText(c)}</span>
+                <button type="button" class="btn-control btn-small ghost" onclick="cancelPlugCountdown()" ${disabled}>Cancel</button>
+            </div>` : `
+            <div class="plug-timers-row">
+                <select id="plug-countdown-action" class="plug-timers-input" aria-label="Action">
+                    <option value="off" ${state.plug.outlets.some(o => o.on) ? 'selected' : ''}>Turn off</option>
+                    <option value="on" ${state.plug.outlets.some(o => o.on) ? '' : 'selected'}>Turn on</option>
+                </select>
+                <span>in</span>
+                <select id="plug-countdown-minutes" class="plug-timers-input" aria-label="After">
+                    ${COUNTDOWN_CHOICES.map(m => `<option value="${m}" ${m === 60 ? 'selected' : ''}>${durationText(m)}</option>`).join('')}
+                </select>
+                <button type="button" class="btn-control btn-small primary" onclick="startPlugCountdown()" ${disabled}>Start</button>
+            </div>`}</div>`;
+    }
+
+    const full = timers.schedules.length >= limits.maxSchedules;
+    html += `<div class="plug-timers-section"><h4>Schedule</h4>
+        ${timers.schedules.length ? '' : '<div class="plug-timers-empty">No schedules yet.</div>'}
+        ${timers.schedules.map(r => state.editing === r.id ? scheduleForm(r, limits, busy) : `
+            <div class="plug-schedule ${r.enabled ? '' : 'off'}">
+                ${limits.onePerAction ? '' : `<input type="checkbox" ${r.enabled ? 'checked' : ''} ${disabled}
+                    onchange="togglePlugSchedule('${escapeHtml(r.id)}', this.checked)" aria-label="Enabled">`}
+                <span class="plug-schedule-time">${escapeHtml(scheduleTimeText(r))}</span>
+                <span class="plug-schedule-what"><b>${r.on ? 'On' : 'Off'}</b> · ${daysText(r.days)}</span>
+                <button type="button" class="btn-control btn-small ghost" onclick="editPlugSchedule('${escapeHtml(r.id)}')" ${disabled}>Edit</button>
+                <button type="button" class="btn-control btn-small ghost" onclick="deletePlugSchedule('${escapeHtml(r.id)}')" ${disabled}
+                    aria-label="Delete">✕</button>
+            </div>`).join('')}
+        ${state.editing === 'new' ? scheduleForm(null, limits, busy) : full ? '' : `
+            <button type="button" class="btn-control btn-small" onclick="editPlugSchedule('new')" ${disabled}>Add Schedule</button>`}
+        </div>
+        <div class="settings-hint">${limits.onePerAction
+            ? 'These lights keep one daily on time and one daily off time.'
+            : 'Kept on the plug, so they run even when AMMUI is off.'} Timers set in the ${escapeHtml(state.plug.brand)} app show here too.</div>`;
+    body.innerHTML = html;
+}
+
+function scheduleForm(rule, limits, busy) {
+    const on = rule ? rule.on : true;
+    const days = rule?.days || [true, true, true, true, true, true, true];
+    return `
+        <div class="plug-schedule-form">
+            <div class="plug-timers-row">
+                <select id="plug-schedule-action" class="plug-timers-input" aria-label="Action">
+                    <option value="on" ${on ? 'selected' : ''}>Turn on</option>
+                    <option value="off" ${on ? '' : 'selected'}>Turn off</option>
+                </select>
+                <span>at</span>
+                <input type="time" id="plug-schedule-time" class="plug-timers-input" value="${rule && !rule.at ? clockText(rule.minute) : ''}" required>
+            </div>
+            ${limits.days ? `<div class="plug-schedule-days" role="group" aria-label="Days">
+                ${WEEK_ORDER.map(d => `<label class="plug-day" title="${DAY_NAMES[d]}">
+                    <input type="checkbox" data-day="${d}" ${days[d] ? 'checked' : ''}><span>${DAY_LETTERS[d]}</span></label>`).join('')}
+            </div>` : ''}
+            <div class="plug-timers-row end">
+                <button type="button" class="btn-control btn-small ghost" onclick="editPlugSchedule(null)">Cancel</button>
+                <button type="button" class="btn-control btn-small primary" onclick="savePlugSchedule()" ${busy ? 'disabled' : ''}>Save</button>
+            </div>
+        </div>`;
+}
+
+function startPlugCountdown() {
+    plugTimersRequest('POST', 'countdown', {
+        on: document.getElementById('plug-countdown-action').value === 'on',
+        minutes: +document.getElementById('plug-countdown-minutes').value
+    });
+}
+
+function cancelPlugCountdown() {
+    plugTimersRequest('POST', 'countdown', { on: false, minutes: 0 });
+}
+
+function editPlugSchedule(id) {
+    if (!plugTimers) return;
+    plugTimers.editing = id;
+    renderPlugTimers();
+}
+
+async function savePlugSchedule() {
+    const time = document.getElementById('plug-schedule-time').value;
+    if (!time) return showToast('Pick a time', 'error');
+    const [h, m] = time.split(':').map(Number);
+    const rule = { on: document.getElementById('plug-schedule-action').value === 'on', minute: h * 60 + m };
+    const dayBoxes = [...document.querySelectorAll('#plug-timers-body .plug-schedule-days input')];
+    if (dayBoxes.length) {
+        rule.days = [0, 1, 2, 3, 4, 5, 6].map(d => dayBoxes.find(b => +b.dataset.day === d).checked);
+        if (!rule.days.some(Boolean)) return showToast('Pick at least one day', 'error');
+    }
+    if (plugTimers.editing !== 'new') rule.id = plugTimers.editing;
+    if (await plugTimersRequest('POST', 'schedules', rule)) editPlugSchedule(null);
+}
+
+function togglePlugSchedule(id, enabled) {
+    plugTimersRequest('POST', 'schedules', { id, enabled });
+}
+
+function deletePlugSchedule(id) {
+    plugTimersRequest('DELETE', `schedules/${encodeURIComponent(id)}`);
 }
 
 function openPlugSettings() {

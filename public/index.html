@@ -707,6 +707,27 @@
         </div>
     </div>
 
+    <div id="plug-timers-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closePlugTimers()">
+        <div class="modal-content" style="max-width: 460px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Timers</h2>
+                    <p class="modal-subtitle" id="plug-timers-name"></p>
+                </div>
+                <button class="btn-close" onclick="closePlugTimers()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="plug-timers-body" class="plug-timers"></div>
+            </div>
+        </div>
+    </div>
+
     <div id="import-library-data-modal" class="modal-overlay" style="display: none;"
         onclick="if(event.target===this)closeLibraryDataImport()">
         <div class="modal-content" style="max-width: 440px;">

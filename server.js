@@ -5448,6 +5448,39 @@ app.post('/api/smart-home/plugs/:id/brightness', async (req, res) => {
     }
 });
 
+// Timers kept on the device itself: a countdown and daily/weekly schedules (see lib/smart-home/index.js)
+app.get('/api/smart-home/plugs/:id/timers', async (req, res) => {
+    try {
+        res.json({ timers: await smartHome.getTimers(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/smart-home/plugs/:id/countdown', async (req, res) => {
+    try {
+        res.json({ timers: await smartHome.setCountdown(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/smart-home/plugs/:id/schedules', async (req, res) => {
+    try {
+        res.json({ timers: await smartHome.saveSchedule(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.delete('/api/smart-home/plugs/:id/schedules/:rule', async (req, res) => {
+    try {
+        res.json({ timers: await smartHome.deleteSchedule(req.params.id, req.params.rule) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
 // Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent".
 // `transcripts` are the recogniser's guesses. Replies { handled: true, message }, or
 // { handled: false, error? } so the browser can try the words as a music request instead.
