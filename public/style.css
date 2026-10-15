@@ -7914,12 +7914,15 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
+/* Using more is bad news, so the up arrow is red and the down arrow green */
 .energy-compare.up::before {
     content: '▲ ';
+    color: #ef4444;
 }
 
 .energy-compare.down::before {
     content: '▼ ';
+    color: #22c55e;
 }
 
 /* Daily bars with a kWh scale down the left; the bars share the scale's height so they line up with it */

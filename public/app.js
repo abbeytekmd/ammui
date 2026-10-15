@@ -5670,7 +5670,9 @@ function drawCalendarEvents() {
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
         const list = byDay.get(cell.dataset.date) || [];
         cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
-        list.slice(0, CALENDAR_MAX_EVENTS_PER_DAY).forEach(ev => {
+        // A "+1 more" row would take the same space as the one event it hides, so show that instead
+        const shown = list.length > CALENDAR_MAX_EVENTS_PER_DAY + 1 ? CALENDAR_MAX_EVENTS_PER_DAY : list.length;
+        list.slice(0, shown).forEach(ev => {
             const el = document.createElement('div');
             el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
             el.style.setProperty('--event-color', ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
@@ -5698,11 +5700,11 @@ function drawCalendarEvents() {
             }
             cell.appendChild(el);
         });
-        if (list.length > CALENDAR_MAX_EVENTS_PER_DAY) {
+        if (list.length > shown) {
             const more = document.createElement('div');
             more.className = 'calendar-more';
-            more.textContent = `+${list.length - CALENDAR_MAX_EVENTS_PER_DAY} more`;
-            more.title = list.slice(CALENDAR_MAX_EVENTS_PER_DAY).map(ev => ev.title).join('\n');
+            more.textContent = `+${list.length - shown} more`;
+            more.title = list.slice(shown).map(ev => ev.title).join('\n');
             cell.appendChild(more);
         }
     });
