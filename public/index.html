@@ -69,6 +69,13 @@
                     </svg>
                     <span>Smart Home</span>
                 </button>
+                <button type="button" class="lib-tab" data-mode="energy" onclick="showEnergy()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"></path>
+                    </svg>
+                    <span>Energy</span>
+                </button>
             </nav>
 
             <div class="menu-container logo-menu">
@@ -580,11 +587,6 @@
                 </div>
             </div>
             <div id="smarthome-status" class="smarthome-status"></div>
-            <div id="smarthome-energy" class="smarthome-section" hidden>
-                <div id="smarthome-energy-banner" class="smarthome-banner energy-banner" aria-hidden="true"></div>
-                <h3>Energy</h3>
-                <div id="smarthome-energy-grid" class="energy-grid"></div>
-            </div>
             <div id="smarthome-plugs" class="smarthome-section" hidden>
                 <div id="smarthome-plugs-banner" class="smarthome-banner plugs-banner" aria-hidden="true"></div>
                 <h3>Plugs</h3>
@@ -594,6 +596,21 @@
                 <div id="smarthome-lights-banner" class="smarthome-banner lights-banner" aria-hidden="true"></div>
                 <h3>Twinkly Lights</h3>
                 <div id="smarthome-lights-grid" class="smarthome-grid"></div>
+            </div>
+        </section>
+
+        <section id="energy-view" class="smarthome-view" hidden>
+            <div class="smarthome-header">
+                <h2>Energy</h2>
+                <div class="smarthome-actions">
+                    <button type="button" class="btn-control btn-small" onclick="openPlugSettings()"
+                        title="Set the Bright login that reads your smart meter">Bright Login</button>
+                </div>
+            </div>
+            <div id="energy-status" class="smarthome-status"></div>
+            <div id="smarthome-energy" class="smarthome-section" hidden>
+                <div id="smarthome-energy-banner" class="smarthome-banner energy-banner" aria-hidden="true"></div>
+                <div id="smarthome-energy-grid" class="energy-grid"></div>
             </div>
         </section>
 
@@ -1236,7 +1253,7 @@
                     </div>
                     <div class="manage-section">
                         <h3>Smart Meter (Bright)</h3>
-                        <p class="settings-hint">Shows your electricity and gas use on the Smart Home tab, using the
+                        <p class="settings-hint">Shows your electricity and gas use on the Energy tab, using the
                             login of the free Bright app (by Hildebrand). Readings come from your smart meter via Bright's servers and
                             are usually an hour or two behind.</p>
                         <div class="settings-group">

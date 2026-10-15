@@ -13,7 +13,11 @@ A web based home hub with DLNA server, player and controller. Plays music and sh
 </tr>
 <tr>
 <td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars with meal planning</td>
-<td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - energy usage, smart plugs and Twinkly lights</td>
+<td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - smart plugs and Twinkly lights</td>
+</tr>
+<tr>
+<td><img src="images/ammui-energy.png" /><br/><b>Energy</b> - electricity and gas use from your smart meter</td>
+<td></td>
 </tr>
 </table>
 
@@ -278,6 +282,25 @@ Plugs and lights take their names from the Tapo or Twinkly app unless you rename
 * **A wrong password isn't retried.** Tapo plugs lock themselves for a while after too many failed logins, so once a plug refuses the password AMMUI stops trying it until you save a different one. A card that says *Wrong TP-Link password* has a button that goes straight to the login.
 * **Check that the server can see broadcasts.** Plugs are found by a broadcast on the local network (UDP ports 9999, 20002 and 5555), so they must be on the same subnet as the server, and the server machine's firewall must allow those replies.
 * If a plug's address changes (for example after a router restart), it's picked up again at the next search.
+
+## Energy
+
+The **Energy** tab shows your electricity and gas use from your smart meter, with a card for each showing today so far and, side by side:
+
+* **The last 7 days** day by day, compared with the 6 weeks before, weekly totals for the last 7 weeks, and this month so far.
+* **Last month** day by day, compared with the 6 months before and with the same month a year earlier, monthly totals for the last 12 months, and last month's daily average and busiest day. Each monthly bar has a line across it showing the same month a year earlier, once there are readings from that far back (see [How far back the history goes](#how-far-back-the-history-goes)).
+
+Costs are shown alongside where the Bright account has them. It's read through the free **Bright** app (by Hildebrand), so you need a Bright account linked to your meter first.
+
+To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Smart Home** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
+
+### How far back the history goes
+
+A smart meter only keeps about 13 months of readings. When you first sign up to Bright, it collects whatever your meter still holds, so your history starts roughly 13 months before you signed up, and nothing before that can be fetched.
+
+Comparing a month with the same month a year earlier needs readings from both months, so the year-earlier lines on the monthly bars (and the comparison under last month's total) may not show at first. After a while, as the history builds up, they start to appear month by month until all 12 bars have one. Nothing needs setting up for this; it happens on its own.
+
+<img src="images/ammui-energy.png" width="600"/>
 
 ## Secure Access (HTTPS)
 

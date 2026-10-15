@@ -5478,7 +5478,7 @@ function updateBrowserModeTabs() {
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view' };
 
 function setAppView(view) {
     appView = view;
@@ -9846,7 +9846,6 @@ const deviceIcon = p => p.type === 'twinkly' ? LIGHTS_ICON : PLUG_ICON;
 async function showSmartHome() {
     setAppView('smarthome');
     if (!smartHomePlugs.length) document.getElementById('smarthome-status').textContent = 'Looking for plugs...';
-    loadEnergy();
     await refreshSmartHome();
 }
 
@@ -9860,7 +9859,6 @@ async function refreshSmartHome() {
             if (!res.ok) throw new Error(data.error || res.statusText);
             smartHomePlugs = data.plugs || [];
             if (!smartHomeDragging) renderSmartHome();
-            if (Date.now() - energyLoadedAt > ENERGY_REFRESH_MS) loadEnergy();
         } catch (err) {
             document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
         }
@@ -9967,10 +9965,22 @@ function renderSmartHome() {
     banner.classList.toggle('on', lights.some(p => p.outlets.some(o => o.on)));
 }
 
-// Smart meter readings (Bright app login, see lib/smart-home/glow.js). They move half-hourly at
-// most and arrive late, so they're re-read far less often than the plugs.
+// Energy tab: smart meter readings (Bright app login, see lib/smart-home/glow.js). They move
+// half-hourly at most and arrive late, so while the tab is showing they're only re-read every few minutes.
 const ENERGY_REFRESH_MS = 5 * 60 * 1000;
-let energyLoadedAt = 0;
+let energyTimer = null;
+
+function showEnergy() {
+    setAppView('energy');
+    refreshEnergy();
+}
+
+async function refreshEnergy() {
+    clearTimeout(energyTimer);
+    if (appView !== 'energy') return;
+    if (!document.hidden) await loadEnergy();
+    if (appView === 'energy') energyTimer = setTimeout(refreshEnergy, ENERGY_REFRESH_MS);
+}
 const ENERGY_ICONS = {
     electricity: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M13 2 4 14h7l-1 8 9-12h-7Z"></path></svg>`,
@@ -9982,7 +9992,6 @@ const kwhText = kwh => `${kwh < 10 ? kwh.toFixed(2) : kwh.toFixed(1)} kWh`;
 const clockTime = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 async function loadEnergy({ refresh = false } = {}) {
-    energyLoadedAt = Date.now();
     try {
         const res = await fetch(`/api/energy${refresh ? '?refresh=1' : ''}`);
         const data = await res.json();
@@ -9997,6 +10006,8 @@ function renderEnergy(data) {
     const section = document.getElementById('smarthome-energy');
     const grid = document.getElementById('smarthome-energy-grid');
     section.hidden = !data.configured;
+    document.getElementById('energy-status').textContent = data.configured ? ''
+        : 'No smart meter set up yet. Press Bright Login to add the login from your Bright app.';
     if (!data.configured) return;
     const banner = document.getElementById('smarthome-energy-banner');
     if (!banner.innerHTML) banner.innerHTML = energyBannerSvg();
@@ -10018,62 +10029,133 @@ function niceScale(peak, lines = 3) {
 
 const shortDate = date => new Date(`${date}T12:00:00`).toLocaleDateString([], { day: 'numeric', month: 'short' });
 
-function energyCard(f) {
-    const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
-    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
-    const lastWeek = f.weeks[f.weeks.length - 1];
-    const earlier = f.weeks.slice(0, -1).filter(w => w.kwh > 0);
-    const average = earlier.length ? earlier.reduce((sum, w) => sum + w.kwh, 0) / earlier.length : 0;
-    const change = average ? Math.round((lastWeek.kwh / average - 1) * 100) : null;
-    const comparison = change === null ? 'Not enough history to compare yet'
-        : `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} the ${earlier.length}-week average of ${kwhText(average)}`;
+// "▲ 10% more than the 6-week average of 66.2 kWh", comparing the latest period with the earlier ones that have readings
+function energyComparison(periods, unit) {
+    const latest = periods[periods.length - 1];
+    const earlier = periods.slice(0, -1).filter(p => p.kwh > 0);
+    const average = earlier.length ? earlier.reduce((sum, p) => sum + p.kwh, 0) / earlier.length : 0;
+    const change = average ? Math.round((latest.kwh / average - 1) * 100) : null;
+    const text = change === null ? 'Not enough history to compare yet'
+        : `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} the ${earlier.length}-${unit} average of ${kwhText(average)}`;
+    return `<div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+}
 
-    const scale = niceScale(Math.max(...f.lastWeek.map(d => d.kwh), 0));
+// Percentage change from a year earlier, or null when there's nothing to compare with
+const yearChange = m => m.lastYear?.kwh ? Math.round((m.kwh / m.lastYear.kwh - 1) * 100) : null;
+
+function energyYearComparison(m) {
+    const change = yearChange(m);
+    if (change === null) return '';
+    const then = `${monthName(m.month)} ${+m.month.slice(0, 4) - 1}`;
+    const text = `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} ${then}, ${kwhText(m.lastYear.kwh)}`;
+    return `<div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+}
+
+// One bar per day on a kWh scale. label(d, i) gives the text under each bar; dense squeezes a month's worth in.
+function energyDailyPlot(f, days, ariaLabel, label, dense = false) {
+    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
+    const scale = niceScale(Math.max(...days.map(d => d.kwh), 0));
     const ticks = Array.from({ length: Math.round(scale.max / scale.step) + 1 }, (_, i) => scale.max - i * scale.step);
-    const tickText = v => +v.toFixed(2);
-    const days = f.lastWeek.map(d => {
+    const bars = days.map((d, i) => {
         const day = new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' });
         return `<div class="energy-day" title="${day} ${shortDate(d.date)}: ${kwhText(d.kwh)}${cost(d.pence)}">
             <div class="energy-day-bar"><span style="height:${d.kwh ? Math.max(1, (d.kwh / scale.max) * 100) : 0}%"></span></div>
-            <div class="energy-day-label">${day.slice(0, 2)}</div></div>`;
+            <div class="energy-day-label">${label(d, i)}</div></div>`;
     }).join('');
+    return `
+            <div class="energy-plot" role="img" aria-label="${ariaLabel}">
+                <div class="energy-scale">${ticks.map(v => `<span>${+v.toFixed(2)}</span>`).join('')}</div>
+                <div class="energy-plot-area">
+                    <div class="energy-gridlines">${ticks.map(() => '<i></i>').join('')}</div>
+                    <div class="energy-week ${dense ? 'dense' : ''}">${bars}</div>
+                </div>
+            </div>`;
+}
 
-    const weekPeak = Math.max(...f.weeks.map(w => w.kwh), 0.001);
-    const weeks = f.weeks.map((w, i) => {
-        const latest = i === f.weeks.length - 1;
-        return `<div class="energy-day ${latest ? 'today' : ''}" title="${shortDate(w.from)} – ${shortDate(w.to)}: ${kwhText(w.kwh)}${cost(w.pence)}">
-            <div class="energy-day-bar small"><span style="height:${Math.max(2, (w.kwh / weekPeak) * 100)}%"></span></div>
-            <div class="energy-day-label">${latest ? 'Last' : shortDate(w.from)}</div></div>`;
-    }).join('');
+// Small bars of each period's total, the latest highlighted
+// Small bars of each period's total, the latest highlighted. A period with a lastYear total also gets a
+// line across its bar at that height, so it can be compared with the same period a year earlier.
+function energyTotalsBars(f, periods, title, label, dense = false) {
+    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
+    const peak = Math.max(...periods.flatMap(p => [p.kwh, p.lastYear?.kwh || 0]), 0.001);
+    return `<div class="energy-week ${dense ? 'dense' : ''}">${periods.map((p, i) => {
+        const latest = i === periods.length - 1;
+        const change = yearChange(p);
+        const year = change === null ? '' : `&#10;A year earlier: ${kwhText(p.lastYear.kwh)}${cost(p.lastYear.pence)} (${change > 0 ? '+' : ''}${change}%)`;
+        return `<div class="energy-day ${latest ? 'today' : ''}" title="${title(p)}: ${kwhText(p.kwh)}${cost(p.pence)}${year}">
+            <div class="energy-day-bar ${p.lastYear !== undefined ? 'tall' : ''}"><span style="height:${Math.max(2, (p.kwh / peak) * 100)}%"></span>${
+                p.lastYear ? `<i class="energy-last-year" style="bottom:${(p.lastYear.kwh / peak) * 100}%"></i>` : ''}</div>
+            <div class="energy-day-label">${label(p, latest)}</div></div>`;
+    }).join('')}</div>`;
+}
 
+const monthName = (month, style = 'long') => new Date(`${month}-15T12:00:00`).toLocaleDateString([], { month: style });
+
+function energyFigures(f, total) {
+    return `
+                <div class="energy-figures">
+                    <span class="energy-big">${kwhText(total.kwh)}</span>
+                    ${f.hasCost ? `<span class="energy-cost">${pounds(total.pence)}</span>` : ''}
+                </div>`;
+}
+
+// One card per fuel: the last 7 days beside last month, each with its totals for the periods before it
+function energyCard(f) {
+    const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
+    const today = `Today${f.today.dataTo ? ` (to ${clockTime(f.today.dataTo)})` : ''}: ${kwhText(f.today.kwh)}${f.hasCost ? ` · ${pounds(f.today.pence)}` : ''}`;
     return `
         <div class="plug-card energy-card energy-${f.fuel}">
             <div class="plug-card-head">
                 <div class="plug-card-icon">${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}</div>
                 <div class="plug-card-title">
                     <div class="plug-card-name">${name}</div>
-                    <div class="plug-card-status">Last 7 days, ${shortDate(lastWeek.from)} – ${shortDate(lastWeek.to)}</div>
+                    <div class="plug-card-status">${today}</div>
                 </div>
             </div>
-            <div class="energy-figures">
-                <span class="energy-big">${kwhText(lastWeek.kwh)}</span>
-                ${f.hasCost ? `<span class="energy-cost">${pounds(lastWeek.pence)}</span>` : ''}
-            </div>
-            <div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${comparison}</div>
-            <div class="energy-plot" role="img" aria-label="${name} use per day over the last 7 days">
-                <div class="energy-scale">${ticks.map(v => `<span>${tickText(v)}</span>`).join('')}</div>
-                <div class="energy-plot-area">
-                    <div class="energy-gridlines">${ticks.map(() => '<i></i>').join('')}</div>
-                    <div class="energy-week">${days}</div>
-                </div>
-            </div>
-            <div class="energy-section-label">Weekly totals, last ${f.weeks.length} weeks</div>
-            <div class="energy-week">${weeks}</div>
-            <div class="energy-totals">
-                <div><span>Today${f.today.dataTo ? ` (to ${clockTime(f.today.dataTo)})` : ''}</span><b>${kwhText(f.today.kwh)}</b>${f.hasCost ? pounds(f.today.pence) : ''}</div>
-                <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
-            </div>
+            <div class="energy-panes">${energyWeekPane(f, name)}${energyMonthPane(f, name)}</div>
         </div>`;
+}
+
+function energyWeekPane(f, name) {
+    const lastWeek = f.weeks[f.weeks.length - 1];
+    const weekday = d => new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' }).slice(0, 2);
+    return `
+            <div class="energy-pane">
+                <div class="energy-pane-title">Last 7 days, ${shortDate(lastWeek.from)} – ${shortDate(lastWeek.to)}</div>
+                ${energyFigures(f, lastWeek)}
+                ${energyComparison(f.weeks, 'week')}
+                ${energyDailyPlot(f, f.lastWeek, `${name} use per day over the last 7 days`, weekday)}
+                <div class="energy-section-label">Weekly totals, last ${f.weeks.length} weeks</div>
+                ${energyTotalsBars(f, f.weeks, w => `${shortDate(w.from)} – ${shortDate(w.to)}`, (w, latest) => latest ? 'Last' : shortDate(w.from))}
+                <div class="energy-totals">
+                    <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
+                </div>
+            </div>`;
+}
+
+// The same, a month at a time: last calendar month day by day, compared with the six months before it
+function energyMonthPane(f, name) {
+    if (!f.months?.length) return '';
+    const lastMonth = f.months[f.months.length - 1];
+    const days = f.lastMonth.filter(d => d.kwh > 0);
+    const average = days.length ? { kwh: lastMonth.kwh / days.length, pence: lastMonth.pence / days.length } : { kwh: 0, pence: 0 };
+    const busiest = days.reduce((top, d) => d.kwh > top.kwh ? d : top, { kwh: 0 });
+    const dayOfMonth = d => { const n = +d.date.slice(8); return n % 7 === 1 ? n : ''; };
+    return `
+            <div class="energy-pane">
+                <div class="energy-pane-title">Last month, ${monthName(lastMonth.month)} ${lastMonth.month.slice(0, 4)}</div>
+                ${energyFigures(f, lastMonth)}
+                ${energyComparison(f.months.slice(-7), 'month')}
+                ${energyYearComparison(lastMonth)}
+                ${energyDailyPlot(f, f.lastMonth, `${name} use per day through ${monthName(lastMonth.month)}`, dayOfMonth, true)}
+                <div class="energy-section-label energy-legend">Monthly totals, last ${f.months.length} months
+                    ${f.months.some(m => m.lastYear) ? '<span><i class="energy-last-year"></i>a year earlier</span>' : ''}</div>
+                ${energyTotalsBars(f, f.months, m => `${monthName(m.month)} ${m.month.slice(0, 4)}`, m => monthName(m.month, 'short').slice(0, 3), true)}
+                <div class="energy-totals">
+                    <div><span>Daily average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
+                    <div><span>Busiest day</span><b>${kwhText(busiest.kwh)}</b>${busiest.date ? shortDate(busiest.date) : ''}</div>
+                </div>
+            </div>`;
 }
 
 function plugCard(p) {
@@ -10336,7 +10418,7 @@ async function saveGlowAccount(btn) {
         if (!res.ok) throw new Error((await res.json()).error || res.statusText);
         await loadGlowAccount();
         status.textContent = 'Connected';
-        if (appView === 'smarthome') loadEnergy();
+        if (appView === 'energy') loadEnergy();
     } catch (err) {
         status.textContent = `Failed: ${err.message}`;
     } finally {
