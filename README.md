@@ -29,6 +29,7 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * Send from other local DLNA servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent, Music (album art of playing track)
 * Album art can be retrieved from discogs (via a Discogs API key)
+* Lyrics from LRCLIB shown in the slideshow's Music mode. Sync'd as closely as possible.
 * Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
 * Watch a track's music video on YouTube, right from the track list (via a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
