@@ -6733,8 +6733,32 @@ input:checked+.slider:before {
         max-height: 60vh;
     }
 
+    /* Lyrics take the map's place in the panel (the map gives way if a photo has a location) */
     .ss-lyrics-panel {
-        right: calc(var(--ss-panel-w) + 40px);
+        grid-column: 2;
+        grid-row: 4;
+        position: static;
+        width: auto;
+        height: 40vh;
+        margin: 16px 16px 0;
+    }
+
+    .screensaver-overlay.has-lyrics .ss-map-window {
+        display: none !important;
+    }
+
+    .ss-lyrics-content {
+        align-items: center;
+        text-align: center;
+        padding: 0 8px;
+    }
+
+    .ss-lyrics-line {
+        font-size: clamp(15px, 1.2vw, 22px);
+    }
+
+    .ss-lyrics-line.active {
+        font-size: clamp(18px, 1.5vw, 27px);
     }
 
     /* Today's calendar, under the music bar; its row takes no space when there's nothing today */

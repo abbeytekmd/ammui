@@ -4881,6 +4881,8 @@ function clearLyrics() {
 function updateSsLyricsVisibility() {
     const panel = document.getElementById('ss-lyrics-panel');
     if (!panel) return;
+    // Landscape screens put the lyrics where the map goes, so the map hides while they're up
+    document.getElementById('screensaver-overlay')?.classList.toggle('has-lyrics', isLyricsDisplayActive());
     if (isLyricsDisplayActive()) {
         panel.style.display = 'block';
         syncLyricsSpacerPadding(panel);
