@@ -1813,81 +1813,169 @@
     <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;">
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
-        <!-- Landscape screens: the column the controls sit in, right of the photo (see style.css) -->
-        <div id="ss-side-panel" class="ss-side-panel"></div>
-        <div class="screensaver-info" id="screensaver-info"></div>
-        <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
-        <div id="ss-lyrics-panel" class="ss-lyrics-panel" style="display:none;">
-            <div id="ss-lyrics-content" class="ss-lyrics-content"></div>
-        </div>
-        <div id="ss-map-window" class="ss-map-window" style="display:none;">
-            <div id="ss-map" class="ss-map"></div>
-        </div>
-        <!-- Today's calendar, in the side panel (filled by slideshow.js) -->
-        <div id="ss-agenda" class="ss-agenda"></div>
-
-        <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
-            ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
-            onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
-            <!-- Music buttons hide when nothing is queued; the exit button always stays -->
-            <div id="ss-music-controls" class="ss-music-controls" style="display:none;">
-            <button id="btn-ss-playpause-bar" class="btn-ss-music" onclick="toggleSlideshowPlayback(event)"
-                ontouchend="toggleSlideshowPlayback(event); event.preventDefault();" title="Play/Pause Music">
-                <svg id="svg-ss-play-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M8 5v14l11-7z"></path>
-                </svg>
-                <svg id="svg-ss-pause-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"
-                    style="display: none;">
-                    <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
-                </svg>
-            </button>
-            <button id="btn-ss-stop-after" class="btn-ss-music btn-stop-after" onclick="toggleStopAfterTrack()"
-                ontouchend="toggleStopAfterTrack(); event.preventDefault();" title="Stop after current track">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round">
-                    <path d="M6 6h12v12H6z" fill="currentColor" stroke="none" />
-                    <line x1="4" y1="22" x2="20" y2="22" />
-                    <line x1="12" y1="17" x2="12" y2="22" />
-                </svg>
-            </button>
-            <button class="btn-ss-music" onclick="adjustVolume(-5)"
-                ontouchend="adjustVolume(-5); event.preventDefault();" title="Volume Down">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <line x1="15" y1="12" x2="21" y2="12"></line>
-                </svg>
-            </button>
-            <button class="btn-ss-music" onclick="adjustVolume(5)" ontouchend="adjustVolume(5); event.preventDefault();"
-                title="Volume Up">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                    <line x1="15" y1="12" x2="21" y2="12"></line>
-                    <line x1="18" y1="9" x2="18" y2="15"></line>
-                </svg>
-            </button>
-            <button id="btn-ss-retry-art" class="btn-ss-music" onclick="retryAlbumArt()"
-                ontouchend="retryAlbumArt(); event.preventDefault();" title="Retry album art" style="display:none;">
-                <!-- Picture frame with a refresh arrow in the corner -->
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <polyline points="3 17 8 12 12 16" />
-                    <path d="M22 18a4 4 0 1 1-1.2-2.85" />
-                    <polyline points="21 13 21 15.5 18.5 15.5" />
-                </svg>
-            </button>
+        <!-- Landscape screens: the column right of the photo, holding these from top to bottom (see style.css).
+             Elsewhere it has no box of its own and they sit over the photo. -->
+        <div id="ss-side-panel" class="ss-side-panel">
+            <div class="screensaver-music-bar" id="ss-music-bar" onclick="event.stopPropagation()"
+                ontouchstart="event.stopPropagation()" ontouchend="event.stopPropagation()"
+                onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
+                <!-- Music buttons hide when nothing is queued; the exit button always stays -->
+                <div id="ss-music-controls" class="ss-music-controls" style="display:none;">
+                <button id="btn-ss-playpause-bar" class="btn-ss-music" onclick="toggleSlideshowPlayback(event)"
+                    ontouchend="toggleSlideshowPlayback(event); event.preventDefault();" title="Play/Pause Music">
+                    <svg id="svg-ss-play-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M8 5v14l11-7z"></path>
+                    </svg>
+                    <svg id="svg-ss-pause-bar" width="28" height="28" viewBox="0 0 24 24" fill="currentColor"
+                        style="display: none;">
+                        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"></path>
+                    </svg>
+                </button>
+                <button id="btn-ss-stop-after" class="btn-ss-music btn-stop-after" onclick="toggleStopAfterTrack()"
+                    ontouchend="toggleStopAfterTrack(); event.preventDefault();" title="Stop after current track">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round">
+                        <path d="M6 6h12v12H6z" fill="currentColor" stroke="none" />
+                        <line x1="4" y1="22" x2="20" y2="22" />
+                        <line x1="12" y1="17" x2="12" y2="22" />
+                    </svg>
+                </button>
+                <button class="btn-ss-music" onclick="adjustVolume(-5)"
+                    ontouchend="adjustVolume(-5); event.preventDefault();" title="Volume Down">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <line x1="15" y1="12" x2="21" y2="12"></line>
+                    </svg>
+                </button>
+                <button class="btn-ss-music" onclick="adjustVolume(5)" ontouchend="adjustVolume(5); event.preventDefault();"
+                    title="Volume Up">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <line x1="15" y1="12" x2="21" y2="12"></line>
+                        <line x1="18" y1="9" x2="18" y2="15"></line>
+                    </svg>
+                </button>
+                <button id="btn-ss-retry-art" class="btn-ss-music" onclick="retryAlbumArt()"
+                    ontouchend="retryAlbumArt(); event.preventDefault();" title="Retry album art" style="display:none;">
+                    <!-- Picture frame with a refresh arrow in the corner -->
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 11V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="3 17 8 12 12 16" />
+                        <path d="M22 18a4 4 0 1 1-1.2-2.85" />
+                        <polyline points="21 13 21 15.5 18.5 15.5" />
+                    </svg>
+                </button>
+                </div>
+                <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
+                    ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
+                    title="Exit Slideshow">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
             </div>
-            <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
-                ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
-                title="Exit Slideshow">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-            </button>
+            <!-- Today's calendar, in the side panel (filled by slideshow.js) -->
+            <div id="ss-agenda" class="ss-agenda"></div>
+            <div class="screensaver-info" id="screensaver-info"></div>
+            <div id="ss-lyrics-panel" class="ss-lyrics-panel" style="display:none;">
+                <div id="ss-lyrics-content" class="ss-lyrics-content"></div>
+            </div>
+            <div id="ss-map-window" class="ss-map-window" style="display:none;">
+                <div id="ss-map" class="ss-map"></div>
+            </div>
+            <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
+                ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
+                onmouseup="event.stopPropagation()">
+                <div class="ss-control-item" onclick="rotateSlideshow(-90)"
+                    ontouchstart="rotateSlideshow(-90); event.preventDefault();"
+                    ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button class="btn-ss-rotate" title="Rotate Left">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 2v6h6" />
+                            <path d="M3 13a9 9 0 1 0 3-7.7l-3 2.7" />
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Rotate</div>
+                </div>
+
+                <div class="ss-control-item" onclick="toggleSlideshowMode()"
+                    ontouchstart="toggleSlideshowMode(); event.preventDefault();"
+                    ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Recent / Favourites)">
+                        <span id="ss-mode-label">All</span>
+                    </button>
+                    <div class="ss-control-label">Mode</div>
+                </div>
+
+                <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
+                    ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();"
+                    ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button id="btn-ss-favourite" class="btn-ss-favourite" title="Favourite Photo">
+                        <svg id="svg-favourite" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path
+                                d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l8.84-8.84 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
+                            </path>
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Fav</div>
+                </div>
+
+                <!-- Fired on touchend rather than touchstart: browsers only count touchend as the user
+                     gesture that's allowed to start the microphone. -->
+                <div class="ss-control-item" id="ss-voice-item" onclick="toggleVoiceCommand()"
+                    ontouchstart="event.preventDefault();"
+                    ontouchend="toggleVoiceCommand(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button id="btn-ss-voice" class="btn-ss-voice" title="Voice command">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round">
+                            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                            <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                            <line x1="12" y1="18" x2="12" y2="22"></line>
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Voice</div>
+                </div>
+
+                <div class="ss-control-item" id="ss-browse-item" style="display: none;" onclick="openSlideshowBrowser()"
+                    ontouchstart="event.preventDefault();"
+                    ontouchend="openSlideshowBrowser(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button class="btn-ss-rotate" title="Browse the photos in this slideshow">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="3" width="7" height="7"></rect>
+                            <rect x="14" y="14" width="7" height="7"></rect>
+                            <rect x="3" y="14" width="7" height="7"></rect>
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Browse</div>
+                </div>
+
+                <div class="ss-control-item" onclick="deleteCurrentPhoto()"
+                    ontouchstart="deleteCurrentPhoto(); event.preventDefault();"
+                    ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button class="btn-ss-delete" title="Hide Photo (Don't show again)">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M3 6h18" />
+                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                            <line x1="10" y1="11" x2="10" y2="17" />
+                            <line x1="14" y1="11" x2="14" y2="17" />
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Hide</div>
+                </div>
+            </div>
         </div>
+        <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
+
 
 
         <div class="ss-nav-prev" onclick="event.stopPropagation(); previousSlideshow();"
@@ -1912,92 +2000,6 @@
             </button>
         </div>
 
-        <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
-            ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
-            onmouseup="event.stopPropagation()">
-            <div class="ss-control-item" onclick="rotateSlideshow(-90)"
-                ontouchstart="rotateSlideshow(-90); event.preventDefault();"
-                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button class="btn-ss-rotate" title="Rotate Left">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M3 2v6h6" />
-                        <path d="M3 13a9 9 0 1 0 3-7.7l-3 2.7" />
-                    </svg>
-                </button>
-                <div class="ss-control-label">Rotate</div>
-            </div>
-
-            <div class="ss-control-item" onclick="toggleSlideshowMode()"
-                ontouchstart="toggleSlideshowMode(); event.preventDefault();"
-                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button class="btn-ss-mode" title="Toggle Mode (All / On This Day / Recent / Favourites)">
-                    <span id="ss-mode-label">All</span>
-                </button>
-                <div class="ss-control-label">Mode</div>
-            </div>
-
-            <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
-                ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();"
-                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button id="btn-ss-favourite" class="btn-ss-favourite" title="Favourite Photo">
-                    <svg id="svg-favourite" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path
-                            d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l8.84-8.84 1.06-1.06a5.5 5.5 0 0 0 0-7.78z">
-                        </path>
-                    </svg>
-                </button>
-                <div class="ss-control-label">Fav</div>
-            </div>
-
-            <!-- Fired on touchend rather than touchstart: browsers only count touchend as the user
-                 gesture that's allowed to start the microphone. -->
-            <div class="ss-control-item" id="ss-voice-item" onclick="toggleVoiceCommand()"
-                ontouchstart="event.preventDefault();"
-                ontouchend="toggleVoiceCommand(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button id="btn-ss-voice" class="btn-ss-voice" title="Voice command">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round">
-                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
-                        <line x1="12" y1="18" x2="12" y2="22"></line>
-                    </svg>
-                </button>
-                <div class="ss-control-label">Voice</div>
-            </div>
-
-            <div class="ss-control-item" id="ss-browse-item" style="display: none;" onclick="openSlideshowBrowser()"
-                ontouchstart="event.preventDefault();"
-                ontouchend="openSlideshowBrowser(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button class="btn-ss-rotate" title="Browse the photos in this slideshow">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="7" height="7"></rect>
-                        <rect x="14" y="3" width="7" height="7"></rect>
-                        <rect x="14" y="14" width="7" height="7"></rect>
-                        <rect x="3" y="14" width="7" height="7"></rect>
-                    </svg>
-                </button>
-                <div class="ss-control-label">Browse</div>
-            </div>
-
-            <div class="ss-control-item" onclick="deleteCurrentPhoto()"
-                ontouchstart="deleteCurrentPhoto(); event.preventDefault();"
-                ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                <button class="btn-ss-delete" title="Hide Photo (Don't show again)">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M3 6h18" />
-                        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                        <line x1="10" y1="11" x2="10" y2="17" />
-                        <line x1="14" y1="11" x2="14" y2="17" />
-                    </svg>
-                </button>
-                <div class="ss-control-label">Hide</div>
-            </div>
-        </div>
 
         <!-- Grid of the photos in the current Day/Recent/Favs list -->
         <div id="ss-browser" class="ss-browser" style="display: none;" onclick="event.stopPropagation()"

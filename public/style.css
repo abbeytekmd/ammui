@@ -6624,14 +6624,18 @@ input:checked+.slider:before {
 }
 
 /*
- * Landscape screens: a panel down the right holds the music bar, the photo details and the
- * controls, and the photo sits to its left instead of underneath them. The panel is as wide
- * as the space a full-height 2046x1536 (4:3) photo leaves, so those fill the rest of the
- * screen. The overlay becomes a two-column grid; today's calendar sits in the panel under the
- * music bar and the photo's map under its details, while the lyrics and arrows float over the
- * photo. Not on short screens (a phone turned sideways), where the panel doesn't fit.
+ * Landscape screens: a panel down the right holds, top to bottom, the music bar, today's
+ * calendar, the photo details, the lyrics or map and the controls, and the photo sits to its
+ * left instead of underneath them. The panel is as wide as the space a full-height 2046x1536
+ * (4:3) photo leaves, so those fill the rest of the screen. The overlay becomes a two-column
+ * grid and the panel a column of its own, so nothing in it can overlap; when it's short of
+ * height the lyrics or map give way. Not on short screens (a phone turned sideways), where the
+ * panel doesn't fit: there it has no box and what's in it floats over the photo as before.
  */
-.ss-side-panel,
+.ss-side-panel {
+    display: contents;
+}
+
 .ss-agenda {
     display: none;
 }
@@ -6641,16 +6645,17 @@ input:checked+.slider:before {
         --ss-panel-w: clamp(300px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
         display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
         grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
-        /* music, today's calendar, details, map or lyrics, controls. The details keep their height and the map or
-           lyrics row gives way when space is short, so the track title never rides up over the calendar */
-        grid-template-rows: auto auto minmax(min-content, 1fr) minmax(0, auto) auto;
+        grid-template-rows: minmax(0, 1fr);
     }
 
     .ss-side-panel {
-        display: block;
+        display: flex;
+        flex-direction: column;
         grid-column: 2;
-        grid-row: 1 / -1;
+        grid-row: 1;
         align-self: stretch;   /* the overlay centres its children */
+        min-height: 0;
+        overflow: hidden;
         background: rgba(10, 10, 12, 0.92);
         border-left: 1px solid rgba(255, 255, 255, 0.08);
         z-index: 10002;
@@ -6658,7 +6663,7 @@ input:checked+.slider:before {
 
     .screensaver-img {
         grid-column: 1;
-        grid-row: 1 / -1;
+        grid-row: 1;
         min-width: 0;
         min-height: 0;
         object-position: center;   /* a photo that doesn't fill the space sits in the middle of it */
@@ -6668,9 +6673,12 @@ input:checked+.slider:before {
         justify-self: center;
     }
 
+    /* Everything in the panel keeps its height except the lyrics and map, which shrink to fit */
+    .ss-side-panel > * {
+        flex: none;
+    }
+
     .screensaver-music-bar {
-        grid-column: 2;
-        grid-row: 1;
         position: static;
         flex-wrap: wrap;
         justify-content: center;
@@ -6686,13 +6694,12 @@ input:checked+.slider:before {
         gap: 6px;
     }
 
+    /* Pushed down to sit above the lyrics or map (or the controls), leaving any spare room above it */
     .screensaver-info {
-        grid-column: 2;
-        grid-row: 3;
-        align-self: end;
         position: static;
         max-width: none;
-        margin: 12px 16px 0;   /* a gap under the calendar when space is tight */
+        margin: auto 16px 0;
+        padding-top: 12px;   /* a gap under the calendar when space is tight */
         z-index: 10003;
         overflow-wrap: anywhere;
     }
@@ -6701,8 +6708,6 @@ input:checked+.slider:before {
     .ss-date { font-size: clamp(18px, 1.4vw, 28px); }
 
     .screensaver-controls {
-        grid-column: 2;
-        grid-row: 5;
         position: static;
         flex-wrap: wrap;
         justify-content: center;
@@ -6716,15 +6721,18 @@ input:checked+.slider:before {
         max-width: calc(100% - var(--ss-panel-w) - 40px);
     }
 
-    /* The map fills the panel's width; its row is empty (and takes no space) when it's hidden */
+    /* The map fills the panel's width */
+    .ss-side-panel > .ss-map-window {
+        flex: 0 1 auto;
+        min-height: 0;
+    }
+
     .ss-map-window {
-        grid-column: 2;
-        grid-row: 4;
         position: static;
         width: auto;
         height: auto;
         aspect-ratio: 4 / 3;
-        max-height: min(40vh, calc(100% - 16px));
+        max-height: 40vh;
         margin: 16px 16px 0;
     }
 
@@ -6732,17 +6740,18 @@ input:checked+.slider:before {
         width: auto;
         height: auto;
         aspect-ratio: 1;
-        max-height: min(60vh, calc(100% - 16px));
+        max-height: 60vh;
     }
 
     /* Lyrics take the map's place in the panel (the map gives way if a photo has a location) */
+    .ss-side-panel > .ss-lyrics-panel {
+        flex: 0 1 40vh;
+        min-height: 0;
+    }
+
     .ss-lyrics-panel {
-        grid-column: 2;
-        grid-row: 4;
         position: static;
         width: auto;
-        height: 40vh;
-        max-height: calc(100% - 16px);   /* less its top margin */
         margin: 16px 16px 0;
         overflow: hidden;
         /* The same card as the calendar's; the fade moves inside it so the border stays solid */
@@ -6773,11 +6782,9 @@ input:checked+.slider:before {
         font-size: clamp(18px, 1.5vw, 27px);
     }
 
-    /* Today's calendar, under the music bar; its row takes no space when there's nothing today */
+    /* Today's calendar, under the music bar; it takes no space when there's nothing on */
     .ss-agenda:not(:empty) {
         display: block;
-        grid-column: 2;
-        grid-row: 2;
         margin: 16px 8px 0;
         padding: 10px 10px;
         max-height: 30vh;
