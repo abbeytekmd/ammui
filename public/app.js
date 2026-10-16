@@ -5488,15 +5488,25 @@ function setAppView(view) {
     updateBrowserModeTabs();
 }
 
-// Calendar tab: a month view
+// Calendar tab: a month view, or three weeks from the current one
 let calendarMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let calendarWeekStart = startOfCalendarWeek(new Date());
+let calendarRange = localStorage.getItem('calendarRange') === 'weeks' ? 'weeks' : 'month';
+const CALENDAR_WEEKS_SHOWN = 3;
 
 let calendarRenderToken = 0;
-const CALENDAR_MAX_EVENTS_PER_DAY = 3;
+// Three weeks have taller rows than a month, so each day fits more
+const calendarMaxEventsPerDay = () => calendarRange === 'weeks' ? 6 : 3;
+
+// Weeks start on Monday
+function startOfCalendarWeek(d) {
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7);
+}
 
 function showCalendar() {
     const now = new Date();
     calendarMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    calendarWeekStart = startOfCalendarWeek(now);
     renderCalendar();
     setAppView('calendar');
 }
@@ -5671,7 +5681,8 @@ function drawCalendarEvents() {
         const list = byDay.get(cell.dataset.date) || [];
         cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
-        const shown = list.length > CALENDAR_MAX_EVENTS_PER_DAY + 1 ? CALENDAR_MAX_EVENTS_PER_DAY : list.length;
+        const maxEvents = calendarMaxEventsPerDay();
+        const shown = list.length > maxEvents + 1 ? maxEvents : list.length;
         list.slice(0, shown).forEach(ev => {
             const el = document.createElement('div');
             el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
@@ -5761,43 +5772,78 @@ async function loadCalendarEvents(gridStart, gridEnd, token) {
     }
 }
 
-// -1 / +1 steps a month; 0 jumps back to the current month
+// -1 / +1 steps a month (or a week in the three-week view); 0 jumps back to the current one
 function changeCalendarMonth(step) {
     const now = new Date();
-    calendarMonth = step === 0
-        ? new Date(now.getFullYear(), now.getMonth(), 1)
-        : new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + step, 1);
+    if (calendarRange === 'weeks') {
+        calendarWeekStart = step === 0
+            ? startOfCalendarWeek(now)
+            : new Date(calendarWeekStart.getFullYear(), calendarWeekStart.getMonth(), calendarWeekStart.getDate() + step * 7);
+    } else {
+        calendarMonth = step === 0
+            ? new Date(now.getFullYear(), now.getMonth(), 1)
+            : new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + step, 1);
+    }
     renderCalendar();
 }
 
+// Switching view starts from the current week or month
+function setCalendarRange(range) {
+    calendarRange = range === 'weeks' ? 'weeks' : 'month';
+    try { localStorage.setItem('calendarRange', calendarRange); } catch (e) { }
+    changeCalendarMonth(0);
+}
+
 function renderCalendar() {
-    const year = calendarMonth.getFullYear();
-    const month = calendarMonth.getMonth();
-    document.getElementById('calendar-title').textContent =
-        calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const weeks = calendarRange === 'weeks';
+    const unit = weeks ? 'week' : 'month';
+    document.getElementById('calendar-range-select').value = calendarRange;
+    document.getElementById('calendar-prev-btn').title = `Previous ${unit}`;
+    document.getElementById('calendar-next-btn').title = `Next ${unit}`;
+    document.querySelector('#calendar-view .calendar-today-btn').title = `Go to the current ${unit}`;
+
+    let gridStart, cellCount, month;
+    if (weeks) {
+        gridStart = calendarWeekStart;
+        cellCount = CALENDAR_WEEKS_SHOWN * 7;
+        const last = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + cellCount - 1);
+        const sameYear = last.getFullYear() === gridStart.getFullYear();
+        document.getElementById('calendar-title').textContent =
+            `${gridStart.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...(sameYear ? {} : { year: 'numeric' }) })} – ` +
+            last.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+    } else {
+        const year = calendarMonth.getFullYear();
+        month = calendarMonth.getMonth();
+        document.getElementById('calendar-title').textContent =
+            calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+        const leading = (new Date(year, month, 1).getDay() + 6) % 7;
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        gridStart = new Date(year, month, 1 - leading);
+        cellCount = Math.ceil((leading + daysInMonth) / 7) * 7;
+    }
 
     // Weeks start on Monday
     const weekdayNames = [];
     for (let i = 0; i < 7; i++) {
         weekdayNames.push(new Date(2024, 0, 1 + i).toLocaleDateString(undefined, { weekday: 'short' })); // 1 Jan 2024 was a Monday
     }
-    const leading = (new Date(year, month, 1).getDay() + 6) % 7;
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const cellCount = Math.ceil((leading + daysInMonth) / 7) * 7;
 
     const today = new Date();
     let html = weekdayNames.map(n => `<div class="calendar-weekday">${n}</div>`).join('');
     for (let i = 0; i < cellCount; i++) {
-        const d = new Date(year, month, 1 - leading + i);
+        const d = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + i);
         const classes = ['calendar-day'];
-        if (d.getMonth() !== month) classes.push('other-month');
+        if (!weeks && d.getMonth() !== month) classes.push('other-month');
         if (d.toDateString() === today.toDateString()) classes.push('today');
-        html += `<div class="${classes.join(' ')}" data-date="${calendarDateKey(d)}"><span class="calendar-day-num">${d.getDate()}</span></div>`;
+        // Three weeks can span two months, so name the month on its first day (and on the first cell)
+        const num = weeks && (i === 0 || d.getDate() === 1)
+            ? d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+            : d.getDate();
+        html += `<div class="${classes.join(' ')}" data-date="${calendarDateKey(d)}"><span class="calendar-day-num">${num}</span></div>`;
     }
     document.getElementById('calendar-grid').innerHTML = html;
 
-    const gridStart = new Date(year, month, 1 - leading);
-    const gridEnd = new Date(year, month, 1 - leading + cellCount);
+    const gridEnd = new Date(gridStart.getFullYear(), gridStart.getMonth(), gridStart.getDate() + cellCount);
     loadCalendarEvents(gridStart, gridEnd, ++calendarRenderToken);
 }
 

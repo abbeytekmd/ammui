@@ -1805,6 +1805,21 @@ p.subtitle {
     padding: 0.4rem 0.8rem;
 }
 
+.calendar-range-select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.calendar-range-select option {
+    background: var(--bg);
+}
+
 .calendar-grid {
     flex: 1;
     display: grid;
@@ -1848,9 +1863,10 @@ p.subtitle {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 1.8rem;
+    min-width: 1.8rem;   /* a pill when it carries a month name in the three-week view */
     height: 1.8rem;
-    border-radius: 50%;
+    padding: 0 0.45rem;
+    border-radius: 0.9rem;
     background: var(--primary);
     color: #fff;
 }
@@ -6622,7 +6638,7 @@ input:checked+.slider:before {
 
 @media (orientation: landscape) and (min-height: 480px) {
     .screensaver-overlay.active {
-        --ss-panel-w: clamp(200px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
+        --ss-panel-w: clamp(300px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
         display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
         grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
         grid-template-rows: auto auto minmax(0, 1fr) auto auto;   /* music, today's calendar, details, map, controls */
@@ -6726,8 +6742,8 @@ input:checked+.slider:before {
         display: block;
         grid-column: 2;
         grid-row: 2;
-        margin: 16px 16px 0;
-        padding: 10px 14px;
+        margin: 16px 8px 0;
+        padding: 10px 10px;
         max-height: 30vh;
         overflow: hidden;
         z-index: 10003;
@@ -6796,12 +6812,12 @@ input:checked+.slider:before {
 /* The calendar (or tag) an item comes from, in its colour, at the end of the row */
 .ss-agenda-source {
     flex: none;
-    max-width: 40%;
+    max-width: 30%;
     margin-left: auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.8em;
+    font-size: 0.65em;
     font-weight: 600;
 }
 

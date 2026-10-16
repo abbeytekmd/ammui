@@ -616,14 +616,14 @@
 
         <section id="calendar-view" class="calendar-view" hidden>
             <div class="calendar-header">
-                <button type="button" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
+                <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="15 18 9 12 15 6"></polyline>
                     </svg>
                 </button>
                 <h2 id="calendar-title" class="calendar-title"></h2>
-                <button type="button" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
+                <button type="button" id="calendar-next-btn" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="9 18 15 12 9 6"></polyline>
@@ -631,6 +631,11 @@
                 </button>
                 <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
                     title="Go to the current month">Today</button>
+                <select id="calendar-range-select" class="calendar-range-select" onchange="setCalendarRange(this.value)"
+                    title="How much of the calendar to show">
+                    <option value="month">Month</option>
+                    <option value="weeks">3 weeks</option>
+                </select>
             </div>
             <div id="calendar-status" class="calendar-status"></div>
             <div class="calendar-body">
