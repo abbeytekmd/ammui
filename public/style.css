@@ -6641,7 +6641,9 @@ input:checked+.slider:before {
         --ss-panel-w: clamp(300px, calc(100vw - 100dvh * 2046 / 1536), 50vw);
         display: grid !important;   /* slideshow.js shows the overlay with an inline display: flex */
         grid-template-columns: minmax(0, 1fr) var(--ss-panel-w);
-        grid-template-rows: auto auto minmax(0, 1fr) auto auto;   /* music, today's calendar, details, map, controls */
+        /* music, today's calendar, details, map or lyrics, controls. The details keep their height and the map or
+           lyrics row gives way when space is short, so the track title never rides up over the calendar */
+        grid-template-rows: auto auto minmax(min-content, 1fr) minmax(0, auto) auto;
     }
 
     .ss-side-panel {
@@ -6690,7 +6692,7 @@ input:checked+.slider:before {
         align-self: end;
         position: static;
         max-width: none;
-        margin: 0 16px;
+        margin: 12px 16px 0;   /* a gap under the calendar when space is tight */
         z-index: 10003;
         overflow-wrap: anywhere;
     }
@@ -6722,7 +6724,7 @@ input:checked+.slider:before {
         width: auto;
         height: auto;
         aspect-ratio: 4 / 3;
-        max-height: 40vh;
+        max-height: min(40vh, calc(100% - 16px));
         margin: 16px 16px 0;
     }
 
@@ -6730,7 +6732,7 @@ input:checked+.slider:before {
         width: auto;
         height: auto;
         aspect-ratio: 1;
-        max-height: 60vh;
+        max-height: min(60vh, calc(100% - 16px));
     }
 
     /* Lyrics take the map's place in the panel (the map gives way if a photo has a location) */
@@ -6740,7 +6742,15 @@ input:checked+.slider:before {
         position: static;
         width: auto;
         height: 40vh;
+        max-height: calc(100% - 16px);   /* less its top margin */
         margin: 16px 16px 0;
+        overflow: hidden;
+        /* The same card as the calendar's; the fade moves inside it so the border stays solid */
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
+        -webkit-mask-image: none;
+        mask-image: none;
     }
 
     .screensaver-overlay.has-lyrics .ss-map-window {
@@ -6751,6 +6761,8 @@ input:checked+.slider:before {
         align-items: center;
         text-align: center;
         padding: 0 8px;
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
+        mask-image: linear-gradient(to bottom, transparent 0%, black 15%, black 85%, transparent 100%);
     }
 
     .ss-lyrics-line {
