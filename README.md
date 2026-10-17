@@ -38,6 +38,7 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
 * Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
+* Calories: click **+ kcal** on an ingredient to look it up in the USDA FoodData Central database (free key from [api.data.gov](https://fdc.nal.usda.gov/api-key-signup), pasted in **Settings → Integrations**), or type the calories in yourself. Each meal then shows its calories per person. Weights, volumes (cup, tbsp, tsp, ml) and single items are converted automatically; for units like "packet" or "tin" you enter the weight of one, once.
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 

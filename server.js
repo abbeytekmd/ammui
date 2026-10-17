@@ -53,6 +53,7 @@ import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './li
 import https from 'https';
 import crypto from 'crypto';
 import { xmlEscape } from './lib/upnp.js';
+import { searchFoods, getFood, NutritionError } from './lib/nutrition.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
@@ -182,6 +183,7 @@ let settings = {
     discogsToken: '',
     acoustidKey: '',
     youtubeApiKey: '',
+    usdaApiKey: '', // USDA FoodData Central, for ingredient calories
     allowKeySharing: false, // let other AMMUI installs on the network copy the keys above
     s3: {
         endpoint: '',
@@ -224,6 +226,7 @@ function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
     settings.acoustidKey = getSetting('acoustidKey', '');
     settings.youtubeApiKey = getSetting('youtubeApiKey', '');
+    settings.usdaApiKey = getSetting('usdaApiKey', '');
     settings.allowKeySharing = !!getSetting('allowKeySharing', false);
     const savedS3 = getSetting('s3', {}) || {};
     settings.s3 = { ...settings.s3, ...savedS3 };
@@ -257,6 +260,7 @@ function saveSettings() {
     setSetting('discogsToken', settings.discogsToken);
     setSetting('acoustidKey', settings.acoustidKey);
     setSetting('youtubeApiKey', settings.youtubeApiKey);
+    setSetting('usdaApiKey', settings.usdaApiKey);
     setSetting('allowKeySharing', settings.allowKeySharing);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
@@ -2554,8 +2558,23 @@ app.post('/api/settings/youtube', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/settings/usda', (req, res) => {
+    const key = settings.usdaApiKey || '';
+    const hasKey = key.length > 0;
+    const maskedKey = hasKey ? key.substring(0, 4) + '****************' : '';
+    res.json({ hasKey, maskedKey });
+});
+
+app.post('/api/settings/usda', express.json(), (req, res) => {
+    const { key } = req.body;
+    settings.usdaApiKey = (key || '').trim();
+    saveSettings();
+    console.log(`USDA API key ${key ? 'updated' : 'removed'} on server.`);
+    res.json({ success: true });
+});
+
 // --- Copying API keys between AMMUI installs on the same network ---
-const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey'];
+const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey', 'usdaApiKey'];
 
 // Loopback, private (10/8, 172.16/12, 192.168/16), link-local and IPv6 unique-local addresses
 function isLanAddress(addr = '') {
@@ -3014,8 +3033,55 @@ function cleanIngredient(body, id) {
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
     const sameName = findIngredientIdByName(name);
     if (sameName && sameName !== id) return `"${name}" is already in the list`;
-    return { name, amount, unit };
+    if (!('nutrition' in body)) return { name, amount, unit };
+    const nutrition = cleanNutrition(body.nutrition);
+    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, nutrition };
 }
+
+// An ingredient's calories: null, or { kcalPer100g, gramsPerUnit: { unit: grams }, fdcId, fdcName }.
+// Returns a string saying what's wrong.
+function cleanNutrition(n) {
+    if (n == null) return null;
+    if (typeof n !== 'object') return 'Invalid calories';
+    const kcalPer100g = Number(n.kcalPer100g);
+    if (!Number.isFinite(kcalPer100g) || kcalPer100g < 0 || kcalPer100g > 1000) return 'Calories per 100 g must be between 0 and 1000';
+    const gramsPerUnit = {};
+    for (const [unit, grams] of Object.entries(n.gramsPerUnit && typeof n.gramsPerUnit === 'object' ? n.gramsPerUnit : {})) {
+        const g = Number(grams);
+        if (unit.length > 40 || !Number.isFinite(g) || g <= 0 || g > 100000) return `Invalid weight for "${unit}"`;
+        gramsPerUnit[unit.toLowerCase()] = g;
+    }
+    const fdcId = Number.isInteger(n.fdcId) && n.fdcId > 0 ? n.fdcId : null;
+    return { kcalPer100g, gramsPerUnit, fdcId, fdcName: fdcId ? String(n.fdcName ?? '').slice(0, 300) : '' };
+}
+
+// Calorie lookups for ingredients, from USDA FoodData Central
+function nutritionError(res, err) {
+    if (err instanceof NutritionError) return res.status(err.status).json({ error: err.message });
+    console.error('[Nutrition]', err);
+    res.status(500).json({ error: 'Calorie lookup failed' });
+}
+
+app.get('/api/nutrition/search', async (req, res) => {
+    if (!settings.usdaApiKey) return res.status(400).json({ error: 'Add a USDA FoodData Central API key in Settings → Integrations first.' });
+    const query = String(req.query.q ?? '').trim();
+    if (!query) return res.status(400).json({ error: 'Enter something to search for' });
+    try {
+        res.json({ foods: await searchFoods(settings.usdaApiKey, query, { branded: req.query.branded === '1' }) });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+app.get('/api/nutrition/food/:fdcId', async (req, res) => {
+    if (!settings.usdaApiKey) return res.status(400).json({ error: 'Add a USDA FoodData Central API key in Settings → Integrations first.' });
+    if (!/^\d+$/.test(req.params.fdcId)) return res.status(400).json({ error: 'Invalid food id' });
+    try {
+        res.json(await getFood(settings.usdaApiKey, req.params.fdcId));
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
 
 app.get('/api/ingredients', (req, res) => {
     res.json({ ingredients: listIngredients() });
@@ -4348,7 +4414,7 @@ app.get('/api/library-data/counts', (req, res) => {
 
 // Meals and ingredients export by name (ids mean nothing on another instance)
 app.get('/api/ingredients/export', (req, res) => {
-    const ingredients = listIngredients().map(({ name, amount, unit }) => ({ name, amount, unit }));
+    const ingredients = listIngredients().map(({ name, amount, unit, nutrition }) => ({ name, amount, unit, nutrition }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
 });
 
@@ -4359,7 +4425,7 @@ app.get('/api/meals/export', (req, res) => {
 });
 
 // New names are added; an existing ingredient is left as it is, except that an empty
-// one-person quantity is filled in from the file.
+// one-person quantity, or missing calories, are filled in from the file.
 app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) => {
     const { ingredients } = req.body;
     if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'ingredients array required' });
@@ -4374,8 +4440,15 @@ app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) =
             continue;
         }
         const current = getIngredient(id);
-        if (!current.amount && !current.unit && (clean.amount || clean.unit)) {
-            saveIngredient({ id, name: current.name, amount: clean.amount, unit: clean.unit });
+        const fillQuantity = !current.amount && !current.unit && (clean.amount || clean.unit);
+        const fillNutrition = !current.nutrition && clean.nutrition;
+        if (fillQuantity || fillNutrition) {
+            saveIngredient({
+                id, name: current.name,
+                amount: fillQuantity ? clean.amount : current.amount,
+                unit: fillQuantity ? clean.unit : current.unit,
+                nutrition: fillNutrition ? clean.nutrition : undefined,
+            });
             updated++;
         } else existing++;
     }

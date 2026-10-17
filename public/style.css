@@ -2544,7 +2544,7 @@ p.subtitle {
 
 /* Saved ingredients — a third column beside the meal editor */
 .ingredients-panel {
-    width: 24rem;
+    width: 26rem;
     flex-shrink: 0;
     display: flex;
     flex-direction: column;
@@ -2576,9 +2576,112 @@ p.subtitle {
     content: none;
 }
 
+/* Narrower quantity columns leave the name room beside the calories */
+.ingredient-row input.recipe-amount {
+    flex-basis: 3.75rem;
+    width: 3.75rem;
+}
+
+.ingredient-row input.recipe-unit {
+    flex-basis: 5rem;
+    width: 5rem;
+}
+
 .ingredient-add input:not(.recipe-amount):not(.recipe-unit) {
     flex: 1;
     min-width: 0;
+}
+
+/* Calories for a row's amount; click to look them up or change them */
+.recipe-kcal {
+    flex: 0 0 4.5rem;
+    padding: 0.35rem 0.4rem;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.recipe-kcal:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.recipe-kcal.unset {
+    color: var(--text-muted);
+}
+
+.recipe-kcal:disabled {
+    cursor: default;
+}
+
+.recipe-kcal-total {
+    margin: 0;
+    padding-left: 2.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.recipe-kcal-total:empty {
+    display: none;
+}
+
+/* Calories dialog: USDA search results */
+.nutrition-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.nutrition-result {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.nutrition-result:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nutrition-result.active {
+    border-color: var(--primary);
+    background: rgba(99, 102, 241, 0.12);
+}
+
+.nutrition-result-name {
+    flex: 1;
+    min-width: 0;
+}
+
+.nutrition-result-type,
+.nutrition-result-kcal {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.nutrition-preview {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.nutrition-preview:empty {
+    display: none;
 }
 
 @media (hover: none) {
@@ -2627,6 +2730,10 @@ p.subtitle {
 
     .recipe-add-ingredient {
         margin-left: 0;
+    }
+
+    .recipe-kcal-total {
+        padding-left: 0;
     }
 }
 

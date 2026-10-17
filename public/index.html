@@ -537,6 +537,7 @@
                             oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
                         <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
                     </div>
+                    <p id="recipe-kcal-total" class="recipe-kcal-total"></p>
                     <datalist id="recipe-units">
                         <option value="g"><option value="kg"><option value="ml"><option value="l">
                         <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
@@ -750,6 +751,60 @@
             </div>
             <div class="modal-body">
                 <div id="plug-timers-body" class="plug-timers"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recipes tab: calories for one ingredient, looked up from USDA FoodData Central or typed in -->
+    <div id="nutrition-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeNutritionDialog()">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Calories</h2>
+                    <p class="modal-subtitle" id="nutrition-ingredient-name"></p>
+                </div>
+                <button class="btn-close" onclick="closeNutritionDialog()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <label for="nutrition-search-input">Find it in the USDA food database</label>
+                    <div class="input-with-button">
+                        <input type="search" id="nutrition-search-input" autocomplete="off"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); searchNutrition(); }">
+                        <button class="btn-control btn-small primary" onclick="searchNutrition()">Search</button>
+                    </div>
+                    <label class="settings-check">
+                        <input type="checkbox" id="nutrition-branded" onchange="searchNutrition()">
+                        <span>Include branded products</span>
+                    </label>
+                    <div id="nutrition-results" class="nutrition-results"></div>
+                </div>
+                <div class="settings-group">
+                    <p id="nutrition-source" class="settings-hint"></p>
+                    <label for="nutrition-kcal">Calories per 100 g</label>
+                    <input type="number" id="nutrition-kcal" min="0" max="1000" step="any" placeholder="e.g. 40"
+                        oninput="updateNutritionPreview()">
+                    <div id="nutrition-unit-group" class="settings-group" style="padding: 0;">
+                        <label for="nutrition-unit-grams" id="nutrition-unit-label"></label>
+                        <input type="number" id="nutrition-unit-grams" min="0" step="any" oninput="updateNutritionPreview()">
+                        <p id="nutrition-unit-hint" class="settings-hint"></p>
+                    </div>
+                    <p id="nutrition-preview" class="nutrition-preview"></p>
+                    <div id="nutrition-status" class="calendar-status"></div>
+                    <div style="display:flex; gap:0.75rem; margin-top: 0.5rem;">
+                        <button id="nutrition-remove-btn" class="btn-control ghost calendar-entry-delete"
+                            onclick="removeNutrition()">Remove</button>
+                        <span style="flex: 1;"></span>
+                        <button class="btn-control ghost" onclick="closeNutritionDialog()">Cancel</button>
+                        <button id="nutrition-save-btn" class="btn-control primary" onclick="saveNutrition()">Save</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -975,7 +1030,7 @@
                                 </select>
                                 <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
                             </div>
-                            <p class="settings-hint">Fetches the Discogs, AcoustID and YouTube keys, the S3 connection
+                            <p class="settings-hint">Fetches the Discogs, AcoustID, YouTube and USDA keys, the S3 connection
                                 details and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
                             <label class="settings-check" style="margin-top: 0.5rem;">
@@ -1030,6 +1085,19 @@
                                 Some videos have embedding disabled by their owner — if the
                                 <code>yt-dlp</code> tool is installed on the server, those still play locally
                                 (extracted on the fly, not cached); otherwise they open on youtube.com instead.</p>
+                        </div>
+
+                        <div class="settings-group" style="margin-top: 1.5rem;">
+                            <label for="usda-key-input">USDA FoodData Central API Key</label>
+                            <div class="input-with-button">
+                                <input type="password" id="usda-key-input"
+                                    placeholder="Enter your api.data.gov key"
+                                    autocomplete="off">
+                                <button class="btn-control btn-small primary" onclick="saveUsdaKey()">Save</button>
+                            </div>
+                            <p class="settings-hint">Looks up calories for ingredients on the Recipes tab. Each ingredient
+                                is looked up once and the result is saved here. <a href="https://fdc.nal.usda.gov/api-key-signup"
+                                    target="_blank" rel="noopener">Get a free key here</a>.</p>
                         </div>
                     </div>
                 </div>
