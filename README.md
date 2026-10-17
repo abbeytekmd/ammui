@@ -38,8 +38,20 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
 * Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
+* Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
+## Why?
+I'd been using an Amazon Echo Show for a while. It was great but...
+* I have a library of mp3s and was paying a subscription to a music service I could manage without.
+* I have a library of photos. To get them on the Echo, I had to upload them to AWS.
+* I didn't really have a consistent backup strategy for the above.
+* I'd get Adverts :-(
+* I never really got the on-this-day slideshow I wanted. It didn't seem to quite work.
+* It didn't hook in with my Google Calendars very well.
+* The UI is not great for me. Settings are not easy to find. As a product designer who has built a lot of UI, that was winding me up :)
+
+Some of this stuff may have changed since then but I wanted a home hub that's not tied too much to one company's ecosystem, that covers a diverse range of functions, that is built with a decent UI, that can run on a wide range of hardware and that isn't too expensive to deploy. 
 ## Target Hardware
 
 The install contains the media server and a built in webserver to serve the UI. It should run on anything that can run node.js (Windows/Linux/MacOS) and will need storage space for the media library. The UI runs from a browser so any device with one should work. It can be on the same machine as the server and/or on any device on the local network to it. A touchscreen is highly recommended.
@@ -315,6 +327,17 @@ A smart meter only keeps about 13 months of readings. When you first sign up to 
 Comparing a month with the same month a year earlier needs readings from both months, so the year-earlier lines on the monthly bars (and the comparison under last month's total) may not show at first. After a while, as the history builds up, they start to appear month by month until all 12 bars have one. Nothing needs setting up for this; it happens on its own.
 
 <img src="images/ammui-energy.png" width="600"/>
+
+## Games
+
+The **Games** tab has a daily word game: guess the five-letter word in six tries. After each guess the tiles turn green for a letter in the right place, amber for a letter that's in the word but somewhere else, and grey for a letter that isn't in it. The on-screen keyboard keeps track of the letters you've tried, or you can type on a keyboard.
+
+* **A new word every day, the same for everyone.** The word changes at midnight, and every device picks the same one for the same day without needing to talk to the server or each other, so the family can compare how they got on.
+* **UK English.** Words come from the British English lists of [SCOWL](http://wordlist.aspell.net/) (the word lists behind many spell checkers), so British spellings such as *odour* and *kerb* are accepted and American ones such as *color* aren't. The daily word is always a fairly common word, with plurals and past tenses such as *cakes* and *baked* left out. Guesses can be any word from a much larger list. The lists are downloaded the first time the tab is opened (about 1.3 MB) and kept by the browser after that.
+* **Players.** Add the people who play in **Server Settings** → **Games**. Pick who's playing at the top of the tab before starting; each device remembers who played on it last. Each player's game and stats (games played, win rate, current and best streak) are kept on the server, so they're the same on every device, and a day's word can only be played once per player.
+* **No spoilers.** When a game is finished the letters are cleared, leaving just the coloured tiles, so others can see how it went without seeing the word.
+
+Removing a player also deletes their games and stats.
 
 ## Secure Access (HTTPS)
 
