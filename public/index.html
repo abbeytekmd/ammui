@@ -878,6 +878,23 @@
                         </div>
                     </div>
                     <div class="manage-section">
+                        <h3>Slideshow</h3>
+                        <div class="settings-group">
+                            <label for="slideshow-idle-input">Start after idle (seconds)</label>
+                            <input type="number" id="slideshow-idle-input" min="0" max="86400" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">How long the app sits untouched before the slideshow starts.
+                                It doesn't start while a game is being played. 0 means it only starts when you
+                                start it.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-photo-input">Show each photo for (seconds)</label>
+                            <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
+                        </div>
+                    </div>
+                    <div class="manage-section">
                         <h3>Secure Access (HTTPS)</h3>
                         <div class="settings-group">
                             <p class="settings-hint">Voice commands only work when the app is opened over HTTPS.
@@ -2160,8 +2177,8 @@
         </div>
     </div>
 
-    <script src="app.js?v=53"></script>
-    <script src="slideshow.js?v=5"></script>
+    <script src="app.js?v=55"></script>
+    <script src="slideshow.js?v=7"></script>
 </body>
 
 </html>

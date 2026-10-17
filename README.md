@@ -202,6 +202,7 @@ powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
 Stop the server (Ctrl+C in its terminal, or stop the service if you set one up), then delete the folder you cloned AMMUI into. As on Windows, that folder holds the database, settings and local library, so back up anything you want to keep first.
 
 ## Slideshow:
+* Starts after the app has been idle for a while and moves to the next photo on a timer. Set both in Settings > General (0 turns either timer off). It won't start while a game is in progress.
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
 * Go back to the last picture in the slideshow in case you just missed it.

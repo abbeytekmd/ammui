@@ -5510,6 +5510,7 @@ function setAppView(view) {
     document.querySelector('.main-layout').hidden = !!view;
     if (floatingBtn) floatingBtn.style.visibility = view ? 'hidden' : '';
     updateBrowserModeTabs();
+    if (slideshow) slideshow.resetIdleTimer(); // the slideshow waits while a game is being played
 }
 
 // Calendar tab: a month view, or three weeks from the current one
@@ -9439,8 +9440,35 @@ async function fetchGeneralSettings() {
             if (nameInput) nameInput.value = data.deviceName;
             updateUIWithDeviceName();
         }
+        applySlideshowSettings(data);
     } catch (err) {
         console.error('Failed to fetch general settings:', err);
+    }
+}
+
+function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds }) {
+    document.getElementById('slideshow-idle-input').value = slideshowIdleSeconds;
+    document.getElementById('slideshow-photo-input').value = slideshowPhotoSeconds;
+    if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
+}
+
+async function saveSlideshowSettings() {
+    const idle = Number(document.getElementById('slideshow-idle-input').value);
+    const photo = Number(document.getElementById('slideshow-photo-input').value);
+    if (!(idle >= 0) || !(photo >= 0)) return;
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slideshowIdleSeconds: idle, slideshowPhotoSeconds: photo })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        // Show the values the server kept (it clamps them to a sensible range)
+        applySlideshowSettings(await (await fetch('/api/settings/general')).json());
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save slideshow settings:', err);
+        showToast('Failed to save settings');
     }
 }
 
@@ -11206,6 +11234,8 @@ function wordScore(guess, answer) {
 }
 
 const wordOver = () => !!wordGame && wordGame.status !== 'playing';
+// A game is on screen and not finished: the idle slideshow mustn't cover it
+const gameInProgress = () => appView === 'games' && wordGame?.status === 'playing';
 
 // A message under the title; ms = 0 leaves it showing
 function wordMessage(text, ms = 2000) {
@@ -11300,6 +11330,7 @@ function openGamePlayerSettings() {
 // A finished game shows only the colours, so the letters (and the word) aren't there for others to see.
 function renderWord(revealLast = false, showLetters = revealLast || !wordOver()) {
     if (!wordList) return;
+    if (slideshow) slideshow.resetIdleTimer(); // re-arm once the game ends
     renderGamePlayers();
     const day = wordGame?.day ?? wordToday();
     const answer = wordAnswer(day);

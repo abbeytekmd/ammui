@@ -69,14 +69,22 @@ class Slideshow {
 
     resetIdleTimer(e) {
         clearTimeout(this.timer);
-        if (!this.isActive && !document.hidden) {
+        if (!this.isActive && !document.hidden && this.idleTimeout > 0 && !gameInProgress()) {
             const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
             if (!isVideoVisible) {
                 this.timer = setTimeout(() => {
-                    this.start();
+                    if (!gameInProgress()) this.start();
                 }, this.idleTimeout);
             }
         }
+    }
+
+    // Seconds from the General settings. 0 = never start when idle / never auto-advance.
+    setTimings(idleSeconds, photoSeconds) {
+        if (idleSeconds >= 0) this.idleTimeout = idleSeconds * 1000;
+        if (photoSeconds >= 0) this.duration = photoSeconds * 1000;
+        if (this.isActive) this.resetInterval();
+        else this.resetIdleTimer();
     }
 
     async start(items = null, index = -1) {
@@ -232,7 +240,7 @@ class Slideshow {
 
     resetInterval() {
         if (this.interval) clearInterval(this.interval);
-        if (this.isActive) {
+        if (this.isActive && this.duration > 0) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }

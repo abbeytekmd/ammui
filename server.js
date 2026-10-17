@@ -194,6 +194,8 @@ let settings = {
         mirrorMaxDeletePercent: 10
     },
     deviceName: 'AMMUI',
+    slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
+    slideshowPhotoSeconds: 60, // how long each photo shows
     calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
     calendarTagColors: {}, // { tag: '#rrggbb' } colours of calendar entry tags
     screensaver: {
@@ -227,6 +229,8 @@ function loadSettings() {
     // Installs from before the connection test existed: a configured bucket was already in use
     if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
+    settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
+    settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
@@ -255,6 +259,8 @@ function saveSettings() {
     setSetting('allowKeySharing', settings.allowKeySharing);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
+    setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
+    setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
@@ -2613,10 +2619,27 @@ app.post('/api/sync/s3/test', express.json(), async (req, res) => {
 });
 
 app.get('/api/settings/general', (req, res) => {
-    res.json({ deviceName: settings.deviceName });
+    res.json({
+        deviceName: settings.deviceName,
+        slideshowIdleSeconds: settings.slideshowIdleSeconds,
+        slideshowPhotoSeconds: settings.slideshowPhotoSeconds
+    });
 });
 
 app.post('/api/settings/general', express.json(), (req, res) => {
+    // Slideshow timings: whole seconds, idle 10s–24h, photos 5s–1h. 0 turns that timer off.
+    const seconds = (v, min, max) => {
+        const n = Math.round(Number(v));
+        if (!Number.isFinite(n)) return null;
+        return n <= 0 ? 0 : Math.min(Math.max(n, min), max);
+    };
+    const idle = seconds(req.body.slideshowIdleSeconds, 10, 86400);
+    const photo = seconds(req.body.slideshowPhotoSeconds, 5, 3600);
+    if (idle !== null || photo !== null) {
+        if (idle !== null) settings.slideshowIdleSeconds = idle;
+        if (photo !== null) settings.slideshowPhotoSeconds = photo;
+        saveSettings();
+    }
     const deviceName = String(req.body.deviceName || '').trim();
     if (deviceName) {
         const oldLibraryName = localLibraryName();
