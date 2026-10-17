@@ -359,10 +359,10 @@ The `certs` folder holds private keys, so it isn't committed to git. Delete it a
 
 Until a device trusts AMMUI's certificate, browsers show a "connection is not private" warning. You can click through it (Advanced → Proceed) and everything, including voice commands, works. To remove the warning for good, go to **Settings → General → Secure Access (HTTPS)**, press **Download Certificate** on each device, and install it as a trusted root certificate:
 
-* **Windows**: open the downloaded file → Install Certificate → Local Machine → "Place all certificates in the following store" → **Trusted Root Certification Authorities**. Restart the browser.
+* **Windows**: press **Install on this PC** instead, open the downloaded `trust-ammui.cmd` and choose *Yes* in the Windows security warning (if SmartScreen appears, choose More info → Run anyway). Restart the browser. Or install it by hand: open the downloaded certificate → Install Certificate → Local Machine → "Place all certificates in the following store" → **Trusted Root Certification Authorities**. Restart the browser.
 * **Android**: Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**, and choose the downloaded file.
-* **iPhone / iPad**: open the download in Safari and allow the profile, install it under Settings → General → VPN & Device Management, then turn it on under Settings → General → About → **Certificate Trust Settings**.
-* **macOS**: open the file in Keychain Access, then double-click "AMMUI Local CA" and set **Trust → When using this certificate** to Always Trust.
+* **iPhone / iPad**: in Safari, press **Install on this iPhone / iPad** and allow the profile, install it under Settings → General → VPN & Device Management, then turn it on under Settings → General → About → **Certificate Trust Settings**.
+* **macOS**: press **Install on this Mac** instead, open the downloaded `ammui.mobileconfig`, then in System Settings search for **Profiles**, double-click AMMUI and choose Install. Or by hand: open the certificate in Keychain Access, then double-click "AMMUI Local CA" and set **Trust → When using this certificate** to Always Trust.
 
 Each device only needs this once: when the server certificate is renewed it's signed by the same authority, so it stays trusted.
 

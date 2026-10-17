@@ -52,6 +52,7 @@ import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import https from 'https';
 import crypto from 'crypto';
+import { xmlEscape } from './lib/upnp.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
@@ -1323,6 +1324,79 @@ app.get('/api/https/ca.crt', (req, res) => {
     res.set('Content-Type', 'application/x-x509-ca-cert');
     res.set('Content-Disposition', 'attachment; filename="ammui-ca.crt"');
     res.sendFile(caPath);
+});
+
+// Browsers can't trust a certificate themselves, so Windows devices get a script that adds the CA
+// to the current user's trusted roots (no admin needed; Windows asks the user to confirm).
+app.get('/api/https/trust-ammui.cmd', (req, res) => {
+    const caPath = caCertificatePath(certsDir);
+    if (!fs.existsSync(caPath)) return res.status(404).send('HTTPS is not set up');
+    const pem = fs.readFileSync(caPath, 'utf8').trim().split(/\r?\n/);
+    const script = [
+        '@echo off',
+        'title Trust the AMMUI certificate',
+        'set "CRT=%TEMP%\\ammui-ca.crt"',
+        '(',
+        ...pem.map(line => `echo ${line}`),
+        ') > "%CRT%"',
+        'echo Adding the AMMUI certificate to this Windows user\'s trusted certificates.',
+        'echo Choose Yes in the Windows security warning that appears.',
+        'echo.',
+        'certutil -user -addstore Root "%CRT%" >nul',
+        'if errorlevel 1 (echo The certificate was NOT installed.) else (echo Done. Restart your browser to remove the warning.)',
+        'del "%CRT%" >nul 2>&1',
+        'echo.',
+        'pause',
+        '',
+    ].join('\r\n');
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', 'attachment; filename="trust-ammui.cmd"');
+    res.send(script);
+});
+
+// iPhone / iPad: a configuration profile carrying the CA, which Safari offers to install. iOS still
+// makes the user turn on full trust for it in Certificate Trust Settings; nothing can skip that.
+app.get('/api/https/ammui.mobileconfig', (req, res) => {
+    const caPath = caCertificatePath(certsDir);
+    if (!fs.existsSync(caPath)) return res.status(404).send('HTTPS is not set up');
+    const ca = new crypto.X509Certificate(fs.readFileSync(caPath));
+    // Stable ids per CA, so installing again replaces the profile rather than adding a second one.
+    const hash = crypto.createHash('sha256').update(ca.raw).digest('hex');
+    const uuid = n => {
+        const h = hash.slice(n * 32, n * 32 + 32);
+        return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`.toUpperCase();
+    };
+    const id = `local.ammui.ca.${hash.slice(0, 12)}`;
+    const name = xmlEscape(ca.subject.match(/^CN=(.*)$/m)?.[1] ?? 'AMMUI Local CA');
+    const profile = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadCertificateFileName</key><string>ammui-ca.crt</string>
+            <key>PayloadContent</key><data>${ca.raw.toString('base64')}</data>
+            <key>PayloadDisplayName</key><string>${name}</string>
+            <key>PayloadIdentifier</key><string>${id}.root</string>
+            <key>PayloadType</key><string>com.apple.security.root</string>
+            <key>PayloadUUID</key><string>${uuid(1)}</string>
+            <key>PayloadVersion</key><integer>1</integer>
+        </dict>
+    </array>
+    <key>PayloadDescription</key><string>Lets this device open AMMUI over HTTPS without a warning. After installing, turn it on under Settings, General, About, Certificate Trust Settings.</string>
+    <key>PayloadDisplayName</key><string>AMMUI</string>
+    <key>PayloadIdentifier</key><string>${id}</string>
+    <key>PayloadRemovalDisallowed</key><false/>
+    <key>PayloadType</key><string>Configuration</string>
+    <key>PayloadUUID</key><string>${uuid(0)}</string>
+    <key>PayloadVersion</key><integer>1</integer>
+</dict>
+</plist>
+`;
+    res.set('Content-Type', 'application/x-apple-aspen-config');
+    res.set('Content-Disposition', 'inline; filename="ammui.mobileconfig"');
+    res.send(profile);
 });
 
 // ---------------------------------------------------------------------------

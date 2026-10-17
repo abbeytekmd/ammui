@@ -904,10 +904,39 @@
                                 the connection isn't private until you trust it. To remove the warning for good,
                                 download the certificate below on each phone or PC and install it as a trusted
                                 root certificate.</p>
-                            <div style="display:flex; gap:0.75rem;">
+                            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                                <a id="https-trust-windows" class="btn-control btn-seek" href="/api/https/trust-ammui.cmd"
+                                    download="trust-ammui.cmd" style="text-decoration:none; display:none;">Install on this PC</a>
+                                <a id="https-trust-ios" class="btn-control btn-seek" href="/api/https/ammui.mobileconfig"
+                                    style="text-decoration:none; display:none;">Install on this iPhone / iPad</a>
+                                <a id="https-trust-mac" class="btn-control btn-seek" href="/api/https/ammui.mobileconfig"
+                                    download="ammui.mobileconfig" style="text-decoration:none; display:none;">Install on this Mac</a>
                                 <a class="btn-control btn-seek" href="/api/https/ca.crt" download="ammui-ca.crt"
                                     style="text-decoration:none;">Download Certificate</a>
                             </div>
+                            <div id="https-trust-mac-hint" class="settings-hint" style="display:none;">
+                                <ol style="margin:0.25rem 0; padding-left:1.25rem;">
+                                    <li>Press <b>Install on this Mac</b> and open the downloaded <b>ammui.mobileconfig</b>.</li>
+                                    <li>Open System Settings, search for <b>Profiles</b>, double-click <b>AMMUI</b>, choose
+                                        <b>Install</b> and enter your password.</li>
+                                    <li>Restart the browser.</li>
+                                </ol>
+                            </div>
+                            <div id="https-trust-ios-hint" class="settings-hint" style="display:none;">
+                                <p id="https-trust-ios-safari" style="display:none;"><b>Open this page in Safari first</b>:
+                                    other browsers can't install the certificate.</p>
+                                <ol style="margin:0.25rem 0; padding-left:1.25rem;">
+                                    <li>Press <b>Install on this iPhone / iPad</b> and choose <b>Allow</b>.</li>
+                                    <li>Open the Settings app, tap <b>Profile Downloaded</b> near the top, then
+                                        <b>Install</b> (it says "Not Verified": that's expected).</li>
+                                    <li>Go to Settings &rarr; General &rarr; About &rarr; <b>Certificate Trust Settings</b>
+                                        and turn on the <b>AMMUI Local CA</b>. Without this step the warning stays.</li>
+                                </ol>
+                            </div>
+                            <p id="https-trust-windows-hint" class="settings-hint" style="display:none;">
+                                On Windows, press <b>Install on this PC</b>, open the downloaded file, and choose
+                                <b>Yes</b> when Windows asks to install the certificate. If Windows says it protected
+                                your PC, choose <b>More info</b> &rarr; <b>Run anyway</b>. Then restart the browser.</p>
                         </div>
                     </div>
                     <div class="manage-section">

@@ -9418,6 +9418,28 @@ function secureAppUrl() {
 function renderHttpsSettings() {
     const el = document.getElementById('https-urls');
     if (!el) return;
+    // Windows gets a one-click trust script instead of the certificate import wizard.
+    const isWindows = /Windows/i.test(navigator.userAgent);
+    for (const id of ['https-trust-windows', 'https-trust-windows-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isWindows && httpsInfo?.available ? '' : 'none';
+    }
+    // iPhone / iPad get a configuration profile. iPadOS Safari claims to be a Mac, hence the touch check.
+    const ua = navigator.userAgent;
+    const isIos = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const isSafari = !/CriOS|FxiOS|EdgiOS|OPiOS|GSA\//.test(ua);
+    for (const id of ['https-trust-ios', 'https-trust-ios-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isIos && httpsInfo?.available ? '' : 'none';
+    }
+    // Macs install the same profile, from System Settings.
+    const isMac = /Macintosh/.test(ua) && !isIos;
+    for (const id of ['https-trust-mac', 'https-trust-mac-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isMac && httpsInfo?.available ? '' : 'none';
+    }
+    const safariNote = document.getElementById('https-trust-ios-safari');
+    if (safariNote) safariNote.style.display = isSafari ? 'none' : '';
     if (!httpsInfo?.available) {
         el.textContent = "HTTPS isn't running - check the server log.";
         return;
