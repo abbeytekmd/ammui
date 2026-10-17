@@ -53,7 +53,7 @@ import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './li
 import https from 'https';
 import crypto from 'crypto';
 import { xmlEscape } from './lib/upnp.js';
-import { searchFoods, getFood, NutritionError } from './lib/nutrition.js';
+import { searchFoods, getFood, NutritionError, SOURCES as NUTRITION_SOURCES } from './lib/nutrition.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
@@ -183,7 +183,7 @@ let settings = {
     discogsToken: '',
     acoustidKey: '',
     youtubeApiKey: '',
-    usdaApiKey: '', // USDA FoodData Central, for ingredient calories
+    usdaApiKey: '', // USDA FoodData Central, one of the sources of ingredient calories
     allowKeySharing: false, // let other AMMUI installs on the network copy the keys above
     s3: {
         endpoint: '',
@@ -3038,8 +3038,8 @@ function cleanIngredient(body, id) {
     return typeof nutrition === 'string' ? nutrition : { name, amount, unit, nutrition };
 }
 
-// An ingredient's calories: null, or { kcalPer100g, gramsPerUnit: { unit: grams }, fdcId, fdcName }.
-// Returns a string saying what's wrong.
+// An ingredient's calories: null, or { kcalPer100g, gramsPerUnit: { unit: grams }, source, sourceId, sourceName }
+// (source is the food table it came from, or '' if typed in). Returns a string saying what's wrong.
 function cleanNutrition(n) {
     if (n == null) return null;
     if (typeof n !== 'object') return 'Invalid calories';
@@ -3051,11 +3051,17 @@ function cleanNutrition(n) {
         if (unit.length > 40 || !Number.isFinite(g) || g <= 0 || g > 100000) return `Invalid weight for "${unit}"`;
         gramsPerUnit[unit.toLowerCase()] = g;
     }
-    const fdcId = Number.isInteger(n.fdcId) && n.fdcId > 0 ? n.fdcId : null;
-    return { kcalPer100g, gramsPerUnit, fdcId, fdcName: fdcId ? String(n.fdcName ?? '').slice(0, 300) : '' };
+    // Exports from the first, USDA-only version have fdcId/fdcName instead
+    const legacyUsda = !n.source && Number.isInteger(n.fdcId) && n.fdcId > 0;
+    const source = legacyUsda ? 'usda' : NUTRITION_SOURCES.includes(n.source) ? n.source : '';
+    return {
+        kcalPer100g, gramsPerUnit, source,
+        sourceId: source ? String((legacyUsda ? n.fdcId : n.sourceId) ?? '').slice(0, 40) : '',
+        sourceName: source ? String((legacyUsda ? n.fdcName : n.sourceName) ?? '').slice(0, 300) : '',
+    };
 }
 
-// Calorie lookups for ingredients, from USDA FoodData Central
+// Calorie lookups for ingredients: UK food tables (bundled), Open Food Facts or USDA
 function nutritionError(res, err) {
     if (err instanceof NutritionError) return res.status(err.status).json({ error: err.message });
     console.error('[Nutrition]', err);
@@ -3063,21 +3069,18 @@ function nutritionError(res, err) {
 }
 
 app.get('/api/nutrition/search', async (req, res) => {
-    if (!settings.usdaApiKey) return res.status(400).json({ error: 'Add a USDA FoodData Central API key in Settings → Integrations first.' });
     const query = String(req.query.q ?? '').trim();
     if (!query) return res.status(400).json({ error: 'Enter something to search for' });
     try {
-        res.json({ foods: await searchFoods(settings.usdaApiKey, query, { branded: req.query.branded === '1' }) });
+        res.json({ foods: await searchFoods(String(req.query.source || 'cofid'), query, { usdaKey: settings.usdaApiKey, branded: req.query.branded === '1' }) });
     } catch (err) {
         nutritionError(res, err);
     }
 });
 
-app.get('/api/nutrition/food/:fdcId', async (req, res) => {
-    if (!settings.usdaApiKey) return res.status(400).json({ error: 'Add a USDA FoodData Central API key in Settings → Integrations first.' });
-    if (!/^\d+$/.test(req.params.fdcId)) return res.status(400).json({ error: 'Invalid food id' });
+app.get('/api/nutrition/food/:source/:id', async (req, res) => {
     try {
-        res.json(await getFood(settings.usdaApiKey, req.params.fdcId));
+        res.json(await getFood(req.params.source, req.params.id, { usdaKey: settings.usdaApiKey }));
     } catch (err) {
         nutritionError(res, err);
     }

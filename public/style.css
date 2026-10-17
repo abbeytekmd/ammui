@@ -2630,7 +2630,91 @@ p.subtitle {
     display: none;
 }
 
-/* Calories dialog: USDA search results */
+/* Calories dialog: the source tabs and search box stay above the scrolling results */
+.nutrition-search-bar {
+    flex-shrink: 0;
+    padding: 0 2rem 0.75rem;
+}
+
+.nutrition-search-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.nutrition-search-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+/* For UK products: what the UK food tables say, to compare the labels against */
+.nutrition-reference {
+    margin: 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.nutrition-reference button {
+    margin-left: 0.4rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.nutrition-reference[hidden] {
+    display: none;
+}
+
+.nutrition-result-doubt {
+    display: block;
+    font-size: 0.75rem;
+    color: #f59e0b;
+}
+
+/* Calories dialog: where to look (UK foods / UK products / USDA) */
+.nutrition-sources {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.nutrition-sources button {
+    flex: 1;
+    padding: 0.45rem 0.5rem;
+    border: none;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.nutrition-sources button:hover {
+    color: var(--text);
+}
+
+.nutrition-sources button.active {
+    background: var(--primary);
+    color: white;
+}
+
+/* Their display: flex would otherwise beat the hidden attribute */
+.settings-check[hidden],
+.settings-group[hidden] {
+    display: none;
+}
+
+/* Calories dialog: search results */
 .nutrition-results {
     display: flex;
     flex-direction: column;

@@ -47,7 +47,8 @@
       "lib/**/*.js"
     ],
     "assets": [
-      "public/**/*"
+      "public/**/*",
+      "lib/data/**/*"
     ],
     "targets": [
       "node18-win-x64"

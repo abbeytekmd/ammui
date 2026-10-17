@@ -771,18 +771,27 @@
                     </svg>
                 </button>
             </div>
+            <!-- Stays put while the results and form below scroll, so it's always clear where they're from -->
+            <div class="settings-group nutrition-search-bar">
+                <div id="nutrition-sources" class="nutrition-sources" role="tablist" aria-label="Where to look">
+                    <button type="button" role="tab" data-source="cofid" onclick="setNutritionSearchSource('cofid')">UK foods</button>
+                    <button type="button" role="tab" data-source="off" onclick="setNutritionSearchSource('off')">UK products</button>
+                    <button type="button" role="tab" data-source="usda" onclick="setNutritionSearchSource('usda')">USDA</button>
+                </div>
+                <p id="nutrition-source-hint" class="settings-hint"></p>
+                <div class="nutrition-search-row">
+                    <input type="search" id="nutrition-search-input" autocomplete="off" aria-label="Search for a food"
+                        onkeydown="if(event.key==='Enter') { event.preventDefault(); searchNutrition(); }">
+                    <button class="btn-control btn-small primary" onclick="searchNutrition()">Search</button>
+                </div>
+                <label class="settings-check" id="nutrition-branded-option">
+                    <input type="checkbox" id="nutrition-branded" onchange="searchNutrition()">
+                    <span>Include branded products</span>
+                </label>
+            </div>
             <div class="modal-body">
                 <div class="settings-group">
-                    <label for="nutrition-search-input">Find it in the USDA food database</label>
-                    <div class="input-with-button">
-                        <input type="search" id="nutrition-search-input" autocomplete="off"
-                            onkeydown="if(event.key==='Enter') { event.preventDefault(); searchNutrition(); }">
-                        <button class="btn-control btn-small primary" onclick="searchNutrition()">Search</button>
-                    </div>
-                    <label class="settings-check">
-                        <input type="checkbox" id="nutrition-branded" onchange="searchNutrition()">
-                        <span>Include branded products</span>
-                    </label>
+                    <p id="nutrition-reference" class="nutrition-reference" hidden></p>
                     <div id="nutrition-results" class="nutrition-results"></div>
                 </div>
                 <div class="settings-group">
@@ -1095,8 +1104,8 @@
                                     autocomplete="off">
                                 <button class="btn-control btn-small primary" onclick="saveUsdaKey()">Save</button>
                             </div>
-                            <p class="settings-hint">Looks up calories for ingredients on the Meals tab. Each ingredient
-                                is looked up once and the result is saved here. <a href="https://fdc.nal.usda.gov/api-key-signup"
+                            <p class="settings-hint">Optional. Adds US foods to the places the Meals tab can look up
+                                ingredient calories; UK foods and UK products work without a key. <a href="https://fdc.nal.usda.gov/api-key-signup"
                                     target="_blank" rel="noopener">Get a free key here</a>.</p>
                         </div>
                     </div>

@@ -38,7 +38,7 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
 * Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
-* Calories for each meal per person, from ingredients looked up once in the USDA food database or typed in (see [Calories](#calories)).
+* Calories for each meal per person, from ingredients looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
@@ -334,22 +334,32 @@ Comparing a month with the same month a year earlier needs readings from both mo
 
 The **Meals** tab can show how many calories each meal has per person. Calories are set once on each ingredient in the **Ingredients** list. Each meal then adds up its own ingredients for the amounts it uses.
 
-### Setting up
+### Where calories come from
 
-Calories are looked up in [USDA FoodData Central](https://fdc.nal.usda.gov/), the US government's free food database. It needs a free API key:
+The Calories dialog can look in three places. Pick one with the tabs at the top.
+
+| Tab | What it has | Needs |
+| --- | --- | --- |
+| **UK foods** (the default) | About 2,850 basic foods with UK names and UK figures, such as *Aubergine, raw*, *Swede, boiled* or *Bacon rashers, back, grilled*. These come from McCance and Widdowson's *Composition of Foods*, the UK's official food tables. | Nothing. It's built into AMMUI and works offline. |
+| **UK products** | Packaged products sold in the UK, such as Heinz beans or Warburtons bread, from [Open Food Facts](https://uk.openfoodfacts.org/). It knows the pack size, so *"1 tin"* works without entering a weight. | An internet connection. No key. |
+| **USDA** | US foods from [USDA FoodData Central](https://fdc.nal.usda.gov/), including weights for cups, slices and single items. It uses American names (*eggplant*, *zucchini*, *cilantro*). | A free API key (see below). |
+
+The dialog remembers the tab you used last.
+
+#### USDA key (optional)
 
 1. Sign up at [fdc.nal.usda.gov/api-key-signup](https://fdc.nal.usda.gov/api-key-signup). The key arrives by email straight away.
 2. Paste it in **Settings → Integrations → USDA FoodData Central API Key** and press Save.
 
-The key allows 1,000 lookups an hour, far more than you'll need. You can still type calories in by hand without a key.
+The key allows 1,000 lookups an hour.
 
 ### Adding calories to an ingredient
 
 1. In the **Ingredients** list, press **+ kcal** next to an ingredient.
-2. AMMUI searches for its name and lists matching foods with their calories per 100 g. Basic foods such as "Onions, raw" are listed by default. Tick **Include branded products** to search packaged foods too. If nothing useful comes up, try a simpler name (*"chicken breast"* rather than *"Tesco chicken fillets"*).
-3. Pick the closest match. This fills in **Calories per 100 g**, plus the food's own weights for things like a cup, a slice or one medium item.
-4. If the ingredient's unit isn't a weight, check the **Weight of 1 …** box (see below).
-5. Press **Save**. The line underneath shows what the ingredient comes to, e.g. *"1 onion (110 g) ≈ 44 kcal per person"*.
+2. AMMUI searches for its name and lists matching foods with their calories per 100 g. Close misspellings are found too (*"brocolli"* finds broccoli). If nothing useful comes up, try another tab or a simpler name (*"chicken breast"* rather than *"skinless chicken fillets"*). For USDA, tick **Include branded products** to search US packaged foods as well.
+3. Pick the closest match. This fills in **Calories per 100 g**, plus any weights the source knows: the pack size for a UK product, or a cup, a slice and one medium item for a USDA food.
+4. If the ingredient's unit isn't a weight, check the **Weight of 1 …** box (see below). The UK food tables don't list weights for single items, so for *"2 eggs"* or *"1 onion"* enter how much one weighs.
+5. Press **Save**. The line underneath shows what the ingredient comes to, e.g. *"1 onion (150 g) ≈ 53 kcal per person"*.
 
 You can also skip the search and type **Calories per 100 g** from a packet label. To change an ingredient's calories later, click its calorie figure. **Remove** clears them.
 
@@ -362,9 +372,10 @@ Calories are worked out from the amount and unit each meal uses, so the same ing
 | Unit | How it's converted |
 | --- | --- |
 | g, kg, oz, lb | Directly by weight |
-| cup, tbsp, tsp, ml, l | The food's own weight for that measure if USDA lists one. Otherwise it's worked out from another volume it does list, or as if it weighed the same as water |
-| No unit ("2" onions) | The weight of one item: USDA's medium size where it has one |
-| Anything else (packet, tin, bunch, pinch…) | The weight you enter for one, in **Weight of 1 …** |
+| cup, tbsp, tsp, ml, l | The food's own weight for that measure if the source lists one. Otherwise it's worked out from another volume it does list, or as if it weighed the same as water |
+| No unit ("2" onions) | The weight of one item that you enter, or USDA's medium size where it has one |
+| tin, can, packet, pack, jar, bag, box, bottle, pot, tub, carton, pouch, bar | The weight you enter for one. If you haven't entered one, the product's pack size from Open Food Facts |
+| Anything else (bunch, pinch, serving…) | The weight you enter for one, in **Weight of 1 …** |
 
 Amounts can be whole numbers, decimals (*0.5* or *0,5*), fractions (*1/2*, *1 1/2*, *½*) or ranges (*2-3* counts as 2.5). A unit typed with no amount, such as *pinch*, counts as one of it.
 
@@ -372,9 +383,11 @@ Each ingredient row shows its calories. **? kcal** means AMMUI doesn't know the 
 
 ### Good to know
 
-* Figures are estimates. USDA values are averages for raw or plainly cooked foods, and the weight of "one onion" or "a cup of rice" varies, so treat totals as a rough guide.
+* Figures are estimates. Food tables give averages, products change their recipes, and the weight of "one onion" or "a cup of rice" varies, so treat totals as a rough guide.
+* Open Food Facts figures are typed in from labels by its users. AMMUI catches the common slip of entering kJ where kcal should be, but check a figure against the packet if it looks odd.
 * Calories are included when ingredients are exported. Importing fills them in for any ingredient here that doesn't have them yet, and never overwrites ones already set.
 * The USDA key is copied along with the other keys by **Settings → Integrations → Copy Keys From Another Device**.
+* The UK food tables are © Crown copyright: Public Health England (2021), *McCance and Widdowson's The Composition of Foods Integrated Dataset*. They contain public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). The copy built into AMMUI is made from the published spreadsheet by `scripts/build-cofid.py`, which can be re-run when a new edition comes out. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
 
 ## Games
 

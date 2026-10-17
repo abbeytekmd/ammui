@@ -6666,11 +6666,16 @@ function parseAmount(text) {
     return v != null && Number.isFinite(v) ? v : null;
 }
 
+// Words for one whole pack of a product. Open Food Facts gives its pack size as "pack", which
+// any of these uses unless the ingredient has its own weight for that word.
+const PACK_WORDS = new Set(['pack', 'packet', 'tin', 'can', 'jar', 'bottle', 'bag', 'box', 'pot', 'tub', 'carton', 'pouch', 'bar']);
+
 // Grams in one of this unit, or null if it can't be worked out. Volumes without their own
 // weight use the density of any volume the food does list, or water's.
 function gramsPerOne(key, gramsPerUnit) {
     if (WEIGHT_GRAMS[key]) return WEIGHT_GRAMS[key];
     if (gramsPerUnit[key] > 0) return gramsPerUnit[key];
+    if (PACK_WORDS.has(key) && gramsPerUnit.pack > 0) return gramsPerUnit.pack;
     if (VOLUME_ML[key]) {
         const known = Object.keys(VOLUME_ML).find(v => gramsPerUnit[v] > 0);
         const density = known ? gramsPerUnit[known] / VOLUME_ML[known] : 1;
@@ -6752,7 +6757,24 @@ function ingredientCaloriesButton(ingredient) {
     return { text: `${Math.round(ingredient.nutrition.kcalPer100g)}/100g`, cls: '', title: `${ingredient.nutrition.kcalPer100g} kcal per 100 g` };
 }
 
-let nutritionDialog = null; // { ingredient, unit, fdcId, fdcName, gramsPerUnit }
+let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit }
+
+// Where calories can be looked up (the server's lib/nutrition.js)
+const NUTRITION_SOURCES = {
+    cofid: { label: 'UK food tables', hint: 'Basic foods, from the UK\'s official food tables (McCance and Widdowson\'s Composition of Foods). Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/" target="_blank" rel="noopener">Open Government Licence v3.0</a>.' },
+    off: { label: 'Open Food Facts', hint: 'Packaged products sold in the UK, from <a href="https://uk.openfoodfacts.org/" target="_blank" rel="noopener">Open Food Facts</a>, added by its users from the labels. Check the figure against the packet if it looks odd.' },
+    usda: { label: 'USDA', hint: 'US foods, from USDA FoodData Central, using American names (eggplant, zucchini). Needs a free key in Settings → Integrations.' },
+};
+const NUTRITION_SOURCE_KEY = 'ammui.nutritionSource';
+
+function lastNutritionSource() {
+    try {
+        const saved = localStorage.getItem(NUTRITION_SOURCE_KEY);
+        return NUTRITION_SOURCES[saved] ? saved : 'cofid';
+    } catch {
+        return 'cofid';
+    }
+}
 
 function setNutritionStatus(text, isError) {
     setCalendarSettingsStatus('nutrition-status', text, isError);
@@ -6764,8 +6786,10 @@ function openNutritionDialog(ingredient, unit = ingredient.unit) {
     const n = ingredient.nutrition;
     nutritionDialog = {
         ingredient, unit,
-        fdcId: n?.fdcId ?? null,
-        fdcName: n?.fdcName || '',
+        source: n?.source || '',
+        sourceId: n?.sourceId || '',
+        sourceName: n?.sourceName || '',
+        sourceKcal: n?.kcalPer100g ?? null,
         gramsPerUnit: { ...(n?.gramsPerUnit || {}) },
     };
     document.getElementById('nutrition-ingredient-name').textContent = ingredient.name;
@@ -6774,10 +6798,29 @@ function openNutritionDialog(ingredient, unit = ingredient.unit) {
     document.getElementById('nutrition-kcal').value = n ? n.kcalPer100g : '';
     document.getElementById('nutrition-remove-btn').style.visibility = n ? '' : 'hidden';
     setNutritionStatus('', false);
+    // Search where this ingredient came from, otherwise wherever was used last
+    setNutritionSearchSource(NUTRITION_SOURCES[n?.source] ? n.source : lastNutritionSource(), false);
     renderNutritionForm();
     document.getElementById('nutrition-modal').style.display = 'flex';
     if (!n) searchNutrition();
 }
+
+// The source tabs above the search box; remember picks the source for next time
+function setNutritionSearchSource(source, remember = true) {
+    document.querySelectorAll('#nutrition-sources [data-source]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.source === source);
+        btn.setAttribute('aria-selected', btn.dataset.source === source ? 'true' : 'false');
+    });
+    document.getElementById('nutrition-source-hint').innerHTML = NUTRITION_SOURCES[source].hint;
+    document.getElementById('nutrition-branded-option').hidden = source !== 'usda';
+    if (!remember) return;
+    try { localStorage.setItem(NUTRITION_SOURCE_KEY, source); } catch { /* not kept; fine */ }
+    document.getElementById('nutrition-results').innerHTML = '';
+    searchNutrition();
+}
+
+const nutritionSearchSource = () =>
+    document.querySelector('#nutrition-sources [data-source].active')?.dataset.source || 'cofid';
 
 function closeNutritionDialog() {
     document.getElementById('nutrition-modal').style.display = 'none';
@@ -6788,7 +6831,8 @@ function closeNutritionDialog() {
 function renderNutritionForm() {
     const d = nutritionDialog;
     const key = unitKey(d.unit);
-    document.getElementById('nutrition-source').textContent = d.fdcId ? `From USDA: ${d.fdcName}` : '';
+    document.getElementById('nutrition-source').textContent = d.source && NUTRITION_SOURCES[d.source]
+        ? `From ${NUTRITION_SOURCES[d.source].label}: ${d.sourceName}` : '';
 
     const group = document.getElementById('nutrition-unit-group');
     group.hidden = !!WEIGHT_GRAMS[key];
@@ -6801,9 +6845,10 @@ function renderNutritionForm() {
     input.value = own > 0 ? own : '';
     input.placeholder = worked ? String(Math.round(worked * 10) / 10) : 'Check the packet';
     const known = Object.entries(d.gramsPerUnit).map(([u, g]) => `${u === 'each' ? 'one' : `1 ${u}`} = ${g} g`);
-    document.getElementById('nutrition-unit-hint').textContent = VOLUME_ML[key] && !(own > 0)
-        ? `Leave empty to work it out${known.length ? ` from ${known.join(', ')}` : ' as if it weighs the same as water'}.`
-        : known.length ? `Known weights: ${known.join(' · ')}` : '';
+    let hint = known.length ? `Known weights: ${known.join(' · ')}` : '';
+    if (!(own > 0) && VOLUME_ML[key]) hint = `Leave empty to work it out${known.length ? ` from ${known.join(', ')}` : ' as if it weighs the same as water'}.`;
+    else if (!(own > 0) && worked) hint = `Leave empty to use the pack size, ${worked} g.`;
+    document.getElementById('nutrition-unit-hint').textContent = hint;
     updateNutritionPreview();
 }
 
@@ -6819,7 +6864,10 @@ function nutritionFromForm() {
         if (grams > 0) gramsPerUnit[key] = grams;
         else delete gramsPerUnit[key];
     }
-    return { kcalPer100g: Number(kcalText), gramsPerUnit, fdcId: d.fdcId, fdcName: d.fdcName };
+    // A figure typed over the looked-up one is no longer that food's
+    const kcalPer100g = Number(kcalText);
+    const looked = d.source && kcalPer100g === d.sourceKcal;
+    return { kcalPer100g, gramsPerUnit, source: looked ? d.source : '', sourceId: looked ? d.sourceId : '', sourceName: looked ? d.sourceName : '' };
 }
 
 // What the ingredient comes to for one person (or for one of the unit being asked about)
@@ -6837,45 +6885,75 @@ function updateNutritionPreview() {
     el.textContent = `${what} (${Math.round(result.grams)} g) ≈ ${formatKcal(result.kcal)}${forPerson ? ' per person' : ''}`;
 }
 
+// Product labels and US figures vary (and are sometimes plain wrong), so alongside them show
+// what the UK food tables give for the same search, to compare against or use instead
+async function showNutritionReference(source, query) {
+    const d = nutritionDialog;
+    const el = document.getElementById('nutrition-reference');
+    el.hidden = true;
+    if (source === 'cofid') return;
+    try {
+        const res = await fetch(`/api/nutrition/search?source=cofid&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        const food = res.ok && data.foods[0];
+        if (!food || nutritionDialog !== d || nutritionSearchSource() !== source) return;
+        el.innerHTML = `For comparison, the UK food tables give <b>${escapeHtml(food.name)}</b> as ${Math.round(food.kcalPer100g)} kcal/100g.
+            <button type="button">Use this</button>`;
+        el.querySelector('button').onclick = () => pickNutritionFood('cofid', food.id, null);
+        el.hidden = false;
+    } catch {
+        // Just a comparison; leave it out
+    }
+}
+
 async function searchNutrition() {
     const d = nutritionDialog;
     const query = document.getElementById('nutrition-search-input').value.trim();
     const resultsEl = document.getElementById('nutrition-results');
     if (!d || !query) return;
+    const source = nutritionSearchSource();
     const branded = document.getElementById('nutrition-branded').checked ? '1' : '0';
     resultsEl.innerHTML = '<p class="settings-hint">Searching...</p>';
+    showNutritionReference(source, query);
     try {
-        const res = await fetch(`/api/nutrition/search?q=${encodeURIComponent(query)}&branded=${branded}`);
+        const res = await fetch(`/api/nutrition/search?source=${source}&q=${encodeURIComponent(query)}&branded=${branded}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Search failed');
-        if (nutritionDialog !== d) return;
+        // A newer search (another source, or the dialog closed) has taken over
+        if (nutritionDialog !== d || nutritionSearchSource() !== source) return;
         if (!data.foods.length) {
             resultsEl.innerHTML = '<p class="settings-hint">Nothing found. Try fewer or simpler words, or type the calories in below.</p>';
             return;
         }
-        resultsEl.innerHTML = data.foods.map(f => `
-            <button type="button" class="nutrition-result${f.fdcId === d.fdcId ? ' active' : ''}" data-id="${f.fdcId}">
-                <span class="nutrition-result-name">${escapeHtml(f.name)}${f.brand ? ` <span class="nutrition-result-type">${escapeHtml(f.brand)}</span>` : ''}</span>
+        resultsEl.innerHTML = data.foods.map(f => {
+            const detail = [f.brand, f.size].filter(Boolean).map(escapeHtml).join(' · ');
+            return `
+            <button type="button" class="nutrition-result${f.source === d.source && f.id === d.sourceId ? ' active' : ''}" data-source="${f.source}" data-id="${escapeAttr(f.id)}">
+                <span class="nutrition-result-name">${escapeHtml(f.name)}${detail ? ` <span class="nutrition-result-type">${detail}</span>` : ''}
+                    ${f.doubtful ? '<span class="nutrition-result-doubt">⚠ The calories on this label don\'t match its protein, carbs and fat</span>' : ''}</span>
                 <span class="nutrition-result-kcal">${Math.round(f.kcalPer100g)} kcal/100g</span>
-            </button>`).join('');
+            </button>`;
+        }).join('');
         resultsEl.querySelectorAll('.nutrition-result').forEach(btn => {
-            btn.onclick = () => pickNutritionFood(Number(btn.dataset.id), btn);
+            btn.onclick = () => pickNutritionFood(btn.dataset.source, btn.dataset.id, btn);
         });
     } catch (err) {
         if (nutritionDialog === d) resultsEl.innerHTML = `<p class="settings-hint">${escapeHtml(err.message)}</p>`;
     }
 }
 
-async function pickNutritionFood(fdcId, btn) {
+async function pickNutritionFood(source, id, btn) {
     const d = nutritionDialog;
     setNutritionStatus('Loading...', false);
     try {
-        const res = await fetch(`/api/nutrition/food/${fdcId}`);
+        const res = await fetch(`/api/nutrition/food/${source}/${encodeURIComponent(id)}`);
         const food = await res.json();
         if (!res.ok) throw new Error(food.error || 'Lookup failed');
         if (nutritionDialog !== d) return;
-        d.fdcId = food.fdcId;
-        d.fdcName = food.name;
+        d.source = food.source;
+        d.sourceId = food.id;
+        d.sourceName = food.name;
+        d.sourceKcal = food.kcalPer100g;
         // Weights typed in earlier (a packet, say) stay unless this food lists its own
         d.gramsPerUnit = { ...d.gramsPerUnit, ...food.gramsPerUnit };
         document.getElementById('nutrition-kcal').value = food.kcalPer100g;
