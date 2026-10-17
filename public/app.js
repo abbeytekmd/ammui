@@ -11075,6 +11075,7 @@ const WORD_GUESSES = 6;
 const WORD_FIRST_DAY = Date.UTC(2026, 0, 1) / 86400000; // puzzle #1
 const WORD_KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-']; // + is Enter, - is Backspace
 const WORD_REVEAL_MS = WORD_LENGTH * 250 + 250;
+const WORD_LETTERS_SHOWN_MS = 5000; // after finishing, before the board is blanked
 let wordList = null;   // { answers: [...in daily order], valid: Set }
 let gamePlayers = [];     // [{ id, name }]
 let gamePlayerId = null;  // who's playing on this device
@@ -11215,8 +11216,9 @@ function wordMessage(text, ms = 2000) {
     if (ms) wordMessageTimer = setTimeout(() => { el.textContent = wordOver() ? wordEndText() : ''; }, ms);
 }
 
+// Doesn't give the word away: a finished board is left for others on the device to see
 function wordEndText() {
-    if (wordGame.status !== 'won') return `The word was ${wordAnswer(wordGame.day).toUpperCase()}. A new one tomorrow.`;
+    if (wordGame.status !== 'won') return 'Out of guesses. A new word tomorrow.';
     const praise = ['Genius!', 'Magnificent!', 'Impressive!', 'Splendid!', 'Great!', 'Phew!'];
     return `${praise[wordGame.guesses.length - 1]} A new word tomorrow.`;
 }
@@ -11294,8 +11296,9 @@ function openGamePlayerSettings() {
     switchSettingsTab('games', serverSettingsModal.querySelector('.settings-tab[onclick*="\'word\'"]'));
 }
 
-// revealLast flips the tiles of the guess just made, and holds back its keyboard colours till they've turned
-function renderWord(revealLast = false) {
+// revealLast flips the tiles of the guess just made, and holds back its keyboard colours till they've turned.
+// A finished game shows only the colours, so the letters (and the word) aren't there for others to see.
+function renderWord(revealLast = false, showLetters = revealLast || !wordOver()) {
     if (!wordList) return;
     renderGamePlayers();
     const day = wordGame?.day ?? wordToday();
@@ -11310,7 +11313,7 @@ function renderWord(revealLast = false) {
     const keyStates = {};
     const rank = { absent: 1, present: 2, correct: 3 };
     guesses.forEach((guess, r) => {
-        if (revealLast && r === guesses.length - 1) return;
+        if (!showLetters || (revealLast && r === guesses.length - 1)) return;
         wordScore(guess, answer).forEach((state, i) => {
             if (!(rank[keyStates[guess[i]]] >= rank[state])) keyStates[guess[i]] = state;
         });
@@ -11325,7 +11328,7 @@ function renderWord(revealLast = false) {
         for (let i = 0; i < WORD_LENGTH; i++) {
             const tile = document.createElement('div');
             tile.className = 'word-tile';
-            tile.textContent = letters[i] || '';
+            if (showLetters) tile.textContent = letters[i] || '';
             if (letters[i]) tile.classList.add('filled');
             if (score) {
                 tile.classList.add(score[i]);
@@ -11348,7 +11351,13 @@ function renderWord(revealLast = false) {
         const game = wordGame;
         setTimeout(() => {
             if (appView !== 'games' || game !== wordGame) return;
-            renderWord();
+            if (!wordOver()) return renderWord();
+            // Just finished: a few seconds to look at the board (and the word, if missed) before it's blanked
+            renderWord(false, true);
+            if (game.status === 'lost') wordMessage(`The word was ${wordAnswer(game.day).toUpperCase()}.`, 0);
+            setTimeout(() => {
+                if (appView === 'games' && game === wordGame) renderWord();
+            }, WORD_LETTERS_SHOWN_MS);
         }, WORD_REVEAL_MS);
     } else if (wordOver()) {
         wordMessage(wordEndText(), 0);
