@@ -209,7 +209,7 @@ class Slideshow {
                 const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1);
                 const key = calendarDateKey(dayStart);
                 const items = all.filter(it => it.allDay
-                    ? it.startKey <= key && (it.endKey > key || it.endKey === it.startKey)
+                    ? (it.endKey === it.startKey ? it.startKey === key : it.startKey <= key && it.endKey > key)
                     : it.start < dayEnd && (it.end > dayStart || +it.start === +dayStart))
                     .sort((a, b) => (a.allDay === b.allDay ? (a.start || 0) - (b.start || 0) : a.allDay ? -1 : 1));
                 return { label, items };
