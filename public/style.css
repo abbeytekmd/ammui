@@ -1727,19 +1727,42 @@ p.subtitle {
 }
 
 /* Library mode tabs (Music / Photos / Videos) — top-left of the top bar */
+/* Scrolls sideways when the tabs don't all fit (phones), with no scrollbar showing */
 .library-mode-tabs {
     display: flex;
     gap: 0.25rem;
     flex: 1;
     min-width: 0;
+    margin-bottom: -1px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+}
+
+.library-mode-tabs::-webkit-scrollbar {
+    display: none;
+}
+
+/* Fades out at whichever end has more tabs off screen (classes set by updateTabOverflow) */
+.library-mode-tabs.more-right {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2rem), transparent);
+}
+
+.library-mode-tabs.more-left {
+    mask-image: linear-gradient(to left, #000 calc(100% - 2rem), transparent);
+}
+
+.library-mode-tabs.more-left.more-right {
+    mask-image: linear-gradient(to right, transparent, #000 2rem, #000 calc(100% - 2rem), transparent);
 }
 
 .library-mode-tabs .lib-tab {
     display: flex;
     align-items: center;
     gap: 0.4rem;
+    flex-shrink: 0;
     padding: 0.5rem 0.9rem;
-    margin-bottom: -1px;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -1763,9 +1786,8 @@ p.subtitle {
 
 @media (max-width: 600px) {
     .library-mode-tabs .lib-tab {
-        flex: 1;
         justify-content: center;
-        padding: 0.5rem 0.4rem;
+        padding: 0.5rem 0.6rem;
     }
 }
 
@@ -1779,9 +1801,13 @@ p.subtitle {
     padding-top: 1rem;
 }
 
-.calendar-view[hidden],
-.main-layout[hidden] {
+.calendar-view[hidden] {
     display: none;
+}
+
+/* !important: the phone layout forces .main-layout to display: flex !important */
+.main-layout[hidden] {
+    display: none !important;
 }
 
 .calendar-header {
@@ -3337,11 +3363,10 @@ p.subtitle {
     color: var(--text-muted);
 }
 
+/* Phones: hidden to leave the tabs more room (the name is still at the top of the logo menu) */
 @media (max-width: 600px) {
     .top-bar-device-name {
-        max-width: 7rem;
-        margin-right: 0.4rem;
-        font-size: 0.85rem;
+        display: none;
     }
 }
 

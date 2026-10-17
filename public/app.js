@@ -5475,7 +5475,27 @@ function updateBrowserModeTabs() {
     bar.querySelectorAll('.lib-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === activeTab);
     });
+    // On a narrow screen the tabs scroll sideways: keep the selected one in view
+    const active = bar.querySelector('.lib-tab.active');
+    if (active && !bar.hidden) {
+        const left = active.offsetLeft - bar.offsetLeft;
+        if (left < bar.scrollLeft || left + active.offsetWidth > bar.scrollLeft + bar.clientWidth) {
+            bar.scrollTo({ left: left - (bar.clientWidth - active.offsetWidth) / 2, behavior: 'smooth' });
+        }
+    }
+    updateTabOverflow();
 }
+
+// Fades the ends of the tab bar that have more tabs scrolled off them
+function updateTabOverflow() {
+    const bar = document.getElementById('library-mode-tabs');
+    if (!bar) return;
+    bar.classList.toggle('more-left', bar.scrollLeft > 1);
+    bar.classList.toggle('more-right', bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1);
+}
+document.getElementById('library-mode-tabs')?.addEventListener('scroll', updateTabOverflow, { passive: true });
+window.addEventListener('resize', updateTabOverflow);
+document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web font arrives
 
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
