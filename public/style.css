@@ -8665,3 +8665,219 @@ input:checked+.slider:before {
 .manage-item-host.plug-state.ok {
     color: #34d399;
 }
+
+/* ─── Word tab ────────────────────────────────────────────────────────── */
+.games-view {
+    --word-correct: #16a34a;
+    --word-present: #ca8a04;
+    --word-absent: #334155;
+    --word-key-height: clamp(3.2rem, 8dvh, 4.75rem);
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1rem;
+    overflow-y: auto;
+    user-select: none;
+}
+
+.games-view[hidden] {
+    display: none;
+}
+
+.games-view .smarthome-header {
+    align-self: stretch;
+    flex-wrap: wrap;
+}
+
+.word-number {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.word-stats {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.game-players {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.game-players-label {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.game-player {
+    padding: 0.45rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.game-player:hover {
+    border-color: var(--text-muted);
+}
+
+.game-player.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* No player picked: the board and keys show, but greyed out */
+.games-view.no-player .word-board,
+.games-view.no-player .word-keyboard {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.game-player-name {
+    flex: 1;
+    font-weight: 600;
+}
+
+.game-player-add {
+    margin-top: 0.75rem;
+}
+
+.word-message {
+    min-height: 1.4em;
+    font-weight: 600;
+    text-align: center;
+}
+
+/* Takes whatever height the header and keyboard leave, and the tiles grow or shrink to fill it */
+.word-board-area {
+    flex: 1;
+    min-height: 12rem;
+    align-self: stretch;
+    container-type: size;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.word-board {
+    --word-tile: max(1.75rem, min(4.25rem, calc((100cqh - 1.75rem) / 6), calc((100cqw - 1.4rem) / 5)));
+    display: grid;
+    gap: 0.35rem;
+}
+
+.word-row {
+    display: grid;
+    grid-template-columns: repeat(5, var(--word-tile));
+    gap: 0.35rem;
+}
+
+.word-row.shake {
+    animation: word-shake 0.4s;
+}
+
+@keyframes word-shake {
+    20%, 60% { transform: translateX(-6px); }
+    40%, 80% { transform: translateX(6px); }
+}
+
+.word-tile {
+    width: var(--word-tile);
+    height: var(--word-tile);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--card-border);
+    border-radius: 6px;
+    font-size: calc(var(--word-tile) * 0.55);
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text);
+}
+
+.word-tile.filled {
+    border-color: var(--text-muted);
+}
+
+.word-tile.correct,
+.word-tile.present,
+.word-tile.absent {
+    border-color: transparent;
+    color: #fff;
+}
+
+.word-tile.correct { background: var(--word-correct); }
+.word-tile.present { background: var(--word-present); }
+.word-tile.absent { background: var(--word-absent); }
+
+/* Flips over from the plain tile to its colour, one tile after another */
+.word-tile.reveal {
+    animation: word-flip 0.5s ease-in-out backwards;
+}
+
+@keyframes word-flip {
+    0% { transform: rotateX(0); background: transparent; border-color: var(--text-muted); color: var(--text); }
+    49% { transform: rotateX(90deg); background: transparent; border-color: var(--text-muted); color: var(--text); }
+    50% { transform: rotateX(90deg); }
+    100% { transform: rotateX(0); }
+}
+
+.word-keyboard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    width: min(100%, 46rem);
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+}
+
+.word-key-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.35rem;
+}
+
+.word-key {
+    flex: 1;
+    max-width: 4.2rem;
+    height: var(--word-key-height);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: #64748b;
+    color: #fff;
+    font-family: inherit;
+    font-size: clamp(1rem, 2.6dvh, 1.4rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.word-key.wide {
+    flex: 1.5;
+    max-width: 6.5rem;
+    font-size: clamp(0.75rem, 1.9dvh, 1rem);
+}
+
+.word-key:active {
+    filter: brightness(1.2);
+}
+
+.word-key.correct { background: var(--word-correct); }
+.word-key.present { background: var(--word-present); }
+.word-key.absent { background: var(--word-absent); color: var(--text-muted); }

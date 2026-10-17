@@ -4289,6 +4289,7 @@ function openServerSettingsModal() {
         loadKeySources();
         loadKeySharing();
         loadCalendarSettings();
+        loadGamePlayerSettings();
         startS3StatusPolling();
         loadLocalStats();
         loadLibraryDataCounts();
@@ -4300,6 +4301,7 @@ function closeServerSettingsModal() {
     if (serverSettingsModal) {
         serverSettingsModal.style.display = 'none';
         stopS3StatusPolling();
+        if (appView === 'games') showGames(); // players may have been added or removed
     }
 }
 
@@ -5480,7 +5482,7 @@ function updateBrowserModeTabs() {
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view' };
 
 function setAppView(view) {
     appView = view;
@@ -11036,4 +11038,395 @@ function onHiddenPhotosKey(e) {
     else if (viewing && e.key === 'ArrowRight') stepHiddenPhotoViewer(1);
     else if (viewing && (e.key === 'u' || e.key === 'U')) unhideHiddenPhoto(hiddenPhotoViewerIndex);
     else if (viewing && e.key === 'Delete') deleteHiddenPhoto(hiddenPhotoViewerIndex);
+}
+
+// Games tab: a five-letter word a day, six guesses. The words are SCOWL's English and British
+// lists from a pinned version of the wordlist-english package, which never changes, so every
+// device builds the same list, shuffles it the same way and picks the same word for the same
+// day, without talking to the server or each other. Players (Server Settings → Games) and
+// their games and stats are kept on the server, so they follow a player between devices.
+const WORD_SOURCE = 'https://cdn.jsdelivr.net/npm/wordlist-english@1.2.1';
+const WORD_ANSWER_SIZES = [10, 20, 35];                    // common words: the daily answers
+const WORD_GUESS_SIZES = [...WORD_ANSWER_SIZES, 40, 50, 55, 60, 70]; // also accepted as guesses
+// Common, but not wanted as the word of the day (still fine as guesses)
+const WORD_NOT_ANSWERS = new Set(['bitch', 'chink', 'enema', 'horny', 'lynch', 'paddy', 'penis', 'prick', 'pussy', 'queer', 'semen', 'spunk', 'whore']);
+const WORD_LENGTH = 5;
+const WORD_GUESSES = 6;
+const WORD_FIRST_DAY = Date.UTC(2026, 0, 1) / 86400000; // puzzle #1
+const WORD_KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-']; // + is Enter, - is Backspace
+const WORD_REVEAL_MS = WORD_LENGTH * 250 + 250;
+let wordList = null;   // { answers: [...in daily order], valid: Set }
+let gamePlayers = [];     // [{ id, name }]
+let gamePlayerId = null;  // who's playing on this device
+try { gamePlayerId = localStorage.getItem('gamePlayer'); } catch { }
+let wordGame = null;    // the player's game today: { day, guesses, status: playing | won | lost }
+let wordStats = null;
+let wordTyped = '';
+let wordSaving = false;
+let wordLoadToken = 0;
+let wordMessageTimer = null;
+
+// Days since 1970 for the local calendar date, so the word changes at the device's midnight
+const wordToday = () => {
+    const d = new Date();
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000;
+};
+const wordAnswer = day => {
+    const list = wordList.answers;
+    return list[((day - WORD_FIRST_DAY) % list.length + list.length) % list.length];
+};
+
+// Download the lists (only the first time: the result is kept in localStorage) and work out
+// the answers in daily order. Everything here must come out the same on every device.
+async function loadWordList() {
+    try {
+        const cached = JSON.parse(localStorage.getItem('wordList'));
+        if (cached?.source === WORD_SOURCE) return cached;
+    } catch { }
+    const lists = await Promise.all(WORD_GUESS_SIZES.flatMap(size => ['english', 'british'].map(async kind => {
+        const res = await fetch(`${WORD_SOURCE}/${kind}-words-${size}.json`);
+        if (!res.ok) throw new Error(`${kind}-words-${size}: ${res.statusText}`);
+        return { size, words: await res.json() };
+    })));
+    const common = lists.filter(l => WORD_ANSWER_SIZES.includes(l.size)).flatMap(l => l.words);
+    const short = new Set(common.filter(w => /^[a-z]{3,4}$/.test(w)));
+    // Plurals and past tenses of shorter common words make poor answers ("cakes", "baked")
+    const inflected = w =>
+        (w.endsWith('s') && !w.endsWith('ss') && (short.has(w.slice(0, 4)) ||
+            (w.endsWith('es') && short.has(w.slice(0, 3))) || (w.endsWith('ies') && short.has(w.slice(0, 2) + 'y')))) ||
+        (w.endsWith('ed') && (short.has(w.slice(0, 3)) || short.has(w.slice(0, 4)) ||
+            (w.endsWith('ied') && short.has(w.slice(0, 2) + 'y'))));
+    const fiveLetter = words => [...new Set(words.filter(w => /^[a-z]{5}$/.test(w)))].sort();
+    const answers = fiveLetter(common).filter(w => !inflected(w) && !WORD_NOT_ANSWERS.has(w));
+    // Fixed-seed shuffle (mulberry32), so consecutive days aren't alphabetical
+    let seed = 0x5eed1e55;
+    const rand = () => {
+        seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+    for (let i = answers.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [answers[i], answers[j]] = [answers[j], answers[i]];
+    }
+    const result = { source: WORD_SOURCE, answers, guesses: fiveLetter(lists.flatMap(l => l.words)) };
+    try { localStorage.setItem('wordList', JSON.stringify(result)); } catch { }
+    return result;
+}
+
+async function showGames() {
+    setAppView('games');
+    const token = ++wordLoadToken;
+    try {
+        if (!wordList) {
+            wordMessage('Loading words...', 0);
+            const { answers, guesses } = await loadWordList();
+            wordList = { answers, valid: new Set(guesses) };
+        }
+        const res = await fetch('/api/games/players');
+        if (!res.ok) throw new Error(res.statusText);
+        gamePlayers = await res.json();
+    } catch (err) {
+        if (token === wordLoadToken) wordMessage(`Couldn't load the game: ${err.message}`, 0);
+        return;
+    }
+    if (token !== wordLoadToken) return;
+    if (!gamePlayers.some(u => u.id === gamePlayerId)) gamePlayerId = null;
+    await loadWordGame();
+}
+
+function selectGamePlayer(id) {
+    if (wordSaving) return;
+    gamePlayerId = id;
+    try { localStorage.setItem('gamePlayer', id); } catch { }
+    loadWordGame();
+}
+
+// Today's game and stats for the selected player
+async function loadWordGame() {
+    const token = ++wordLoadToken;
+    wordGame = null;
+    wordStats = null;
+    wordTyped = '';
+    wordMessage('', 0);
+    renderWord();
+    if (!gamePlayerId) return;
+    const day = wordToday();
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(gamePlayerId)}/game?day=${day}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (token !== wordLoadToken) return;
+        wordGame = { day, guesses: data.guesses, status: data.status };
+        wordStats = data.stats;
+        renderWord();
+    } catch (err) {
+        if (token === wordLoadToken) wordMessage(`Couldn't load the game: ${err.message}`, 0);
+    }
+}
+
+// Colour each letter: right place, elsewhere in the word, or not in it. A repeated letter
+// only counts as many times as it's in the answer, right-place matches first.
+function wordScore(guess, answer) {
+    const result = Array(WORD_LENGTH).fill('absent');
+    const left = {};
+    for (let i = 0; i < WORD_LENGTH; i++) {
+        if (guess[i] === answer[i]) result[i] = 'correct';
+        else left[answer[i]] = (left[answer[i]] || 0) + 1;
+    }
+    for (let i = 0; i < WORD_LENGTH; i++) {
+        if (result[i] !== 'correct' && left[guess[i]] > 0) {
+            result[i] = 'present';
+            left[guess[i]]--;
+        }
+    }
+    return result;
+}
+
+const wordOver = () => !!wordGame && wordGame.status !== 'playing';
+
+// A message under the title; ms = 0 leaves it showing
+function wordMessage(text, ms = 2000) {
+    const el = document.getElementById('word-message');
+    el.textContent = text;
+    clearTimeout(wordMessageTimer);
+    wordMessageTimer = null;
+    if (ms) wordMessageTimer = setTimeout(() => { el.textContent = wordOver() ? wordEndText() : ''; }, ms);
+}
+
+function wordEndText() {
+    if (wordGame.status !== 'won') return `The word was ${wordAnswer(wordGame.day).toUpperCase()}. A new one tomorrow.`;
+    const praise = ['Genius!', 'Magnificent!', 'Impressive!', 'Splendid!', 'Great!', 'Phew!'];
+    return `${praise[wordGame.guesses.length - 1]} A new word tomorrow.`;
+}
+
+function wordKey(key) {
+    if (!wordGame || wordSaving) return;
+    // Left open past midnight: on to the new day's game
+    if (wordGame.day !== wordToday()) return loadWordGame();
+    if (wordOver()) return;
+    if (key === 'enter') return wordSubmit();
+    if (key === 'backspace') wordTyped = wordTyped.slice(0, -1);
+    else if (/^[a-z]$/.test(key) && wordTyped.length < WORD_LENGTH) wordTyped += key;
+    renderWord();
+}
+
+async function wordSubmit() {
+    if (wordTyped.length < WORD_LENGTH) return wordShake('Not enough letters');
+    if (!wordList.valid.has(wordTyped)) return wordShake('Not in the word list');
+    const game = wordGame;
+    const guesses = [...game.guesses, wordTyped];
+    const status = wordTyped === wordAnswer(game.day) ? 'won' : guesses.length >= WORD_GUESSES ? 'lost' : 'playing';
+    wordSaving = true;
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(gamePlayerId)}/game`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day: game.day, guesses, status })
+        });
+        const data = await res.json();
+        if (game !== wordGame) return; // switched player meanwhile
+        if (res.status === 409) {
+            // Played on another device meanwhile: show that game instead
+            Object.assign(wordGame, { guesses: data.guesses, status: data.status });
+            wordStats = data.stats;
+            wordTyped = '';
+            renderWord();
+            if (!wordOver()) wordMessage('Updated from another device');
+            return;
+        }
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        Object.assign(wordGame, { guesses, status });
+        wordStats = data.stats;
+        wordTyped = '';
+        renderWord(true);
+    } catch (err) {
+        if (game === wordGame) wordMessage(`Couldn't save the guess: ${err.message}`, 4000);
+    } finally {
+        wordSaving = false;
+    }
+}
+
+function wordShake(text) {
+    wordMessage(text);
+    const row = document.querySelector(`#word-board .word-row[data-row="${wordGame.guesses.length}"]`);
+    if (!row) return;
+    row.classList.remove('shake');
+    void row.offsetWidth; // restart the animation
+    row.classList.add('shake');
+}
+
+function renderGamePlayers() {
+    const el = document.getElementById('game-players');
+    if (!gamePlayers.length) {
+        el.innerHTML = `<span class="game-players-label">No players yet.</span>
+            <button type="button" class="btn-control btn-small primary" onclick="openGamePlayerSettings()">Add Players</button>`;
+        return;
+    }
+    el.innerHTML = `<span class="game-players-label">${gamePlayerId ? 'Playing:' : 'Who\'s playing?'}</span>` +
+        gamePlayers.map(u => `<button type="button" class="game-player${u.id === gamePlayerId ? ' active' : ''}"
+            onclick="selectGamePlayer('${escapeHtml(u.id)}')">${escapeHtml(u.name)}</button>`).join('');
+}
+
+function openGamePlayerSettings() {
+    openServerSettingsModal();
+    switchSettingsTab('games', serverSettingsModal.querySelector('.settings-tab[onclick*="\'word\'"]'));
+}
+
+// revealLast flips the tiles of the guess just made, and holds back its keyboard colours till they've turned
+function renderWord(revealLast = false) {
+    if (!wordList) return;
+    renderGamePlayers();
+    const day = wordGame?.day ?? wordToday();
+    const answer = wordAnswer(day);
+    const guesses = wordGame?.guesses || [];
+    document.getElementById('word-number').textContent = `#${day - WORD_FIRST_DAY + 1}`;
+    document.getElementById('games-view').classList.toggle('no-player', !wordGame);
+    if (!gamePlayerId && gamePlayers.length) wordMessage('Pick who\'s playing to start.', 0);
+
+    const board = document.getElementById('word-board');
+    board.innerHTML = '';
+    const keyStates = {};
+    const rank = { absent: 1, present: 2, correct: 3 };
+    guesses.forEach((guess, r) => {
+        if (revealLast && r === guesses.length - 1) return;
+        wordScore(guess, answer).forEach((state, i) => {
+            if (!(rank[keyStates[guess[i]]] >= rank[state])) keyStates[guess[i]] = state;
+        });
+    });
+    for (let r = 0; r < WORD_GUESSES; r++) {
+        const row = document.createElement('div');
+        row.className = 'word-row';
+        row.dataset.row = r;
+        const guess = guesses[r];
+        const score = guess ? wordScore(guess, answer) : null;
+        const letters = guess || (r === guesses.length ? wordTyped : '');
+        for (let i = 0; i < WORD_LENGTH; i++) {
+            const tile = document.createElement('div');
+            tile.className = 'word-tile';
+            tile.textContent = letters[i] || '';
+            if (letters[i]) tile.classList.add('filled');
+            if (score) {
+                tile.classList.add(score[i]);
+                if (revealLast && r === guesses.length - 1) {
+                    tile.classList.add('reveal');
+                    tile.style.animationDelay = `${i * 0.25}s`;
+                }
+            }
+            row.appendChild(tile);
+        }
+        board.appendChild(row);
+    }
+    renderWordKeyboard(keyStates);
+
+    const s = wordStats;
+    document.getElementById('word-stats').textContent = s?.played
+        ? `Played ${s.played} · Won ${Math.round(100 * s.won / s.played)}% · Streak ${s.streak} · Best ${s.best}`
+        : '';
+    if (revealLast) {
+        const game = wordGame;
+        setTimeout(() => {
+            if (appView !== 'games' || game !== wordGame) return;
+            renderWord();
+        }, WORD_REVEAL_MS);
+    } else if (wordOver()) {
+        wordMessage(wordEndText(), 0);
+    }
+}
+
+function renderWordKeyboard(keyStates) {
+    const keyboard = document.getElementById('word-keyboard');
+    keyboard.innerHTML = '';
+    for (const keys of WORD_KEY_ROWS) {
+        const row = document.createElement('div');
+        row.className = 'word-key-row';
+        for (const k of keys) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.tabIndex = -1; // keep focus off the keys so a typed Enter isn't also a click
+            btn.className = 'word-key';
+            const key = k === '+' ? 'enter' : k === '-' ? 'backspace' : k;
+            if (k === '+') {
+                btn.textContent = 'Enter';
+                btn.classList.add('wide');
+            } else if (k === '-') {
+                btn.classList.add('wide');
+                btn.setAttribute('aria-label', 'Backspace');
+                btn.innerHTML = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 5H8l-6 7 6 7h13a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z"></path><line x1="17" y1="9" x2="11" y2="15"></line><line x1="11" y1="9" x2="17" y2="15"></line></svg>`;
+            } else {
+                btn.textContent = k;
+                if (keyStates[k]) btn.classList.add(keyStates[k]);
+            }
+            btn.onclick = () => wordKey(key);
+            row.appendChild(btn);
+        }
+        keyboard.appendChild(row);
+    }
+}
+
+// Physical keyboard, while the tab is showing and nothing else wants the keys
+document.addEventListener('keydown', e => {
+    if (appView !== 'games' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.matches?.('input, textarea, select, [contenteditable]')) return;
+    if (typeof slideshow !== 'undefined' && slideshow?.isActive) return;
+    if ([...document.querySelectorAll('[id$="-modal"]')].some(m => m.style.display === 'flex')) return;
+    const key = e.key.toLowerCase();
+    if (key === 'enter' || key === 'backspace' || /^[a-z]$/.test(key)) {
+        e.preventDefault();
+        wordKey(key);
+    }
+});
+
+// --- Server Settings → Games: the players ---
+async function loadGamePlayerSettings() {
+    const listEl = document.getElementById('game-players-list');
+    if (!listEl) return;
+    try {
+        const users = await (await fetch('/api/games/players')).json();
+        listEl.innerHTML = users.length
+            ? users.map(u => `
+                <div class="calendar-settings-row">
+                    <span class="game-player-name">${escapeHtml(u.name)}</span>
+                    <button class="btn-control btn-small" onclick="removeGamePlayer('${escapeHtml(u.id)}', this)"
+                        title="Remove this player and their stats">Remove</button>
+                </div>`).join('')
+            : '<span class="settings-hint">No players yet.</span>';
+    } catch (err) {
+        listEl.innerHTML = '<span class="settings-hint">Could not load players.</span>';
+    }
+}
+
+async function addGamePlayer() {
+    const input = document.getElementById('game-player-add-name');
+    const name = input.value.trim();
+    if (!name) return setCalendarSettingsStatus('game-players-status', 'Enter a name first.', true);
+    try {
+        const res = await fetch('/api/games/players', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to add the player');
+        input.value = '';
+        setCalendarSettingsStatus('game-players-status', `Added ${data.name}.`, false);
+        await loadGamePlayerSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('game-players-status', err.message, true);
+    }
+}
+
+async function removeGamePlayer(id, btn) {
+    const name = btn.closest('.calendar-settings-row')?.querySelector('.game-player-name')?.textContent || 'this player';
+    if (!confirm(`Remove ${name}? Their games and stats will be deleted.`)) return;
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        setCalendarSettingsStatus('game-players-status', `Removed ${name}.`, false);
+        await loadGamePlayerSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('game-players-status', `Couldn't remove the player: ${err.message}`, true);
+    }
 }

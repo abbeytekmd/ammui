@@ -46,6 +46,7 @@ import {
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
+    listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
@@ -2854,6 +2855,55 @@ app.put('/api/recipes/:id', express.json(), (req, res) => {
 app.delete('/api/recipes/:id', (req, res) => {
     if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
     res.json({ success: true });
+});
+
+// --- Games tab: players, and each player's game for the day (day = days since 1970, their local date) ---
+app.get('/api/games/players', (req, res) => {
+    res.json(listGamePlayers());
+});
+
+app.post('/api/games/players', express.json(), (req, res) => {
+    const name = String(req.body.name ?? '').trim();
+    if (!name) return res.status(400).json({ error: 'Enter a name' });
+    if (name.length > 40) return res.status(400).json({ error: 'That name is too long' });
+    if (findGamePlayerByName(name)) return res.status(400).json({ error: `"${name}" is already a player` });
+    res.json(addGamePlayer(crypto.randomUUID(), name));
+});
+
+app.delete('/api/games/players/:id', (req, res) => {
+    if (!deleteGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    res.json({ success: true });
+});
+
+function gameDay(value) {
+    const day = Number(value);
+    return Number.isInteger(day) && day > 0 ? day : null;
+}
+
+app.get('/api/games/players/:id/game', (req, res) => {
+    const day = gameDay(req.query.day);
+    if (day === null) return res.status(400).json({ error: 'day is required' });
+    if (!getGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    res.json({ ...getWordGame(req.params.id, day), stats: getWordGameStats(req.params.id, day) });
+});
+
+// Guesses only ever get added to, and a finished game stays finished, so a day can't be replayed
+app.put('/api/games/players/:id/game', express.json(), (req, res) => {
+    const day = gameDay(req.body.day);
+    const guesses = req.body.guesses;
+    const status = req.body.status;
+    if (day === null) return res.status(400).json({ error: 'day is required' });
+    if (!Array.isArray(guesses) || guesses.length > 6 || !guesses.every(g => /^[a-z]{5}$/.test(g))) {
+        return res.status(400).json({ error: 'Invalid guesses' });
+    }
+    if (!['playing', 'won', 'lost'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!getGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    const saved = getWordGame(req.params.id, day);
+    if (saved.status !== 'playing' || saved.guesses.some((g, i) => guesses[i] !== g)) {
+        return res.status(409).json({ error: 'This game was already played', ...saved, stats: getWordGameStats(req.params.id, day) });
+    }
+    saveWordGame(req.params.id, day, guesses, status);
+    res.json({ guesses, status, stats: getWordGameStats(req.params.id, day) });
 });
 
 // --- Ingredients (Recipes tab): each with the preferred quantity for one person ---

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=47">
+    <link rel="stylesheet" href="style.css?v=50">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -75,6 +75,15 @@
                         <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"></path>
                     </svg>
                     <span>Energy</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="games" onclick="showGames()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="8" width="6" height="8" rx="1"></rect>
+                        <rect x="9" y="8" width="6" height="8" rx="1"></rect>
+                        <rect x="16" y="8" width="6" height="8" rx="1"></rect>
+                    </svg>
+                    <span>Games</span>
                 </button>
             </nav>
 
@@ -614,6 +623,18 @@
             </div>
         </section>
 
+        <!-- Games tab: a daily five-letter word game (built by app.js) -->
+        <section id="games-view" class="games-view" hidden>
+            <div class="smarthome-header">
+                <h2>Daily Word <span id="word-number" class="word-number"></span></h2>
+                <div id="word-stats" class="word-stats"></div>
+            </div>
+            <div id="game-players" class="game-players"></div>
+            <div id="word-message" class="word-message" role="status" aria-live="polite"></div>
+            <div class="word-board-area"><div id="word-board" class="word-board"></div></div>
+            <div id="word-keyboard" class="word-keyboard"></div>
+        </section>
+
         <section id="calendar-view" class="calendar-view" hidden>
             <div class="calendar-header">
                 <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
@@ -839,6 +860,7 @@
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
+                <button class="settings-tab" onclick="switchSettingsTab('games', this)">Games</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
@@ -999,6 +1021,23 @@
                             </div>
                             <div id="calendar-add-status" class="calendar-status"></div>
                         </div>
+                    </div>
+                </div>
+                <div id="settings-games" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Players</h3>
+                        <p class="settings-hint">Each player has their own game and stats, the same on every
+                            device. Removing a player deletes their games and stats.</p>
+                        <div id="game-players-list" class="calendar-settings-list">
+                            <span class="settings-hint">Loading...</span>
+                        </div>
+                        <div class="tag-input-wrapper game-player-add"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); addGamePlayer(); }">
+                            <input type="text" id="game-player-add-name" placeholder="New player's name" maxlength="40"
+                                autocomplete="off" aria-label="New player's name">
+                            <button type="button" class="btn-control btn-small primary" onclick="addGamePlayer()">Add Player</button>
+                        </div>
+                        <div id="game-players-status" class="calendar-status"></div>
                     </div>
                 </div>
                 <div id="settings-backup" class="settings-panel">
@@ -2121,7 +2160,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=48"></script>
+    <script src="app.js?v=51"></script>
     <script src="slideshow.js?v=5"></script>
 </body>
 
