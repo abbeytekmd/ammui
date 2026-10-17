@@ -517,6 +517,8 @@ The status box underneath shows progress for both. **View Log** shows the result
 
 Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
 
+The server also writes its log to `logs/ammui.log` in the AMMUI folder, so there's a record even if the server crashes or is restarted. Each start and exit is marked with a `---- Server starting ----` / `---- Server exiting ----` line; a start with no exit before it means the server stopped unexpectedly. When the file reaches 5 MB it's renamed to `ammui.log.1` (older ones move up to `.2` … `.5`, and the oldest is deleted), so the logs never take more than about 30 MB.
+
 ## How music video matching works
 
 This describes what happens behind the Video button (see [Music Videos](#music-videos) for what the button shows).
