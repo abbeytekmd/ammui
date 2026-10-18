@@ -564,10 +564,16 @@
                     <h2>Shopping List</h2>
                     <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
                 </div>
-                <!-- One item per line; saved as you type -->
-                <textarea id="shopping-list" class="shopping-list" spellcheck="true" maxlength="20000"
-                    placeholder="Click here and type what you need, one item per line..." aria-label="Shopping list"
-                    oninput="shoppingListEdited()" onblur="saveShoppingListNow()"></textarea>
+                <!-- One item per line, saved as you type. Lines don't wrap, so each has a picture beside it. -->
+                <div class="shopping-list-wrap">
+                    <textarea id="shopping-list" class="shopping-list" spellcheck="true" maxlength="20000" wrap="off"
+                        aria-label="Shopping list"
+                        oninput="shoppingListEdited()" onkeydown="shoppingListKeydown(event)"
+                        onblur="hideShoppingSuggestions(); saveShoppingListNow()" onscroll="scrollShoppingThumbs(); hideShoppingSuggestions()"></textarea>
+                    <div class="shopping-thumbs" aria-hidden="true"><div id="shopping-thumbs"></div></div>
+                    <!-- Saved ingredients matching the line being typed -->
+                    <div id="shopping-suggest" class="shopping-suggest" hidden></div>
+                </div>
                 <button type="button" id="btn-shopping-voice" class="btn-control" onclick="toggleShoppingVoice()"
                     title="Voice: &quot;add milk&quot;, &quot;remove eggs&quot;">
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -995,6 +1001,18 @@
                             <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
                                 onchange="saveSlideshowSettings()">
                             <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Shopping List</h3>
+                        <div class="settings-group">
+                            <label for="supermarket-select">Supermarket</label>
+                            <select id="supermarket-select" class="key-source-select" onchange="saveSupermarket()">
+                                <option value="">Any</option>
+                            </select>
+                            <p class="settings-hint">Each item on the Meals tab's shopping list shows a picture of a
+                                matching product from Open Food Facts. Pick a supermarket to prefer its own-brand
+                                products where it has a close match.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -2287,6 +2305,33 @@
     </button>
     <div id="toast-container" class="toast-container"></div>
 
+    <!-- Meals tab: choosing a shopping list item's picture (opened by clicking it) -->
+    <div id="shopping-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeShoppingPicker()">
+        <div class="modal-content shopping-picker-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Choose a Picture</h2>
+                    <p id="shopping-picker-item" class="subtitle"></p>
+                </div>
+                <button class="btn-close" onclick="closeShoppingPicker()">&#x2715;</button>
+            </div>
+            <div class="modal-body shopping-picker-body">
+                <div class="shopping-picker-search">
+                    <input type="text" id="shopping-picker-search" placeholder="Search products, e.g. a brand"
+                        aria-label="Search products" autocomplete="off"
+                        onkeydown="if(event.key==='Enter')searchShoppingPicker()">
+                    <button type="button" class="btn-control btn-small primary" onclick="searchShoppingPicker()">Search</button>
+                </div>
+                <div id="shopping-picker-results" class="shopping-picker-results"></div>
+                <div class="shopping-picker-actions">
+                    <button type="button" class="btn-control ghost" onclick="chooseShoppingProduct(-1)">No Picture</button>
+                    <button type="button" id="shopping-picker-auto" class="btn-control ghost" onclick="resetShoppingProduct()"
+                        title="Forget the chosen picture and use the one found automatically">Automatic</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="art-search-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeArtSearchModal()">
         <div class="modal-content" style="max-width:480px;width:90vw;">
             <div class="modal-header">
@@ -2322,6 +2367,11 @@
         </div>
     </div>
 
+    <!-- Shopping list line parsing, shared with the server -->
+    <script type="module">
+        import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
+        Object.assign(window, { splitShoppingLine, shoppingItemKey });
+    </script>
     <script src="app.js?v=55"></script>
     <script src="slideshow.js?v=7"></script>
 </body>

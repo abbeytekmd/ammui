@@ -46,6 +46,7 @@ import {
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
+    getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
@@ -53,7 +54,8 @@ import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './li
 import https from 'https';
 import crypto from 'crypto';
 import { xmlEscape } from './lib/upnp.js';
-import { searchFoods, getFood, NutritionError, SOURCES as NUTRITION_SOURCES } from './lib/nutrition.js';
+import { splitShoppingLine } from './public/shopping-items.js';
+import { searchFoods, getFood, NutritionError, SOURCES as NUTRITION_SOURCES, SUPERMARKETS, findShoppingProduct, searchShoppingProducts, shoppingProductKey, shoppingItemKey } from './lib/nutrition.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
@@ -199,6 +201,7 @@ let settings = {
     deviceName: 'AMMUI',
     slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
     slideshowPhotoSeconds: 60, // how long each photo shows
+    supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
     calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
     calendarTagColors: {}, // { tag: '#rrggbb' } colours of calendar entry tags
     screensaver: {
@@ -235,6 +238,7 @@ function loadSettings() {
     settings.deviceName = getSetting('deviceName', '');
     settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
     settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
+    settings.supermarket = getSetting('supermarket', '') || '';
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
@@ -266,6 +270,7 @@ function saveSettings() {
     setSetting('deviceName', settings.deviceName);
     setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
     setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
+    setSetting('supermarket', settings.supermarket);
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
@@ -2715,7 +2720,9 @@ app.get('/api/settings/general', (req, res) => {
     res.json({
         deviceName: settings.deviceName,
         slideshowIdleSeconds: settings.slideshowIdleSeconds,
-        slideshowPhotoSeconds: settings.slideshowPhotoSeconds
+        slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
+        supermarket: settings.supermarket,
+        supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name }))
     });
 });
 
@@ -2731,6 +2738,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
     if (idle !== null || photo !== null) {
         if (idle !== null) settings.slideshowIdleSeconds = idle;
         if (photo !== null) settings.slideshowPhotoSeconds = photo;
+        saveSettings();
+    }
+    if (typeof req.body.supermarket === 'string') {
+        const id = req.body.supermarket;
+        if (id && !SUPERMARKETS.some(s => s.id === id)) return res.status(400).json({ error: 'Unknown supermarket' });
+        settings.supermarket = id;
         saveSettings();
     }
     const deviceName = String(req.body.deviceName || '').trim();
@@ -2973,9 +2986,52 @@ app.delete('/api/recipes/:id', (req, res) => {
     res.json({ success: true });
 });
 
+// The shopping list's items are the saved ingredients, the same list meals use. Any item that isn't
+// one yet is added, as a meal does when saved (matched loosely: "2 Eggs" is the saved "Egg").
+// skipLine is a line still being typed, left until it's finished. Returns how many were added.
+function addShoppingIngredients(text, skipLine = -1) {
+    const known = new Set(listIngredients().map(i => shoppingItemKey(i.name)));
+    let added = 0;
+    for (const [i, line] of text.split('\n').entries()) {
+        if (i === skipLine) continue;
+        const item = splitShoppingLine(line).item.trim();
+        const key = shoppingItemKey(item);
+        if (!key || known.has(key) || item.length > 300) continue;
+        known.add(key);
+        saveIngredient({ id: crypto.randomUUID(), name: item.charAt(0).toUpperCase() + item.slice(1), amount: '', unit: '' });
+        added++;
+    }
+    return added;
+}
+
+const shoppingListText = () => getSetting('shoppingList', {}).text || '';
+
+// Lists from before the two were joined
+addShoppingIngredients(shoppingListText());
+
+// After an ingredient is renamed: its lines on the shopping list take the new name, keeping their
+// amounts ("2 pints of Milk" -> "2 pints of Semi-skimmed milk"), and its chosen picture follows it
+function renameOnShoppingList(oldName, newName) {
+    const oldKey = shoppingItemKey(oldName);
+    const text = shoppingListText();
+    const renamed = text.split('\n').map(line => {
+        const { before, item, after } = splitShoppingLine(line);
+        return shoppingItemKey(item) === oldKey ? before + newName + after : line;
+    }).join('\n');
+    if (renamed !== text) setSetting('shoppingList', { text: renamed });
+    const newKey = shoppingItemKey(newName);
+    const pick = getShoppingProductPick(oldKey);
+    if (pick && newKey !== oldKey && !getShoppingProductPick(newKey)) {
+        setShoppingProductPick(newKey, pick.product);
+        deleteShoppingProductPick(oldKey);
+    }
+}
+
+const onShoppingList = name => shoppingListText().split('\n').some(line => shoppingItemKey(line) === shoppingItemKey(name));
+
 // --- Meals tab: the shopping list, free text with one item per line ---
 app.get('/api/shopping-list', (req, res) => {
-    res.json({ text: getSetting('shoppingList', {}).text || '' });
+    res.json({ text: shoppingListText() });
 });
 
 app.put('/api/shopping-list', express.json(), (req, res) => {
@@ -2984,7 +3040,92 @@ app.put('/api/shopping-list', express.json(), (req, res) => {
     if (text.length > 20000) return res.status(400).json({ error: 'The list is too long' });
     // Stored inside an object so a list like "123" isn't read back as a number
     setSetting('shoppingList', { text });
-    res.json({ text });
+    const skipLine = Number.isInteger(req.body.skipLine) ? req.body.skipLine : -1;
+    res.json({ text, ingredientsAdded: addShoppingIngredients(text, skipLine) });
+});
+
+// The product picture for one shopping list line: { product: { code, name, brand, image } | null, picked }.
+// A picture chosen by hand (picked) wins. Otherwise it's looked up once and kept: a match for
+// 90 days, no match for a week (Open Food Facts keeps growing).
+const SHOPPING_PRODUCT_TTL = 90 * 24 * 3600 * 1000;
+const SHOPPING_NO_PRODUCT_TTL = 7 * 24 * 3600 * 1000;
+const shoppingProductLookups = new Map(); // key -> Promise, so the same item isn't searched twice at once
+
+const shoppingLine = req => String(req.query.item ?? req.body?.item ?? '').trim().slice(0, 200);
+
+async function automaticShoppingProduct(line) {
+    const supermarket = settings.supermarket;
+    const key = shoppingProductKey(line, supermarket);
+    if (key.endsWith('|')) return null;
+    const cached = getCachedShoppingProduct(key);
+    if (cached && Date.now() - cached.fetchedAt < (cached.product ? SHOPPING_PRODUCT_TTL : SHOPPING_NO_PRODUCT_TTL)) {
+        return cached.product;
+    }
+    try {
+        let lookup = shoppingProductLookups.get(key);
+        if (!lookup) {
+            lookup = findShoppingProduct(line, supermarket)
+                .then(product => { setCachedShoppingProduct(key, product); return product; })
+                .finally(() => shoppingProductLookups.delete(key));
+            shoppingProductLookups.set(key, lookup);
+        }
+        return await lookup;
+    } catch (err) {
+        // An old picture beats none while Open Food Facts is down or busy
+        if (cached) return cached.product;
+        throw err;
+    }
+}
+
+app.get('/api/shopping-list/product', async (req, res) => {
+    const line = shoppingLine(req);
+    const pick = getShoppingProductPick(shoppingItemKey(line));
+    if (pick) return res.json({ product: pick.product, picked: true });
+    try {
+        res.json({ product: await automaticShoppingProduct(line), picked: false });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// Products to choose a line's picture from: the line's item, or q if given ("andrex" for "toilet roll")
+app.get('/api/shopping-list/products', async (req, res) => {
+    const query = String(req.query.q ?? '').trim().slice(0, 200) || shoppingLine(req);
+    if (!query) return res.status(400).json({ error: 'Enter something to search for' });
+    try {
+        res.json({ products: await searchShoppingProducts(query, settings.supermarket) });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// Chooses the picture for a line's item, for every line with that item from now on (like album
+// art). product is one from the list above, or null for no picture.
+app.put('/api/shopping-list/product', express.json(), (req, res) => {
+    const key = shoppingItemKey(shoppingLine(req));
+    if (!key) return res.status(400).json({ error: 'item is required' });
+    const p = req.body.product;
+    let product = null;
+    if (p !== null) {
+        const text = v => String(v ?? '').trim().slice(0, 200);
+        if (!p || !/^\d{1,30}$/.test(String(p.code)) || !/^https:\/\/images\.openfoodfacts\.org\//.test(String(p.image))) {
+            return res.status(400).json({ error: 'Pick a product from the list' });
+        }
+        product = { code: String(p.code), name: text(p.name), brand: text(p.brand), image: String(p.image).slice(0, 500) };
+    }
+    setShoppingProductPick(key, product);
+    res.json({ product, picked: true });
+});
+
+// Forgets the chosen picture: the item goes back to the automatic one
+app.delete('/api/shopping-list/product', async (req, res) => {
+    const line = shoppingLine(req);
+    deleteShoppingProductPick(shoppingItemKey(line));
+    try {
+        res.json({ product: await automaticShoppingProduct(line), picked: false });
+    } catch (err) {
+        nutritionError(res, err);
+    }
 });
 
 // --- Games tab: players, and each player's game for the day (day = days since 1970, their local date) ---
@@ -3111,10 +3252,13 @@ app.post('/api/ingredients', express.json(), (req, res) => {
 });
 
 app.put('/api/ingredients/:id', express.json(), (req, res) => {
-    if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
+    const current = getIngredient(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Ingredient not found' });
     const ingredient = cleanIngredient(req.body, req.params.id);
     if (typeof ingredient === 'string') return res.status(400).json({ error: ingredient });
-    res.json(saveIngredient({ id: req.params.id, ...ingredient }));
+    const saved = saveIngredient({ id: req.params.id, ...ingredient });
+    if (saved.name !== current.name) renameOnShoppingList(current.name, saved.name);
+    res.json(saved);
 });
 
 app.delete('/api/ingredients/:id', (req, res) => {
@@ -3123,7 +3267,10 @@ app.delete('/api/ingredients/:id', (req, res) => {
         const shown = meals.slice(0, 3).join(', ') + (meals.length > 3 ? ` and ${meals.length - 3} more` : '');
         return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that meal' : 'those meals'} first.` });
     }
-    if (!deleteIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
+    const ingredient = getIngredient(req.params.id);
+    if (!ingredient) return res.status(404).json({ error: 'Ingredient not found' });
+    if (onShoppingList(ingredient.name)) return res.status(409).json({ error: "It's on the shopping list. Take it off there first." });
+    deleteIngredient(req.params.id);
     res.json({ success: true });
 });
 

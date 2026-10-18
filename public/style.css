@@ -2561,24 +2561,214 @@ p.subtitle {
     min-height: 0;
 }
 
+.shopping-list-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    min-height: 12rem;
+}
+
+/* Lines don't wrap (a long one scrolls sideways), so line n is always row n of the pictures.
+   Rows are tall enough for a picture; the left padding is where the pictures go. */
 .shopping-list {
     flex: 1;
     min-height: 12rem;
     resize: none;
-    padding: 0.75rem 1rem;
+    padding: 0.5rem 1rem 0.5rem 4.5rem;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--card-border);
     border-radius: 1rem;
     color: inherit;
     font: inherit;
     font-size: 1.3rem;
-    line-height: 1.6;
+    line-height: 2.5;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+/* Over the list's left padding; the inner layer moves with the list's scrolling */
+.shopping-thumbs {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    bottom: 1px;
+    width: 4rem;
+    overflow: hidden;
+    pointer-events: none;
+    border-radius: 1rem 0 0 1rem;
+}
+
+.shopping-thumb {
+    position: absolute;
+    left: 0.55rem;
+    width: 2.9rem;
+    height: 2.9rem;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 0.4rem;
+    pointer-events: auto; /* the layer lets clicks through to the list; the pictures open the chooser */
+    cursor: pointer;
+}
+
+/* Saved ingredients offered under the line being typed */
+.shopping-suggest {
+    position: absolute;
+    z-index: 5;
+    min-width: 14rem;
+    max-width: calc(100% - 5rem);
+    display: flex;
+    flex-direction: column;
+    padding: 0.3rem;
+    background: var(--bg);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.shopping-suggest[hidden] {
+    display: none;
+}
+
+.shopping-suggestion {
+    padding: 0.55rem 0.8rem;
+    background: none;
+    border: none;
+    border-radius: 0.5rem;
+    color: inherit;
+    font: inherit;
+    font-size: 1.1rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.shopping-suggestion:hover,
+.shopping-suggestion.active {
+    background: rgba(255, 255, 255, 0.1);
 }
 
 .shopping-list:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+/* A line with no picture: a "+" to choose one */
+.shopping-thumb-empty {
+    padding: 0;
+    background: transparent;
+    border: 1px dashed var(--card-border);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 1.3rem;
+    line-height: 1;
+    opacity: 0.6;
+}
+
+.shopping-thumb-empty:hover {
+    opacity: 1;
+    border-color: var(--primary);
+}
+
+/* Choosing a shopping list item's picture */
+.shopping-picker-content {
+    max-width: 720px;
+    width: 92vw;
+    height: 80vh;
+}
+
+.shopping-picker-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    flex: 1;
+}
+
+.shopping-picker-search {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.shopping-picker-search input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.6rem 0.9rem;
+    color: inherit;
+    font: inherit;
+}
+
+.shopping-picker-results {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+    align-content: start;
+    gap: 0.6rem;
+}
+
+.shopping-picker-message {
+    grid-column: 1 / -1;
+    padding: 1rem;
+    text-align: center;
+}
+
+.shopping-picker-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid transparent;
+    border-radius: 0.75rem;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: center;
+}
+
+.shopping-picker-option:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.shopping-picker-option.selected {
+    border-color: var(--primary);
+}
+
+.shopping-picker-option img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 0.5rem;
+}
+
+.shopping-picker-name {
+    font-size: 0.8rem;
+    line-height: 1.2;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.shopping-picker-brand {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.shopping-picker-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.shopping-picker-actions [hidden] {
+    display: none;
 }
 
 /* Big, under the list; colours come from the shared voice button style */
@@ -2627,6 +2817,41 @@ p.subtitle {
 /* Rows reuse the meal editor's in-place inputs, minus its numbering */
 .ingredient-row::before {
     content: none;
+}
+
+/* The product picture (as on the shopping list); click to choose another */
+.ingredient-pic {
+    flex: 0 0 2.6rem;
+    height: 2.6rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 1.1rem;
+    cursor: pointer;
+}
+
+.ingredient-pic img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #fff;
+}
+
+.ingredient-pic.empty {
+    border: 1px dashed var(--card-border);
+    opacity: 0.6;
+}
+
+.ingredient-pic.empty:hover {
+    opacity: 1;
+    border-color: var(--primary);
 }
 
 /* Narrower quantity columns leave the name room beside the calories */

@@ -6295,11 +6295,13 @@ function closeIngredientsDialog() {
 
 // --- Meals tab: shopping list, free text with one item per line, saved shortly after each change ---
 let shoppingSavedText = '';   // the list as the server last had it
+let shoppingSavedSkip = -1;   // the line being typed when it was saved, not yet made an ingredient
 let shoppingSaveTimer = null;
 
 // Leaves the box alone while someone is typing in it or a change is waiting to be saved
 async function loadShoppingList() {
     const box = document.getElementById('shopping-list');
+    shoppingProductFailed.clear();
     if (shoppingSaveTimer || document.activeElement === box) return;
     try {
         const res = await fetch('/api/shopping-list');
@@ -6307,12 +6309,98 @@ async function loadShoppingList() {
         if (!res.ok) throw new Error(data.error || 'Failed to load the shopping list');
         if (shoppingSaveTimer || document.activeElement === box) return;
         shoppingSavedText = box.value = data.text;
+        showShoppingPictures();
     } catch (err) {
         setCalendarSettingsStatus('shopping-status', `Couldn't load the shopping list: ${err.message}`, true);
     }
 }
 
+// --- Shopping list: the saved ingredients (the same list meals use) offered while typing a line ---
+let shoppingSuggestions = []; // ingredient names offered for the line being typed
+let shoppingSuggestIndex = -1; // the one picked with the arrow keys
+
+// The line the caret is on: { start, end, text, index }
+function shoppingCaretLine(box) {
+    const value = box.value;
+    const start = value.lastIndexOf('\n', box.selectionStart - 1) + 1;
+    const newline = value.indexOf('\n', box.selectionStart);
+    return { start, end: newline < 0 ? value.length : newline, text: value.slice(start, newline < 0 ? undefined : newline),
+        index: value.slice(0, start).split('\n').length - 1 };
+}
+
+// While typing at the end of a line: saved ingredients whose name (or a word of it) starts with
+// what's typed after the amount ("2 pints of mi" offers "Milk")
+function updateShoppingSuggestions() {
+    const box = document.getElementById('shopping-list');
+    const line = shoppingCaretLine(box);
+    const typed = splitShoppingLine(line.text).item.trim().toLowerCase();
+    const atEnd = box.selectionStart === box.selectionEnd && box.selectionStart === line.end;
+    const wordStarts = name => name.toLowerCase().split(/[^\p{L}\p{N}]+/u).some(w => w.startsWith(typed));
+    shoppingSuggestions = !typed || !atEnd ? [] : ingredientList
+        .filter(i => i.name.toLowerCase() !== typed && wordStarts(i.name))
+        .sort((a, b) => b.name.toLowerCase().startsWith(typed) - a.name.toLowerCase().startsWith(typed))
+        .slice(0, 6).map(i => i.name);
+    shoppingSuggestIndex = -1;
+    renderShoppingSuggestions(line.index);
+}
+
+function renderShoppingSuggestions(lineIndex) {
+    const menu = document.getElementById('shopping-suggest');
+    if (!shoppingSuggestions.length) {
+        menu.hidden = true;
+        return;
+    }
+    const box = document.getElementById('shopping-list');
+    const style = getComputedStyle(box);
+    if (lineIndex !== undefined) {
+        // Just under the line being typed
+        menu.style.top = `${box.offsetTop + parseFloat(style.paddingTop) + (lineIndex + 1) * parseFloat(style.lineHeight) - box.scrollTop}px`;
+        menu.style.left = `${box.offsetLeft + parseFloat(style.paddingLeft) - box.scrollLeft}px`;
+    }
+    menu.innerHTML = shoppingSuggestions.map((name, i) => `
+        <button type="button" class="shopping-suggestion${i === shoppingSuggestIndex ? ' active' : ''}"
+            onmousedown="event.preventDefault()" onclick="acceptShoppingSuggestion(${i})">${escapeHtml(name)}</button>`).join('');
+    menu.hidden = false;
+}
+
+function hideShoppingSuggestions() {
+    shoppingSuggestions = [];
+    document.getElementById('shopping-suggest').hidden = true;
+}
+
+// Arrow keys move through the suggestions, Tab or Enter takes one (Tab the first if none is picked;
+// Enter only a picked one, so it still starts a new line), Escape closes them
+function shoppingListKeydown(event) {
+    if (!shoppingSuggestions.length) return;
+    const n = shoppingSuggestions.length;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        shoppingSuggestIndex = event.key === 'ArrowDown' ? (shoppingSuggestIndex + 1) % n : (shoppingSuggestIndex - 1 + n) % n;
+        renderShoppingSuggestions();
+    } else if (event.key === 'Tab' || (event.key === 'Enter' && shoppingSuggestIndex >= 0)) {
+        acceptShoppingSuggestion(Math.max(shoppingSuggestIndex, 0));
+    } else if (event.key === 'Escape') {
+        hideShoppingSuggestions();
+    } else {
+        return;
+    }
+    event.preventDefault();
+}
+
+// Puts the ingredient's name in place of what was typed, keeping the amount
+function acceptShoppingSuggestion(i) {
+    const box = document.getElementById('shopping-list');
+    const line = shoppingCaretLine(box);
+    const { before, after } = splitShoppingLine(line.text);
+    const name = shoppingSuggestions[i];
+    box.value = box.value.slice(0, line.start) + before + name + after + box.value.slice(line.end);
+    box.selectionStart = box.selectionEnd = line.start + before.length + name.length;
+    hideShoppingSuggestions();
+    shoppingListEdited();
+}
+
 function shoppingListEdited() {
+    updateShoppingSuggestions();
+    renderShoppingThumbs(); // pictures follow their lines straight away; new lines get theirs once typing pauses
     clearTimeout(shoppingSaveTimer);
     shoppingSaveTimer = setTimeout(saveShoppingListNow, 800);
 }
@@ -6320,18 +6408,26 @@ function shoppingListEdited() {
 async function saveShoppingListNow() {
     clearTimeout(shoppingSaveTimer);
     shoppingSaveTimer = null;
-    const text = document.getElementById('shopping-list').value;
-    if (text === shoppingSavedText) return;
+    const box = document.getElementById('shopping-list');
+    const text = box.value;
+    // A line still being typed isn't made an ingredient yet ("po" on the way to "Potatoes"); it is
+    // once the caret leaves it or the list loses focus
+    const skipLine = document.activeElement === box ? shoppingCaretLine(box).index : -1;
+    showShoppingPictures();
+    if (text === shoppingSavedText && skipLine === shoppingSavedSkip) return;
     try {
         const res = await fetch('/api/shopping-list', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text })
+            body: JSON.stringify({ text, skipLine })
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || 'Failed to save');
         shoppingSavedText = text;
+        shoppingSavedSkip = skipLine;
         setCalendarSettingsStatus('shopping-status', '');
+        // New items were added to the ingredients, for meals to offer too
+        if (data.ingredientsAdded) loadIngredients();
     } catch (err) {
         setCalendarSettingsStatus('shopping-status', `Couldn't save the shopping list: ${err.message}`, true);
     }
@@ -6342,6 +6438,176 @@ function clearShoppingList() {
     if (!box.value.trim() || !confirm('Clear the whole shopping list?')) return;
     box.value = '';
     saveShoppingListNow();
+}
+
+// --- Shopping list pictures: a matching product (Open Food Facts, via the server) beside each line ---
+// Clicking one offers the alternatives; the one chosen is kept for that item from then on.
+const shoppingProducts = new Map(); // line (lowercased) -> { product: { code, name, brand, image } | null, picked }
+const shoppingProductStale = new Set(); // lines to look up again, still showing their old picture meanwhile
+const shoppingProductFailed = new Set(); // lines whose lookup failed; tried again when the list next loads
+let shoppingLookupRunning = false;
+
+const shoppingLineKey = line => line.trim().toLowerCase();
+
+// What needs a picture: the shopping list's lines, and the saved ingredients while their dialog is open
+function shoppingPictureItems() {
+    const lines = document.getElementById('shopping-list').value.split('\n');
+    const dialogOpen = document.getElementById('ingredients-modal').style.display === 'flex';
+    return [...lines, ...(dialogOpen ? ingredientList.map(i => i.name) : [])].map(shoppingLineKey);
+}
+
+function renderProductPictures() {
+    renderShoppingThumbs();
+    renderIngredientPictures();
+}
+
+// Draws the known pictures, then looks up the items that don't have one yet, one at a time
+async function showShoppingPictures() {
+    renderProductPictures();
+    if (shoppingLookupRunning) return;
+    shoppingLookupRunning = true;
+    try {
+        for (;;) {
+            const box = document.getElementById('shopping-list');
+            // Not the line still being typed ("po" on the way to "Potatoes")
+            const typing = document.activeElement === box ? shoppingLineKey(shoppingCaretLine(box).text) : null;
+            const line = shoppingPictureItems()
+                .find(l => l && l !== typing && (!shoppingProducts.has(l) || shoppingProductStale.has(l)) && !shoppingProductFailed.has(l));
+            if (!line) break;
+            shoppingProductStale.delete(line);
+            try {
+                const res = await fetch(`/api/shopping-list/product?item=${encodeURIComponent(line)}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                shoppingProducts.set(line, data);
+            } catch (err) {
+                console.warn(`[Shopping] No picture for "${line}":`, err.message);
+                shoppingProductFailed.add(line);
+                // Rate-limited or offline: the rest would fail too
+                if (!navigator.onLine || /too many/i.test(err.message || '')) break;
+            }
+            renderProductPictures();
+        }
+    } finally {
+        shoppingLookupRunning = false;
+    }
+}
+
+// One picture per line, in the list's left padding, lined up with the line's row. A line with no
+// picture gets a "+" to choose one.
+function renderShoppingThumbs() {
+    const box = document.getElementById('shopping-list');
+    const layer = document.getElementById('shopping-thumbs');
+    if (!box || !layer) return;
+    const style = getComputedStyle(box);
+    const rowHeight = parseFloat(style.lineHeight);
+    const top = parseFloat(style.paddingTop);
+    const size = parseFloat(getComputedStyle(document.documentElement).fontSize) * 2.9; // .shopping-thumb's height
+    layer.innerHTML = box.value.split('\n').map((line, i) => {
+        const found = shoppingProducts.get(shoppingLineKey(line));
+        if (!found) return '';
+        const position = `style="top: ${top + i * rowHeight + (rowHeight - size) / 2}px" onclick="openShoppingPicker(${i})"`;
+        const { product } = found;
+        if (!product) return `<button type="button" class="shopping-thumb shopping-thumb-empty" ${position} title="Choose a picture">+</button>`;
+        const label = product.brand ? `${product.name} (${product.brand})` : product.name;
+        return `<img class="shopping-thumb" src="${escapeHtml(product.image)}" alt="${escapeHtml(label)}"
+            title="${escapeHtml(label)} - click for others" loading="lazy" ${position}>`;
+    }).join('');
+    scrollShoppingThumbs();
+}
+
+function scrollShoppingThumbs() {
+    const box = document.getElementById('shopping-list');
+    document.getElementById('shopping-thumbs').style.transform = `translateY(${-box.scrollTop}px)`;
+}
+
+// Looks every line up again (after the supermarket or a chosen picture changes), keeping the old
+// pictures up until the new ones arrive
+function refreshShoppingPictures() {
+    for (const line of shoppingProducts.keys()) shoppingProductStale.add(line);
+    shoppingProductFailed.clear();
+    if (appView === 'recipes') showShoppingPictures();
+}
+
+// --- Choosing a different picture for a line ---
+let shoppingPickerLine = '';
+let shoppingPickerResults = [];
+
+function openShoppingPicker(index) {
+    const line = document.getElementById('shopping-list').value.split('\n')[index]?.trim();
+    if (line) openProductPicker(line);
+}
+
+// For a shopping list line or an ingredient's name; the choice shows in both places
+function openProductPicker(line) {
+    shoppingPickerLine = line;
+    document.getElementById('shopping-picker-item').textContent = line;
+    document.getElementById('shopping-picker-search').value = line;
+    const picked = shoppingProducts.get(shoppingLineKey(line))?.picked;
+    document.getElementById('shopping-picker-auto').hidden = !picked;
+    document.getElementById('shopping-picker-modal').style.display = 'flex';
+    searchShoppingPicker();
+}
+
+function closeShoppingPicker() {
+    document.getElementById('shopping-picker-modal').style.display = 'none';
+    document.getElementById('shopping-picker-results').innerHTML = '';
+}
+
+async function searchShoppingPicker() {
+    const query = document.getElementById('shopping-picker-search').value.trim();
+    const results = document.getElementById('shopping-picker-results');
+    if (!query) return;
+    results.innerHTML = '<p class="settings-hint shopping-picker-message">Searching Open Food Facts...</p>';
+    try {
+        const params = new URLSearchParams({ item: shoppingPickerLine, q: query });
+        const res = await fetch(`/api/shopping-list/products?${params}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        shoppingPickerResults = data.products;
+        if (!data.products.length) {
+            results.innerHTML = '<p class="settings-hint shopping-picker-message">Nothing found. Try other words, such as a brand.</p>';
+            return;
+        }
+        const current = shoppingProducts.get(shoppingLineKey(shoppingPickerLine))?.product?.code;
+        results.innerHTML = data.products.map((p, i) => `
+            <button type="button" class="shopping-picker-option${p.code === current ? ' selected' : ''}" onclick="chooseShoppingProduct(${i})">
+                <img src="${escapeHtml(p.image)}" alt="" loading="lazy">
+                <span class="shopping-picker-name">${escapeHtml(p.name)}</span>
+                <span class="shopping-picker-brand">${escapeHtml(p.brand || '')}</span>
+            </button>`).join('');
+    } catch (err) {
+        results.innerHTML = `<p class="settings-hint shopping-picker-message">Couldn't search: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+// index into the results, or -1 for no picture
+async function chooseShoppingProduct(index) {
+    const product = index < 0 ? null : shoppingPickerResults[index];
+    await saveShoppingPick('PUT', { item: shoppingPickerLine, product });
+}
+
+// Back to the picture found automatically
+async function resetShoppingProduct() {
+    await saveShoppingPick('DELETE', { item: shoppingPickerLine });
+}
+
+async function saveShoppingPick(method, body) {
+    try {
+        const res = await fetch('/api/shopping-list/product', {
+            method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        // Other lines for the same item ("2 pints of milk", "milk") follow on the refresh
+        shoppingProducts.set(shoppingLineKey(body.item), data);
+        closeShoppingPicker();
+        refreshShoppingPictures();
+    } catch (err) {
+        showToast(`Couldn't save the picture: ${err.message}`, 'error', 4000);
+    }
 }
 
 // For matching a spoken item to a line: "Some Tomatoes." and "tomato" are the same thing
@@ -6372,11 +6638,15 @@ async function runShoppingVoice(transcripts, quiet = false) {
         const key = shoppingKey(item);
 
         if (add) {
-            if (lines.some(l => shoppingKey(l) === key)) {
+            if (lines.some(l => shoppingItemKey(l) === shoppingItemKey(item))) {
                 showToast(`${item} is already on the list.`, 'info', 2500);
                 return true;
             }
-            lines.push(item.charAt(0).toUpperCase() + item.slice(1));
+            // A saved ingredient goes on under its saved name ("add 2 pints of milk" -> "2 pints of Milk")
+            const { before, item: name, after } = splitShoppingLine(item);
+            const saved = ingredientList.find(i => shoppingItemKey(i.name) === shoppingItemKey(name));
+            const line = saved ? before + saved.name + after : item;
+            lines.push(line.charAt(0).toUpperCase() + line.slice(1));
             showToast(`Added ${item}`, 'success', 2500);
         } else {
             // An exact match first, then a line that mentions it ("2 pints of milk" for "milk")
@@ -6651,6 +6921,7 @@ function renderIngredientList() {
         const kcal = ingredientCaloriesButton(i);
         return `
         <div class="recipe-ingredient ingredient-row" data-id="${escapeAttr(i.id)}">
+            <button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>
             <input type="text" data-field="name" value="${escapeAttr(i.name)}" maxlength="300" aria-label="Ingredient name">
             <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(i.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount for one person">
             <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(i.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">
@@ -6667,6 +6938,25 @@ function renderIngredientList() {
         });
         row.querySelector('[data-act="remove"]').onclick = () => removeIngredient(ingredient);
         row.querySelector('[data-act="kcal"]').onclick = () => openNutritionDialog(ingredient);
+        row.querySelector('[data-act="pic"]').onclick = () => openProductPicker(ingredient.name);
+    });
+    showShoppingPictures();
+}
+
+// Each ingredient's product picture, the same one the shopping list shows for it; "+" for none
+function renderIngredientPictures() {
+    document.querySelectorAll('#ingredients-list .ingredient-row').forEach(row => {
+        const ingredient = ingredientList.find(i => i.id === row.dataset.id);
+        const found = ingredient && shoppingProducts.get(shoppingLineKey(ingredient.name));
+        const btn = row.querySelector('[data-act="pic"]');
+        const state = !found ? '' : found.product ? found.product.image : '+';
+        if (btn.dataset.state === state) return; // unchanged: don't reload the image
+        btn.dataset.state = state;
+        btn.classList.toggle('empty', state === '+');
+        btn.innerHTML = found?.product ? `<img src="${escapeAttr(found.product.image)}" alt="" loading="lazy">` : state;
+        btn.title = found?.product
+            ? `${found.product.name}${found.product.brand ? ` (${found.product.brand})` : ''} - click for others`
+            : 'Choose a picture';
     });
 }
 
@@ -6707,6 +6997,8 @@ async function updateIngredient(ingredient, row) {
         kcalBtn.className = `recipe-kcal ${kcal.cls}`;
         refreshRecipeCalories();
         if (!renamed) return;
+        loadShoppingList(); // the server renamed it there too
+        showShoppingPictures(); // and the new name may picture differently
         renameIngredientInDraft(ingredient);
         ingredientList.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
         renderIngredientNames();
@@ -10027,8 +10319,34 @@ async function fetchGeneralSettings() {
             updateUIWithDeviceName();
         }
         applySlideshowSettings(data);
+        applySupermarketSetting(data);
     } catch (err) {
         console.error('Failed to fetch general settings:', err);
+    }
+}
+
+function applySupermarketSetting({ supermarket = '', supermarkets = [] }) {
+    const select = document.getElementById('supermarket-select');
+    if (!select) return;
+    select.innerHTML = '<option value="">Any</option>' + supermarkets
+        .map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+    select.value = supermarket;
+}
+
+async function saveSupermarket() {
+    const supermarket = document.getElementById('supermarket-select').value;
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ supermarket })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        refreshShoppingPictures();
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save the supermarket:', err);
+        showToast('Failed to save settings');
     }
 }
 
