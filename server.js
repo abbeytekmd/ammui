@@ -1202,6 +1202,10 @@ app.get('/api/browse/:udn', async (req, res) => {
     try {
         const server = new MediaServer(device);
         const items = await server.browse(objectId);
+        // Favourites get a heart in the file browser
+        for (const item of items) {
+            if (item.uri && settings.fileTags?.[mediaKey(item.uri)]?.includes('fav')) item.fav = true;
+        }
         res.json({ objectId, items });
     } catch (err) {
         console.error('Failed to browse device:', err.message);

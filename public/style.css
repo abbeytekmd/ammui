@@ -1550,17 +1550,22 @@ p.subtitle {
 
 .playlist-items.grid-view .item-actions {
     display: flex;
+    align-items: center;
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
     gap: 0.35rem;
-    opacity: 0;
-    transition: all 0.2s ease;
     z-index: 20;
     pointer-events: auto;
 }
 
-.playlist-items.grid-view .browser-item:hover .item-actions {
+/* The buttons appear on hover; a favourite's heart is always there */
+.playlist-items.grid-view .item-actions .btn-control {
+    opacity: 0;
+    transition: all 0.2s ease;
+}
+
+.playlist-items.grid-view .browser-item:hover .item-actions .btn-control {
     opacity: 1;
 }
 
@@ -1584,7 +1589,7 @@ p.subtitle {
 }
 
 
-.playlist-items.grid-view .browser-item.photo-selected .item-actions {
+.playlist-items.grid-view .browser-item.photo-selected .item-actions .btn-control {
     opacity: 1;
 }
 
@@ -1681,6 +1686,20 @@ p.subtitle {
     align-items: center;
     gap: 0.5rem;
     margin-left: auto;
+}
+
+/* A favourite, beside its info button in the file browser */
+.browser-fav-heart {
+    display: flex;
+    align-items: center;
+    color: #ec4899;
+    flex-shrink: 0;
+}
+
+.playlist-items.grid-view .browser-fav-heart {
+    padding: 0.3rem;
+    border-radius: 50%;
+    background: rgba(15, 23, 42, 0.8);
 }
 
 .browser-item:hover .queue-btn,

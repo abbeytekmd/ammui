@@ -2384,6 +2384,7 @@ function renderBrowser(items) {
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
+                    ${item.fav ? FAV_HEART_HTML : ''}
                     <button class="btn-control ghost info-btn${detectFolderMismatch(item) ? ' info-btn-conflict' : ''}" onclick="event.stopPropagation(); showFileInfoFromBrowser(${index})" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
@@ -9701,6 +9702,23 @@ async function toggleFileFav() {
     await saveFileTags();
 }
 
+// A favourite's heart, beside its info button in the file browser
+const FAV_HEART_HTML = `<span class="browser-fav-heart" title="Favourite" aria-label="Favourite">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.2 5.3 3.1 1.7-1.9 3.2-3.1 5.3-3.1 3.7 0 5.8 3.9 4.3 7.3C19.5 16.4 12 21 12 21z"></path></svg>
+</span>`;
+
+// After a file is (un)favourited in the info panel: its row in the file browser follows
+function showBrowserFavHeart(uri, isFav) {
+    currentBrowserItems.forEach((item, index) => {
+        if (item.uri !== uri || !!item.fav === isFav) return;
+        item.fav = isFav;
+        const actions = browserItems.querySelector(`[data-item-index="${index}"] .item-actions`);
+        if (!actions) return;
+        actions.querySelector('.browser-fav-heart')?.remove();
+        if (isFav) actions.querySelector('.info-btn')?.insertAdjacentHTML('beforebegin', FAV_HEART_HTML);
+    });
+}
+
 async function saveFileTags() {
     if (!currentInfoUri) return;
     try {
@@ -9710,6 +9728,7 @@ async function saveFileTags() {
             body: JSON.stringify({ uri: currentInfoUri, tags: currentFileTags })
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        showBrowserFavHeart(currentInfoUri, currentFileTags.includes('fav'));
     } catch (err) {
         console.error('Failed to save tags:', err);
         showToast('Failed to save tags: ' + err.message, 'error', 4000);
