@@ -1798,6 +1798,20 @@ p.subtitle {
     transition: color 0.15s, border-color 0.15s;
 }
 
+/* Each tab's icon has its own colour; the label keeps the muted / active colour */
+.library-mode-tabs .lib-tab svg {
+    flex-shrink: 0;
+}
+
+.library-mode-tabs .lib-tab[data-mode="music"] svg { color: #f472b6; }
+.library-mode-tabs .lib-tab[data-mode="photo"] svg { color: #38bdf8; }
+.library-mode-tabs .lib-tab[data-mode="video"] svg { color: #a78bfa; }
+.library-mode-tabs .lib-tab[data-mode="calendar"] svg { color: #f87171; }
+.library-mode-tabs .lib-tab[data-mode="recipes"] svg { color: #fb923c; }
+.library-mode-tabs .lib-tab[data-mode="smarthome"] svg { color: #34d399; }
+.library-mode-tabs .lib-tab[data-mode="energy"] svg { color: #facc15; }
+.library-mode-tabs .lib-tab[data-mode="games"] svg { color: #2dd4bf; }
+
 .library-mode-tabs .lib-tab:hover {
     color: var(--text);
 }
@@ -1811,6 +1825,20 @@ p.subtitle {
     .library-mode-tabs .lib-tab {
         justify-content: center;
         padding: 0.5rem 0.6rem;
+    }
+}
+
+/* Larger tabs on tablets and desktops, where there's room and they're easier to hit */
+@media (min-width: 601px) {
+    .library-mode-tabs .lib-tab {
+        gap: 0.5rem;
+        padding: 0.75rem 1.2rem;
+        font-size: 1rem;
+    }
+
+    .library-mode-tabs .lib-tab svg {
+        width: 20px;
+        height: 20px;
     }
 }
 
