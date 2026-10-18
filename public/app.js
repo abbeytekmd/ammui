@@ -1848,9 +1848,22 @@ async function executeBrowserFind() {
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition = null;
 // No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's or Smart Home's mic at all.
-if (!SpeechRecognitionImpl) ['ss-voice-item', 'btn-smarthome-voice'].forEach(id => document.getElementById(id)?.remove());
+if (!SpeechRecognitionImpl) ['ss-voice-item', 'btn-smarthome-voice', 'btn-shopping-voice'].forEach(id => document.getElementById(id)?.remove());
 
 function toggleVoiceCommand() {
+    // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
+    toggleListening(['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'],
+        appView === 'smarthome'
+            ? 'Listening... e.g. "turn on <device>", "turn off all the lights", "set <device> to 50 percent"'
+            : appView === 'recipes'
+                ? 'Listening... e.g. "add milk", "remove eggs", "play <song> by <artist>", "turn on <device>"'
+                : 'Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "volume 30", "turn on <device>"',
+        runVoiceCommand);
+}
+
+// Listens once (or stops listening if already) and passes the recogniser's guesses to onResult.
+// buttonIds show the listening state while it lasts.
+function toggleListening(buttonIds, hint, onResult) {
     if (voiceRecognition) {
         voiceRecognition.abort();
         return;
@@ -1867,14 +1880,13 @@ Switch to ${secureUrl} ?`)) {
         return;
     }
 
-    // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
-    const btns = ['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'].map(id => document.getElementById(id)).filter(Boolean);
+    const btns = buttonIds.map(id => document.getElementById(id)).filter(Boolean);
     const rec = new SpeechRecognitionImpl();
     rec.lang = navigator.language || 'en-GB';
     rec.interimResults = false;
     rec.maxAlternatives = 3;
 
-    rec.onresult = (e) => runVoiceCommand(Array.from(e.results[0]).map(alt => alt.transcript));
+    rec.onresult = (e) => onResult(Array.from(e.results[0]).map(alt => alt.transcript));
     rec.onerror = (e) => {
         if (e.error === 'aborted') return; // the user pressed the button again
         if (e.error === 'no-speech') showToast("Didn't catch that.", 'info', 2500);
@@ -1888,9 +1900,7 @@ Switch to ${secureUrl} ?`)) {
 
     voiceRecognition = rec;
     btns.forEach(b => b.classList.add('listening'));
-    showToast(appView === 'smarthome'
-        ? 'Listening... e.g. "turn on <device>", "turn off all the lights", "set <device> to 50 percent"'
-        : 'Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "volume 30", "turn on <device>"', 'info', 4000);
+    showToast(hint, 'info', 4000);
     rec.start();
 }
 
@@ -1950,6 +1960,8 @@ async function runVoiceCommand(transcripts) {
 
     let lastError = 'No match found.';
     try {
+        // On the Meals tab, "add milk" / "remove eggs" go to the shopping list
+        if (appView === 'recipes' && await runShoppingVoice(transcripts, true)) return;
         // Smart home first: "turn on the curtain" needs no media server or player
         const home = await runSmartHomeVoice(transcripts);
         if (home === true) return;
@@ -6268,8 +6280,121 @@ function setRecipeStatus(text, isError) {
 // Keeps whatever is open (including unsaved edits) when returning to the tab
 async function showRecipes() {
     setAppView('recipes');
-    await Promise.all([loadRecipes(), loadIngredients()]);
+    await Promise.all([loadRecipes(), loadIngredients(), loadShoppingList()]);
     if (!recipeDraft) renderRecipeEditor();
+}
+
+function openIngredientsDialog() {
+    document.getElementById('ingredients-modal').style.display = 'flex';
+    renderIngredientList();
+}
+
+function closeIngredientsDialog() {
+    document.getElementById('ingredients-modal').style.display = 'none';
+}
+
+// --- Meals tab: shopping list, free text with one item per line, saved shortly after each change ---
+let shoppingSavedText = '';   // the list as the server last had it
+let shoppingSaveTimer = null;
+
+// Leaves the box alone while someone is typing in it or a change is waiting to be saved
+async function loadShoppingList() {
+    const box = document.getElementById('shopping-list');
+    if (shoppingSaveTimer || document.activeElement === box) return;
+    try {
+        const res = await fetch('/api/shopping-list');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load the shopping list');
+        if (shoppingSaveTimer || document.activeElement === box) return;
+        shoppingSavedText = box.value = data.text;
+    } catch (err) {
+        setCalendarSettingsStatus('shopping-status', `Couldn't load the shopping list: ${err.message}`, true);
+    }
+}
+
+function shoppingListEdited() {
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = setTimeout(saveShoppingListNow, 800);
+}
+
+async function saveShoppingListNow() {
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = null;
+    const text = document.getElementById('shopping-list').value;
+    if (text === shoppingSavedText) return;
+    try {
+        const res = await fetch('/api/shopping-list', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        shoppingSavedText = text;
+        setCalendarSettingsStatus('shopping-status', '');
+    } catch (err) {
+        setCalendarSettingsStatus('shopping-status', `Couldn't save the shopping list: ${err.message}`, true);
+    }
+}
+
+function clearShoppingList() {
+    const box = document.getElementById('shopping-list');
+    if (!box.value.trim() || !confirm('Clear the whole shopping list?')) return;
+    box.value = '';
+    saveShoppingListNow();
+}
+
+// For matching a spoken item to a line: "Some Tomatoes." and "tomato" are the same thing
+const shoppingKey = (text) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim()
+    .replace(/^(?:some|a|an|the)\s+/, '').replace(/\s+/g, ' ').replace(/(?:es|s)$/, '');
+
+function toggleShoppingVoice() {
+    toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"', transcripts => runShoppingVoice(transcripts));
+}
+
+// Acts on "add <item>" or "remove <item>" (optionally "... to/from the shopping list"). Returns
+// true if one of the guesses was such a command. Quietly returns false otherwise when `quiet`
+// (the header mic, which then tries music and smart home).
+async function runShoppingVoice(transcripts, quiet = false) {
+    const addRe = /^(?:please\s+)?(?:add|buy)\s+(.+?)(?:\s+(?:to|on|onto)\s+(?:the\s+|my\s+)?(?:shopping\s+)?list)?[.!]?$/i;
+    const removeRe = /^(?:please\s+)?(?:remove|delete|cross off)\s+(.+?)(?:\s+(?:from|off)\s+(?:the\s+|my\s+)?(?:shopping\s+)?list)?[.!]?$/i;
+
+    for (const transcript of transcripts) {
+        const text = transcript.trim();
+        const add = text.match(addRe);
+        const remove = !add && text.match(removeRe);
+        if (!add && !remove) continue;
+
+        const box = document.getElementById('shopping-list');
+        const lines = box.value.split('\n');
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+        const item = (add || remove)[1].trim().replace(/^some\s+/i, '');
+        const key = shoppingKey(item);
+
+        if (add) {
+            if (lines.some(l => shoppingKey(l) === key)) {
+                showToast(`${item} is already on the list.`, 'info', 2500);
+                return true;
+            }
+            lines.push(item.charAt(0).toUpperCase() + item.slice(1));
+            showToast(`Added ${item}`, 'success', 2500);
+        } else {
+            // An exact match first, then a line that mentions it ("2 pints of milk" for "milk")
+            let index = lines.findIndex(l => shoppingKey(l) === key);
+            if (index < 0) index = lines.findIndex(l => key && shoppingKey(l).includes(key));
+            if (index < 0) {
+                showToast(`${item} isn't on the list.`, 'info', 3000);
+                return true;
+            }
+            showToast(`Removed ${lines[index].trim()}`, 'success', 2500);
+            lines.splice(index, 1);
+        }
+        box.value = lines.join('\n');
+        await saveShoppingListNow();
+        return true;
+    }
+    if (!quiet) showToast(`"${transcripts[0]}": say "add <item>" or "remove <item>".`, 'error', 4000);
+    return false;
 }
 
 async function loadRecipes() {
@@ -7398,6 +7523,7 @@ document.addEventListener('visibilitychange', () => {
     // When page becomes visible again, immediately fetch latest data
     if (isPageVisible) {
         window.scrollTo(0, 0);
+        if (appView === 'recipes') loadShoppingList();
         fetchDevices();
         if (selectedRendererUdn && !isRendererOffline) {
             fetchStatus();

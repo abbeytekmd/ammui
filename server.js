@@ -2973,6 +2973,20 @@ app.delete('/api/recipes/:id', (req, res) => {
     res.json({ success: true });
 });
 
+// --- Meals tab: the shopping list, free text with one item per line ---
+app.get('/api/shopping-list', (req, res) => {
+    res.json({ text: getSetting('shoppingList', {}).text || '' });
+});
+
+app.put('/api/shopping-list', express.json(), (req, res) => {
+    const text = req.body?.text;
+    if (typeof text !== 'string') return res.status(400).json({ error: 'text is required' });
+    if (text.length > 20000) return res.status(400).json({ error: 'The list is too long' });
+    // Stored inside an object so a list like "123" isn't read back as a number
+    setSetting('shoppingList', { text });
+    res.json({ text });
+});
+
 // --- Games tab: players, and each player's game for the day (day = days since 1970, their local date) ---
 app.get('/api/games/players', (req, res) => {
     res.json(listGamePlayers());

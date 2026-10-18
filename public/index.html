@@ -511,7 +511,10 @@
             <aside class="recipes-list-panel">
                 <div class="recipes-list-header">
                     <h2>Meals</h2>
-                    <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
+                    <div class="recipes-header-actions">
+                        <button type="button" class="btn-control btn-small" onclick="openIngredientsDialog()">Ingredients</button>
+                        <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
+                    </div>
                 </div>
                 <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search meals..."
                     autocomplete="off" oninput="renderRecipeList()">
@@ -556,25 +559,26 @@
                     </div>
                 </div>
             </div>
-            <aside class="ingredients-panel">
+            <aside class="shopping-panel">
                 <div class="recipes-list-header">
-                    <h2>Ingredients</h2>
+                    <h2>Shopping List</h2>
+                    <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
                 </div>
-                <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to a meal fills in its quantity.</p>
-                <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search ingredients..."
-                    autocomplete="off" oninput="renderIngredientList()">
-                <div id="ingredients-list" class="ingredients-list"></div>
-                <div class="tag-input-wrapper ingredient-add"
-                    onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
-                    <input type="text" id="ingredient-add-name" placeholder="New ingredient" maxlength="300"
-                        autocomplete="off" aria-label="Ingredient name">
-                    <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
-                        autocomplete="off" aria-label="Amount for one person">
-                    <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                        maxlength="40" autocomplete="off" aria-label="Unit">
-                    <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
-                </div>
-                <div id="ingredients-status" class="calendar-status"></div>
+                <!-- One item per line; saved as you type -->
+                <textarea id="shopping-list" class="shopping-list" spellcheck="true" maxlength="20000"
+                    placeholder="Click here and type what you need, one item per line..." aria-label="Shopping list"
+                    oninput="shoppingListEdited()" onblur="saveShoppingListNow()"></textarea>
+                <button type="button" id="btn-shopping-voice" class="btn-control" onclick="toggleShoppingVoice()"
+                    title="Voice: &quot;add milk&quot;, &quot;remove eggs&quot;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.25" stroke-linecap="round">
+                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                    </svg>
+                    Say "add ..." or "remove ..."
+                </button>
+                <div id="shopping-status" class="calendar-status"></div>
             </aside>
         </section>
 
@@ -751,6 +755,41 @@
             </div>
             <div class="modal-body">
                 <div id="plug-timers-body" class="plug-timers"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Meals tab: saved ingredients, each with the quantity for one person -->
+    <div id="ingredients-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeIngredientsDialog()">
+        <div class="modal-content ingredients-modal-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Ingredients</h2>
+                </div>
+                <button class="btn-close" onclick="closeIngredientsDialog()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body ingredients-panel">
+                <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to a meal fills in its quantity.</p>
+                <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search ingredients..."
+                    autocomplete="off" oninput="renderIngredientList()">
+                <div id="ingredients-list" class="ingredients-list"></div>
+                <div class="tag-input-wrapper ingredient-add"
+                    onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
+                    <input type="text" id="ingredient-add-name" placeholder="New ingredient" maxlength="300"
+                        autocomplete="off" aria-label="Ingredient name">
+                    <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
+                        autocomplete="off" aria-label="Amount for one person">
+                    <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
+                        maxlength="40" autocomplete="off" aria-label="Unit">
+                    <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
+                </div>
+                <div id="ingredients-status" class="calendar-status"></div>
             </div>
         </div>
     </div>

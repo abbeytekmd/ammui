@@ -900,7 +900,8 @@ p.subtitle {
 /* Voice: the one filled, glowing button in the toolbar, so it's the first thing you see.
    A slow halo "breathes" while idle; it turns red and pulses fast while listening. */
 #btn-voice,
-#btn-smarthome-voice {
+#btn-smarthome-voice,
+#btn-shopping-voice {
     position: relative;
     color: #fff;
     background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 55%, #6366f1 100%);
@@ -910,7 +911,8 @@ p.subtitle {
 }
 
 #btn-voice:hover,
-#btn-smarthome-voice:hover {
+#btn-smarthome-voice:hover,
+#btn-shopping-voice:hover {
     color: #fff;
     background: linear-gradient(135deg, #f472b6 0%, #a78bfa 55%, #818cf8 100%);
     border-color: rgba(255, 255, 255, 0.4);
@@ -919,7 +921,8 @@ p.subtitle {
 }
 
 #btn-voice.listening,
-#btn-smarthome-voice.listening {
+#btn-smarthome-voice.listening,
+#btn-shopping-voice.listening {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
     border-color: rgba(255, 255, 255, 0.35);
     animation: voice-pulse 1s ease-out infinite;
@@ -937,7 +940,8 @@ p.subtitle {
 
 @media (prefers-reduced-motion: reduce) {
     #btn-voice, #btn-voice.listening,
-    #btn-smarthome-voice, #btn-smarthome-voice.listening { animation: none; }
+    #btn-smarthome-voice, #btn-smarthome-voice.listening,
+    #btn-shopping-voice, #btn-shopping-voice.listening { animation: none; }
 }
 
 .play-btn,
@@ -2542,10 +2546,59 @@ p.subtitle {
     margin-top: 0.5rem;
 }
 
-/* Saved ingredients — a third column beside the meal editor */
-.ingredients-panel {
-    width: 26rem;
+.recipes-header-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* Shopping list — a third column beside the meal editor; one item per line */
+.shopping-panel {
+    width: 28rem;
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.shopping-list {
+    flex: 1;
+    min-height: 12rem;
+    resize: none;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    color: inherit;
+    font: inherit;
+    font-size: 1.3rem;
+    line-height: 1.6;
+}
+
+.shopping-list:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+/* Big, under the list; colours come from the shared voice button style */
+#btn-shopping-voice {
+    width: 100%;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 1rem 1.25rem;
+    border-radius: 1rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+/* Saved ingredients — opened from the Meals list's Ingredients button */
+.ingredients-modal-content {
+    max-width: 640px;
+    height: 80vh;
+}
+
+.ingredients-panel {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -2774,7 +2827,7 @@ p.subtitle {
     }
 }
 
-/* Not enough room for three columns: ingredients go full width underneath */
+/* Not enough room for three columns: the shopping list goes full width underneath */
 @media (max-width: 1300px) {
     .recipes-view {
         flex-wrap: wrap;
@@ -2786,9 +2839,9 @@ p.subtitle {
         max-height: 60vh;
     }
 
-    .ingredients-panel {
+    .shopping-panel {
         width: 100%;
-        max-height: 50vh;
+        height: 50vh;
     }
 }
 
@@ -2804,7 +2857,7 @@ p.subtitle {
         max-height: 35vh;
     }
 
-    .ingredients-panel {
+    .shopping-panel {
         flex-shrink: 0;
     }
 
