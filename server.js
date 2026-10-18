@@ -209,6 +209,12 @@ let settings = {
         objectId: null,
         pathName: 'Not Set'
     },
+    // Command run once the web server is listening, e.g. to open a browser on this machine
+    startup: {
+        browser: 'none', // 'none', one of STARTUP_BROWSERS, or 'manual' (command typed by the user)
+        kiosk: false,
+        command: ''
+    },
     manualRotations: {},
     deletedPhotos: {},
     fileTags: {}
@@ -242,6 +248,7 @@ function loadSettings() {
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
+    settings.startup = { ...settings.startup, ...(getSetting('startup', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
         settings.screensaver = { serverUdn: SERVER_UDN, objectId: 'pictures', pathName: 'pictures' };
@@ -274,6 +281,7 @@ function saveSettings() {
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
+    setSetting('startup', settings.startup);
 }
 
 // stats.json migration completed to play_history.db
@@ -2718,6 +2726,95 @@ app.post('/api/sync/s3/test', express.json(), async (req, res) => {
     settings.s3 = { ...settings.s3, ...tested, verified: result.ok };
     saveSettings();
     res.json(result);
+});
+
+// Settings → Startup: a command run once the web server is up, normally to open a browser
+// on this machine at the app. The browser choices build the command for this OS; 'manual'
+// runs whatever was typed.
+const STARTUP_BROWSERS = ['chrome', 'edge', 'firefox', 'safari'];
+
+function startupCommand(browser, kiosk) {
+    const url = `http://localhost:${port}`;
+    const flags = {
+        chrome: kiosk ? '--kiosk' : '--new-window',
+        edge: kiosk ? '--kiosk --edge-kiosk-type=fullscreen' : '--new-window',
+        firefox: kiosk ? '--kiosk' : '--new-window'
+    }[browser];
+    if (process.platform === 'darwin') {
+        if (browser === 'safari') return `open -a Safari ${url}`; // Safari has no kiosk mode
+        const appName = { chrome: 'Google Chrome', edge: 'Microsoft Edge', firefox: 'Firefox' }[browser];
+        return appName ? `open -na "${appName}" --args ${flags} ${url}` : null;
+    }
+    if (browser === 'safari') return null; // only on macOS
+    if (process.platform === 'win32') {
+        // start finds the browsers through their App Paths registration, so no full path is needed
+        const exe = { chrome: 'chrome', edge: 'msedge', firefox: 'firefox' }[browser];
+        return exe ? `start "" ${exe} ${flags} ${url}` : null;
+    }
+    const candidates = {
+        chrome: ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'],
+        edge: ['microsoft-edge', 'microsoft-edge-stable'],
+        firefox: ['firefox']
+    }[browser];
+    if (!candidates) return null;
+    const exe = candidates.find(name => resolveLikeSpawn(name)) || candidates[0];
+    return `${exe} ${flags} ${url}`;
+}
+
+// The command each browser choice gives on this OS (null where that browser isn't available)
+function startupPresets() {
+    return Object.fromEntries(STARTUP_BROWSERS.map(b => [b, { normal: startupCommand(b, false), kiosk: startupCommand(b, true) }]));
+}
+
+function runStartupCommand(command = settings.startup.command) {
+    if (!command) return;
+    console.log(`[STARTUP] Running: ${command}`);
+    try {
+        // Detached and not waited on: a browser started this way keeps running until it's closed
+        const child = spawn(command, { shell: true, detached: true, windowsHide: true, stdio: 'ignore' });
+        child.on('error', err => console.error('[STARTUP] Command failed:', err.message));
+        child.unref();
+    } catch (err) {
+        console.error('[STARTUP] Command failed:', err.message);
+    }
+}
+
+// Update & Restart drops this marker so the restarted server doesn't open a second browser
+// (the page already open reloads itself).
+const restartMarkerPath = path.join(baseDataDir, '.restarting');
+
+function runStartupOnBoot() {
+    try {
+        const age = Date.now() - fs.statSync(restartMarkerPath).mtimeMs;
+        fs.unlinkSync(restartMarkerPath);
+        if (age < 5 * 60 * 1000) return console.log('[STARTUP] Restarted after an update: startup command skipped.');
+    } catch { /* no marker: a normal start */ }
+    runStartupCommand();
+}
+
+app.get('/api/settings/startup', (req, res) => {
+    res.json({ ...settings.startup, platform: process.platform, url: `http://localhost:${port}`, presets: startupPresets() });
+});
+
+app.post('/api/settings/startup', express.json(), (req, res) => {
+    const browser = String(req.body.browser || 'none');
+    const kiosk = !!req.body.kiosk;
+    let command;
+    if (browser === 'none') command = '';
+    else if (browser === 'manual') command = String(req.body.command || '').trim();
+    else if (STARTUP_BROWSERS.includes(browser)) {
+        command = startupCommand(browser, kiosk);
+        if (!command) return res.status(400).json({ error: `${browser} isn't available on this system` });
+    } else return res.status(400).json({ error: 'Unknown browser' });
+    settings.startup = { browser, kiosk, command };
+    saveSettings();
+    res.json({ ...settings.startup, platform: process.platform, url: `http://localhost:${port}`, presets: startupPresets() });
+});
+
+app.post('/api/settings/startup/run', (req, res) => {
+    if (!settings.startup.command) return res.status(400).json({ error: 'No startup command is set' });
+    runStartupCommand();
+    res.json({ ok: true });
 });
 
 app.get('/api/settings/general', (req, res) => {
@@ -6015,6 +6112,7 @@ app.post('/api/updates/channel', async (req, res) => {
 
 // Starts a replacement server after this process exits (so ports are free), then exits.
 function restartServer() {
+    try { fs.writeFileSync(restartMarkerPath, String(Date.now())); } catch { /* the browser may open again */ }
     if (process.env.AMMUI_SUPERVISED === '1') {
         console.log('[UPDATE] Exiting for supervisor restart...');
         process.exit(0);
@@ -6132,6 +6230,7 @@ function startServices() {
 
 app.listen(port, () => {
     console.log(`AMMUI server listening at http://localhost:${port}`);
+    runStartupOnBoot();
     if (settings.deviceName) startServices();
     else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
 });

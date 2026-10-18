@@ -973,6 +973,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
+                <button class="settings-tab" onclick="switchSettingsTab('startup', this)">Startup</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-general" class="settings-panel active">
@@ -1368,6 +1369,39 @@
                                 packages, then restarts the server and reloads this page. Changing the channel takes effect when you
                                 update; going from Dev back to Stable can go back to an older version.
                             </p>
+                        </div>
+                    </div>
+                </div>
+                <div id="settings-startup" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Run When the Server Starts</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Runs a command on the machine running the server once the server
+                                is ready, for example to open the app in a browser on a wall tablet or a TV.</p>
+                            <div id="startup-browser-options" class="startup-browser-options">
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="none" onchange="onStartupBrowserChange()"><span>None</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="chrome" onchange="onStartupBrowserChange()"><span>Chrome</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="edge" onchange="onStartupBrowserChange()"><span>Edge</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="firefox" onchange="onStartupBrowserChange()"><span>Firefox</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="safari" onchange="onStartupBrowserChange()"><span>Safari</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="manual" onchange="onStartupBrowserChange()"><span>Manual</span></label>
+                            </div>
+                            <label class="settings-check" style="margin-top: 0.75rem;">
+                                <input type="checkbox" id="startup-kiosk" onchange="onStartupBrowserChange()">
+                                <span>Kiosk mode
+                                    <span class="settings-hint">Full screen with no address bar or tabs. Close it with
+                                        Alt+F4 (Cmd+Q on a Mac). Safari has no kiosk mode.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="startup-command-input">Command</label>
+                            <input type="text" id="startup-command-input" disabled spellcheck="false"
+                                onchange="saveStartupSettings()">
+                            <p id="startup-command-hint" class="settings-hint"></p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-seek" onclick="runStartupCommandNow()">Run Now</button>
+                            </div>
                         </div>
                     </div>
                 </div>

@@ -4537,7 +4537,89 @@ function switchSettingsTab(tab, btnEl) {
     }
 
     if (tab.toLowerCase() === 'tools') loadToolsStatus();
+    if (tab.toLowerCase() === 'startup') loadStartupSettings();
     if (tab.toLowerCase() === 'smarthome') loadPlugSettings();
+}
+
+// Settings → Startup: a command the server runs once it's up, usually opening a browser.
+// Picking a browser fills in the command the server builds for its OS; Manual lets you type one.
+let startupPresets = {};
+let startupAppUrl = '';
+
+function applyStartupSettings({ browser, kiosk, command, presets, url }) {
+    startupAppUrl = url || '';
+    startupPresets = presets || {};
+    document.querySelectorAll('input[name="startup-browser"]').forEach(radio => {
+        const preset = startupPresets[radio.value];
+        radio.disabled = !!preset && !preset.normal; // a browser this OS doesn't have
+        radio.checked = radio.value === browser;
+    });
+    document.getElementById('startup-kiosk').checked = !!kiosk;
+    document.getElementById('startup-command-input').value = command || '';
+    updateStartupControls();
+}
+
+function updateStartupControls() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    const preset = startupPresets[browser];
+    document.getElementById('startup-kiosk').disabled = !preset || !preset.kiosk || preset.kiosk === preset.normal;
+    document.getElementById('startup-command-input').disabled = browser !== 'manual';
+    document.getElementById('startup-command-hint').textContent = browser === 'manual'
+        ? `Runs in the server's shell (cmd on Windows, sh elsewhere). The app is at ${startupAppUrl}.`
+        : browser === 'none' ? 'Nothing runs when the server starts.' : '';
+}
+
+async function loadStartupSettings() {
+    try {
+        applyStartupSettings(await (await fetch('/api/settings/startup')).json());
+    } catch (err) {
+        console.error('Failed to load startup settings:', err);
+    }
+}
+
+function onStartupBrowserChange() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    const input = document.getElementById('startup-command-input');
+    const preset = startupPresets[browser];
+    if (preset) input.value = (document.getElementById('startup-kiosk').checked && preset.kiosk) || preset.normal;
+    else if (browser === 'none') input.value = '';
+    // Switching to Manual keeps the command shown, ready to be edited
+    updateStartupControls();
+    if (browser === 'manual') input.focus();
+    saveStartupSettings();
+}
+
+async function saveStartupSettings() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    try {
+        const response = await fetch('/api/settings/startup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                browser,
+                kiosk: document.getElementById('startup-kiosk').checked,
+                command: document.getElementById('startup-command-input').value
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        applyStartupSettings(data);
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save startup settings:', err);
+        showToast(`Failed to save settings: ${err.message}`);
+    }
+}
+
+async function runStartupCommandNow() {
+    try {
+        const response = await fetch('/api/settings/startup/run', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        showToast('Startup command run', 'success', 2000);
+    } catch (err) {
+        showToast(err.message);
+    }
 }
 
 // Settings → Tools: which external programs (ffmpeg, yt-dlp, ...) the server can run.

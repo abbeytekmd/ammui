@@ -5266,13 +5266,30 @@ p.subtitle {
     cursor: pointer;
 }
 
-.settings-group .settings-check input[type="checkbox"] {
+.settings-group .settings-check input[type="checkbox"],
+.settings-group .settings-check input[type="radio"] {
     width: 1rem;
     height: 1rem;
     flex: none;
     margin: 0.1rem 0 0;
     padding: 0;
     accent-color: var(--primary);
+}
+
+.startup-browser-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+}
+
+.settings-check:has(input:disabled) {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.settings-group input[type="text"]:disabled {
+    opacity: 0.7;
+    cursor: default;
 }
 
 .settings-check .settings-hint {

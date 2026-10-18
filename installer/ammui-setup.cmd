@@ -581,6 +581,7 @@ function Start-Server {
     $url = "https://localhost:$HttpsPort/"
     Write-Host ''
     Write-Host "    AMMUI is starting: $url" -ForegroundColor Green
+    Write-Host '    Open that address in a browser. To have a browser open whenever AMMUI starts, use Settings > Startup.'
     Write-Host "    From other devices use https://$($env:COMPUTERNAME):$HttpsPort/ (or this PC's IP address)."
     Write-Host '    If Windows Firewall asks about Node.js, allow it on private networks so players and other devices can connect.'
     Write-Host '    Close this window to stop AMMUI.' -ForegroundColor Green
@@ -589,16 +590,14 @@ function Start-Server {
     $Host.UI.RawUI.WindowTitle = 'AMMUI server (close this window to stop)'
     Set-Location $InstallDir
     # The server shares this window for its log. Once it is listening (its certificate exists
-    # by then), trust the certificate and open the browser.
+    # by then), trust the certificate. No browser is opened here: Settings > Startup in the app
+    # chooses whether the server opens one when it starts.
     $server = Start-Process (Get-Command node).Source -ArgumentList 'server.js' -NoNewWindow -PassThru
     $null = $server.Handle   # keep a handle so ExitCode is available afterwards
     for ($i = 0; $i -lt 120 -and -not $server.HasExited; $i++) {
         try { (New-Object Net.Sockets.TcpClient('localhost', $HttpsPort)).Close(); break } catch { Start-Sleep -Milliseconds 500 }
     }
-    if (-not $server.HasExited) {
-        Grant-CertificateTrust
-        Start-Process $url
-    }
+    if (-not $server.HasExited) { Grant-CertificateTrust }
     $server.WaitForExit()
     Write-Host ''
     Warn "The AMMUI server stopped (exit code $($server.ExitCode))."
