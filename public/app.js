@@ -1848,7 +1848,7 @@ async function executeBrowserFind() {
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition = null;
 // No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's or Smart Home's mic at all.
-if (!SpeechRecognitionImpl) ['ss-voice-item', 'btn-smarthome-voice', 'btn-shopping-voice'].forEach(id => document.getElementById(id)?.remove());
+if (!SpeechRecognitionImpl) ['btn-ss-voice','btn-smarthome-voice', 'btn-shopping-voice'].forEach(id => document.getElementById(id)?.remove());
 
 function toggleVoiceCommand() {
     // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
@@ -11097,6 +11097,12 @@ const kwhText = kwh => `${kwh < 10 ? kwh.toFixed(2) : kwh.toFixed(1)} kWh`;
 const clockTime = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 async function loadEnergy({ refresh = false } = {}) {
+    // The meter readings take a few seconds to come back, so say so until the first lot arrive
+    // (later refreshes leave the last readings showing instead)
+    if (!document.getElementById('smarthome-energy-grid').innerHTML) {
+        document.getElementById('energy-status').innerHTML =
+            '<div class="energy-loading"><span class="spinner"></span>Reading your smart meter…</div>';
+    }
     try {
         const res = await fetch(`/api/energy${refresh ? '?refresh=1' : ''}`);
         const data = await res.json();

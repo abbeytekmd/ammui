@@ -1753,10 +1753,12 @@ p.subtitle {
 /* Scrolls sideways when the tabs don't all fit (phones), with no scrollbar showing */
 .library-mode-tabs {
     display: flex;
-    gap: 0.25rem;
+    align-items: flex-end;
+    gap: 0.3rem;
     flex: 1;
     min-width: 0;
-    margin-bottom: -1px;
+    padding-top: 0.4rem;
+    margin-bottom: -1px;   /* the tabs sit on the top bar's bottom line, so the active one can cut through it */
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -1786,16 +1788,20 @@ p.subtitle {
     gap: 0.4rem;
     flex-shrink: 0;
     padding: 0.5rem 0.9rem;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
+    /* Folder tabs: soft glass buttons with rounded tops, standing on the top bar's bottom line */
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: none;
+    border-radius: 12px 12px 0 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     color: var(--text-muted);
     font-family: inherit;
     font-size: 0.85rem;
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
 
 /* Each tab's icon has its own colour; the label keeps the muted / active colour */
@@ -1814,12 +1820,24 @@ p.subtitle {
 
 .library-mode-tabs .lib-tab:hover {
     color: var(--text);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06));
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
-.library-mode-tabs .lib-tab.active {
-    color: var(--primary);
-    border-bottom-color: var(--primary);
+.library-mode-tabs .lib-tab:active {
+    background: rgba(255, 255, 255, 0.05);
 }
+
+/* The open tab: taller, a coloured strip along its top, and the page's colour at its foot so it
+   covers the line underneath and joins the page below */
+.library-mode-tabs .lib-tab.active {
+    color: var(--text);
+    padding-top: calc(0.5rem + 4px);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 28%, var(--bg)), var(--bg));
+    border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    box-shadow: inset 0 3px 0 var(--primary), 0 -2px 8px var(--primary-glow);
+}
+
 
 @media (max-width: 600px) {
     .library-mode-tabs .lib-tab {
@@ -1834,6 +1852,10 @@ p.subtitle {
         gap: 0.5rem;
         padding: 0.75rem 1.2rem;
         font-size: 1rem;
+    }
+
+    .library-mode-tabs .lib-tab.active {
+        padding-top: calc(0.75rem + 4px);
     }
 
     .library-mode-tabs .lib-tab svg {
@@ -6861,7 +6883,7 @@ input:checked+.slider:before {
 }
 
 .btn-ss-music.btn-ss-exit:hover {
-    background: rgba(220, 50, 50, 0.7);
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.6), rgba(220, 38, 38, 0.4));
 }
 
 .screensaver-controls {
@@ -6948,22 +6970,37 @@ input:checked+.slider:before {
     background: rgba(0, 0, 0, 0.6);
 }
 
+/* Soft glass buttons: a faint top-lit gradient, a hairline highlight along the top edge */
 .btn-ss-music {
-    background: transparent;
-    border: none;
-    color: white;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: rgba(255, 255, 255, 0.92);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 8px;
+    padding: 12px;
     border-radius: 50%;
-    transition: all 0.2s ease;
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .btn-ss-music:hover {
-    background: rgba(255, 255, 255, 0.1);
-    transform: scale(1.1);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+    color: #fff;
+}
+
+.btn-ss-music:active {
+    transform: scale(0.94);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.btn-ss-music.btn-ss-exit {
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.32), rgba(239, 68, 68, 0.16));
+    border-color: rgba(248, 113, 113, 0.28);
 }
 
 .ss-volume-container {
@@ -7104,7 +7141,7 @@ input:checked+.slider:before {
 }
 
 #ss-mode-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     line-height: 1.1;
     display: block;
@@ -7114,7 +7151,7 @@ input:checked+.slider:before {
 
 /* Longer labels (Music, Recent, Custom) need to be smaller to fit inside the circle */
 #ss-mode-label.long {
-    font-size: 8px;
+    font-size: 9.5px;
 }
 
 .btn-ss-favourite {
@@ -7152,33 +7189,76 @@ input:checked+.slider:before {
     height: 22px;
 }
 
-.btn-ss-voice {
-    background: linear-gradient(135deg, rgba(236, 72, 153, 0.7) 0%, rgba(139, 92, 246, 0.7) 55%, rgba(99, 102, 241, 0.7) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 50%;
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    cursor: pointer;
-    backdrop-filter: blur(5px);
-    transition: all 0.2s ease;
+/* In the music bar: a .btn-ss-music with a purple tint */
+.btn-ss-music.btn-ss-voice {
+    background: linear-gradient(180deg, rgba(168, 85, 247, 0.38), rgba(99, 102, 241, 0.2));
+    border-color: rgba(196, 181, 253, 0.3);
 }
 
-.btn-ss-voice svg {
-    width: 22px;
-    height: 22px;
+.btn-ss-music.btn-ss-voice:hover {
+    background: linear-gradient(180deg, rgba(168, 85, 247, 0.55), rgba(99, 102, 241, 0.32));
 }
 
-.btn-ss-voice.listening {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+.btn-ss-music.btn-ss-voice.listening {
+    background: linear-gradient(180deg, #ef4444, #dc2626);
     animation: voice-pulse 1s ease-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .btn-ss-voice.listening { animation: none; }
+}
+
+/* The photo controls share the music bar's soft glass look (see .btn-ss-music). Their buttons
+   ignore the pointer, so hover and press are read from the item around each one. */
+.screensaver-controls .ss-control-item button {
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border-radius: 50%;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.screensaver-controls .ss-control-item:hover button {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+    color: #fff;
+    transform: none;
+}
+
+.screensaver-controls .ss-control-item:active button {
+    transform: scale(0.94) !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.screensaver-controls .ss-control-item button svg {
+    width: 24px;
+    height: 24px;
+}
+
+.screensaver-controls .ss-control-item .btn-ss-favourite.is-favourite {
+    background: linear-gradient(180deg, rgba(244, 63, 94, 0.32), rgba(244, 63, 94, 0.16));
+    border-color: rgba(251, 113, 133, 0.35);
+    color: #fb7185;
+}
+
+.screensaver-controls .ss-control-item:hover .btn-ss-delete {
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.5), rgba(220, 38, 38, 0.3));
+    color: #fff;
+}
+
+.screensaver-controls .ss-control-label {
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.75);
 }
 
 /*
@@ -7240,16 +7320,37 @@ input:checked+.slider:before {
         position: static;
         flex-wrap: wrap;
         justify-content: center;
-        gap: 6px;
+        gap: 10px;
         margin: calc(20px + env(safe-area-inset-top)) 16px 0;
-        padding: 8px;
+        padding: 0;
+        /* The panel is already dark, so the buttons stand on their own without a box around them */
+        background: none;
+        backdrop-filter: none;
+        border: none;
+        box-shadow: none;
+    }
+
+    .screensaver-music-bar:hover {
+        background: none;
+    }
+
+    /* The bar spans the panel, so the buttons share its width as big rounded-square targets */
+    .ss-music-controls {
+        flex: 4 1 0;   /* four music buttons usually showing, so voice and exit get an equal share */
+        gap: 10px;
+    }
+
+    .screensaver-music-bar .btn-ss-music {
+        flex: 1 1 0;
+        min-width: 48px;
+        height: 56px;
+        padding: 0;
         border-radius: 16px;
     }
 
-    .ss-music-controls {
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 6px;
+    .screensaver-music-bar .btn-ss-music svg {
+        width: 26px;
+        height: 26px;
     }
 
     /* Pushed down to sit above the lyrics or map (or the controls), leaving any spare room above it */
@@ -7265,13 +7366,34 @@ input:checked+.slider:before {
     .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
     .ss-date { font-size: clamp(18px, 1.4vw, 28px); }
 
+    /* Laid out like the music bar: rounded squares sharing the panel's width */
     .screensaver-controls {
         position: static;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 14px 12px;
-        padding: 20px 12px calc(28px + env(safe-area-inset-bottom));
+        flex-wrap: wrap;   /* only on the narrowest panels */
+        gap: 12px 10px;
+        padding: 20px 16px calc(28px + env(safe-area-inset-bottom));
     }
+
+    .screensaver-controls .ss-control-item {
+        flex: 1 1 0;
+        min-width: 44px;
+        gap: 6px;
+    }
+
+    .screensaver-controls .ss-control-item button {
+        width: 100%;
+        height: 56px;
+        border-radius: 16px;
+    }
+
+    .screensaver-controls .ss-control-item button svg {
+        width: 26px;
+        height: 26px;
+    }
+
+    /* The rounded-square button is wider than the circle, so the mode name can be bigger */
+    #ss-mode-label { font-size: 14px; }
+    #ss-mode-label.long { font-size: 11px; }
 
     .ss-nav-next { right: calc(var(--ss-panel-w) + 16px); }
 
@@ -9439,3 +9561,43 @@ input:checked+.slider:before {
 .word-key.correct { background: var(--word-correct); }
 .word-key.present { background: var(--word-present); }
 .word-key.absent { background: var(--word-absent); color: var(--text-muted); }
+
+/* Bigger slideshow and logo menu buttons in the top bar, easier to tap (phones keep the smaller size) */
+@media (min-width: 601px) {
+    .header-logo {
+        width: 34px;
+        height: 34px;
+    }
+
+    .logo-btn,
+    .top-bar-icon-btn {
+        padding: 0.5rem;
+    }
+
+    .top-bar-icon-btn {
+        min-width: calc(34px + 1rem + 2px);
+        min-height: calc(34px + 1rem + 2px);
+    }
+
+    .top-bar-icon-btn svg {
+        width: 30px;
+        height: 30px;
+    }
+}
+
+/* Energy tab: shown while the first meter readings are on their way */
+.energy-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 0;
+    color: var(--text-muted);
+    font-size: 1rem;
+}
+
+.energy-loading .spinner {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
+    flex-shrink: 0;
+}

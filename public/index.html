@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=53">
+    <link rel="stylesheet" href="style.css?v=62">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -2121,6 +2121,17 @@
                     </svg>
                 </button>
                 </div>
+                <!-- Always shown, as it can start music when none is queued. Fired on touchend: browsers
+                     only count touchend as the user gesture that's allowed to start the microphone. -->
+                <button id="btn-ss-voice" class="btn-ss-music btn-ss-voice" onclick="toggleVoiceCommand()"
+                    ontouchend="toggleVoiceCommand(); event.preventDefault();" title="Voice command">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round">
+                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                    </svg>
+                </button>
                 <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
                     ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
                     title="Exit Slideshow">
@@ -2179,22 +2190,6 @@
                     <div class="ss-control-label">Fav</div>
                 </div>
 
-                <!-- Fired on touchend rather than touchstart: browsers only count touchend as the user
-                     gesture that's allowed to start the microphone. -->
-                <div class="ss-control-item" id="ss-voice-item" onclick="toggleVoiceCommand()"
-                    ontouchstart="event.preventDefault();"
-                    ontouchend="toggleVoiceCommand(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                    <button id="btn-ss-voice" class="btn-ss-voice" title="Voice command">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round">
-                            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-                            <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
-                            <line x1="12" y1="18" x2="12" y2="22"></line>
-                        </svg>
-                    </button>
-                    <div class="ss-control-label">Voice</div>
-                </div>
-
                 <div class="ss-control-item" id="ss-browse-item" style="display: none;" onclick="openSlideshowBrowser()"
                     ontouchstart="event.preventDefault();"
                     ontouchend="openSlideshowBrowser(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
@@ -2216,11 +2211,11 @@
                     <button class="btn-ss-delete" title="Hide Photo (Don't show again)">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18" />
-                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                            <line x1="10" y1="11" x2="10" y2="17" />
-                            <line x1="14" y1="11" x2="14" y2="17" />
+                            <!-- Eye with a slash through it, as on the slideshow browser's hide button -->
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                            <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                            <line x1="1" y1="1" x2="23" y2="23" />
                         </svg>
                     </button>
                     <div class="ss-control-label">Hide</div>
@@ -2406,7 +2401,7 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=55"></script>
+    <script src="app.js?v=57"></script>
     <script src="slideshow.js?v=7"></script>
 </body>
 

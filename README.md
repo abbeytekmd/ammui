@@ -1,4 +1,4 @@
-# Media Hub (AMMUI)
+# Home Hub (AMMUI)
 
 A web based home hub to manage and play your music, video and photo files. Send them to Sonos, TV, etc., a flexible slideshow, some smart home capabilities, calendar display, a basic meal manager and even a little game. 
 <table>
