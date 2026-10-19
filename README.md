@@ -1,12 +1,6 @@
 # Media Hub (AMMUI)
 
-A web based home hub with DLNA server, player and controller for music, videos and photos, a flexible slideshow feature and some smart home capability covering some smart plugs, twinkly lights and energy usage via the Bright API.
-
-* Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
-* Right side of the screen - playback device: DLNA player, Sonos, Airplay
-
-**Get started:** on Windows, download and run the installer. See [Installation](#-installation).
-
+A web based home hub to manage and play your music, video and photo files. Send them to Sonos, TV, etc., a flexible slideshow, some smart home capabilities, calendar display, a basic meal manager and even a little game. 
 <table>
 <tr>
 <td><img src="images/ammui-music.png" /><br/><b>Music</b> - browse your library and play to Sonos, DLNA or AirPlay</td>
@@ -43,16 +37,15 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
-## Why?
+## My journey to here...
 I'd been using an Amazon Echo Show for a while. It was great but...
 * I have a library of mp3s and was paying a subscription to a music service I could manage without.
 * I have a library of photos. To get them on the Echo, I had to upload them to AWS.
-* I didn't really have a consistent backup strategy for the above.
+* I didn't really have a backup strategy for the above.
 * I'd get Adverts :-(
 * I never really got the on-this-day slideshow I wanted. It didn't seem to quite work.
 * It didn't hook in with my Google Calendars very well.
-* The UI is not great for me. Settings are not easy to find. As a product designer who has built a lot of UI, that was winding me up :)
-
+* I didn't really get the UI. Settings seemed hard to find, if they were there at all. I,ve designed a lot of UI heavy products and wanted something that made sense to me.
 Some of this stuff may have changed since then but I wanted a home hub that's not tied too much to one company's ecosystem, that covers a diverse range of functions, that is built with a decent UI, that can run on a wide range of hardware and that isn't too expensive to deploy. 
 ## Target Hardware
 
