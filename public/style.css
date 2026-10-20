@@ -8533,6 +8533,15 @@ input:checked+.slider:before {
     background: rgba(255, 255, 255, 0.12);
 }
 
+/* Bigger tiles in the slideshow browser than in the hidden-photos grid */
+#ss-browser-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+#ss-browser-grid .photo-tile {
+    contain-intrinsic-size: auto 150px;
+}
+
 /* Select toggle in each tile's top-left corner */
 .photo-tile-select {
     position: absolute;
@@ -8575,6 +8584,31 @@ input:checked+.slider:before {
 @media (hover: hover) {
     .ss-browser:not(.selecting) .photo-tile:not(:hover) .photo-tile-select {
         opacity: 0;
+    }
+}
+
+/* Any touchscreen (even one that also has a mouse) keeps the tile buttons showing, with bigger targets */
+@media (any-pointer: coarse) {
+    .photo-tile-actions,
+    .ss-browser:not(.selecting) .photo-tile:not(:hover) .photo-tile-select {
+        opacity: 1;
+    }
+
+    .photo-tile-select {
+        width: 32px;
+        height: 32px;
+    }
+
+    .photo-tile-actions button {
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Long-press selects a tile, so keep the browser's own long-press menu out of the way */
+    .ss-browser .photo-tile {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
     }
 }
 

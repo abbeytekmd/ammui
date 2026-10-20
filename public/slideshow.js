@@ -959,6 +959,7 @@ class Slideshow {
         document.getElementById('ss-browser-title').textContent = labels[this.mode] || 'Slideshow';
         this.browserGrid = document.getElementById('ss-browser-grid');
         this.browserGrid.innerHTML = '';
+        this.attachBrowserLongPress();
         this.browserRendered = 0;
         this.updateBrowserCount();
         do this.renderBrowserBatch(); while (this.browserRendered <= this.index && this.browserRendered < this.items.length);
@@ -1036,6 +1037,46 @@ class Slideshow {
         }
         this.browserGrid.insertAdjacentHTML('beforeend', html);
         this.browserRendered = end;
+    }
+
+    // Touch: holding a tile selects it, the way phone galleries start a selection
+    attachBrowserLongPress() {
+        const grid = this.browserGrid;
+        if (grid._longPress) return;
+        grid._longPress = true;
+        let timer = null, startX = 0, startY = 0, suppressClick = false;
+        const cancel = () => { clearTimeout(timer); timer = null; };
+
+        grid.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' || e.target.closest('.photo-tile-select, .photo-tile-actions')) return;
+            const tile = e.target.closest('.photo-tile');
+            if (!tile) return;
+            suppressClick = false;
+            startX = e.clientX; startY = e.clientY;
+            cancel();
+            timer = setTimeout(() => {
+                timer = null;
+                suppressClick = true;
+                navigator.vibrate?.(30);
+                const i = +tile.dataset.index;
+                if (!this.browserSelection.has(this.items[i])) this.toggleBrowserSelection(i);
+            }, 500);
+        });
+        grid.addEventListener('pointermove', (e) => {
+            if (timer && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
+        });
+        grid.addEventListener('pointerup', cancel);
+        grid.addEventListener('pointercancel', cancel);
+        // The tap that ends a long-press mustn't also toggle/jump
+        grid.addEventListener('click', (e) => {
+            if (!suppressClick) return;
+            suppressClick = false;
+            e.stopPropagation();
+            e.preventDefault();
+        }, true);
+        grid.addEventListener('contextmenu', (e) => {
+            if (e.pointerType !== 'mouse' && (timer || suppressClick)) e.preventDefault();
+        });
     }
 
     // Once anything is selected, tapping a tile adds to the selection instead of leaving the browser
