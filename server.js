@@ -44,6 +44,7 @@ import {
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItem, getLibraryIndexItemsUnder, removeFromLibraryIndex, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
+    calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
@@ -3038,6 +3039,35 @@ app.put('/api/calendar-entries/:id', express.json(), (req, res) => {
 
 app.delete('/api/calendar-entries/:id', (req, res) => {
     if (!deleteCalendarEntry(req.params.id)) return res.status(404).json({ error: 'Entry not found' });
+    res.json({ success: true });
+});
+
+// One occurrence of a repeating entry, by its date: PUT makes it an entry of its own with the
+// changes given (the series skips that date), DELETE just skips it
+function findOccurrence(req, res) {
+    const series = getCalendarEntry(req.params.id);
+    if (!series) { res.status(404).json({ error: 'Entry not found' }); return null; }
+    const date = req.params.date;
+    if (!series.repeat || !DATE_RE.test(date) || !calendarEntryOccursOn(series, date)) {
+        res.status(400).json({ error: 'That entry does not repeat on that date' });
+        return null;
+    }
+    return date;
+}
+
+app.put('/api/calendar-entries/:id/occurrences/:date', express.json(), (req, res) => {
+    const date = findOccurrence(req, res);
+    if (!date) return;
+    const entry = cleanCalendarEntry({ ...req.body, repeat: null });
+    if (typeof entry === 'string') return res.status(400).json({ error: entry });
+    ensureTagColors(entry.tags);
+    res.json(skipCalendarEntryOccurrence(req.params.id, date, { id: crypto.randomUUID(), ...entry }));
+});
+
+app.delete('/api/calendar-entries/:id/occurrences/:date', (req, res) => {
+    const date = findOccurrence(req, res);
+    if (!date) return;
+    skipCalendarEntryOccurrence(req.params.id, date);
     res.json({ success: true });
 });
 

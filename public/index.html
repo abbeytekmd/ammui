@@ -1686,6 +1686,12 @@
                 </button>
             </div>
             <div class="calendar-entry-form">
+                <div id="calendar-entry-scope" class="calendar-entry-kind" role="tablist" aria-label="Which occurrences">
+                    <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="one" role="tab"
+                        onclick="setCalendarEntryScope('one')">This occurrence</button>
+                    <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="all" role="tab"
+                        onclick="setCalendarEntryScope('all')">Every occurrence</button>
+                </div>
                 <div class="calendar-entry-kind" role="tablist" aria-label="Entry type">
                     <button type="button" class="calendar-entry-kind-btn" data-kind="entry" role="tab"
                         onclick="setCalendarEntryKind('entry')">Entry</button>
@@ -1727,7 +1733,7 @@
                         <input type="date" id="calendar-entry-date" required>
                     </div>
                 </div>
-                <div class="settings-group">
+                <div id="calendar-entry-repeat-group" class="settings-group">
                     <label for="calendar-entry-repeat-unit">Repeat</label>
                     <div class="calendar-entry-repeat">
                         <span class="calendar-entry-repeat-word calendar-entry-repeat-on">Every</span>
@@ -1745,8 +1751,8 @@
                         <input type="date" id="calendar-entry-repeat-until" aria-label="Repeat until">
                         <span class="settings-hint" style="margin: 0;">Leave blank to repeat forever</span>
                     </div>
-                    <p id="calendar-entry-series-note" class="settings-hint" style="margin: 0;"></p>
                 </div>
+                <p id="calendar-entry-series-note" class="settings-hint" style="margin: 0;"></p>
                 <div class="settings-group">
                     <label for="calendar-entry-tag-input">Tags <span class="calendar-entry-tags-hint">— pick at least one</span></label>
                     <div id="calendar-entry-tags" class="calendar-entry-tag-choices"></div>

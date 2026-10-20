@@ -2293,7 +2293,9 @@ p.subtitle {
 
 .calendar-entry-normal-fields[hidden],
 #calendar-entry-recipe-fields[hidden],
-#calendar-entry-no-recipes[hidden] {
+#calendar-entry-no-recipes[hidden],
+#calendar-entry-scope[hidden],
+#calendar-entry-repeat-group[hidden] {
     display: none;
 }
 

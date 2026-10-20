@@ -6046,6 +6046,33 @@ function updateCalendarEntryRepeatUI() {
     document.getElementById('calendar-entry-date-heading').textContent = repeating ? 'Starts' : 'Date';
 }
 
+// --- This occurrence | Every occurrence, for a repeating entry opened from one of its dates ---
+// 'one' edits or deletes just that date (it becomes an entry of its own); 'all' changes the series
+function setCalendarEntryScope(scope) {
+    const editing = calendarEntryEditing;
+    if (!editing?.occurrence) return;
+    // Keep whatever date was typed for the scope being left
+    const dateInput = document.getElementById('calendar-entry-date');
+    if (editing.scope === 'one') editing.occurrenceDate = dateInput.value;
+    else if (editing.scope === 'all') editing.date = dateInput.value;
+    editing.scope = scope;
+
+    const one = scope === 'one';
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-scope-btn').forEach(btn => {
+        const on = btn.dataset.scope === scope;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    dateInput.value = one ? editing.occurrenceDate : editing.date;
+    document.getElementById('calendar-entry-repeat-group').hidden = one;
+    document.getElementById('calendar-entry-date-heading').textContent = one ? 'Date' : 'Starts';
+    document.getElementById('calendar-entry-series-note').textContent = one
+        ? 'Only this date changes. The other occurrences stay as they are.'
+        : 'Changes apply to every occurrence.';
+    document.getElementById('calendar-entry-delete-btn').textContent = one ? 'Delete This One' : 'Delete All';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
+}
+
 // --- Entry | Recipe: a normal entry has a title and description; a recipe entry just names a recipe ---
 let calendarEntryKind = 'entry';
 
@@ -6096,17 +6123,18 @@ async function openRecipeFromEntry() {
 }
 
 
-// date: the day clicked. For a repeating entry that's one occurrence; saving keeps the
-// series' own start date, and changes apply to every occurrence.
+// date: the day clicked. For a repeating entry that's one occurrence, and the dialog can change
+// or delete just it, or the whole series (which keeps its own start date).
 async function openCalendarEntryModal(date, entry = null) {
     const startDate = entry ? (entry.startDate || entry.date) : date;
-    calendarEntryEditing = { id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [] };
-    document.getElementById('calendar-entry-heading').textContent = entry ? 'Edit Entry' : 'New Entry';
-    // For a repeating entry, say which occurrence was clicked; the Date field holds the series start
-    document.getElementById('calendar-entry-date-label').textContent =
-        entry && entry.repeat && date !== startDate ? `Opened from ${formatCalendarDate(date)}` : '';
-    document.getElementById('calendar-entry-date').value = startDate;
     const repeat = entry ? entry.repeat : null;
+    calendarEntryEditing = {
+        id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [],
+        occurrence: repeat ? date : null, occurrenceDate: date, scope: null
+    };
+    document.getElementById('calendar-entry-heading').textContent = entry ? 'Edit Entry' : 'New Entry';
+    document.getElementById('calendar-entry-date-label').textContent = repeat ? formatCalendarDate(date) : '';
+    document.getElementById('calendar-entry-date').value = startDate;
     const recipeId = entry && entry.recipe ? entry.recipe.id : '';
     await loadCalendarEntryRecipeOptions(recipeId, entry && entry.recipe);
     // People: the entry's own count, else whatever the last saved meal entry used
@@ -6119,10 +6147,12 @@ async function openCalendarEntryModal(date, entry = null) {
     document.getElementById('calendar-entry-repeat-unit').value = repeat ? repeat.unit : '';
     document.getElementById('calendar-entry-repeat-interval').value = repeat ? repeat.interval : 1;
     document.getElementById('calendar-entry-repeat-until').value = repeat && repeat.until ? repeat.until : '';
-    document.getElementById('calendar-entry-series-note').textContent = repeat
-        ? 'Changes apply to every occurrence.'
-        : '';
+    document.getElementById('calendar-entry-series-note').textContent = '';
+    document.getElementById('calendar-entry-repeat-group').hidden = false;
+    document.getElementById('calendar-entry-delete-btn').textContent = 'Delete';
     updateCalendarEntryRepeatUI();
+    document.getElementById('calendar-entry-scope').hidden = !repeat;
+    if (repeat) setCalendarEntryScope('one');
     document.getElementById('calendar-entry-title').value = entry && !entry.recipe ? entry.title : '';
     document.getElementById('calendar-entry-description').value = entry && !entry.recipe ? entry.description : '';
     document.getElementById('calendar-entry-tag-input').value = '';
@@ -6211,9 +6241,10 @@ async function saveCalendarEntry() {
 
     const date = document.getElementById('calendar-entry-date').value;
     if (!date) { setStatus('Choose a date.', true); return; }
-    calendarEntryEditing.date = date;
+    const justOne = calendarEntryEditing.scope === 'one';
+    if (!justOne) calendarEntryEditing.date = date;
 
-    const unit = document.getElementById('calendar-entry-repeat-unit').value;
+    const unit = justOne ? '' : document.getElementById('calendar-entry-repeat-unit').value;
     let repeat = null;
     if (unit) {
         const interval = Number(document.getElementById('calendar-entry-repeat-interval').value);
@@ -6226,8 +6257,11 @@ async function saveCalendarEntry() {
     const btn = document.getElementById('calendar-entry-save-btn');
     btn.disabled = true;
     try {
-        const { id, tags } = calendarEntryEditing;
-        const res = await fetch(id ? `/api/calendar-entries/${encodeURIComponent(id)}` : '/api/calendar-entries', {
+        const { id, tags, occurrence } = calendarEntryEditing;
+        const url = !id ? '/api/calendar-entries'
+            : justOne ? `/api/calendar-entries/${encodeURIComponent(id)}/occurrences/${occurrence}`
+            : `/api/calendar-entries/${encodeURIComponent(id)}`;
+        const res = await fetch(url, {
             method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ date, title, description, repeat, recipeId, people, tags })
@@ -6246,9 +6280,14 @@ async function saveCalendarEntry() {
 async function deleteCalendarEntry() {
     if (!calendarEntryEditing?.id) return;
     const title = (calendarEntryKind === 'recipe' ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
-    if (!confirm(`Delete "${title}"?`)) return;
+    const { id, scope, occurrence } = calendarEntryEditing;
+    const question = scope === 'one' ? `Delete "${title}" on ${formatCalendarDate(occurrence)} only?`
+        : scope === 'all' ? `Delete every occurrence of "${title}"?`
+        : `Delete "${title}"?`;
+    if (!confirm(question)) return;
     try {
-        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(calendarEntryEditing.id)}`, { method: 'DELETE' });
+        const url = `/api/calendar-entries/${encodeURIComponent(id)}` + (scope === 'one' ? `/occurrences/${occurrence}` : '');
+        const res = await fetch(url, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
         closeCalendarEntryModal();
         renderCalendar();
