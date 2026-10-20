@@ -8510,6 +8510,72 @@ input:checked+.slider:before {
 .ss-browser-header h2 {
     margin: 0;
     font-size: 1.25rem;
+    margin-right: auto;
+}
+
+.ss-browser-selection {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.ss-browser-clear {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ss-browser-clear:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+/* Select toggle in each tile's top-left corner */
+.photo-tile-select {
+    position: absolute;
+    left: 4px;
+    top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    color: transparent;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.photo-tile.selected .photo-tile-select {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.photo-tile.selected {
+    outline: 3px solid var(--primary);
+    outline-offset: -3px;
+}
+
+.photo-tile.selected .photo-tile-view img {
+    opacity: 0.75;
+}
+
+/* While selecting, a tap on a tile toggles it rather than jumping to it */
+.ss-browser.selecting .photo-tile-view {
+    cursor: pointer;
+}
+
+@media (hover: hover) {
+    .ss-browser:not(.selecting) .photo-tile:not(:hover) .photo-tile-select {
+        opacity: 0;
+    }
 }
 
 .ss-browser-body {

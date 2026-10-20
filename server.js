@@ -4522,17 +4522,21 @@ app.post('/api/slideshow/rotate', (req, res) => {
     res.json({ success: true, rotation });
 });
 
+// Body is { url } for one photo or { urls: [...] } for a batch.
 app.post('/api/slideshow/delete', (req, res) => {
-    const { url } = req.body;
-    if (!url) return res.status(400).json({ error: 'URL required' });
+    const { url, urls } = req.body;
+    const list = Array.isArray(urls) ? urls.filter(u => typeof u === 'string' && u) : (url ? [url] : []);
+    if (list.length === 0) return res.status(400).json({ error: 'URL required' });
 
-    markPhotoDeleted(url);
-    settings.deletedPhotos[mediaKey(url)] = true;
+    for (const u of list) {
+        markPhotoDeleted(u);
+        settings.deletedPhotos[mediaKey(u)] = true;
+    }
     // Left in the scan cache (it's filtered out when served) so unhiding brings it straight back.
     slideshowDeleteVersion++;
 
-    console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
-    res.json({ success: true });
+    console.log(`[SCREENSAVER] Marked ${list.length === 1 ? `photo as deleted: ${list[0]}` : `${list.length} photos as deleted`}`);
+    res.json({ success: true, count: list.length });
 });
 
 // A hidden key's file in this app's own library, or null for anything else (or a path escaping it).

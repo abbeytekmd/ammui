@@ -2255,6 +2255,11 @@
             onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
             <div class="ss-browser-header">
                 <h2><span id="ss-browser-title"></span> <span id="ss-browser-count" class="hidden-photos-count"></span></h2>
+                <div id="ss-browser-selection" class="ss-browser-selection" style="display: none;">
+                    <button class="ss-browser-clear" onclick="slideshow.clearBrowserSelection()" title="Clear selection">Clear</button>
+                    <button id="ss-browser-hide-selected" class="btn-delete" onclick="slideshow.hideSelectedFromBrowser()"
+                        title="Hide the selected photos from the slideshow">Hide (0)</button>
+                </div>
                 <button class="btn-close" onclick="closeSlideshowBrowser()" title="Back to slideshow">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">

@@ -950,6 +950,9 @@ class Slideshow {
         if (!this.isActive || this.items.length === 0 || this.browserOpen) return;
         this.browserOpen = true;
         this._browserCurrentHidden = false;
+        this.browserSelection = new Set(); // items (not indices, which shift as photos are hidden)
+        this._browserLastPicked = null;
+        this.updateBrowserSelectionUI();
         if (this.interval) clearInterval(this.interval); // paused while browsing
 
         const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', custom: 'Custom' };
@@ -969,7 +972,12 @@ class Slideshow {
         }, { root: document.getElementById('ss-browser-body'), rootMargin: '600px' });
         this._browserObserver.observe(document.getElementById('ss-browser-more'));
 
-        this._browserKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.closeBrowser(); } };
+        this._browserKey = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            if (this.browserSelection.size > 0) this.clearBrowserSelection();
+            else this.closeBrowser();
+        };
         document.addEventListener('keydown', this._browserKey);
     }
 
@@ -980,6 +988,7 @@ class Slideshow {
         this._browserObserver?.disconnect();
         document.removeEventListener('keydown', this._browserKey);
         this.browserGrid.innerHTML = '';
+        this.browserSelection.clear();
         if (!this.isActive) return;
         // The photo that was on screen got hidden: move on to the one that took its place
         if (this._browserCurrentHidden) this.next();
@@ -1012,8 +1021,12 @@ class Slideshow {
             const img = thumb
                 ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot ? ` style="transform: rotate(${rot}deg)"` : ''} onerror="onPhotoGridThumbError(this)">`
                 : '<span class="photo-tile-missing">Unavailable</span>';
-            html += `<div class="photo-tile${i === this.index ? ' current' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
-                <button class="photo-tile-view" onclick="slideshow.jumpTo(+this.parentElement.dataset.index)">${img}</button>
+            const selected = this.browserSelection.has(item);
+            html += `<div class="photo-tile${i === this.index ? ' current' : ''}${selected ? ' selected' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
+                <button class="photo-tile-view" onclick="slideshow.onBrowserTileClick(+this.parentElement.dataset.index, event)">${img}</button>
+                <button class="photo-tile-select" onclick="slideshow.toggleBrowserSelection(+this.parentElement.dataset.index, event.shiftKey)" title="Select (shift-click for a range)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </button>
                 <div class="photo-tile-actions">
                     <button class="danger" onclick="slideshow.hideFromBrowser(+this.closest('.photo-tile').dataset.index)" title="Hide from slideshow">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
@@ -1025,36 +1038,96 @@ class Slideshow {
         this.browserRendered = end;
     }
 
-    async hideFromBrowser(i) {
+    // Once anything is selected, tapping a tile adds to the selection instead of leaving the browser
+    onBrowserTileClick(i, e) {
+        if (this.browserSelection.size > 0 || e.shiftKey || e.ctrlKey || e.metaKey) this.toggleBrowserSelection(i, e.shiftKey);
+        else this.jumpTo(i);
+    }
+
+    // Shift selects every tile from the last one picked up to this one
+    toggleBrowserSelection(i, range = false) {
         const item = this.items[i];
         if (!item) return;
+        const last = range && this._browserLastPicked ? this.items.indexOf(this._browserLastPicked) : -1;
+        if (last >= 0) {
+            const [from, to] = last < i ? [last, i] : [i, last];
+            for (let t = from; t <= to; t++) this.browserSelection.add(this.items[t]);
+        } else if (this.browserSelection.has(item)) {
+            this.browserSelection.delete(item);
+        } else {
+            this.browserSelection.add(item);
+        }
+        this._browserLastPicked = item;
+        this.refreshBrowserSelectionTiles();
+    }
+
+    clearBrowserSelection() {
+        this.browserSelection.clear();
+        this._browserLastPicked = null;
+        this.refreshBrowserSelectionTiles();
+    }
+
+    refreshBrowserSelectionTiles() {
+        this.browserGrid?.querySelectorAll('.photo-tile').forEach(tile => {
+            tile.classList.toggle('selected', this.browserSelection.has(this.items[+tile.dataset.index]));
+        });
+        this.updateBrowserSelectionUI();
+    }
+
+    updateBrowserSelectionUI() {
+        const count = this.browserSelection.size;
+        document.getElementById('ss-browser-selection').style.display = count > 0 ? '' : 'none';
+        document.getElementById('ss-browser-hide-selected').textContent = `Hide (${count})`;
+        document.getElementById('ss-browser').classList.toggle('selecting', count > 0);
+    }
+
+    hideFromBrowser(i) {
+        const item = this.items[i];
+        if (item) this.hideBrowserItems([item]);
+    }
+
+    hideSelectedFromBrowser() {
+        const items = [...this.browserSelection];
+        if (items.length === 0 || !confirm(`Hide ${items.length} photo${items.length > 1 ? 's' : ''} from the slideshow?`)) return;
+        this.hideBrowserItems(items);
+    }
+
+    async hideBrowserItems(items) {
         try {
             const res = await fetch('/api/slideshow/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: item.uri || item.res })
+                body: JSON.stringify({ urls: items.map(item => item.uri || item.res) })
             });
             if (!res.ok) throw new Error(res.statusText);
         } catch (e) {
             showToast('Failed to hide: ' + e.message, 'error', 4000);
             return;
         }
-        showToast('Photo hidden', 'success', 2000);
+        showToast(items.length > 1 ? `${items.length} photos hidden` : 'Photo hidden', 'success', 2000);
 
-        const pos = this.items.indexOf(item); // list may have changed while the request was out
-        if (pos < 0) return;
-        this.items.splice(pos, 1);
-        if (pos < this.index) this.index--;
-        else if (pos === this.index) { this.index--; this._browserCurrentHidden = true; }
+        // The list may have changed while the request was out, so work from the items themselves
+        const gone = new Set(items);
+        const oldItems = this.items;
+        const current = this.items[this.index];
+        const before = this.items.slice(0, Math.max(this.index, 0)).filter(item => gone.has(item)).length;
+        this.items = this.items.filter(item => !gone.has(item));
+        if (gone.has(current)) { this.index -= before + 1; this._browserCurrentHidden = true; }
+        else this.index -= before;
+        for (const item of items) this.browserSelection.delete(item);
 
         if (!this.browserOpen) return;
+        if (this.items.length === 0) { this.closeBrowser(); return; }
         const tiles = this.browserGrid.querySelectorAll('.photo-tile');
-        tiles[pos]?.remove();
-        for (let t = pos + 1; t < tiles.length; t++) tiles[t].dataset.index = t - 1;
-        this.browserRendered = tiles[pos] ? tiles.length - 1 : tiles.length;
+        let n = 0;
+        tiles.forEach(tile => {
+            if (gone.has(oldItems[+tile.dataset.index])) tile.remove();
+            else tile.dataset.index = n++;
+        });
+        this.browserRendered = n;
         this.updateBrowserCount();
+        this.updateBrowserSelectionUI();
         this.renderBrowserBatch();
-        if (this.items.length === 0) this.closeBrowser();
     }
 
     resetButtonStates() {
