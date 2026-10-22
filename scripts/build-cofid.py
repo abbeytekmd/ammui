@@ -6,8 +6,9 @@ https://www.gov.uk/government/publications/composition-of-foods-integrated-datas
 then run:  python scripts/build-cofid.py path/to/CoFID.xlsx
 
 Only the standard library is used (an .xlsx is a zip of XML files). Each food keeps its
-code, name and kcal per 100 g (per 100 ml for alcoholic drinks). Where kcal is given as
-N (not known) the kJ figure is converted; Tr (trace) counts as 0.
+code, name, kcal, and grams of protein, carbohydrate and fat, per 100 g (per 100 ml for
+alcoholic drinks). Where kcal is given as N (not known) the kJ figure is converted; Tr (trace)
+counts as 0, and a protein, carbohydrate or fat figure that isn't known is null.
 """
 import json
 import os
@@ -60,6 +61,7 @@ def main(path):
     col = {name: i for i, name in enumerate(header)}
     code, name = col['Food Code'], col['Food Name']
     kcal_col, kj_col = col['Energy (kcal) (kcal)'], col['Energy (kJ) (kJ)']
+    macro_cols = [col['Protein (g)'], col['Carbohydrate (g)'], col['Fat (g)']]
     foods, skipped = [], 0
     for row in rows:
         if not re.match(r'^\d', row[code] if len(row) > code else ''):
@@ -72,7 +74,9 @@ def main(path):
         if kcal is None:
             skipped += 1
             continue
-        foods.append([row[code].strip(), ' '.join(row[name].split()), round(kcal, 1)])
+        macros = [number(cell(i)) for i in macro_cols]
+        foods.append([row[code].strip(), ' '.join(row[name].split()), round(kcal, 1),
+                      *(None if m is None else round(m, 1) for m in macros)])
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with open(OUT, 'w', encoding='utf-8') as f:
         json.dump({

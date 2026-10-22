@@ -43,10 +43,11 @@ import {
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItem, getLibraryIndexItemsUnder, removeFromLibraryIndex, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
-    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
+    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealFamily,
+    getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
-    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
+    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, deleteIngredient, mealsUsingIngredient,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
 } from './lib/db.js';
@@ -2951,10 +2952,10 @@ function cleanCalendarEntry(body) {
     const description = String(body.description || '').trim();
     const tags = [...new Set((Array.isArray(body.tags) ? body.tags : []).map(t => String(t).trim()).filter(Boolean))];
     if (!DATE_RE.test(date) || isNaN(new Date(`${date}T00:00:00`))) return 'A valid date is required';
-    if (!title) return 'A title is required';
+    // A meal's title is its optional name
+    if (!title && !body.meal) return 'A title is required';
     if (title.length > 200) return 'The title is too long';
     if (description.length > 10000) return 'The description is too long';
-    if (!tags.length) return 'Add at least one tag';
     if (tags.some(t => t.length > 60)) return 'A tag is too long';
 
     // Optional repeat: { unit: day|week|month, interval: 1-999, until?: YYYY-MM-DD }
@@ -2970,16 +2971,19 @@ function cleanCalendarEntry(body) {
         repeat = { unit, interval, until };
     }
 
-    // Optional linked recipe
-    const recipeId = body.recipeId ? String(body.recipeId) : null;
-    if (recipeId && !getRecipe(recipeId)) return 'That meal no longer exists';
-    // A meal is for 1-10 people
-    let people = null;
-    if (recipeId) {
-        people = Number(body.people);
-        if (!Number.isInteger(people) || people < 1 || people > 10) return 'People must be a whole number from 1 to 10';
+    // A meal (on the Meals tab's calendar): { parts: [{ id, item }], family: [family member ids] }
+    let meal = null;
+    if (body.meal) {
+        const ids = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(Boolean))];
+        const parts = cleanMealParts(body.meal.parts);
+        if (typeof parts === 'string') return parts;
+        meal = { parts, family: ids(body.meal.family) };
+        if (!meal.parts.length) return 'Add at least one item group or item';
+        if (meal.family.some(id => !getGamePlayer(id))) return 'A family member no longer exists';
     }
-    return { date, title, description, repeat, recipeId, people, tags };
+    // Meals don't need tags; other entries do
+    if (!meal && !tags.length) return 'Add at least one tag';
+    return { date, title, description: meal ? '' : description, repeat, meal, tags: meal ? [] : tags };
 }
 
 app.put('/api/calendar-entries/tag-color', express.json(), (req, res) => {
@@ -3017,9 +3021,9 @@ app.get('/api/calendar-entries/tags', (req, res) => {
     res.json({ tags, colors: Object.fromEntries(tags.map(t => [t, settings.calendarTagColors[t]])) });
 });
 
-// { people: n|null } from the most recently saved meal entry, to prefill a new one
-app.get('/api/calendar-entries/last-people', (req, res) => {
-    res.json({ people: getLastMealPeople() });
+// { family: [ids] } from the most recently saved meal with any, to prefill a new one
+app.get('/api/calendar-entries/last-family', (req, res) => {
+    res.json({ family: getLastMealFamily() });
 });
 
 app.post('/api/calendar-entries', express.json(), (req, res) => {
@@ -3071,6 +3075,57 @@ app.delete('/api/calendar-entries/:id/occurrences/:date', (req, res) => {
     res.json({ success: true });
 });
 
+// --- Meals tab's Meal Plan: a meal for each day of a block of weeks, rotating on the calendar ---
+const MEAL_PLAN_MAX_WEEKS = 8;
+
+app.get('/api/meal-plan', (req, res) => {
+    res.json(getMealPlan());
+});
+
+// { weeks: 1-8, startDate: YYYY-MM-DD|null }
+app.put('/api/meal-plan', express.json(), (req, res) => {
+    const weeks = Number(req.body.weeks);
+    const startDate = req.body.startDate ? String(req.body.startDate) : null;
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > MEAL_PLAN_MAX_WEEKS) return res.status(400).json({ error: `Weeks must be from 1 to ${MEAL_PLAN_MAX_WEEKS}` });
+    if (startDate && (!DATE_RE.test(startDate) || isNaN(new Date(`${startDate}T00:00:00`)))) return res.status(400).json({ error: 'The start date is not valid' });
+    setMealPlanSettings({ weeks, startDate });
+    res.json(getMealPlan());
+});
+
+// A meal's parts in order: each { id, item } is an item (item: true) or an item group (a plain id
+// is taken as an item group). Returns them without repeats, or a string saying what's wrong.
+function cleanMealParts(list) {
+    const seen = new Set();
+    const parts = (Array.isArray(list) ? list : [])
+        .map(p => p && typeof p === 'object' ? { id: String(p.id || ''), item: !!p.item } : { id: String(p || ''), item: false })
+        .filter(p => p.id && !seen.has(p.id) && seen.add(p.id));
+    if (parts.length > 20) return 'Too many item groups and items';
+    if (parts.some(p => !(p.item ? getIngredient(p.id) : getRecipe(p.id)))) return 'An item group or item no longer exists';
+    return parts;
+}
+
+// One day of the plan (0-based): { name, parts: [{ id, item }], repeat?: { unit: day|week, interval } },
+// or { skipped: true } to leave it empty where another day's repeat would fill it. No parts clears it.
+app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
+    const day = Number(req.params.day);
+    if (!Number.isInteger(day) || day < 0 || day >= MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Not a day of the plan' });
+    const name = String(req.body.name || '').trim();
+    const parts = cleanMealParts(req.body.parts);
+    if (name.length > 200) return res.status(400).json({ error: 'The name is too long' });
+    if (typeof parts === 'string') return res.status(400).json({ error: parts });
+    const skipped = !!req.body.skipped;
+    let repeat = null;
+    if (req.body.repeat && !skipped) {
+        const unit = String(req.body.repeat.unit || '');
+        const interval = Number(req.body.repeat.interval);
+        if (!['day', 'week'].includes(unit)) return res.status(400).json({ error: 'Repeat must be days or weeks' });
+        if (!Number.isInteger(interval) || interval < 1 || interval > MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Repeat every must be a whole number from 1 to 56' });
+        repeat = { unit, interval };
+    }
+    saveMealPlanDay(day, { name, parts: skipped ? [] : parts, repeat, skipped });
+    res.json(getMealPlan());
+});
+
 // --- Recipes (Recipes tab) ---
 // Returns a clean recipe, or a string saying what's wrong
 function cleanRecipe(body) {
@@ -3081,21 +3136,25 @@ function cleanRecipe(body) {
         .map(i => i && typeof i === 'object' ? i : { name: i })
         .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), name: String(i.name ?? '').trim() }))
         .filter(i => i.name);
-    if (!name) return 'A meal name is required';
+    if (!name) return 'An item group name is required';
     if (name.length > 200) return 'The name is too long';
-    if (ingredients.length > 500) return 'Too many ingredients';
-    if (ingredients.some(i => i.name.length > 300)) return 'An ingredient is too long';
+    if (!ingredients.length) return 'Add at least one item';
+    if (ingredients.length > 500) return 'Too many items';
+    if (ingredients.some(i => i.name.length > 300)) return 'An item is too long';
     if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
     return { name, ingredients };
 }
 
+// ?ingredients=1 includes each one's ingredients, for adding up the calories of planned meals
 app.get('/api/recipes', (req, res) => {
-    res.json({ recipes: listRecipes() });
+    const recipes = listRecipes();
+    if (req.query.ingredients !== '1') return res.json({ recipes });
+    res.json({ recipes: recipes.map(r => ({ ...r, ingredients: getRecipe(r.id)?.ingredients || [] })) });
 });
 
 app.get('/api/recipes/:id', (req, res) => {
     const recipe = getRecipe(req.params.id);
-    if (!recipe) return res.status(404).json({ error: 'Meal not found' });
+    if (!recipe) return res.status(404).json({ error: 'Item group not found' });
     res.json(recipe);
 });
 
@@ -3106,14 +3165,14 @@ app.post('/api/recipes', express.json(), (req, res) => {
 });
 
 app.put('/api/recipes/:id', express.json(), (req, res) => {
-    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
+    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Item group not found' });
     const recipe = cleanRecipe(req.body);
     if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
     res.json(saveRecipe({ id: req.params.id, ...recipe }));
 });
 
 app.delete('/api/recipes/:id', (req, res) => {
-    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
+    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Item group not found' });
     res.json({ success: true });
 });
 
@@ -3268,7 +3327,7 @@ app.post('/api/games/players', express.json(), (req, res) => {
     const name = String(req.body.name ?? '').trim();
     if (!name) return res.status(400).json({ error: 'Enter a name' });
     if (name.length > 40) return res.status(400).json({ error: 'That name is too long' });
-    if (findGamePlayerByName(name)) return res.status(400).json({ error: `"${name}" is already a player` });
+    if (findGamePlayerByName(name)) return res.status(400).json({ error: `"${name}" is already in the family` });
     res.json(addGamePlayer(crypto.randomUUID(), name));
 });
 
@@ -3314,8 +3373,8 @@ function cleanIngredient(body, id) {
     const name = String(body.name ?? '').trim();
     const amount = String(body.amount ?? '').trim();
     const unit = String(body.unit ?? '').trim();
-    if (!name) return 'An ingredient name is required';
-    if (name.length > 300) return 'The ingredient name is too long';
+    if (!name) return 'An item name is required';
+    if (name.length > 300) return 'The item name is too long';
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
     const sameName = findIngredientIdByName(name);
     if (sameName && sameName !== id) return `"${name}" is already in the list`;
@@ -3324,13 +3383,21 @@ function cleanIngredient(body, id) {
     return typeof nutrition === 'string' ? nutrition : { name, amount, unit, nutrition };
 }
 
-// An ingredient's calories: null, or { kcalPer100g, gramsPerUnit: { unit: grams }, source, sourceId, sourceName }
-// (source is the food table it came from, or '' if typed in). Returns a string saying what's wrong.
+// An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g,
+// gramsPerUnit: { unit: grams }, source, sourceId, sourceName } (a macro is null if not known; source
+// is the food table it came from, or '' if typed in). Returns a string saying what's wrong.
 function cleanNutrition(n) {
     if (n == null) return null;
     if (typeof n !== 'object') return 'Invalid calories';
     const kcalPer100g = Number(n.kcalPer100g);
     if (!Number.isFinite(kcalPer100g) || kcalPer100g < 0 || kcalPer100g > 1000) return 'Calories per 100 g must be between 0 and 1000';
+    const macros = {};
+    for (const [key, label] of [['proteinPer100g', 'Protein'], ['carbsPer100g', 'Carbs'], ['fatPer100g', 'Fat']]) {
+        if (n[key] == null || n[key] === '') { macros[key] = null; continue; }
+        const g = Number(n[key]);
+        if (!Number.isFinite(g) || g < 0 || g > 100) return `${label} per 100 g must be between 0 and 100`;
+        macros[key] = g;
+    }
     const gramsPerUnit = {};
     for (const [unit, grams] of Object.entries(n.gramsPerUnit && typeof n.gramsPerUnit === 'object' ? n.gramsPerUnit : {})) {
         const g = Number(grams);
@@ -3341,7 +3408,7 @@ function cleanNutrition(n) {
     const legacyUsda = !n.source && Number.isInteger(n.fdcId) && n.fdcId > 0;
     const source = legacyUsda ? 'usda' : NUTRITION_SOURCES.includes(n.source) ? n.source : '';
     return {
-        kcalPer100g, gramsPerUnit, source,
+        kcalPer100g, ...macros, gramsPerUnit, source,
         sourceId: source ? String((legacyUsda ? n.fdcId : n.sourceId) ?? '').slice(0, 40) : '',
         sourceName: source ? String((legacyUsda ? n.fdcName : n.sourceName) ?? '').slice(0, 300) : '',
     };
@@ -3372,6 +3439,30 @@ app.get('/api/nutrition/food/:source/:id', async (req, res) => {
     }
 });
 
+// Items given calories before protein, carbs and fat were kept get them from the food they were
+// looked up from. Online sources are asked one at a time; anything that fails is tried again on
+// the next start.
+async function fillMissingMacros() {
+    const missing = listIngredients().filter(i => i.nutrition?.source && i.nutrition.sourceId
+        && i.nutrition.proteinPer100g == null && i.nutrition.carbsPer100g == null && i.nutrition.fatPer100g == null
+        && (i.nutrition.source !== 'usda' || settings.usdaApiKey));
+    let filled = 0;
+    for (const ingredient of missing) {
+        const { source, sourceId } = ingredient.nutrition;
+        try {
+            const food = await getFood(source, sourceId, { usdaKey: settings.usdaApiKey });
+            if (food.proteinPer100g == null && food.carbsPer100g == null && food.fatPer100g == null) continue;
+            setIngredientMacros(ingredient.id, food);
+            filled++;
+        } catch (err) {
+            console.warn(`[Nutrition] Couldn't look up protein, carbs and fat for "${ingredient.name}": ${err.message}`);
+            if (err.status === 429) break;
+        }
+    }
+    if (filled) console.log(`[Nutrition] Added protein, carbs and fat to ${filled} item${filled === 1 ? '' : 's'}`);
+}
+fillMissingMacros().catch(err => console.error('[Nutrition]', err));
+
 app.get('/api/ingredients', (req, res) => {
     res.json({ ingredients: listIngredients() });
 });
@@ -3384,7 +3475,7 @@ app.post('/api/ingredients', express.json(), (req, res) => {
 
 app.put('/api/ingredients/:id', express.json(), (req, res) => {
     const current = getIngredient(req.params.id);
-    if (!current) return res.status(404).json({ error: 'Ingredient not found' });
+    if (!current) return res.status(404).json({ error: 'Item not found' });
     const ingredient = cleanIngredient(req.body, req.params.id);
     if (typeof ingredient === 'string') return res.status(400).json({ error: ingredient });
     const saved = saveIngredient({ id: req.params.id, ...ingredient });
@@ -3396,10 +3487,10 @@ app.delete('/api/ingredients/:id', (req, res) => {
     const meals = mealsUsingIngredient(req.params.id);
     if (meals.length) {
         const shown = meals.slice(0, 3).join(', ') + (meals.length > 3 ? ` and ${meals.length - 3} more` : '');
-        return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that meal' : 'those meals'} first.` });
+        return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that item group' : 'those item groups'} first.` });
     }
     const ingredient = getIngredient(req.params.id);
-    if (!ingredient) return res.status(404).json({ error: 'Ingredient not found' });
+    if (!ingredient) return res.status(404).json({ error: 'Item not found' });
     if (onShoppingList(ingredient.name)) return res.status(409).json({ error: "It's on the shopping list. Take it off there first." });
     deleteIngredient(req.params.id);
     res.json({ success: true });

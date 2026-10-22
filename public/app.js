@@ -5666,12 +5666,28 @@ function startOfCalendarWeek(d) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7);
 }
 
+// Calendar tab: entries and subscribed calendars, but no meals.
+// Meals tab's Calendar: only meal entries, without tags or subscribed calendars.
+// There's one calendar panel, moved into whichever tab is showing it.
+let calendarMeals = false;
+const MEAL_ENTRY_COLOR = '#f59e0b';
+
+// A meal shows its name, or else its parts: "Roast chicken, Mash, Peas"
+const mealEntryTitle = meal => meal.name || meal.parts.map(p => p.name).join(', ') || 'Meal';
+
 function showCalendar() {
+    openCalendarView(false);
+    setAppView('calendar');
+}
+
+function openCalendarView(meals) {
     const now = new Date();
+    calendarMeals = meals;
     calendarMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     calendarWeekStart = startOfCalendarWeek(now);
+    document.getElementById(meals ? 'meals-pane-calendar' : 'calendar-view')
+        .appendChild(document.getElementById('calendar-panel'));
     renderCalendar();
-    setAppView('calendar');
 }
 
 const calendarDateKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -5834,22 +5850,23 @@ function drawCalendarEvents() {
     const hidden = getHiddenCalendars();
     const colors = Object.fromEntries(cals.map(c => [c.id, c.color]));
     const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
-    // An entry stays visible while at least one of its tags is ticked
+    // An entry stays visible while at least one of its tags is ticked (meals have no tag filter)
     const hiddenTags = getHiddenCalendarTags();
-    const visible = ev => ev.entry ? ev.entry.tags.some(t => !hiddenTags.has(t)) : !hidden.has(ev.calendarId);
+    const visible = ev => calendarMeals || (ev.entry ? ev.entry.tags.some(t => !hiddenTags.has(t)) : !hidden.has(ev.calendarId));
     const byDay = groupCalendarEvents(events.filter(visible), gridStart, gridEnd);
     const timeFmt = { hour: '2-digit', minute: '2-digit' };
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
         const list = byDay.get(cell.dataset.date) || [];
-        cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
+        cell.querySelectorAll('.calendar-event, .calendar-more, .meal-nutrition').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
         const maxEvents = calendarMaxEventsPerDay();
         const shown = list.length > maxEvents + 1 ? maxEvents : list.length;
         list.slice(0, shown).forEach(ev => {
             const el = document.createElement('div');
-            el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
-            el.style.setProperty('--event-color', ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
+            el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '') + (ev.planned ? ' planned' : '');
+            el.style.setProperty('--event-color', ev.entry?.meal || ev.planned ? MEAL_ENTRY_COLOR
+                : ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
             const time = ev.allDay ? '' : new Date(ev.start).toLocaleTimeString(undefined, timeFmt);
             if (time) {
                 const t = document.createElement('span');
@@ -5862,17 +5879,22 @@ function drawCalendarEvents() {
                 el.classList.add('local-entry');
                 el.dataset.entryId = ev.entry.id;
                 if (ev.entry.repeat) el.classList.add('repeating');
-                if (ev.entry.recipe) {
-                    const icon = document.createElement('span');
-                    icon.className = 'calendar-event-recipe';
-                    icon.textContent = '🍽';
-                    el.insertBefore(icon, el.firstChild);
-                }
-                el.title = [ev.title, ev.entry.recipe ? `Meal: ${ev.entry.recipe.name}${ev.entry.people ? ` for ${ev.entry.people}` : ''}` : '', ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+                const meal = ev.entry.meal;
+                el.title = meal
+                    ? [ev.title, meal.name ? meal.parts.map(p => p.name).join(', ') : '',
+                        meal.family.length ? `For ${meal.family.map(f => f.name).join(', ')}` : ev.entry.people ? `For ${ev.entry.people}` : '',
+                        describeCalendarRepeat(ev.entry.repeat)].filter(Boolean).join('\n')
+                    : [ev.title, ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+            } else if (ev.planned) {
+                el.title = [ev.title, ev.planned.name ? ev.planned.parts.map(p => p.name).join(', ') : '',
+                    `From the meal plan (day ${ev.planned.day + 1}). Click to add it.`].filter(Boolean).join('\n');
             } else {
                 el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
             }
             cell.appendChild(el);
+            const meal = ev.entry?.meal || ev.planned;
+            const nutrition = meal && mealNutritionElement(meal.parts);
+            if (nutrition) cell.appendChild(nutrition);
         });
         if (list.length > shown) {
             const more = document.createElement('div');
@@ -5884,11 +5906,50 @@ function drawCalendarEvents() {
     });
 }
 
+function entryToCalendarEvent(entry) {
+    const [y, m, d] = entry.date.split('-').map(Number);
+    return { calendarId: null, title: entry.meal ? mealEntryTitle(entry.meal) : entry.title, allDay: true, start: entry.date, end: calendarDateKey(new Date(y, m - 1, d + 1)), entry };
+}
+
+// From today on, a day with no meal yet shows the meal plan's meal for it, faded
+function plannedMealEvents(mealEvents, gridStart, gridEnd) {
+    if (!mealPlan?.startDate || !mealPlan.days.length) return [];
+    const taken = new Set(mealEvents.map(ev => ev.start));
+    const today = calendarDateKey(new Date());
+    const out = [];
+    for (const d = new Date(gridStart); d < gridEnd; d.setDate(d.getDate() + 1)) {
+        const key = calendarDateKey(d);
+        const planned = key >= today && !taken.has(key) && mealPlanDayFor(key);
+        if (planned) out.push({ calendarId: null, title: mealEntryTitle(planned), allDay: true, start: key,
+            end: calendarDateKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)), planned });
+    }
+    return out;
+}
+
 async function loadCalendarEvents(gridStart, gridEnd, token) {
     const statusEl = document.getElementById('calendar-status');
     calendarLoaded = null;
     const range = `start=${calendarDateKey(gridStart)}&end=${calendarDateKey(gridEnd)}`;
+    const meals = calendarMeals;
     try {
+        if (meals) {
+            const [entryData, plan] = await Promise.all([
+                fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
+                fetch('/api/meal-plan').then(r => r.json()).catch(() => null),
+                loadMealNutritionData()
+            ]);
+            if (token !== calendarRenderToken) return;
+            mealPlan = plan;
+            document.getElementById('calendar-sidebar').hidden = true;
+            const mealEvents = (entryData.entries || []).filter(entry => entry.meal).map(entryToCalendarEvent);
+            calendarLoaded = { cals: [], events: [...mealEvents, ...plannedMealEvents(mealEvents, gridStart, gridEnd)], gridStart, gridEnd };
+            drawCalendarEvents();
+            statusEl.className = 'calendar-status';
+            statusEl.textContent = mealPlan?.startDate && mealPlan.days.length
+                ? 'Click a day to plan a meal. Faded meals are from the Meal Plan; click one to add it.'
+                : 'Click a day to plan a meal.';
+            return;
+        }
         const [cals, entryData, tagData] = await Promise.all([
             fetch('/api/calendars').then(r => r.json()),
             fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
@@ -5898,11 +5959,8 @@ async function loadCalendarEvents(gridStart, gridEnd, token) {
         calendarTagColors = tagData.colors || {};
         renderCalendarSidebar(cals, tagData.tags || []);
 
-        // This app's entries go first, so they aren't the ones pushed into "+N more"
-        const entryEvents = (entryData.entries || []).map(entry => {
-            const [y, m, d] = entry.date.split('-').map(Number);
-            return { calendarId: null, title: entry.recipe ? entry.recipe.name : entry.title, allDay: true, start: entry.date, end: calendarDateKey(new Date(y, m - 1, d + 1)), entry };
-        });
+        // This app's entries go first, so they aren't the ones pushed into "+N more". Meals are on the Meals tab.
+        const entryEvents = (entryData.entries || []).filter(entry => !entry.meal).map(entryToCalendarEvent);
         calendarLoaded = { cals, events: entryEvents, gridStart, gridEnd };
         drawCalendarEvents();
 
@@ -5963,7 +6021,7 @@ function renderCalendar() {
     document.getElementById('calendar-range-select').value = calendarRange;
     document.getElementById('calendar-prev-btn').title = `Previous ${unit}`;
     document.getElementById('calendar-next-btn').title = `Next ${unit}`;
-    document.querySelector('#calendar-view .calendar-today-btn').title = `Go to the current ${unit}`;
+    document.querySelector('#calendar-panel .calendar-today-btn').title = `Go to the current ${unit}`;
 
     let gridStart, cellCount, month;
     if (weeks) {
@@ -6022,7 +6080,7 @@ function onCalendarGridClick(event) {
         return;
     }
     // Google events and "+N more" aren't editable, so clicks on them do nothing
-    if (event.target.closest('.calendar-event, .calendar-more')) return;
+    if (event.target.closest('.calendar-event:not(.planned), .calendar-more')) return;
     const cell = event.target.closest('.calendar-day');
     if (cell) openCalendarEntryModal(cell.dataset.date);
 }
@@ -6044,12 +6102,15 @@ function updateCalendarEntryRepeatUI() {
     const repeating = !!document.getElementById('calendar-entry-repeat-unit').value;
     document.querySelectorAll('#calendar-entry-modal .calendar-entry-repeat-on').forEach(el => { el.hidden = !repeating; });
     document.getElementById('calendar-entry-date-heading').textContent = repeating ? 'Starts' : 'Date';
+    // A meal plan repeat runs within the plan, so it has no end date
+    if (calendarEntryEditing?.planDay != null) document.getElementById('calendar-entry-repeat-until-row').hidden = true;
 }
 
 // --- This occurrence | Every occurrence, for a repeating entry opened from one of its dates ---
 // 'one' edits or deletes just that date (it becomes an entry of its own); 'all' changes the series
 function setCalendarEntryScope(scope) {
     const editing = calendarEntryEditing;
+    if (editing?.planDay != null) return setMealPlanScope(scope);
     if (!editing?.occurrence) return;
     // Keep whatever date was typed for the scope being left
     const dateInput = document.getElementById('calendar-entry-date');
@@ -6073,53 +6134,141 @@ function setCalendarEntryScope(scope) {
     setCalendarSettingsStatus('calendar-entry-status', '', false);
 }
 
-// --- Entry | Recipe: a normal entry has a title and description; a recipe entry just names a recipe ---
+// --- Entry or meal: a normal entry (Calendar tab) has a title, description and tags; a meal
+// (the Meals tab's calendar) has an optional name, one or more item groups or items and the family it's for ---
 let calendarEntryKind = 'entry';
+let calendarItemGroupOptions = []; // every item group: [{ id, name, item: false }]
+let calendarFamilyOptions = [];    // every family member: [{ id, name }]
+let calendarItemOptions = [];      // every item, for adding one on its own: [{ id, name, item: true }]
 
 function setCalendarEntryKind(kind) {
     calendarEntryKind = kind;
-    document.querySelectorAll('#calendar-entry-modal .calendar-entry-kind-btn').forEach(btn => {
-        const on = btn.dataset.kind === kind;
-        btn.classList.toggle('active', on);
-        btn.setAttribute('aria-selected', on);
-    });
     document.getElementById('calendar-entry-normal-fields').hidden = kind !== 'entry';
-    document.getElementById('calendar-entry-recipe-fields').hidden = kind !== 'recipe';
+    document.getElementById('calendar-entry-tags-group').hidden = kind !== 'entry';
+    document.getElementById('calendar-entry-meal-fields').hidden = kind !== 'meal';
     setCalendarSettingsStatus('calendar-entry-status', '', false);
 }
 
-// Fills the Recipe dropdown. A linked recipe missing from the list still shows, so it isn't lost.
-async function loadCalendarEntryRecipeOptions(selectedId, linked) {
-    const select = document.getElementById('calendar-entry-recipe');
-    let recipes = [];
-    try {
-        recipes = (await (await fetch('/api/recipes')).json()).recipes || [];
-    } catch (e) { }
-    if (linked && !recipes.some(r => r.id === linked.id)) recipes.push(linked);
-    select.innerHTML = '<option value="">Choose a meal…</option>' +
-        recipes.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
-    select.value = selectedId || '';
-    document.getElementById('calendar-entry-no-recipes').hidden = recipes.length > 0;
-    updateCalendarEntryRecipeUI();
+// The item groups, items and family to choose from. A part or person on the meal that's missing
+// from the list still shows, so it isn't lost.
+async function loadCalendarEntryMealOptions(meal) {
+    const [parts, family, items] = await Promise.all([
+        fetch('/api/recipes').then(r => r.json()).then(d => d.recipes || []).catch(() => []),
+        fetch('/api/games/players').then(r => r.json()).catch(() => []),
+        fetch('/api/ingredients').then(r => r.json()).then(d => d.ingredients || []).catch(() => [])
+    ]);
+    calendarItemGroupOptions = parts.map(r => ({ id: r.id, name: r.name, item: false }));
+    calendarFamilyOptions = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true }));
+    for (const p of meal?.parts || []) {
+        const options = p.item ? calendarItemOptions : calendarItemGroupOptions;
+        if (!options.some(o => o.id === p.id)) options.push(p);
+    }
+    for (const f of meal?.family || []) if (!calendarFamilyOptions.some(o => o.id === f.id)) calendarFamilyOptions.push(f);
 }
 
-function selectedCalendarEntryRecipeName() {
-    const select = document.getElementById('calendar-entry-recipe');
-    return select.value ? select.options[select.selectedIndex].textContent : '';
+// The meal's parts in order, each with Open and Remove, then a dropdown of the rest to add
+function renderCalendarEntryParts() {
+    const editing = calendarEntryEditing;
+    const list = document.getElementById('calendar-entry-parts');
+    list.innerHTML = editing.parts.map((p, i) => `
+        <li class="calendar-entry-part" data-i="${i}">
+            <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
+            <span class="calendar-entry-part-name">${escapeHtml(p.name)}</span>
+            <button type="button" class="btn-control ghost btn-small" data-act="open" title="${p.item ? 'Show this item' : 'Open this item group'}">Open</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
+        </li>`).join('');
+    list.querySelectorAll('.calendar-entry-part').forEach(row => {
+        const part = editing.parts[Number(row.dataset.i)];
+        row.querySelector('.calendar-entry-part-handle').onpointerdown = e => dragCalendarEntryPart(e, row, list);
+        row.querySelector('[data-act="open"]').onclick = () => openMealPartFromEntry(part);
+        row.querySelector('[data-act="remove"]').onclick = () => {
+            editing.parts = editing.parts.filter(p => p !== part);
+            renderCalendarEntryParts();
+        };
+    });
+    // Item groups, then items on their own, leaving out what the meal already has
+    const select = document.getElementById('calendar-entry-part-add');
+    const unused = list => list.filter(o => !editing.parts.some(p => p.id === o.id));
+    const groups = unused(calendarItemGroupOptions);
+    const items = unused(calendarItemOptions);
+    const options = (list, kind) => list.map(o => `<option value="${kind}:${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`).join('');
+    select.innerHTML = `<option value="">${editing.parts.length ? 'Add another item group or item…' : 'Add an item group or item…'}</option>` +
+        (groups.length ? `<optgroup label="Item groups">${options(groups, 'group')}</optgroup>` : '') +
+        (items.length ? `<optgroup label="Items">${options(items, 'item')}</optgroup>` : '');
+    select.hidden = !groups.length && !items.length;
+    document.getElementById('calendar-entry-no-recipes').hidden = calendarItemGroupOptions.length > 0 || calendarItemOptions.length > 0;
 }
 
-function updateCalendarEntryRecipeUI() {
-    document.getElementById('calendar-entry-open-recipe').style.display =
-        document.getElementById('calendar-entry-recipe').value ? '' : 'none';
+// Drag a part up or down by its handle to change the order. Pointer events, so it works by touch
+// too: the row moves among the others as it's dragged, and the new order is kept on release.
+function dragCalendarEntryPart(e, row, list) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    row.classList.add('dragging');
+    const move = ev => {
+        const before = [...list.children].find(r => {
+            if (r === row) return false;
+            const box = r.getBoundingClientRect();
+            return ev.clientY < box.top + box.height / 2;
+        });
+        if (before) { if (row.nextElementSibling !== before) list.insertBefore(row, before); }
+        else if (list.lastElementChild !== row) list.appendChild(row);
+    };
+    const end = () => {
+        handle.removeEventListener('pointermove', move);
+        handle.removeEventListener('pointerup', end);
+        handle.removeEventListener('pointercancel', end);
+        const parts = calendarEntryEditing.parts;
+        calendarEntryEditing.parts = [...list.children].map(r => parts[Number(r.dataset.i)]);
+        renderCalendarEntryParts();
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
 }
 
+// value: "group:<id>" for an item group, or "item:<id>" for an item on its own
+function addCalendarEntryPart(value) {
+    const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)];
+    const part = (kind === 'item' ? calendarItemOptions : calendarItemGroupOptions).find(o => o.id === id);
+    if (part && calendarEntryEditing && !calendarEntryEditing.parts.some(p => p.id === part.id)) calendarEntryEditing.parts.push(part);
+    if (calendarEntryEditing) renderCalendarEntryParts();
+}
 
-async function openRecipeFromEntry() {
-    const id = document.getElementById('calendar-entry-recipe').value;
-    if (!id) return;
+// Each family member as a chip to click on/off
+function renderCalendarEntryFamily() {
+    const editing = calendarEntryEditing;
+    const container = document.getElementById('calendar-entry-family');
+    if (!calendarFamilyOptions.length) {
+        container.innerHTML = '<span class="settings-hint" style="margin: 0;">No family yet. Add them in Server Settings → Family.</span>';
+        return;
+    }
+    container.innerHTML = calendarFamilyOptions.map((f, i) => {
+        const on = editing.family.includes(f.id);
+        return `<button type="button" class="calendar-entry-tag-chip${on ? ' selected' : ''}" data-i="${i}" aria-pressed="${on}">${on ? '✓ ' : ''}${escapeHtml(f.name)}</button>`;
+    }).join('');
+    container.querySelectorAll('.calendar-entry-tag-chip').forEach(el => {
+        el.onclick = () => {
+            const id = calendarFamilyOptions[Number(el.dataset.i)].id;
+            editing.family = editing.family.includes(id) ? editing.family.filter(f => f !== id) : [...editing.family, id];
+            renderCalendarEntryFamily();
+        };
+    });
+}
+
+// An item group opens in its editor; an item is shown in the Items list
+async function openMealPartFromEntry(part) {
     closeCalendarEntryModal();
-    await showRecipes();
-    await selectRecipe(id);
+    if (part.item) {
+        document.getElementById('ingredients-filter').value = part.name;
+        await showRecipes('ingredients');
+        return;
+    }
+    await showRecipes('meals');
+    await selectRecipe(part.id);
 }
 
 
@@ -6132,18 +6281,29 @@ async function openCalendarEntryModal(date, entry = null) {
         id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [],
         occurrence: repeat ? date : null, occurrenceDate: date, scope: null
     };
-    document.getElementById('calendar-entry-heading').textContent = entry ? 'Edit Entry' : 'New Entry';
+    const noun = calendarMeals ? 'Meal' : 'Entry';
+    document.getElementById('calendar-entry-heading').textContent = entry ? `Edit ${noun}` : `New ${noun}`;
     document.getElementById('calendar-entry-date-label').textContent = repeat ? formatCalendarDate(date) : '';
     document.getElementById('calendar-entry-date').value = startDate;
-    const recipeId = entry && entry.recipe ? entry.recipe.id : '';
-    await loadCalendarEntryRecipeOptions(recipeId, entry && entry.recipe);
-    // People: the entry's own count, else whatever the last saved meal entry used
-    let people = entry && entry.people;
-    if (!people) {
-        try { people = (await (await fetch('/api/calendar-entries/last-people')).json()).people; } catch (e) { }
+    const meal = entry && entry.meal;
+    // A new meal starts as the meal plan's meal for that day, to change before saving if need be
+    const planned = calendarMeals && !entry ? mealPlanDayFor(date) : null;
+    showCalendarEntryDateFields(true);
+    if (calendarMeals) {
+        await loadCalendarEntryMealOptions(meal || planned);
+        calendarEntryEditing.parts = meal ? [...meal.parts] : planned ? [...planned.parts] : [];
+        // Who it's for: the meal's own family, else whoever the last saved meal was for
+        let family = meal ? meal.family.map(f => f.id) : [];
+        if (!family.length) {
+            try { family = (await (await fetch('/api/calendar-entries/last-family')).json()).family || []; } catch (e) { }
+            family = family.filter(id => calendarFamilyOptions.some(f => f.id === id));
+        }
+        calendarEntryEditing.family = family;
+        document.getElementById('calendar-entry-meal-name').value = meal ? meal.name : planned ? planned.name : '';
+        renderCalendarEntryParts();
+        renderCalendarEntryFamily();
     }
-    document.getElementById('calendar-entry-people').value = people || 1;
-    setCalendarEntryKind(entry && entry.recipe ? 'recipe' : 'entry');
+    setCalendarEntryKind(calendarMeals ? 'meal' : 'entry');
     document.getElementById('calendar-entry-repeat-unit').value = repeat ? repeat.unit : '';
     document.getElementById('calendar-entry-repeat-interval').value = repeat ? repeat.interval : 1;
     document.getElementById('calendar-entry-repeat-until').value = repeat && repeat.until ? repeat.until : '';
@@ -6153,14 +6313,15 @@ async function openCalendarEntryModal(date, entry = null) {
     updateCalendarEntryRepeatUI();
     document.getElementById('calendar-entry-scope').hidden = !repeat;
     if (repeat) setCalendarEntryScope('one');
-    document.getElementById('calendar-entry-title').value = entry && !entry.recipe ? entry.title : '';
-    document.getElementById('calendar-entry-description').value = entry && !entry.recipe ? entry.description : '';
+    document.getElementById('calendar-entry-title').value = entry && !meal ? entry.title : '';
+    document.getElementById('calendar-entry-description').value = entry && !meal ? entry.description : '';
     document.getElementById('calendar-entry-tag-input').value = '';
     document.getElementById('calendar-entry-delete-btn').style.display = entry ? '' : 'none';
     setCalendarSettingsStatus('calendar-entry-status', '', false);
+    if (planned) document.getElementById('calendar-entry-series-note').textContent = `From the meal plan (day ${planned.day + 1}).`;
     renderCalendarEntryTags();
     document.getElementById('calendar-entry-modal').style.display = 'flex';
-    document.getElementById(calendarEntryKind === 'recipe' ? 'calendar-entry-recipe' : 'calendar-entry-title').focus();
+    document.getElementById(calendarEntryKind === 'meal' ? 'calendar-entry-meal-name' : 'calendar-entry-title').focus();
 
     try {
         const data = await (await fetch('/api/calendar-entries/tags')).json();
@@ -6177,11 +6338,11 @@ function closeCalendarEntryModal() {
     calendarEntryEditing = null;
 }
 
-// Save stays disabled until a tag is selected (a tag typed but not yet added also counts)
+// Save stays disabled until a tag is selected (a tag typed but not yet added also counts). Meals don't need one.
 function updateCalendarEntrySaveButton() {
     const typed = document.getElementById('calendar-entry-tag-input').value.trim();
     document.getElementById('calendar-entry-save-btn').disabled =
-        !calendarEntryEditing || (!calendarEntryEditing.tags.length && !typed);
+        !calendarEntryEditing || (calendarEntryKind !== 'meal' && !calendarEntryEditing.tags.length && !typed);
 }
 
 // Every existing tag as a chip to click on/off, plus any new ones added in this edit
@@ -6225,19 +6386,23 @@ function addCalendarEntryTag() {
 
 async function saveCalendarEntry() {
     if (!calendarEntryEditing) return;
+    if (calendarEntryEditing.planDay != null) return saveMealPlanDay();
     const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
+    // A meal has an optional name (its title), its parts and family, and no description or tags
+    const isMeal = calendarEntryKind === 'meal';
     // A tag typed but not yet added still counts
-    if (document.getElementById('calendar-entry-tag-input').value.trim()) addCalendarEntryTag();
-    // A recipe entry takes its title from the recipe and has no description
-    const isRecipe = calendarEntryKind === 'recipe';
-    const recipeId = isRecipe ? document.getElementById('calendar-entry-recipe').value : null;
-    if (isRecipe && !recipeId) { setStatus('Choose a meal.', true); return; }
-    const people = isRecipe ? Number(document.getElementById('calendar-entry-people').value) : null;
-    if (isRecipe && (!Number.isInteger(people) || people < 1 || people > 10)) { setStatus('People must be a whole number from 1 to 10.', true); return; }
-    const title = isRecipe ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim();
-    const description = isRecipe ? '' : document.getElementById('calendar-entry-description').value.trim();
-    if (!title) { setStatus('Enter a title.', true); return; }
-    if (!calendarEntryEditing.tags.length) { setStatus('Select at least one tag.', true); return; }
+    if (!isMeal && document.getElementById('calendar-entry-tag-input').value.trim()) addCalendarEntryTag();
+    let meal = null;
+    if (isMeal) {
+        const { parts, family } = calendarEntryEditing;
+        if (!parts.length) { setStatus('Add at least one item group or item.', true); return; }
+        if (calendarFamilyOptions.length && !family.length) { setStatus('Choose who it\'s for.', true); return; }
+        meal = { parts: parts.map(p => ({ id: p.id, item: !!p.item })), family };
+    }
+    const title = document.getElementById(isMeal ? 'calendar-entry-meal-name' : 'calendar-entry-title').value.trim();
+    const description = isMeal ? '' : document.getElementById('calendar-entry-description').value.trim();
+    if (!title && !isMeal) { setStatus('Enter a title.', true); return; }
+    if (!isMeal && !calendarEntryEditing.tags.length) { setStatus('Select at least one tag.', true); return; }
 
     const date = document.getElementById('calendar-entry-date').value;
     if (!date) { setStatus('Choose a date.', true); return; }
@@ -6264,7 +6429,7 @@ async function saveCalendarEntry() {
         const res = await fetch(url, {
             method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date, title, description, repeat, recipeId, people, tags })
+            body: JSON.stringify({ date, title, description, repeat, meal, tags: isMeal ? [] : tags })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -6278,8 +6443,11 @@ async function saveCalendarEntry() {
 }
 
 async function deleteCalendarEntry() {
+    if (calendarEntryEditing?.planDay != null) return clearMealPlanDay();
     if (!calendarEntryEditing?.id) return;
-    const title = (calendarEntryKind === 'recipe' ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
+    const title = (calendarEntryKind === 'meal'
+        ? document.getElementById('calendar-entry-meal-name').value.trim() || calendarEntryEditing.parts.map(p => p.name).join(', ')
+        : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
     const { id, scope, occurrence } = calendarEntryEditing;
     const question = scope === 'one' ? `Delete "${title}" on ${formatCalendarDate(occurrence)} only?`
         : scope === 'all' ? `Delete every occurrence of "${title}"?`
@@ -6291,6 +6459,274 @@ async function deleteCalendarEntry() {
         if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
         closeCalendarEntryModal();
         renderCalendar();
+    } catch (err) {
+        setCalendarSettingsStatus('calendar-entry-status', err.message, true);
+    }
+}
+
+// The meal plan dialog is the meal dialog without a date or family, and repeats in days or weeks only
+function showCalendarEntryDateFields(show) {
+    for (const id of ['calendar-entry-family-group', 'calendar-entry-date-group']) {
+        document.getElementById(id).hidden = !show;
+    }
+    const month = document.getElementById('calendar-entry-repeat-month');
+    month.hidden = month.disabled = !show;
+}
+
+// --- Meals tab's Meal Plan: a meal for each day of a block of weeks. From its start date it
+// repeats on the Meals calendar, where a new meal starts as the plan's meal for that day.
+// A day's meal can repeat every so many days or weeks within the plan ---
+let mealPlan = null; // { weeks, startDate, days: [{ day, name, parts: [{ id, name, item }], repeat, skipped }] }
+
+const ymdToUtcDays = ymd => { const [y, m, d] = ymd.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+
+// The plan's day (0-based) a date falls on, or null with no start date
+function mealPlanDayIndex(ymd) {
+    if (!mealPlan?.startDate) return null;
+    const length = mealPlan.weeks * 7;
+    return (((ymdToUtcDays(ymd) - ymdToUtcDays(mealPlan.startDate)) % length) + length) % length;
+}
+
+// The meal on a day of the plan: its own, else the one from the nearest earlier day whose repeat
+// lands on it. { day, sourceDay (the day it was planned on), name, parts, repeat }, or null (also
+// for a day left out of a repeat).
+function mealPlanMealOn(day) {
+    if (!mealPlan) return null;
+    const own = mealPlan.days.find(d => d.day === day);
+    if (own) return own.skipped ? null : { ...own, sourceDay: day };
+    const step = d => d.repeat.interval * (d.repeat.unit === 'week' ? 7 : 1);
+    const source = mealPlan.days
+        .filter(d => d.repeat && d.day < day && (day - d.day) % step(d) === 0)
+        .reduce((best, d) => !best || d.day > best.day ? d : best, null);
+    return source ? { ...source, day, sourceDay: source.day } : null;
+}
+
+// The planned meal for a date, or null
+function mealPlanDayFor(ymd) {
+    const day = mealPlanDayIndex(ymd);
+    return day == null ? null : mealPlanMealOn(day);
+}
+
+// The date day 0 falls on, else this week's Monday so the columns still have weekday names
+function mealPlanBaseDate() {
+    if (mealPlan?.startDate) {
+        const [y, m, d] = mealPlan.startDate.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+    return startOfCalendarWeek(new Date());
+}
+
+// Each item group's ingredients by id, for the per-person totals on the meal plan and Meals calendar
+let mealRecipeIngredients = new Map();
+
+// Item groups' ingredients and the saved items, for those totals. A failure just leaves them out.
+async function loadMealNutritionData() {
+    const [recipes, ingredients] = await Promise.all([
+        fetch('/api/recipes?ingredients=1').then(r => r.json()).catch(() => null),
+        fetch('/api/ingredients').then(r => r.json()).catch(() => null),
+    ]);
+    if (recipes?.recipes) mealRecipeIngredients = new Map(recipes.recipes.map(r => [r.id, r.ingredients]));
+    if (ingredients?.ingredients) ingredientList = ingredients.ingredients;
+}
+
+// A meal's calories, protein, carbs and fat for one person: its single items at their one-person
+// amounts, plus each item group's items at the amounts it uses
+function mealNutrition(parts) {
+    const rows = [];
+    for (const part of parts) {
+        if (part.item) {
+            const ing = ingredientList.find(i => i.id === part.id);
+            if (ing) rows.push({ name: ing.name, result: ingredientCalories(ing.amount, ing.unit, ing.nutrition) });
+            continue;
+        }
+        for (const ri of mealRecipeIngredients.get(part.id) || []) {
+            const saved = recipeRowIngredient(ri);
+            rows.push({ name: saved?.name || ri.name, result: ingredientCalories(ri.amount, ri.unit, saved?.nutrition) });
+        }
+    }
+    return sumNutrition(rows);
+}
+
+// The line under a meal: its total per person (with "+" if some items aren't counted), or null if
+// none of it has calories
+function mealNutritionElement(parts) {
+    const t = mealNutrition(parts);
+    if (!t.counted) return null;
+    const el = document.createElement('div');
+    el.className = 'meal-nutrition';
+    el.textContent = formatNutritionTotal(t) + (t.missing.length ? ' +' : '');
+    el.title = [`About ${formatNutritionTotal(t)} per person`, ...nutritionTotalNotes(t)].join('\n');
+    return el;
+}
+
+async function loadMealPlan() {
+    try {
+        const [res] = await Promise.all([fetch('/api/meal-plan'), loadMealNutritionData()]);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load the meal plan');
+        mealPlan = data;
+        renderMealPlan();
+    } catch (err) {
+        setCalendarSettingsStatus('meal-plan-status', `Couldn't load the meal plan: ${err.message}`, true);
+    }
+}
+
+function renderMealPlan() {
+    if (!mealPlan) return;
+    document.getElementById('meal-plan-weeks').value = mealPlan.weeks;
+    document.getElementById('meal-plan-start').value = mealPlan.startDate || '';
+    const status = document.getElementById('meal-plan-status');
+    status.className = 'calendar-status';
+    status.textContent = mealPlan.startDate
+        ? `Click a day to plan its meal. The plan repeats every ${mealPlan.weeks === 1 ? 'week' : `${mealPlan.weeks} weeks`} on the Calendar, where it's filled in when you add a meal.`
+        : 'Click a day to plan its meal. Choose the date Day 1 falls on to use the plan on the Calendar.';
+
+    const base = mealPlanBaseDate();
+    const todayDay = mealPlanDayIndex(calendarDateKey(new Date()));
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+        html += `<div class="calendar-weekday">${d.toLocaleDateString(undefined, { weekday: 'short' })}</div>`;
+    }
+    for (let day = 0; day < mealPlan.weeks * 7; day++) {
+        const planned = mealPlanMealOn(day);
+        const label = day % 7 === 0 ? `Week ${day / 7 + 1} · Day ${day + 1}` : `Day ${day + 1}`;
+        const title = planned ? mealEntryTitle(planned) : '';
+        const parts = planned?.name ? planned.parts.map(p => p.name).join(', ') : '';
+        const repeatNote = !planned?.repeat ? ''
+            : planned.sourceDay === day ? describeCalendarRepeat(planned.repeat)
+            : `${describeCalendarRepeat(planned.repeat)} from day ${planned.sourceDay + 1}`;
+        html += `<div class="calendar-day${day === todayDay ? ' today' : ''}" data-day="${day}">
+            <span class="calendar-day-num">${label}</span>
+            ${planned ? `<div class="calendar-event all-day local-entry${planned.repeat ? ' repeating' : ''}" style="--event-color: ${MEAL_ENTRY_COLOR}"
+                title="${escapeHtml([title, parts, repeatNote].filter(Boolean).join('\n'))}">${escapeHtml(title)}</div>` : ''}
+            ${parts ? `<div class="meal-plan-parts">${escapeHtml(parts)}</div>` : ''}
+            ${planned ? mealNutritionElement(planned.parts)?.outerHTML || '' : ''}
+        </div>`;
+    }
+    document.getElementById('meal-plan-grid').innerHTML = html;
+}
+
+async function saveMealPlanSettings() {
+    const weeks = Number(document.getElementById('meal-plan-weeks').value);
+    const startDate = document.getElementById('meal-plan-start').value || null;
+    try {
+        const res = await fetch('/api/meal-plan', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeks, startDate })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        mealPlan = data;
+        renderMealPlan();
+    } catch (err) {
+        setCalendarSettingsStatus('meal-plan-status', `Couldn't save the meal plan: ${err.message}`, true);
+    }
+}
+
+function onMealPlanGridClick(event) {
+    const cell = event.target.closest('.calendar-day');
+    if (cell) openMealPlanDayModal(Number(cell.dataset.day));
+}
+
+function mealPlanDayHeading(day) {
+    const base = mealPlanBaseDate();
+    const weekday = new Date(base.getFullYear(), base.getMonth(), base.getDate() + day).toLocaleDateString(undefined, { weekday: 'long' });
+    return `Week ${Math.floor(day / 7) + 1}, Day ${day + 1} · ${weekday}`;
+}
+
+// A day filled by another day's repeat can change just itself, or the repeat (from the day it starts)
+async function openMealPlanDayModal(day) {
+    const planned = mealPlanMealOn(day);
+    const copy = !!planned && planned.sourceDay !== day;
+    calendarEntryEditing = {
+        planDay: day, sourceDay: planned ? planned.sourceDay : day, copy, scope: null,
+        tags: [], family: [], parts: planned ? [...planned.parts] : []
+    };
+    document.getElementById('calendar-entry-heading').textContent = planned ? 'Edit Planned Meal' : 'Plan a Meal';
+    document.getElementById('calendar-entry-date-label').textContent = mealPlanDayHeading(day);
+    await loadCalendarEntryMealOptions(planned);
+    document.getElementById('calendar-entry-meal-name').value = planned ? planned.name : '';
+    renderCalendarEntryParts();
+    setCalendarEntryKind('meal');
+    showCalendarEntryDateFields(false);
+    document.getElementById('calendar-entry-repeat-unit').value = planned?.repeat ? planned.repeat.unit : '';
+    document.getElementById('calendar-entry-repeat-interval').value = planned?.repeat ? planned.repeat.interval : 1;
+    document.getElementById('calendar-entry-repeat-group').hidden = false;
+    updateCalendarEntryRepeatUI();
+    document.getElementById('calendar-entry-scope').hidden = !copy;
+    document.getElementById('calendar-entry-series-note').textContent = '';
+    document.getElementById('calendar-entry-delete-btn').textContent = planned?.repeat ? 'Clear All' : 'Clear';
+    document.getElementById('calendar-entry-delete-btn').style.display = planned ? '' : 'none';
+    if (copy) setMealPlanScope('one');
+    updateCalendarEntrySaveButton();
+    document.getElementById('calendar-entry-modal').style.display = 'flex';
+    document.getElementById('calendar-entry-meal-name').focus();
+}
+
+function setMealPlanScope(scope) {
+    const editing = calendarEntryEditing;
+    editing.scope = scope;
+    const one = scope === 'one';
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-scope-btn').forEach(btn => {
+        const on = btn.dataset.scope === scope;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    document.getElementById('calendar-entry-repeat-group').hidden = one;
+    document.getElementById('calendar-entry-series-note').textContent = one
+        ? `Only day ${editing.planDay + 1} changes. The rest of the repeat from day ${editing.sourceDay + 1} stays as it is.`
+        : `Changes apply to every repeat, from day ${editing.sourceDay + 1}.`;
+    document.getElementById('calendar-entry-delete-btn').textContent = one ? 'Clear This One' : 'Clear All';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
+}
+
+async function putMealPlanDay(day, body) {
+    const res = await fetch(`/api/meal-plan/days/${day}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save');
+    mealPlan = data;
+    closeCalendarEntryModal();
+    renderMealPlan();
+}
+
+async function saveMealPlanDay() {
+    const { planDay, sourceDay, scope, parts } = calendarEntryEditing;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
+    if (!parts.length) { setStatus('Add at least one item group or item.', true); return; }
+    // "This occurrence" gives the day a meal of its own; otherwise the day the meal is planned on changes
+    const justOne = scope === 'one';
+    let repeat = null;
+    const unit = justOne ? '' : document.getElementById('calendar-entry-repeat-unit').value;
+    if (unit) {
+        const interval = Number(document.getElementById('calendar-entry-repeat-interval').value);
+        if (!Number.isInteger(interval) || interval < 1 || interval > 56) { setStatus('Repeat every must be a whole number from 1 to 56.', true); return; }
+        repeat = { unit, interval };
+    }
+    const btn = document.getElementById('calendar-entry-save-btn');
+    btn.disabled = true;
+    try {
+        await putMealPlanDay(justOne ? planDay : sourceDay,
+            { name: document.getElementById('calendar-entry-meal-name').value.trim(), parts: parts.map(p => ({ id: p.id, item: !!p.item })), repeat });
+    } catch (err) {
+        setStatus(err.message, true);
+    } finally {
+        updateCalendarEntrySaveButton();
+    }
+}
+
+// "This occurrence" leaves just that day empty; otherwise the meal goes, with every repeat of it
+async function clearMealPlanDay() {
+    const { planDay, sourceDay, scope } = calendarEntryEditing;
+    const justOne = scope === 'one';
+    const repeats = !!mealPlan.days.find(d => d.day === sourceDay)?.repeat;
+    const question = justOne ? `Leave day ${planDay + 1} empty? The rest of the repeat stays as it is.`
+        : repeats ? `Clear the meal planned for day ${sourceDay + 1} and every repeat of it?`
+        : `Clear the meal planned for day ${sourceDay + 1}?`;
+    if (!confirm(question)) return;
+    try {
+        await putMealPlanDay(justOne ? planDay : sourceDay, justOne ? { skipped: true } : { parts: [] });
     } catch (err) {
         setCalendarSettingsStatus('calendar-entry-status', err.message, true);
     }
@@ -6399,20 +6835,35 @@ function setRecipeStatus(text, isError) {
     setCalendarSettingsStatus('recipe-status', text, isError);
 }
 
-// Keeps whatever is open (including unsaved edits) when returning to the tab
-async function showRecipes() {
+// Keeps whatever is open (including unsaved edits) when returning to the tab.
+// tab: which of Calendar | Meals | Ingredients to show, else the one last used.
+async function showRecipes(tab) {
     setAppView('recipes');
+    setMealsTab(tab || mealsTab);
     await Promise.all([loadRecipes(), loadIngredients(), loadShoppingList()]);
     if (!recipeDraft) renderRecipeEditor();
+    if (mealsTab === 'ingredients') renderIngredientList();
 }
 
-function openIngredientsDialog() {
-    document.getElementById('ingredients-modal').style.display = 'flex';
-    renderIngredientList();
-}
+// --- Meals tab: Calendar | Meals | Ingredients down the left; the shopping list stays beside each ---
+const MEALS_TABS = ['calendar', 'plan', 'meals', 'ingredients'];
+let mealsTab = 'meals';
+try { if (MEALS_TABS.includes(localStorage.getItem('mealsTab'))) mealsTab = localStorage.getItem('mealsTab'); } catch (e) { }
 
-function closeIngredientsDialog() {
-    document.getElementById('ingredients-modal').style.display = 'none';
+function setMealsTab(tab) {
+    if (!MEALS_TABS.includes(tab)) tab = 'meals';
+    mealsTab = tab;
+    try { localStorage.setItem('mealsTab', tab); } catch (e) { }
+    document.querySelectorAll('#recipes-view .meals-tab').forEach(btn => {
+        const on = btn.dataset.tab === tab;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    for (const name of MEALS_TABS) document.getElementById(`meals-pane-${name}`).hidden = name !== tab;
+    if (tab === 'calendar') openCalendarView(true);
+    if (tab === 'plan') loadMealPlan();
+    // Ingredients get their pictures while their list is showing
+    if (tab === 'ingredients') renderIngredientList();
 }
 
 // --- Meals tab: shopping list, free text with one item per line, saved shortly after each change ---
@@ -6571,11 +7022,11 @@ let shoppingLookupRunning = false;
 
 const shoppingLineKey = line => line.trim().toLowerCase();
 
-// What needs a picture: the shopping list's lines, and the saved ingredients while their dialog is open
+// What needs a picture: the shopping list's lines, and the saved ingredients while their list is showing
 function shoppingPictureItems() {
     const lines = document.getElementById('shopping-list').value.split('\n');
-    const dialogOpen = document.getElementById('ingredients-modal').style.display === 'flex';
-    return [...lines, ...(dialogOpen ? ingredientList.map(i => i.name) : [])].map(shoppingLineKey);
+    const showing = appView === 'recipes' && mealsTab === 'ingredients';
+    return [...lines, ...(showing ? ingredientList.map(i => i.name) : [])].map(shoppingLineKey);
 }
 
 function renderProductPictures() {
@@ -6793,11 +7244,11 @@ async function loadRecipes() {
     try {
         const res = await fetch('/api/recipes');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load meals');
+        if (!res.ok) throw new Error(data.error || 'Failed to load item groups');
         recipeList = data.recipes || [];
     } catch (err) {
         recipeList = [];
-        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load meals: ${escapeHtml(err.message)}</p>`;
+        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load item groups: ${escapeHtml(err.message)}</p>`;
         return;
     }
     renderRecipeList();
@@ -6808,17 +7259,17 @@ function renderRecipeList() {
     const filter = document.getElementById('recipes-filter').value.trim().toLowerCase();
     const shown = recipeList.filter(r => !filter || r.name.toLowerCase().includes(filter));
     if (!recipeList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No meals yet. Click + New to add one.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No item groups yet. Click + New to add one.</p>';
         return;
     }
     if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No meals match.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No item groups match.</p>';
         return;
     }
     listEl.innerHTML = shown.map(r => `
         <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}" data-id="${escapeHtml(r.id)}">
             <span class="recipe-list-name">${escapeHtml(r.name)}</span>
-            <span class="recipe-list-meta">${r.ingredientCount} ingredient${r.ingredientCount === 1 ? '' : 's'}</span>
+            <span class="recipe-list-meta">${r.ingredientCount} item${r.ingredientCount === 1 ? '' : 's'}</span>
         </button>`).join('');
     listEl.querySelectorAll('.recipe-list-item').forEach(btn => {
         btn.onclick = () => selectRecipe(btn.dataset.id);
@@ -6826,7 +7277,7 @@ function renderRecipeList() {
 }
 
 function confirmDiscardRecipe() {
-    return !recipeIsDirty() || confirm('Discard the unsaved changes to this meal?');
+    return !recipeIsDirty() || confirm('Discard the unsaved changes to this item group?');
 }
 
 function openRecipeDraft(recipe) {
@@ -6844,10 +7295,10 @@ async function selectRecipe(id) {
     try {
         const res = await fetch(`/api/recipes/${encodeURIComponent(id)}`);
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load meal');
+        if (!res.ok) throw new Error(data.error || 'Failed to load item group');
         openRecipeDraft(data);
     } catch (err) {
-        showToast(`Couldn't open meal: ${err.message}`, 'error');
+        showToast(`Couldn't open item group: ${err.message}`, 'error');
         await loadRecipes();
     }
 }
@@ -6953,7 +7404,7 @@ async function saveRecipe() {
     // An ingredient typed but not yet added still counts
     if (document.getElementById('recipe-ingredient-input').value.trim()) addRecipeIngredient();
     const name = recipeDraft.name.trim();
-    if (!name) { setRecipeStatus('Enter a meal name.', true); document.getElementById('recipe-name').focus(); return; }
+    if (!name) { setRecipeStatus('Enter an item group name.', true); document.getElementById('recipe-name').focus(); return; }
     const ingredients = recipeDraft.ingredients
         .map(i => ({ name: i.name.trim(), amount: i.amount.trim(), unit: i.unit.trim() }))
         .filter(i => i.name);
@@ -7009,11 +7460,11 @@ async function loadIngredients() {
     try {
         const res = await fetch('/api/ingredients');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load ingredients');
+        if (!res.ok) throw new Error(data.error || 'Failed to load items');
         ingredientList = data.ingredients || [];
     } catch (err) {
         ingredientList = [];
-        setIngredientsStatus(`Couldn't load ingredients: ${err.message}`, true);
+        setIngredientsStatus(`Couldn't load items: ${err.message}`, true);
     }
     renderIngredientList();
 }
@@ -7032,11 +7483,11 @@ function renderIngredientList() {
     const filter = document.getElementById('ingredients-filter').value.trim().toLowerCase();
     const shown = ingredientList.filter(i => !filter || i.name.toLowerCase().includes(filter));
     if (!ingredientList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No ingredients yet. Add one below.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No items yet. Add one below.</p>';
         return;
     }
     if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No matching ingredients.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No matching items.</p>';
         return;
     }
     listEl.innerHTML = shown.map(i => {
@@ -7146,7 +7597,7 @@ function renameIngredientInDraft(ingredient) {
 }
 
 async function removeIngredient(ingredient) {
-    if (!confirm(`Delete the ingredient "${ingredient.name}"?`)) return;
+    if (!confirm(`Delete the item "${ingredient.name}"?`)) return;
     try {
         await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'DELETE');
         setIngredientsStatus('', false);
@@ -7156,8 +7607,9 @@ async function removeIngredient(ingredient) {
     }
 }
 
-// --- Recipes tab: calories. Each ingredient stores kcal per 100 g plus the weight of one of
-// each unit (cup, each, packet...), so any amount in any meal can be converted. ---
+// --- Recipes tab: calories. Each ingredient stores kcal and grams of protein, carbs and fat per
+// 100 g, plus the weight of one of each unit (cup, each, packet...), so any amount in any meal can
+// be converted. ---
 const WEIGHT_GRAMS = { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 };
 const VOLUME_ML = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588 };
 const UNIT_ALIASES = {
@@ -7223,8 +7675,11 @@ function gramsPerOne(key, gramsPerUnit) {
     return null;
 }
 
-// { kcal, grams } for an amount of an ingredient, or { missing } saying what's needed:
-// 'nutrition' (no calories set), 'amount' (no quantity) or 'unit' (unknown weight of one).
+const MACROS = [['protein', 'proteinPer100g'], ['carbs', 'carbsPer100g'], ['fat', 'fatPer100g']];
+
+// { kcal, grams, protein, carbs, fat } for an amount of an ingredient (a macro is null if not
+// known), or { missing } saying what's needed: 'nutrition' (no calories set), 'amount' (no
+// quantity) or 'unit' (unknown weight of one).
 function ingredientCalories(amount, unit, nutrition) {
     if (!nutrition) return { missing: 'nutrition' };
     let qty = parseAmount(amount);
@@ -7235,68 +7690,108 @@ function ingredientCalories(amount, unit, nutrition) {
     const perOne = gramsPerOne(unitKey(unit), nutrition.gramsPerUnit || {});
     if (perOne == null) return { missing: 'unit' };
     const grams = qty * perOne;
-    return { grams, kcal: grams * nutrition.kcalPer100g / 100 };
+    const result = { grams, kcal: grams * nutrition.kcalPer100g / 100 };
+    for (const [macro, key] of MACROS) result[macro] = nutrition[key] == null ? null : grams * nutrition[key] / 100;
+    return result;
 }
 
 const formatKcal = kcal => `${Math.round(kcal).toLocaleString()} kcal`;
+const formatGrams = g => `${g < 10 ? Math.round(g * 10) / 10 : Math.round(g).toLocaleString()} g`;
+
+// "12 g protein · 30 g carbs · 5 g fat" for the macros that are known, or ''
+const formatMacros = r => MACROS.filter(([m]) => r[m] != null).map(([m]) => `${formatGrams(r[m])} ${m}`).join(' · ');
 const unitLabel = (unit, ingredientName) => (unit || '').trim() || `one ${ingredientName.toLowerCase()}`;
 
 // The saved ingredient a meal row refers to, if any
 const recipeRowIngredient = ing =>
     (ing.ingredientId && ingredientList.find(i => i.id === ing.ingredientId)) || findIngredientByName(ing.name);
 
+// Adds up [{ name, result }] (each result from ingredientCalories): { kcal, protein, carbs, fat,
+// counted, missing: names not counted, noMacros: names counted without protein, carbs or fat,
+// anySet: whether any has calories set }. Rows with no name aren't listed as missing.
+function sumNutrition(rows) {
+    const t = { kcal: 0, protein: 0, carbs: 0, fat: 0, counted: 0, missing: [], noMacros: [], anySet: false };
+    for (const { name, result } of rows) {
+        if (result.missing !== 'nutrition') t.anySet = true;
+        if (!('kcal' in result)) {
+            if (name) t.missing.push(name);
+            continue;
+        }
+        t.kcal += result.kcal;
+        t.counted++;
+        for (const [m] of MACROS) t[m] += result[m] ?? 0;
+        if (MACROS.some(([m]) => result[m] == null)) t.noMacros.push(name);
+    }
+    return t;
+}
+
+// "650 kcal · 32 g protein · 70 g carbs · 21 g fat". Protein, carbs and fat are left out until at
+// least one counted item has them.
+const formatNutritionTotal = t => {
+    const macros = t.noMacros.length < t.counted ? formatMacros(t) : '';
+    return `${formatKcal(t.kcal)}${macros ? ` · ${macros}` : ''}`;
+};
+
+// What a total leaves out, one line each, for its tooltip
+const nutritionTotalNotes = t => [
+    t.missing.length ? `Not counted: ${t.missing.join(', ')}` : '',
+    t.noMacros.length && t.noMacros.length < t.counted ? `No protein, carbs or fat for: ${t.noMacros.join(', ')}` : '',
+].filter(Boolean);
+
 // Calories on each meal row, and the meal's total for one person. Only updates the figures, so
 // typing in a row isn't interrupted.
 function refreshRecipeCalories() {
     const totalEl = document.getElementById('recipe-kcal-total');
     if (!recipeDraft || !totalEl) return;
-    let total = 0;
-    const missing = [];
-    let anySet = false;
+    const rows = [];
     document.querySelectorAll('#recipe-ingredients .recipe-ingredient').forEach(row => {
         const ing = recipeDraft.ingredients[Number(row.dataset.i)];
         const cell = row.querySelector('.recipe-kcal');
         if (!ing || !cell) return;
         const saved = recipeRowIngredient(ing);
         const result = ingredientCalories(ing.amount, ing.unit, saved?.nutrition);
-        if (saved?.nutrition) anySet = true;
+        rows.push({ name: saved?.name || ing.name.trim(), result });
         cell.onclick = null;
         cell.disabled = !saved;
         cell.classList.toggle('unset', !('kcal' in result));
         if ('kcal' in result) {
-            total += result.kcal;
             cell.textContent = formatKcal(result.kcal);
-            cell.title = `About ${Math.round(result.grams)} g. Click to change ${saved.name}'s calories.`;
+            const macros = formatMacros(result);
+            cell.title = `About ${Math.round(result.grams)} g${macros ? `: ${macros}` : ''}. Click to change ${saved.name}'s calories.`;
         } else {
-            if (ing.name.trim()) missing.push(ing.name.trim());
             cell.textContent = result.missing === 'unit' ? '? kcal' : saved ? '+ kcal' : '';
-            cell.title = !saved ? 'Save the meal to add this ingredient, then set its calories'
+            cell.title = !saved ? 'Save the item group to add this item, then set its calories'
                 : result.missing === 'unit' ? `Set how much ${unitLabel(ing.unit, saved.name)} weighs`
                 : result.missing === 'amount' ? 'Enter an amount to count its calories'
                 : `Set calories for ${saved.name}`;
         }
         if (saved) cell.onclick = () => openNutritionDialog(saved, ing.unit);
     });
-    if (!recipeDraft.ingredients.length || !anySet) {
-        totalEl.textContent = recipeDraft.ingredients.length ? 'Set calories on the ingredients to see a total for this meal.' : '';
+    const t = sumNutrition(rows);
+    if (!recipeDraft.ingredients.length || !t.anySet) {
+        totalEl.textContent = recipeDraft.ingredients.length ? 'Set calories on the items to see a total for this item group.' : '';
         totalEl.title = '';
         return;
     }
-    totalEl.textContent = `About ${formatKcal(total)} per person`
-        + (missing.length ? ` · ${missing.length} ingredient${missing.length === 1 ? '' : 's'} not counted` : '');
-    totalEl.title = missing.length ? `Not counted: ${missing.join(', ')}` : '';
+    totalEl.textContent = `About ${formatNutritionTotal(t)} per person`
+        + (t.missing.length ? ` · ${t.missing.length} item${t.missing.length === 1 ? '' : 's'} not counted` : '');
+    totalEl.title = nutritionTotalNotes(t).join('\n');
 }
 
 // The calories button on an ingredient row in the Ingredients list
 function ingredientCaloriesButton(ingredient) {
     const result = ingredientCalories(ingredient.amount, ingredient.unit, ingredient.nutrition);
-    if ('kcal' in result) return { text: formatKcal(result.kcal), cls: '', title: `About ${Math.round(result.grams)} g for one person. Click to change.` };
+    if ('kcal' in result) {
+        const macros = formatMacros(result);
+        return { text: formatKcal(result.kcal), cls: '', title: `About ${Math.round(result.grams)} g for one person${macros ? `: ${macros}` : ''}. Click to change.` };
+    }
     if (result.missing === 'nutrition') return { text: '+ kcal', cls: 'unset', title: 'Set calories' };
     if (result.missing === 'unit') return { text: '? kcal', cls: 'unset', title: `Set how much ${unitLabel(ingredient.unit, ingredient.name)} weighs` };
     return { text: `${Math.round(ingredient.nutrition.kcalPer100g)}/100g`, cls: '', title: `${ingredient.nutrition.kcalPer100g} kcal per 100 g` };
 }
 
 let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit }
+const MACRO_INPUTS = { proteinPer100g: 'nutrition-protein', carbsPer100g: 'nutrition-carbs', fatPer100g: 'nutrition-fat' };
 
 // Where calories can be looked up (the server's lib/nutrition.js)
 const NUTRITION_SOURCES = {
@@ -7335,6 +7830,7 @@ function openNutritionDialog(ingredient, unit = ingredient.unit) {
     document.getElementById('nutrition-search-input').value = ingredient.name;
     document.getElementById('nutrition-results').innerHTML = '';
     document.getElementById('nutrition-kcal').value = n ? n.kcalPer100g : '';
+    for (const [key, inputId] of Object.entries(MACRO_INPUTS)) document.getElementById(inputId).value = n?.[key] ?? '';
     document.getElementById('nutrition-remove-btn').style.visibility = n ? '' : 'hidden';
     setNutritionStatus('', false);
     // Search where this ingredient came from, otherwise wherever was used last
@@ -7405,8 +7901,13 @@ function nutritionFromForm() {
     }
     // A figure typed over the looked-up one is no longer that food's
     const kcalPer100g = Number(kcalText);
+    const macros = {};
+    for (const [key, inputId] of Object.entries(MACRO_INPUTS)) {
+        const text = document.getElementById(inputId).value.trim();
+        macros[key] = text === '' ? null : Number(text);
+    }
     const looked = d.source && kcalPer100g === d.sourceKcal;
-    return { kcalPer100g, gramsPerUnit, source: looked ? d.source : '', sourceId: looked ? d.sourceId : '', sourceName: looked ? d.sourceName : '' };
+    return { kcalPer100g, ...macros, gramsPerUnit, source: looked ? d.source : '', sourceId: looked ? d.sourceId : '', sourceName: looked ? d.sourceName : '' };
 }
 
 // What the ingredient comes to for one person (or for one of the unit being asked about)
@@ -7421,7 +7922,8 @@ function updateNutritionPreview() {
     const result = ingredientCalories(amount, d.unit, nutrition);
     if (!('kcal' in result)) { el.textContent = ''; return; }
     const what = `${amount} ${unitLabel(d.unit, ing.name).replace(/^one /, '')}`;
-    el.textContent = `${what} (${Math.round(result.grams)} g) ≈ ${formatKcal(result.kcal)}${forPerson ? ' per person' : ''}`;
+    const macros = formatMacros(result);
+    el.textContent = `${what} (${Math.round(result.grams)} g) ≈ ${formatKcal(result.kcal)}${macros ? ` · ${macros}` : ''}${forPerson ? ' per person' : ''}`;
 }
 
 // Product labels and US figures vary (and are sometimes plain wrong), so alongside them show
@@ -7496,6 +7998,7 @@ async function pickNutritionFood(source, id, btn) {
         // Weights typed in earlier (a packet, say) stay unless this food lists its own
         d.gramsPerUnit = { ...d.gramsPerUnit, ...food.gramsPerUnit };
         document.getElementById('nutrition-kcal').value = food.kcalPer100g;
+        for (const [key, inputId] of Object.entries(MACRO_INPUTS)) document.getElementById(inputId).value = food[key] ?? '';
         document.querySelectorAll('#nutrition-results .nutrition-result').forEach(b => b.classList.toggle('active', b === btn));
         setNutritionStatus('', false);
         renderNutritionForm();
@@ -7546,7 +8049,7 @@ async function deleteRecipe() {
         renderRecipeList();
         return;
     }
-    if (!confirm(`Delete the meal "${recipeDraft.name.trim() || 'Untitled'}"?`)) return;
+    if (!confirm(`Delete the item group "${recipeDraft.name.trim() || 'Untitled'}"? It's also taken out of the meals on the calendar.`)) return;
     try {
         const res = await fetch(`/api/recipes/${encodeURIComponent(recipeDraft.id)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
@@ -10238,8 +10741,8 @@ const LIBRARY_DATA_PARTS = [
     { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
     { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
     // Ingredients before meals, so their one-person quantities are in place first
-    { key: 'ingredients', label: 'ingredient', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
-    { key: 'meals', label: 'meal', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
+    { key: 'ingredients', label: 'item', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
+    { key: 'meals', label: 'item group', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
 ];
 let pendingLibraryData = null; // parsed import file, while the import dialog is open
 
@@ -10259,8 +10762,8 @@ async function loadLibraryDataCounts() {
         el.innerHTML = row('Favourites', c.favourites)
             + row('Deleted photos', c.deleted)
             + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0)
-            + row('Ingredients', c.ingredients)
-            + row('Meals', c.meals);
+            + row('Items', c.ingredients)
+            + row('Item groups', c.meals);
     } catch (e) {
         el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
     }
@@ -12363,7 +12866,7 @@ function renderGamePlayers() {
     const el = document.getElementById('game-players');
     if (!gamePlayers.length) {
         el.innerHTML = `<span class="game-players-label">No players yet.</span>
-            <button type="button" class="btn-control btn-small primary" onclick="openGamePlayerSettings()">Add Players</button>`;
+            <button type="button" class="btn-control btn-small primary" onclick="openGamePlayerSettings()">Add Family</button>`;
         return;
     }
     el.innerHTML = `<span class="game-players-label">${gamePlayerId ? 'Playing:' : 'Who\'s playing?'}</span>` +
@@ -12489,7 +12992,7 @@ document.addEventListener('keydown', e => {
     }
 });
 
-// --- Server Settings → Games: the players ---
+// --- Server Settings → Family: the people who play games and eat meals (game players) ---
 async function loadGamePlayerSettings() {
     const listEl = document.getElementById('game-players-list');
     if (!listEl) return;
@@ -12500,11 +13003,11 @@ async function loadGamePlayerSettings() {
                 <div class="calendar-settings-row">
                     <span class="game-player-name">${escapeHtml(u.name)}</span>
                     <button class="btn-control btn-small" onclick="removeGamePlayer('${escapeHtml(u.id)}', this)"
-                        title="Remove this player and their stats">Remove</button>
+                        title="Remove this person, their game stats and them from planned meals">Remove</button>
                 </div>`).join('')
-            : '<span class="settings-hint">No players yet.</span>';
+            : '<span class="settings-hint">No family yet.</span>';
     } catch (err) {
-        listEl.innerHTML = '<span class="settings-hint">Could not load players.</span>';
+        listEl.innerHTML = '<span class="settings-hint">Could not load the family.</span>';
     }
 }
 
@@ -12519,7 +13022,7 @@ async function addGamePlayer() {
             body: JSON.stringify({ name })
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to add the player');
+        if (!res.ok) throw new Error(data.error || 'Failed to add them');
         input.value = '';
         setCalendarSettingsStatus('game-players-status', `Added ${data.name}.`, false);
         await loadGamePlayerSettings();
@@ -12529,14 +13032,14 @@ async function addGamePlayer() {
 }
 
 async function removeGamePlayer(id, btn) {
-    const name = btn.closest('.calendar-settings-row')?.querySelector('.game-player-name')?.textContent || 'this player';
-    if (!confirm(`Remove ${name}? Their games and stats will be deleted.`)) return;
+    const name = btn.closest('.calendar-settings-row')?.querySelector('.game-player-name')?.textContent || 'this person';
+    if (!confirm(`Remove ${name}? Their games and stats will be deleted, and they're taken off planned meals.`)) return;
     try {
         const res = await fetch(`/api/games/players/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
         setCalendarSettingsStatus('game-players-status', `Removed ${name}.`, false);
         await loadGamePlayerSettings();
     } catch (err) {
-        setCalendarSettingsStatus('game-players-status', `Couldn't remove the player: ${err.message}`, true);
+        setCalendarSettingsStatus('game-players-status', `Couldn't remove them: ${err.message}`, true);
     }
 }

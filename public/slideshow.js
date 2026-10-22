@@ -197,10 +197,10 @@ class Slideshow {
                 fetch(`/api/calendars/events?${range}`).then(r => r.ok ? r.json() : { events: [] }),
             ]);
             const calsById = Object.fromEntries(cals.map(c => [c.id, c]));
-            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from
+            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from (or as a meal)
             const entries = (entryData.entries || []).map(e => ({
-                title: e.recipe ? e.recipe.name : e.title, allDay: true, startKey: e.date, endKey: e.date,
-                source: e.tags?.[0] || '', color: tagData.colors?.[e.tags?.[0]],
+                title: e.meal ? mealEntryTitle(e.meal) : e.title, allDay: true, startKey: e.date, endKey: e.date,
+                source: e.meal ? 'Meal' : e.tags?.[0] || '', color: e.meal ? MEAL_ENTRY_COLOR : tagData.colors?.[e.tags?.[0]],
             }));
             // All-day events carry date keys with an exclusive end; timed ones carry ISO times
             const events = (feedData.events || []).map(ev => ({

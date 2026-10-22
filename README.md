@@ -7,7 +7,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 <td><img src="images/ammui-slideshow-calendar.png" /><br/><b>Slideshow</b> - family photos with today's calendar alongside</td>
 </tr>
 <tr>
-<td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars with meal planning</td>
+<td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars</td>
 <td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - smart plugs and Twinkly lights</td>
 </tr>
 <tr>
@@ -31,9 +31,9 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
-* Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
-* A shopping list beside the meals, typed or by voice ("add milk"). It shares the ingredients list with the meals: saved ingredients are suggested as you type, and new items are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
-* Calories for each meal per person, from ingredients looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
+* Meal planning: build **item groups** (e.g. Mash, Roast chicken) from one or more **items**, each with the amount for one person. Plan a meal on the Meals tab's own Calendar by adding one or more item groups or single items, an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan, Item Groups and Items tabs down the left, with the shopping list alongside. Items and item groups can be exported and imported.
+* A shopping list beside the meals, typed or by voice ("add milk"). It shares the items list with the item groups: saved items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
+* Calories, protein, carbs and fat for each item group per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
@@ -326,7 +326,7 @@ Comparing a month with the same month a year earlier needs readings from both mo
 
 ## Calories
 
-The **Meals** tab can show how many calories each meal has per person. Calories are set once on each ingredient in the **Ingredients** list. Each meal then adds up its own ingredients for the amounts it uses.
+The **Meals** tab can show how many calories, and how much protein, carbohydrate and fat, each item group has per person. These are set once on each item in the **Items** list. Each item group then adds up its own items for the amounts it uses.
 
 ### Where calories come from
 
@@ -347,21 +347,21 @@ The dialog remembers the tab you used last.
 
 The key allows 1,000 lookups an hour.
 
-### Adding calories to an ingredient
+### Adding calories to an item
 
-1. In the **Ingredients** list, press **+ kcal** next to an ingredient.
+1. In the **Items** list, press **+ kcal** next to an item.
 2. AMMUI searches for its name and lists matching foods with their calories per 100 g. Close misspellings are found too (*"brocolli"* finds broccoli). If nothing useful comes up, try another tab or a simpler name (*"chicken breast"* rather than *"skinless chicken fillets"*). For USDA, tick **Include branded products** to search US packaged foods as well.
-3. Pick the closest match. This fills in **Calories per 100 g**, plus any weights the source knows: the pack size for a UK product, or a cup, a slice and one medium item for a USDA food.
-4. If the ingredient's unit isn't a weight, check the **Weight of 1 …** box (see below). The UK food tables don't list weights for single items, so for *"2 eggs"* or *"1 onion"* enter how much one weighs.
-5. Press **Save**. The line underneath shows what the ingredient comes to, e.g. *"1 onion (150 g) ≈ 53 kcal per person"*.
+3. Pick the closest match. This fills in **Calories per 100 g** and the grams of **Protein**, **Carbs** and **Fat** per 100 g, plus any weights the source knows: the pack size for a UK product, or a cup, a slice and one medium item for a USDA food.
+4. If the item's unit isn't a weight, check the **Weight of 1 …** box (see below). The UK food tables don't list weights for single items, so for *"2 eggs"* or *"1 onion"* enter how much one weighs.
+5. Press **Save**. The line underneath shows what the item comes to, e.g. *"1 onion (150 g) ≈ 53 kcal · 1.5 g protein · 12 g carbs · 0.2 g fat per person"*.
 
-You can also skip the search and type **Calories per 100 g** from a packet label. To change an ingredient's calories later, click its calorie figure. **Remove** clears them.
+You can also skip the search and type the figures per 100 g from a packet label. Protein, carbs and fat can be left empty; only calories are needed. Carbs are *available* carbohydrate, as UK labels give it (fibre isn't included), and USDA figures are adjusted to match. To change an item's calories later, click its calorie figure. **Remove** clears them.
 
-Each ingredient is only looked up once. The result is saved in AMMUI's database, so meals show their calories straight away and work without an internet connection.
+Each item is only looked up once. The result is saved in AMMUI's database, so item groups show their calories straight away and work without an internet connection.
 
 ### How amounts are converted
 
-Calories are worked out from the amount and unit each meal uses, so the same ingredient can be measured differently in different meals.
+Calories are worked out from the amount and unit each item group uses, so the same item can be measured differently in different item groups.
 
 | Unit | How it's converted |
 | --- | --- |
@@ -373,13 +373,15 @@ Calories are worked out from the amount and unit each meal uses, so the same ing
 
 Amounts can be whole numbers, decimals (*0.5* or *0,5*), fractions (*1/2*, *1 1/2*, *½*) or ranges (*2-3* counts as 2.5). A unit typed with no amount, such as *pinch*, counts as one of it.
 
-Each ingredient row shows its calories. **? kcal** means AMMUI doesn't know the weight of that unit yet; click it to enter the weight. Under the ingredients, the meal shows its total, e.g. *"About 650 kcal per person"*, and how many ingredients aren't counted yet. Hover over the total to see which ones those are.
+Each item row shows its calories; hover over the figure for its weight, protein, carbs and fat. **? kcal** means AMMUI doesn't know the weight of that unit yet; click it to enter the weight. Under the items, the item group shows its total, e.g. *"About 650 kcal · 32 g protein · 70 g carbs · 21 g fat per person"*, and how many items aren't counted yet. Hover over the total to see which ones those are, and which counted items have no protein, carbs or fat.
+
+Items given calories before AMMUI kept protein, carbs and fat get them filled in automatically when the server starts, from the food they were looked up from. That needs an internet connection for UK products and USDA foods (and the USDA key for those). Calories that were typed in aren't changed.
 
 ### Good to know
 
 * Figures are estimates. Food tables give averages, products change their recipes, and the weight of "one onion" or "a cup of rice" varies, so treat totals as a rough guide.
 * Open Food Facts figures are typed in from labels by its users. AMMUI catches the common slip of entering kJ where kcal should be, but check a figure against the packet if it looks odd.
-* Calories are included when ingredients are exported. Importing fills them in for any ingredient here that doesn't have them yet, and never overwrites ones already set.
+* Calories are included when items are exported. Importing fills them in for any item here that doesn't have them yet, and never overwrites ones already set.
 * The USDA key is copied along with the other keys by **Settings → Integrations → Copy Keys From Another Device**.
 * The UK food tables are © Crown copyright: Public Health England (2021), *McCance and Widdowson's The Composition of Foods Integrated Dataset*. They contain public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). The copy built into AMMUI is made from the published spreadsheet by `scripts/build-cofid.py`, which can be re-run when a new edition comes out. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
 
@@ -389,10 +391,10 @@ The **Games** tab has a daily word game: guess the five-letter word in six tries
 
 * **A new word every day, the same for everyone.** The word changes at midnight, and every device picks the same one for the same day without needing to talk to the server or each other, so the family can compare how they got on.
 * **UK English.** Words come from the British English lists of [SCOWL](http://wordlist.aspell.net/) (the word lists behind many spell checkers), so British spellings such as *odour* and *kerb* are accepted and American ones such as *color* aren't. The daily word is always a fairly common word, with plurals and past tenses such as *cakes* and *baked* left out. Guesses can be any word from a much larger list. The lists are downloaded the first time the tab is opened (about 1.3 MB) and kept by the browser after that.
-* **Players.** Add the people who play in **Server Settings** → **Games**. Pick who's playing at the top of the tab before starting; each device remembers who played on it last. Each player's game and stats (games played, win rate, current and best streak) are kept on the server, so they're the same on every device, and a day's word can only be played once per player.
+* **Players.** Add the people who play in **Server Settings** → **Family** (the same people meals are planned for). Pick who's playing at the top of the tab before starting; each device remembers who played on it last. Each player's game and stats (games played, win rate, current and best streak) are kept on the server, so they're the same on every device, and a day's word can only be played once per player.
 * **No spoilers.** When a game is finished the letters are cleared, leaving just the coloured tiles, so others can see how it went without seeing the word.
 
-Removing a player also deletes their games and stats.
+Removing a family member also deletes their games and stats, and takes them off planned meals.
 
 ## Secure Access (HTTPS)
 

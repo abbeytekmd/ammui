@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=62">
+    <link rel="stylesheet" href="style.css?v=65">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -508,55 +508,145 @@
         </main>
 
         <section id="recipes-view" class="recipes-view" hidden>
-            <aside class="recipes-list-panel">
+            <nav class="meals-tabs" role="tablist" aria-label="Meals">
+                <button type="button" class="meals-tab" data-tab="calendar" role="tab" onclick="setMealsTab('calendar')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>Calendar</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="plan" role="tab" onclick="setMealsTab('plan')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="17 1 21 5 17 9"></polyline>
+                        <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                        <polyline points="7 23 3 19 7 15"></polyline>
+                        <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                    </svg>
+                    <span>Meal Plan</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="meals" role="tab" onclick="setMealsTab('meals')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"></path>
+                        <line x1="6" y1="17" x2="18" y2="17"></line>
+                    </svg>
+                    <span>Item Groups</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="ingredients" role="tab" onclick="setMealsTab('ingredients')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span>Items</span>
+                </button>
+            </nav>
+            <!-- The Calendar tab's calendar is moved in here while it shows meals (see openCalendarView) -->
+            <div id="meals-pane-calendar" class="meals-pane" hidden></div>
+            <!-- A meal for each day of a block of weeks; it repeats on the Calendar from its start date -->
+            <div id="meals-pane-plan" class="meals-pane" hidden>
+                <div class="meal-plan-header">
+                    <h2>Meal Plan</h2>
+                    <label class="meal-plan-setting">Weeks
+                        <select id="meal-plan-weeks" class="calendar-range-select" onchange="saveMealPlanSettings()">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                        </select>
+                    </label>
+                    <label class="meal-plan-setting">Day 1 is
+                        <input type="date" id="meal-plan-start" class="calendar-range-select" onchange="saveMealPlanSettings()">
+                    </label>
+                </div>
+                <div id="meal-plan-status" class="calendar-status"></div>
+                <div id="meal-plan-grid" class="calendar-grid meal-plan-grid" onclick="onMealPlanGridClick(event)"></div>
+            </div>
+            <div id="meals-pane-meals" class="meals-pane meals-pane-meals" hidden>
+                <aside class="recipes-list-panel">
+                    <div class="recipes-list-header">
+                        <h2>Item Groups</h2>
+                        <div class="recipes-header-actions">
+                            <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
+                        </div>
+                    </div>
+                    <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search item groups..."
+                        autocomplete="off" oninput="renderRecipeList()">
+                    <div id="recipes-list" class="recipes-list"></div>
+                </aside>
+                <div id="recipe-panel" class="recipe-panel">
+                    <div id="recipe-empty" class="recipe-empty">
+                        <p>Select an item group, or add a new one.</p>
+                    </div>
+                    <div id="recipe-editor" class="recipe-editor" hidden>
+                        <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Item group name, e.g. Mash"
+                            maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
+                        <h3>Items <span class="recipe-per-person">— amounts for one person</span></h3>
+                        <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
+                        <div class="tag-input-wrapper recipe-add-ingredient"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
+                            <input type="text" id="recipe-amount-input" class="recipe-amount" placeholder="Amount"
+                                maxlength="20" autocomplete="off" aria-label="Amount">
+                            <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
+                                maxlength="40" autocomplete="off" aria-label="Unit">
+                            <input type="text" id="recipe-ingredient-input" placeholder="Add an item, e.g. onions, chopped"
+                                maxlength="300" autocomplete="off" aria-label="Item" list="ingredient-names"
+                                oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
+                            <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
+                        </div>
+                        <p id="recipe-kcal-total" class="recipe-kcal-total"></p>
+                        <datalist id="recipe-units">
+                            <option value="g"><option value="kg"><option value="ml"><option value="l">
+                            <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
+                            <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
+                            <option value="clove"><option value="slice"><option value="piece">
+                        </datalist>
+                        <!-- Saved ingredients, offered while typing an ingredient (filled by renderIngredientList) -->
+                        <datalist id="ingredient-names"></datalist>
+                        <div id="recipe-status" class="calendar-status"></div>
+                        <div class="recipe-actions">
+                            <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
+                                onclick="deleteRecipe()">Delete</button>
+                            <span style="flex: 1;"></span>
+                            <button type="button" id="recipe-revert-btn" class="btn-control ghost" onclick="revertRecipe()">Discard Changes</button>
+                            <button type="button" id="recipe-save-btn" class="btn-control primary" onclick="saveRecipe()">Save</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="meals-pane-ingredients" class="meals-pane" hidden>
                 <div class="recipes-list-header">
-                    <h2>Meals</h2>
-                    <div class="recipes-header-actions">
-                        <button type="button" class="btn-control btn-small" onclick="openIngredientsDialog()">Ingredients</button>
-                        <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
-                    </div>
+                    <h2>Items</h2>
                 </div>
-                <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search meals..."
-                    autocomplete="off" oninput="renderRecipeList()">
-                <div id="recipes-list" class="recipes-list"></div>
-            </aside>
-            <div id="recipe-panel" class="recipe-panel">
-                <div id="recipe-empty" class="recipe-empty">
-                    <p>Select a meal, or add a new one.</p>
-                </div>
-                <div id="recipe-editor" class="recipe-editor" hidden>
-                    <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Meal name"
-                        maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
-                    <h3>Ingredients</h3>
-                    <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
-                    <div class="tag-input-wrapper recipe-add-ingredient"
-                        onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
-                        <input type="text" id="recipe-amount-input" class="recipe-amount" placeholder="Amount"
-                            maxlength="20" autocomplete="off" aria-label="Amount">
-                        <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
+                <div class="ingredients-panel">
+                    <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to an item group fills in its quantity.</p>
+                    <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search items..."
+                        autocomplete="off" oninput="renderIngredientList()">
+                    <div id="ingredients-list" class="ingredients-list"></div>
+                    <div class="tag-input-wrapper ingredient-add"
+                        onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
+                        <input type="text" id="ingredient-add-name" placeholder="New item" maxlength="300"
+                            autocomplete="off" aria-label="Item name">
+                        <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
+                            autocomplete="off" aria-label="Amount for one person">
+                        <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
                             maxlength="40" autocomplete="off" aria-label="Unit">
-                        <input type="text" id="recipe-ingredient-input" placeholder="Add an ingredient, e.g. onions, chopped"
-                            maxlength="300" autocomplete="off" aria-label="Ingredient" list="ingredient-names"
-                            oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
-                        <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
+                        <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
                     </div>
-                    <p id="recipe-kcal-total" class="recipe-kcal-total"></p>
-                    <datalist id="recipe-units">
-                        <option value="g"><option value="kg"><option value="ml"><option value="l">
-                        <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
-                        <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
-                        <option value="clove"><option value="slice"><option value="piece">
-                    </datalist>
-                    <!-- Saved ingredients, offered while typing an ingredient (filled by renderIngredientList) -->
-                    <datalist id="ingredient-names"></datalist>
-                    <div id="recipe-status" class="calendar-status"></div>
-                    <div class="recipe-actions">
-                        <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
-                            onclick="deleteRecipe()">Delete</button>
-                        <span style="flex: 1;"></span>
-                        <button type="button" id="recipe-revert-btn" class="btn-control ghost" onclick="revertRecipe()">Discard Changes</button>
-                        <button type="button" id="recipe-save-btn" class="btn-control primary" onclick="saveRecipe()">Save</button>
-                    </div>
+                    <div id="ingredients-status" class="calendar-status"></div>
                 </div>
             </div>
             <aside class="shopping-panel">
@@ -647,37 +737,40 @@
         </section>
 
         <section id="calendar-view" class="calendar-view" hidden>
-            <div class="calendar-header">
-                <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="15 18 9 12 15 6"></polyline>
-                    </svg>
-                </button>
-                <h2 id="calendar-title" class="calendar-title"></h2>
-                <button type="button" id="calendar-next-btn" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="9 18 15 12 9 6"></polyline>
-                    </svg>
-                </button>
-                <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
-                    title="Go to the current month">Today</button>
-                <select id="calendar-range-select" class="calendar-range-select" onchange="setCalendarRange(this.value)"
-                    title="How much of the calendar to show">
-                    <option value="month">Month</option>
-                    <option value="weeks">3 weeks</option>
-                </select>
-            </div>
-            <div id="calendar-status" class="calendar-status"></div>
-            <div class="calendar-body">
-                <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
-                    <h3 id="calendar-sidebar-cals-heading">Calendars</h3>
-                    <div id="calendar-sidebar-list" class="calendar-sidebar-list"></div>
-                    <h3 id="calendar-sidebar-tags-heading" class="calendar-sidebar-tags-heading" hidden>Tags</h3>
-                    <div id="calendar-sidebar-tags" class="calendar-sidebar-list"></div>
-                </aside>
-                <div id="calendar-grid" class="calendar-grid" onclick="onCalendarGridClick(event)"></div>
+            <!-- Shared with the Meals tab's Calendar, which moves this panel there and shows only meals -->
+            <div id="calendar-panel" class="calendar-panel">
+                <div class="calendar-header">
+                    <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
+                    <h2 id="calendar-title" class="calendar-title"></h2>
+                    <button type="button" id="calendar-next-btn" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                    <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
+                        title="Go to the current month">Today</button>
+                    <select id="calendar-range-select" class="calendar-range-select" onchange="setCalendarRange(this.value)"
+                        title="How much of the calendar to show">
+                        <option value="month">Month</option>
+                        <option value="weeks">3 weeks</option>
+                    </select>
+                </div>
+                <div id="calendar-status" class="calendar-status"></div>
+                <div class="calendar-body">
+                    <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
+                        <h3 id="calendar-sidebar-cals-heading">Calendars</h3>
+                        <div id="calendar-sidebar-list" class="calendar-sidebar-list"></div>
+                        <h3 id="calendar-sidebar-tags-heading" class="calendar-sidebar-tags-heading" hidden>Tags</h3>
+                        <div id="calendar-sidebar-tags" class="calendar-sidebar-list"></div>
+                    </aside>
+                    <div id="calendar-grid" class="calendar-grid" onclick="onCalendarGridClick(event)"></div>
+                </div>
             </div>
         </section>
 
@@ -765,42 +858,8 @@
         </div>
     </div>
 
-    <!-- Meals tab: saved ingredients, each with the quantity for one person -->
-    <div id="ingredients-modal" class="modal-overlay" style="display: none;"
-        onclick="if(event.target===this)closeIngredientsDialog()">
-        <div class="modal-content ingredients-modal-content">
-            <div class="modal-header">
-                <div class="modal-title-group">
-                    <h2>Ingredients</h2>
-                </div>
-                <button class="btn-close" onclick="closeIngredientsDialog()">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="modal-body ingredients-panel">
-                <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to a meal fills in its quantity.</p>
-                <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search ingredients..."
-                    autocomplete="off" oninput="renderIngredientList()">
-                <div id="ingredients-list" class="ingredients-list"></div>
-                <div class="tag-input-wrapper ingredient-add"
-                    onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
-                    <input type="text" id="ingredient-add-name" placeholder="New ingredient" maxlength="300"
-                        autocomplete="off" aria-label="Ingredient name">
-                    <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
-                        autocomplete="off" aria-label="Amount for one person">
-                    <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                        maxlength="40" autocomplete="off" aria-label="Unit">
-                    <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
-                </div>
-                <div id="ingredients-status" class="calendar-status"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Recipes tab: calories for one ingredient, looked up from USDA FoodData Central or typed in -->
+    <!-- Recipes tab: calories, protein, carbs and fat for one ingredient, looked up from the UK food
+         tables, Open Food Facts or USDA FoodData Central, or typed in -->
     <div id="nutrition-modal" class="modal-overlay" style="display: none;"
         onclick="if(event.target===this)closeNutritionDialog()">
         <div class="modal-content" style="max-width: 520px;">
@@ -844,6 +903,21 @@
                     <label for="nutrition-kcal">Calories per 100 g</label>
                     <input type="number" id="nutrition-kcal" min="0" max="1000" step="any" placeholder="e.g. 40"
                         oninput="updateNutritionPreview()">
+                    <div class="nutrition-macros">
+                        <div>
+                            <label for="nutrition-protein">Protein (g)</label>
+                            <input type="number" id="nutrition-protein" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                        <div>
+                            <label for="nutrition-carbs">Carbs (g)</label>
+                            <input type="number" id="nutrition-carbs" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                        <div>
+                            <label for="nutrition-fat">Fat (g)</label>
+                            <input type="number" id="nutrition-fat" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                    </div>
+                    <p class="settings-hint">Protein, carbs and fat are per 100 g too, and can be left empty.</p>
                     <div id="nutrition-unit-group" class="settings-group" style="padding: 0;">
                         <label for="nutrition-unit-grams" id="nutrition-unit-label"></label>
                         <input type="number" id="nutrition-unit-grams" min="0" step="any" oninput="updateNutritionPreview()">
@@ -894,14 +968,14 @@
                 </label>
                 <label class="settings-check">
                     <input type="checkbox" id="import-include-ingredients" onchange="updateLibraryDataImportButton()">
-                    <span>Ingredients <span class="settings-hint" id="import-count-ingredients"></span>
+                    <span>Items <span class="settings-hint" id="import-count-ingredients"></span>
                         <span class="settings-hint">New ones are added; existing ones are kept, with any missing
                             quantity filled in.</span></span>
                 </label>
                 <label class="settings-check">
                     <input type="checkbox" id="import-include-meals" onchange="updateLibraryDataImportButton()">
-                    <span>Meals <span class="settings-hint" id="import-count-meals"></span>
-                        <span class="settings-hint">Meals with a name already here are skipped, not
+                    <span>Item groups <span class="settings-hint" id="import-count-meals"></span>
+                        <span class="settings-hint">Item groups with a name already here are skipped, not
                             overwritten.</span></span>
                 </label>
                 <div id="import-library-data-status" class="calendar-status"></div>
@@ -969,7 +1043,7 @@
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
-                <button class="settings-tab" onclick="switchSettingsTab('games', this)">Games</button>
+                <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
@@ -1071,7 +1145,7 @@
                         <h3>Export &amp; Import</h3>
                         <div class="settings-group">
                             <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos,
-                                file tags, ingredients and meals to one file, or import a file exported from another
+                                file tags, items and item groups to one file, or import a file exported from another
                                 instance of this app. On import you can choose which of them to bring in.</p>
                             <div id="library-data-counts" class="local-stats-grid">
                                 <span class="settings-hint">Loading...</span>
@@ -1206,17 +1280,18 @@
                 </div>
                 <div id="settings-games" class="settings-panel">
                     <div class="manage-section">
-                        <h3>Players</h3>
-                        <p class="settings-hint">Each player has their own game and stats, the same on every
-                            device. Removing a player deletes their games and stats.</p>
+                        <h3>Family</h3>
+                        <p class="settings-hint">The people who play the games and eat the meals planned on the Meals
+                            tab. Each has their own game and stats, the same on every device. Removing someone deletes
+                            their games and stats, and takes them off planned meals.</p>
                         <div id="game-players-list" class="calendar-settings-list">
                             <span class="settings-hint">Loading...</span>
                         </div>
                         <div class="tag-input-wrapper game-player-add"
                             onkeydown="if(event.key==='Enter') { event.preventDefault(); addGamePlayer(); }">
-                            <input type="text" id="game-player-add-name" placeholder="New player's name" maxlength="40"
-                                autocomplete="off" aria-label="New player's name">
-                            <button type="button" class="btn-control btn-small primary" onclick="addGamePlayer()">Add Player</button>
+                            <input type="text" id="game-player-add-name" placeholder="Name" maxlength="40"
+                                autocomplete="off" aria-label="New family member's name">
+                            <button type="button" class="btn-control btn-small primary" onclick="addGamePlayer()">Add</button>
                         </div>
                         <div id="game-players-status" class="calendar-status"></div>
                     </div>
@@ -1670,7 +1745,7 @@
 
 
 
-    <!-- Calendar Entry Modal (Calendar tab: click a day to add, an entry to edit) -->
+    <!-- Calendar Entry Modal (Calendar tab and the Meals tab's calendar: click a day to add, an entry to edit) -->
     <div id="calendar-entry-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
@@ -1692,29 +1767,25 @@
                     <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="all" role="tab"
                         onclick="setCalendarEntryScope('all')">Every occurrence</button>
                 </div>
-                <div class="calendar-entry-kind" role="tablist" aria-label="Entry type">
-                    <button type="button" class="calendar-entry-kind-btn" data-kind="entry" role="tab"
-                        onclick="setCalendarEntryKind('entry')">Entry</button>
-                    <button type="button" class="calendar-entry-kind-btn" data-kind="recipe" role="tab"
-                        onclick="setCalendarEntryKind('recipe')">Meal</button>
-                </div>
-                <div id="calendar-entry-recipe-fields" class="settings-group">
-                    <label for="calendar-entry-recipe">Meal</label>
-                    <div class="calendar-entry-repeat">
-                        <select id="calendar-entry-recipe" class="calendar-entry-recipe-select" onchange="updateCalendarEntryRecipeUI()">
-                            <option value="">Choose a meal…</option>
-                        </select>
-                        <button type="button" id="calendar-entry-open-recipe" class="btn-control ghost btn-small"
-                            onclick="openRecipeFromEntry()">Open Meal</button>
+                <!-- A meal: optional name, one or more item groups or items, and the family it's for -->
+                <div id="calendar-entry-meal-fields" class="calendar-entry-normal-fields">
+                    <div class="settings-group">
+                        <label for="calendar-entry-meal-name">Name <span class="calendar-entry-tags-hint">— optional, e.g. Sunday roast</span></label>
+                        <input type="text" id="calendar-entry-meal-name" maxlength="200" autocomplete="off"
+                            onkeydown="if(event.key==='Enter') saveCalendarEntry()">
                     </div>
-                    <div class="calendar-entry-repeat">
-                        <span class="calendar-entry-repeat-word">For</span>
-                        <input type="number" id="calendar-entry-people" min="1" max="10" step="1" value="1"
-                            aria-label="Number of people">
-                        <label for="calendar-entry-people" class="calendar-entry-repeat-word">people</label>
+                    <div class="settings-group">
+                        <label for="calendar-entry-part-add">Item groups and items <span class="calendar-entry-tags-hint">— one or more</span></label>
+                        <ol id="calendar-entry-parts" class="calendar-entry-parts"></ol>
+                        <select id="calendar-entry-part-add" class="calendar-entry-recipe-select"
+                            onchange="addCalendarEntryPart(this.value)"></select>
+                        <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No item groups or items yet. Add
+                            them under Item Groups or Items.</p>
                     </div>
-                    <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No meals yet. Add them
-                        on the Meals tab.</p>
+                    <div id="calendar-entry-family-group" class="settings-group">
+                        <label>For <span class="calendar-entry-tags-hint">— who's eating</span></label>
+                        <div id="calendar-entry-family" class="calendar-entry-tag-choices"></div>
+                    </div>
                 </div>
                 <div id="calendar-entry-normal-fields" class="calendar-entry-normal-fields">
                     <div class="settings-group">
@@ -1727,7 +1798,7 @@
                         <textarea id="calendar-entry-description" rows="4" maxlength="10000"></textarea>
                     </div>
                 </div>
-                <div class="settings-group">
+                <div id="calendar-entry-date-group" class="settings-group">
                     <label for="calendar-entry-date" id="calendar-entry-date-heading">Date</label>
                     <div class="calendar-entry-repeat">
                         <input type="date" id="calendar-entry-date" required>
@@ -1743,17 +1814,17 @@
                             <option value="">Doesn't repeat</option>
                             <option value="day">day(s)</option>
                             <option value="week">week(s)</option>
-                            <option value="month">month(s)</option>
+                            <option value="month" id="calendar-entry-repeat-month">month(s)</option>
                         </select>
                     </div>
-                    <div class="calendar-entry-repeat calendar-entry-repeat-on">
+                    <div id="calendar-entry-repeat-until-row" class="calendar-entry-repeat calendar-entry-repeat-on">
                         <span class="calendar-entry-repeat-word">Until</span>
                         <input type="date" id="calendar-entry-repeat-until" aria-label="Repeat until">
                         <span class="settings-hint" style="margin: 0;">Leave blank to repeat forever</span>
                     </div>
                 </div>
                 <p id="calendar-entry-series-note" class="settings-hint" style="margin: 0;"></p>
-                <div class="settings-group">
+                <div id="calendar-entry-tags-group" class="settings-group">
                     <label for="calendar-entry-tag-input">Tags <span class="calendar-entry-tags-hint">— pick at least one</span></label>
                     <div id="calendar-entry-tags" class="calendar-entry-tag-choices"></div>
                     <div class="tag-input-wrapper">
@@ -2412,8 +2483,8 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=57"></script>
-    <script src="slideshow.js?v=7"></script>
+    <script src="app.js?v=61"></script>
+    <script src="slideshow.js?v=9"></script>
 </body>
 
 </html>
