@@ -6139,7 +6139,7 @@ function setCalendarEntryScope(scope) {
 let calendarEntryKind = 'entry';
 let calendarItemGroupOptions = []; // every item group: [{ id, name, item: false }]
 let calendarFamilyOptions = [];    // every family member: [{ id, name }]
-let calendarItemOptions = [];      // every item, for adding one on its own: [{ id, name, item: true }]
+let calendarItemOptions = [];      // every item, for adding one on its own: [{ id, name, item: true, amount, unit }]
 
 function setCalendarEntryKind(kind) {
     calendarEntryKind = kind;
@@ -6159,7 +6159,8 @@ async function loadCalendarEntryMealOptions(meal) {
     ]);
     calendarItemGroupOptions = parts.map(r => ({ id: r.id, name: r.name, item: false, unconfirmed: r.unconfirmed || r.unconfirmedItems }));
     calendarFamilyOptions = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
-    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true, unconfirmed: i.unconfirmed }));
+    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true, unconfirmed: i.unconfirmed, amount: i.amount, unit: i.unit }));
+    hideCalendarEntryNewPart();
     for (const p of meal?.parts || []) {
         const options = p.item ? calendarItemOptions : calendarItemGroupOptions;
         if (!options.some(o => o.id === p.id)) options.push(p);
@@ -6196,10 +6197,9 @@ function renderCalendarEntryParts() {
     const items = unused(calendarItemOptions);
     const options = (list, kind) => list.map(o => `<option value="${kind}:${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`).join('');
     select.innerHTML = `<option value="">${editing.parts.length ? 'Add another item group or item…' : 'Add an item group or item…'}</option>` +
+        '<option value="new:group">+ New item group…</option><option value="new:item">+ New item…</option>' +
         (groups.length ? `<optgroup label="Item groups">${options(groups, 'group')}</optgroup>` : '') +
         (items.length ? `<optgroup label="Items">${options(items, 'item')}</optgroup>` : '');
-    select.hidden = !groups.length && !items.length;
-    document.getElementById('calendar-entry-no-recipes').hidden = calendarItemGroupOptions.length > 0 || calendarItemOptions.length > 0;
 }
 
 // Drag a part up or down by its handle to change the order. Pointer events, so it works by touch
@@ -6232,12 +6232,146 @@ function dragCalendarEntryPart(e, row, list) {
     handle.addEventListener('pointercancel', end);
 }
 
-// value: "group:<id>" for an item group, or "item:<id>" for an item on its own
+// value: "group:<id>" for an item group, "item:<id>" for an item on its own, or "new:group" /
+// "new:item" to make one
 function addCalendarEntryPart(value) {
     const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)];
+    if (kind === 'new') {
+        document.getElementById('calendar-entry-part-add').value = '';
+        showCalendarEntryNewPart(id);
+        return;
+    }
     const part = (kind === 'item' ? calendarItemOptions : calendarItemGroupOptions).find(o => o.id === id);
     if (part && calendarEntryEditing && !calendarEntryEditing.parts.some(p => p.id === part.id)) calendarEntryEditing.parts.push(part);
     if (calendarEntryEditing) renderCalendarEntryParts();
+}
+
+// --- Making a new item or item group from the meal dialog, added to the meal once saved ---
+let calendarNewGroupItems = []; // the new item group's items so far: [{ name, amount, unit }]
+
+function hideCalendarEntryNewPart() {
+    const box = document.getElementById('calendar-entry-new-part');
+    box.hidden = true;
+    box.innerHTML = '';
+}
+
+// kind: 'item' (a name and its quantity for one person) or 'group' (a name and its items, each at
+// its saved one-person quantity; amounts can be changed later under Item Groups)
+function showCalendarEntryNewPart(kind) {
+    const box = document.getElementById('calendar-entry-new-part');
+    const names = calendarItemOptions.map(o => `<option value="${escapeAttr(o.name)}">`).join('');
+    box.innerHTML = kind === 'item' ? `
+        <div class="calendar-entry-new-heading">New item <span class="calendar-entry-tags-hint">— quantity for one person</span></div>
+        <div class="calendar-entry-new-row">
+            <input type="text" data-field="name" placeholder="Item name, e.g. Peas" maxlength="300" autocomplete="off" aria-label="Item name">
+            <input type="text" data-field="amount" class="calendar-entry-new-amount" placeholder="Amount" maxlength="20" autocomplete="off" aria-label="Amount for one person">
+            <input type="text" data-field="unit" class="calendar-entry-new-unit" placeholder="Unit" maxlength="40" list="recipe-units" autocomplete="off" aria-label="Unit">
+        </div>
+        <div class="calendar-entry-new-actions">
+            <span class="calendar-status" data-status></span>
+            <button type="button" class="btn-control ghost btn-small" data-act="cancel">Cancel</button>
+            <button type="button" class="btn-control primary btn-small" data-act="create">Add Item</button>
+        </div>` : `
+        <div class="calendar-entry-new-heading">New item group</div>
+        <input type="text" data-field="name" placeholder="Item group name, e.g. Mash" maxlength="200" autocomplete="off" aria-label="Item group name">
+        <div class="calendar-entry-new-items" data-items></div>
+        <div class="calendar-entry-new-row">
+            <input type="text" data-field="item" placeholder="Add an item, e.g. Potatoes" maxlength="300" list="calendar-entry-new-names" autocomplete="off" aria-label="Item">
+            <button type="button" class="btn-control ghost btn-small" data-act="add">Add</button>
+        </div>
+        <datalist id="calendar-entry-new-names">${names}</datalist>
+        <div class="calendar-entry-new-actions">
+            <span class="calendar-status" data-status></span>
+            <button type="button" class="btn-control ghost btn-small" data-act="cancel">Cancel</button>
+            <button type="button" class="btn-control primary btn-small" data-act="create">Add Item Group</button>
+        </div>`;
+    box.hidden = false;
+    calendarNewGroupItems = [];
+    const field = name => box.querySelector(`[data-field="${name}"]`);
+    box.querySelector('[data-act="cancel"]').onclick = hideCalendarEntryNewPart;
+    box.querySelector('[data-act="create"]').onclick = () => createCalendarEntryNewPart(kind);
+    if (kind === 'group') {
+        box.querySelector('[data-act="add"]').onclick = addCalendarEntryNewGroupItem;
+        renderCalendarEntryNewGroupItems();
+    } else {
+        // Naming an item that exists already fills in its quantity, as elsewhere
+        field('name').oninput = () => fillIngredientQuantity(field('name'), field('amount'), field('unit'));
+    }
+    // Enter adds the item typed (for a group) or makes it, rather than saving the meal
+    box.querySelectorAll('input').forEach(input => {
+        input.onkeydown = e => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (kind === 'group' && input.dataset.field === 'item') addCalendarEntryNewGroupItem();
+            else createCalendarEntryNewPart(kind);
+        };
+    });
+    field('name').focus();
+}
+
+function addCalendarEntryNewGroupItem() {
+    const input = document.querySelector('#calendar-entry-new-part [data-field="item"]');
+    const name = input.value.trim();
+    input.value = '';
+    input.focus();
+    if (!name) return;
+    const saved = calendarItemOptions.find(o => o.name.toLowerCase() === name.toLowerCase());
+    calendarNewGroupItems.push({ name: saved ? saved.name : name, amount: saved?.amount || '', unit: saved?.unit || '' });
+    renderCalendarEntryNewGroupItems();
+}
+
+function renderCalendarEntryNewGroupItems() {
+    const list = document.querySelector('#calendar-entry-new-part [data-items]');
+    list.innerHTML = calendarNewGroupItems.map((ing, i) => `
+        <span class="calendar-entry-tag-chip selected" data-i="${i}">${escapeHtml([ing.amount, ing.unit, ing.name].filter(Boolean).join(' '))}
+            <button type="button" class="calendar-entry-new-remove" title="Remove" aria-label="Remove ${escapeAttr(ing.name)}">✕</button></span>`).join('');
+    list.querySelectorAll('[data-i]').forEach(chip => {
+        chip.querySelector('button').onclick = () => {
+            calendarNewGroupItems.splice(Number(chip.dataset.i), 1);
+            renderCalendarEntryNewGroupItems();
+        };
+    });
+}
+
+async function createCalendarEntryNewPart(kind) {
+    const box = document.getElementById('calendar-entry-new-part');
+    const value = name => box.querySelector(`[data-field="${name}"]`)?.value.trim() || '';
+    const status = box.querySelector('[data-status]');
+    const fail = text => { status.className = 'calendar-status error'; status.textContent = text; };
+    const name = value('name');
+    if (!name) { fail(kind === 'item' ? 'Enter a name for the item.' : 'Enter a name for the item group.'); box.querySelector('[data-field="name"]').focus(); return; }
+    // An item typed but not yet added still counts
+    if (kind === 'group' && value('item')) addCalendarEntryNewGroupItem();
+    if (kind === 'group' && !calendarNewGroupItems.length) { fail('Add at least one item.'); return; }
+    const create = box.querySelector('[data-act="create"]');
+    create.disabled = true;
+    try {
+        const body = kind === 'item' ? { name, amount: value('amount'), unit: value('unit') } : { name, ingredients: calendarNewGroupItems };
+        const res = await fetch(kind === 'item' ? '/api/ingredients' : '/api/recipes', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        if (!calendarEntryEditing) return;
+        // Saving a group adds any of its items not seen before to the Items list
+        if (kind === 'group') await loadCalendarEntryMealOptions(calendarEntryEditing);
+        const part = kind === 'item'
+            ? { id: data.id, name: data.name, item: true, unconfirmed: false, amount: data.amount, unit: data.unit }
+            : { id: data.id, name: data.name, item: false, unconfirmed: false };
+        const options = kind === 'item' ? calendarItemOptions : calendarItemGroupOptions;
+        if (!options.some(o => o.id === part.id)) options.push(part);
+        options.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+        calendarEntryEditing.parts.push(part);
+        hideCalendarEntryNewPart();
+        renderCalendarEntryParts();
+        // Keep the Item Groups and Items lists up to date with what was made here
+        loadRecipes();
+        loadIngredients();
+    } catch (err) {
+        fail(err.message);
+        create.disabled = false;
+    }
 }
 
 // Each family member as a chip to click on/off

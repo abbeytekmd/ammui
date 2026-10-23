@@ -2317,6 +2317,82 @@ p.subtitle {
     display: none;
 }
 
+/* A new item or item group, made from the meal dialog */
+.calendar-entry-new-part {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+
+.calendar-entry-new-part[hidden] {
+    display: none;
+}
+
+.calendar-entry-new-heading {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.calendar-entry-new-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.calendar-entry-new-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.calendar-entry-new-row input.calendar-entry-new-amount {
+    flex: 0 0 5rem;
+}
+
+.calendar-entry-new-row input.calendar-entry-new-unit {
+    flex: 0 0 6rem;
+}
+
+.calendar-entry-new-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.calendar-entry-new-items:empty {
+    display: none;
+}
+
+.calendar-entry-new-remove {
+    margin-left: 0.3rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.calendar-entry-new-remove:hover {
+    opacity: 1;
+}
+
+.calendar-entry-new-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.calendar-entry-new-actions .calendar-status {
+    flex: 1;
+    margin: 0;
+}
+
 /* A meal's parts, in order */
 .calendar-entry-parts {
     list-style: none;

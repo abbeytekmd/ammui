@@ -1789,8 +1789,8 @@
                         <ol id="calendar-entry-parts" class="calendar-entry-parts"></ol>
                         <select id="calendar-entry-part-add" class="calendar-entry-recipe-select"
                             onchange="addCalendarEntryPart(this.value)"></select>
-                        <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No item groups or items yet. Add
-                            them under Item Groups or Items.</p>
+                        <!-- A new item or item group, made from here and added to the meal (filled by showCalendarEntryNewPart) -->
+                        <div id="calendar-entry-new-part" class="calendar-entry-new-part" hidden></div>
                     </div>
                     <div id="calendar-entry-family-group" class="settings-group">
                         <label>For <span class="calendar-entry-tags-hint">— who's eating</span></label>
