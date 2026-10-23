@@ -2341,6 +2341,10 @@ p.subtitle {
     border-radius: 0.5rem;
 }
 
+.calendar-entry-part.unconfirmed {
+    background: rgba(0, 0, 0, 0.3);
+}
+
 .calendar-entry-part-handle {
     cursor: grab;
     touch-action: none;
@@ -2610,6 +2614,33 @@ p.subtitle {
     font-size: 0.9rem;
 }
 
+.recipe-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.recipe-name-row .recipe-name-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.recipe-unconfirmed {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.recipe-unconfirmed input {
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
 .recipes-filter:focus,
 .recipe-name-input:focus {
     outline: none;
@@ -2644,9 +2675,18 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
 }
 
+/* An item group holding an unconfirmed item, shaded like the item itself */
+.recipe-list-item.unconfirmed {
+    background: rgba(0, 0, 0, 0.3);
+}
+
 .recipe-list-item.active {
     background: color-mix(in srgb, var(--primary) 18%, transparent);
     border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+}
+
+.recipe-list-item.active.unconfirmed {
+    background: color-mix(in srgb, var(--primary) 18%, rgba(0, 0, 0, 0.3));
 }
 
 .recipe-list-name {
@@ -2760,6 +2800,12 @@ p.subtitle {
     outline: none;
     border-color: var(--card-border);
     background: rgba(255, 255, 255, 0.05);
+}
+
+/* An item ticked as unconfirmed on the Items list, wherever it shows */
+.recipe-ingredient.unconfirmed {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 0.4rem;
 }
 
 .recipe-ingredient-btn {
@@ -3122,6 +3168,25 @@ p.subtitle {
 .ingredient-pic.empty:hover {
     opacity: 1;
     border-color: var(--primary);
+}
+
+/* The Unconfirmed tickbox at the start of each row */
+.ingredient-unconfirmed {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding-left: 0.4rem;
+    cursor: pointer;
+}
+
+.recipe-ingredient .ingredient-unconfirmed input {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    padding: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
 }
 
 /* Narrower quantity columns leave the name room beside the calories */

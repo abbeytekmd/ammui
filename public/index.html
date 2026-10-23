@@ -592,8 +592,13 @@
                         <p>Select an item group, or add a new one.</p>
                     </div>
                     <div id="recipe-editor" class="recipe-editor" hidden>
-                        <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Item group name, e.g. Mash"
-                            maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
+                        <div class="recipe-name-row">
+                            <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Item group name, e.g. Mash"
+                                maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
+                            <label class="recipe-unconfirmed">
+                                <input type="checkbox" id="recipe-unconfirmed" onchange="markRecipeDirty()"> Unconfirmed
+                            </label>
+                        </div>
                         <h3>Items <span class="recipe-per-person">— amounts for one person</span></h3>
                         <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
                         <div class="tag-input-wrapper recipe-add-ingredient"
@@ -632,7 +637,7 @@
                     <h2>Items</h2>
                 </div>
                 <div class="ingredients-panel">
-                    <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to an item group fills in its quantity.</p>
+                    <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to an item group fills in its quantity. Tick an item that's unconfirmed to shade it, and any item group it's in. Item groups have their own tickbox too.</p>
                     <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search items..."
                         autocomplete="off" oninput="renderIngredientList()">
                     <div id="ingredients-list" class="ingredients-list"></div>

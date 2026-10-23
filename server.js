@@ -3142,7 +3142,7 @@ function cleanRecipe(body) {
     if (ingredients.length > 500) return 'Too many items';
     if (ingredients.some(i => i.name.length > 300)) return 'An item is too long';
     if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
-    return { name, ingredients };
+    return { name, unconfirmed: !!body.unconfirmed, ingredients };
 }
 
 // ?ingredients=1 includes each one's ingredients, for adding up the calories of planned meals
@@ -3378,9 +3378,11 @@ function cleanIngredient(body, id) {
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
     const sameName = findIngredientIdByName(name);
     if (sameName && sameName !== id) return `"${name}" is already in the list`;
-    if (!('nutrition' in body)) return { name, amount, unit };
+    // Left out, unconfirmed stays as it is
+    const unconfirmed = 'unconfirmed' in body ? !!body.unconfirmed : undefined;
+    if (!('nutrition' in body)) return { name, amount, unit, unconfirmed };
     const nutrition = cleanNutrition(body.nutrition);
-    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, nutrition };
+    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, unconfirmed, nutrition };
 }
 
 // An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g,
@@ -4804,13 +4806,13 @@ app.get('/api/library-data/counts', (req, res) => {
 
 // Meals and ingredients export by name (ids mean nothing on another instance)
 app.get('/api/ingredients/export', (req, res) => {
-    const ingredients = listIngredients().map(({ name, amount, unit, nutrition }) => ({ name, amount, unit, nutrition }));
+    const ingredients = listIngredients().map(({ name, amount, unit, unconfirmed, nutrition }) => ({ name, amount, unit, unconfirmed, nutrition }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
 });
 
 app.get('/api/meals/export', (req, res) => {
     const meals = listRecipes().map(r => getRecipe(r.id)).filter(Boolean)
-        .map(m => ({ name: m.name, ingredients: m.ingredients.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
+        .map(m => ({ name: m.name, unconfirmed: m.unconfirmed, ingredients: m.ingredients.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
 });
 

@@ -6157,9 +6157,9 @@ async function loadCalendarEntryMealOptions(meal) {
         fetch('/api/games/players').then(r => r.json()).catch(() => []),
         fetch('/api/ingredients').then(r => r.json()).then(d => d.ingredients || []).catch(() => [])
     ]);
-    calendarItemGroupOptions = parts.map(r => ({ id: r.id, name: r.name, item: false }));
+    calendarItemGroupOptions = parts.map(r => ({ id: r.id, name: r.name, item: false, unconfirmed: r.unconfirmed || r.unconfirmedItems }));
     calendarFamilyOptions = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
-    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true }));
+    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true, unconfirmed: i.unconfirmed }));
     for (const p of meal?.parts || []) {
         const options = p.item ? calendarItemOptions : calendarItemGroupOptions;
         if (!options.some(o => o.id === p.id)) options.push(p);
@@ -6171,8 +6171,10 @@ async function loadCalendarEntryMealOptions(meal) {
 function renderCalendarEntryParts() {
     const editing = calendarEntryEditing;
     const list = document.getElementById('calendar-entry-parts');
+    // The options are loaded fresh with the dialog, so they say whether each is unconfirmed now
+    const unconfirmed = p => (p.item ? calendarItemOptions : calendarItemGroupOptions).find(o => o.id === p.id)?.unconfirmed;
     list.innerHTML = editing.parts.map((p, i) => `
-        <li class="calendar-entry-part" data-i="${i}">
+        <li class="calendar-entry-part${unconfirmed(p) ? ' unconfirmed' : ''}" data-i="${i}">
             <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
             <span class="calendar-entry-part-name">${escapeHtml(p.name)}</span>
             <button type="button" class="btn-control ghost btn-small" data-act="open" title="${p.item ? 'Show this item' : 'Open this item group'}">Open</button>
@@ -6825,11 +6827,12 @@ async function removeCalendar(id, btn) {
 }
 
 // --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
-let recipeList = [];       // [{ id, name, ingredientCount }]
-let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [{ ingredientId|null, name, amount, unit }] }
+let recipeList = [];       // [{ id, name, ingredientCount, unconfirmed, unconfirmedItems }]
+let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, unconfirmed, ingredients: [{ ingredientId|null, name, amount, unit }] }
 let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
 
-const recipeIsDirty = () => !!recipeDraft && JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients }) !== recipeSavedJson;
+const recipeSnapshot = d => JSON.stringify({ name: d.name, unconfirmed: d.unconfirmed, ingredients: d.ingredients });
+const recipeIsDirty = () => !!recipeDraft && recipeSnapshot(recipeDraft) !== recipeSavedJson;
 
 function setRecipeStatus(text, isError) {
     setCalendarSettingsStatus('recipe-status', text, isError);
@@ -7267,7 +7270,8 @@ function renderRecipeList() {
         return;
     }
     listEl.innerHTML = shown.map(r => `
-        <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}" data-id="${escapeHtml(r.id)}">
+        <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}${r.unconfirmed || r.unconfirmedItems ? ' unconfirmed' : ''}" data-id="${escapeHtml(r.id)}"
+            ${r.unconfirmed ? 'title="Unconfirmed"' : r.unconfirmedItems ? 'title="Has unconfirmed items"' : ''}>
             <span class="recipe-list-name">${escapeHtml(r.name)}</span>
             <span class="recipe-list-meta">${r.ingredientCount} item${r.ingredientCount === 1 ? '' : 's'}</span>
         </button>`).join('');
@@ -7281,8 +7285,8 @@ function confirmDiscardRecipe() {
 }
 
 function openRecipeDraft(recipe) {
-    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: (recipe.ingredients || []).map(i => ({ ingredientId: i.ingredientId || null, name: i.name || '', amount: i.amount || '', unit: i.unit || '' })) };
-    recipeSavedJson = JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients });
+    recipeDraft = { id: recipe.id || null, name: recipe.name || '', unconfirmed: !!recipe.unconfirmed, ingredients: (recipe.ingredients || []).map(i => ({ ingredientId: i.ingredientId || null, name: i.name || '', amount: i.amount || '', unit: i.unit || '' })) };
+    recipeSavedJson = recipeSnapshot(recipeDraft);
     setRecipeStatus('', false);
     for (const f of ['amount', 'unit', 'ingredient']) document.getElementById(`recipe-${f}-input`).value = '';
     renderRecipeEditor();
@@ -7315,6 +7319,7 @@ function renderRecipeEditor() {
     editor.hidden = !recipeDraft;
     if (!recipeDraft) return;
     document.getElementById('recipe-name').value = recipeDraft.name;
+    document.getElementById('recipe-unconfirmed').checked = recipeDraft.unconfirmed;
     renderRecipeIngredients();
     updateRecipeButtons();
 }
@@ -7369,6 +7374,7 @@ function renderRecipeIngredients() {
 function markRecipeDirty() {
     if (!recipeDraft) return;
     recipeDraft.name = document.getElementById('recipe-name').value;
+    recipeDraft.unconfirmed = document.getElementById('recipe-unconfirmed').checked;
     updateRecipeButtons();
 }
 
@@ -7416,7 +7422,7 @@ async function saveRecipe() {
         const res = await fetch(id ? `/api/recipes/${encodeURIComponent(id)}` : '/api/recipes', {
             method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, ingredients })
+            body: JSON.stringify({ name, unconfirmed: recipeDraft.unconfirmed, ingredients })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -7493,7 +7499,10 @@ function renderIngredientList() {
     listEl.innerHTML = shown.map(i => {
         const kcal = ingredientCaloriesButton(i);
         return `
-        <div class="recipe-ingredient ingredient-row" data-id="${escapeAttr(i.id)}">
+        <div class="recipe-ingredient ingredient-row${i.unconfirmed ? ' unconfirmed' : ''}" data-id="${escapeAttr(i.id)}">
+            <label class="ingredient-unconfirmed" title="Unconfirmed">
+                <input type="checkbox" data-field="unconfirmed" ${i.unconfirmed ? 'checked' : ''} aria-label="Unconfirmed">
+            </label>
             <button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>
             <input type="text" data-field="name" value="${escapeAttr(i.name)}" maxlength="300" aria-label="Ingredient name">
             <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(i.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount for one person">
@@ -7557,12 +7566,17 @@ async function addIngredient() {
 
 async function updateIngredient(ingredient, row) {
     const value = f => row.querySelector(`input[data-field="${f}"]`).value.trim();
-    const body = { name: value('name'), amount: value('amount'), unit: value('unit') };
-    if (body.name === ingredient.name && body.amount === ingredient.amount && body.unit === ingredient.unit) return;
+    const unconfirmed = row.querySelector('input[data-field="unconfirmed"]').checked;
+    const body = { name: value('name'), amount: value('amount'), unit: value('unit'), unconfirmed };
+    if (body.name === ingredient.name && body.amount === ingredient.amount && body.unit === ingredient.unit
+        && unconfirmed === ingredient.unconfirmed) return;
     const renamed = body.name !== ingredient.name;
+    const reconfirmed = unconfirmed !== ingredient.unconfirmed;
     try {
         Object.assign(ingredient, await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'PUT', body));
         setIngredientsStatus('Saved.', false);
+        row.classList.toggle('unconfirmed', ingredient.unconfirmed);
+        if (reconfirmed) loadRecipes(); // item groups holding it may change colour
         const kcal = ingredientCaloriesButton(ingredient);
         const kcalBtn = row.querySelector('[data-act="kcal"]');
         kcalBtn.textContent = kcal.text;
@@ -7749,6 +7763,7 @@ function refreshRecipeCalories() {
         const cell = row.querySelector('.recipe-kcal');
         if (!ing || !cell) return;
         const saved = recipeRowIngredient(ing);
+        row.classList.toggle('unconfirmed', !!saved?.unconfirmed);
         const result = ingredientCalories(ing.amount, ing.unit, saved?.nutrition);
         rows.push({ name: saved?.name || ing.name.trim(), result });
         cell.onclick = null;
