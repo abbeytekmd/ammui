@@ -5858,7 +5858,7 @@ function drawCalendarEvents() {
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
         const list = byDay.get(cell.dataset.date) || [];
-        cell.querySelectorAll('.calendar-event, .calendar-more, .meal-nutrition').forEach(el => el.remove());
+        cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
         const maxEvents = calendarMaxEventsPerDay();
         const shown = list.length > maxEvents + 1 ? maxEvents : list.length;
@@ -5887,14 +5887,12 @@ function drawCalendarEvents() {
                     : [ev.title, ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
             } else if (ev.planned) {
                 el.title = [ev.title, ev.planned.name ? ev.planned.parts.map(p => p.name).join(', ') : '',
-                    `From the meal plan (day ${ev.planned.day + 1}). Click to add it.`].filter(Boolean).join('\n');
+                    `From the meal plan (day ${ev.planned.day + 1}). Click the day to add it.`].filter(Boolean).join('\n');
             } else {
                 el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
             }
+            // Just the food: a day's calories and so on are in its day view
             cell.appendChild(el);
-            const meal = ev.entry?.meal || ev.planned;
-            const nutrition = meal && mealNutritionElement(meal.parts);
-            if (nutrition) cell.appendChild(nutrition);
         });
         if (list.length > shown) {
             const more = document.createElement('div');
@@ -5904,6 +5902,7 @@ function drawCalendarEvents() {
             cell.appendChild(more);
         }
     });
+    if (mealDayDate) renderMealDayView();
 }
 
 function entryToCalendarEvent(entry) {
@@ -5946,8 +5945,8 @@ async function loadCalendarEvents(gridStart, gridEnd, token) {
             drawCalendarEvents();
             statusEl.className = 'calendar-status';
             statusEl.textContent = mealPlan?.startDate && mealPlan.days.length
-                ? 'Click a day to plan a meal. Faded meals are from the Meal Plan; click one to add it.'
-                : 'Click a day to plan a meal.';
+                ? 'Click a day to see its meals and plan more. Faded meals are from the Meal Plan.'
+                : 'Click a day to see its meals and plan more.';
             return;
         }
         const [cals, entryData, tagData] = await Promise.all([
@@ -6073,6 +6072,12 @@ let calendarEntryEditing = null; // { id|null, date, tags: [] }
 let calendarEntryTagOptions = [];
 
 function onCalendarGridClick(event) {
+    // On the Meals calendar a click anywhere in a day opens that day
+    if (calendarMeals) {
+        const cell = event.target.closest('.calendar-day');
+        if (cell) openMealDayView(cell.dataset.date);
+        return;
+    }
     const entryEl = event.target.closest('.calendar-event.local-entry');
     if (entryEl) {
         const ev = calendarLoaded?.events.find(e => e.entry && e.entry.id === entryEl.dataset.entryId);
@@ -6159,15 +6164,26 @@ async function loadCalendarEntryMealOptions(meal) {
     for (const f of meal?.family || []) if (!calendarFamilyOptions.some(o => o.id === f.id)) calendarFamilyOptions.push(f);
 }
 
-// The meal's items in order, each with Edit and Remove, then a dropdown of the rest to add
+// The meal's items in order, each with its quantity per person, Edit and Remove, then a dropdown
+// of the rest to add. The quantity boxes show the item's own as a placeholder; typing in them gives
+// this meal its own (a single item's amount and unit, or how many of one made of others).
 function renderCalendarEntryParts() {
     const editing = calendarEntryEditing;
     const list = document.getElementById('calendar-entry-parts');
     list.innerHTML = editing.parts.map((p, i) => {
         const item = itemById(p.id);
+        const quantity = !item ? '' : item.parts ? `
+            <input type="text" class="calendar-entry-part-amount" data-field="amount" value="${escapeAttr(p.amount || '')}" maxlength="20"
+                placeholder="1" aria-label="How many per person" title="How many per person">
+            <span class="calendar-entry-part-times">×</span>` : `
+            <input type="text" class="calendar-entry-part-amount" data-field="amount" value="${escapeAttr(p.amount || '')}" maxlength="20"
+                placeholder="${escapeAttr(item.amount || 'Amount')}" aria-label="Amount per person" title="Amount per person (empty: the item's own)">
+            <input type="text" class="calendar-entry-part-unit" data-field="unit" value="${escapeAttr(p.unit || '')}" maxlength="40"
+                placeholder="${escapeAttr(item.unit || 'Unit')}" list="recipe-units" aria-label="Unit" title="Unit (empty: the item's own)">`;
         return `
         <li class="calendar-entry-part${itemUnconfirmed(item) ? ' unconfirmed' : ''}" data-i="${i}">
             <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
+            ${quantity}
             <span class="calendar-entry-part-name">${escapeHtml(item?.name || p.name)}</span>
             ${item ? '<button type="button" class="btn-control ghost btn-small" data-act="open" title="Edit this item">Edit</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
@@ -6176,6 +6192,10 @@ function renderCalendarEntryParts() {
     list.querySelectorAll('.calendar-entry-part').forEach(row => {
         const part = editing.parts[Number(row.dataset.i)];
         row.querySelector('.calendar-entry-part-handle').onpointerdown = e => dragCalendarEntryPart(e, row, list);
+        row.querySelectorAll('input').forEach(input => {
+            input.oninput = () => { part[input.dataset.field] = input.value; };
+            input.onkeydown = e => { if (e.key === 'Enter') e.preventDefault(); };
+        });
         const open = row.querySelector('[data-act="open"]');
         if (open) open.onclick = () => openMealPartFromEntry(part);
         row.querySelector('[data-act="remove"]').onclick = () => {
@@ -6233,14 +6253,14 @@ function addCalendarEntryPart(value) {
         openItemBuilder(null, {
             onSaved: saved => {
                 if (!saved || !calendarEntryEditing) return;
-                if (!calendarEntryEditing.parts.some(p => p.id === saved.id)) calendarEntryEditing.parts.push({ id: saved.id, name: saved.name });
+                if (!calendarEntryEditing.parts.some(p => p.id === saved.id)) calendarEntryEditing.parts.push({ id: saved.id, name: saved.name, amount: '', unit: '' });
                 renderCalendarEntryParts();
             }
         });
         return;
     }
     const item = itemById(value);
-    if (item && !calendarEntryEditing.parts.some(p => p.id === item.id)) calendarEntryEditing.parts.push({ id: item.id, name: item.name });
+    if (item && !calendarEntryEditing.parts.some(p => p.id === item.id)) calendarEntryEditing.parts.push({ id: item.id, name: item.name, amount: '', unit: '' });
     renderCalendarEntryParts();
 }
 
@@ -6282,6 +6302,7 @@ function openMealPartFromEntry(part) {
 // date: the day clicked. For a repeating entry that's one occurrence, and the dialog can change
 // or delete just it, or the whole series (which keeps its own start date).
 async function openCalendarEntryModal(date, entry = null) {
+    bringModalToFront('calendar-entry-modal');
     const startDate = entry ? (entry.startDate || entry.date) : date;
     const repeat = entry ? entry.repeat : null;
     calendarEntryEditing = {
@@ -6298,7 +6319,7 @@ async function openCalendarEntryModal(date, entry = null) {
     showCalendarEntryDateFields(true);
     if (calendarMeals) {
         await loadCalendarEntryMealOptions(meal || planned);
-        calendarEntryEditing.parts = meal ? [...meal.parts] : planned ? [...planned.parts] : [];
+        calendarEntryEditing.parts = (meal ? meal.parts : planned ? planned.parts : []).map(p => ({ ...p }));
         // Who it's for: the meal's own family, else whoever the last saved meal was for
         let family = meal ? meal.family.map(f => f.id) : [];
         if (!family.length) {
@@ -6404,7 +6425,7 @@ async function saveCalendarEntry() {
         const { parts, family } = calendarEntryEditing;
         if (!parts.length) { setStatus('Add at least one item.', true); return; }
         if (calendarFamilyOptions.length && !family.length) { setStatus('Choose who it\'s for.', true); return; }
-        meal = { parts: parts.map(p => ({ id: p.id })), family };
+        meal = { parts: parts.map(mealPartOut), family };
     }
     const title = document.getElementById(isMeal ? 'calendar-entry-meal-name' : 'calendar-entry-title').value.trim();
     const description = isMeal ? '' : document.getElementById('calendar-entry-description').value.trim();
@@ -6530,8 +6551,218 @@ async function loadMealNutritionData() {
     if (data?.ingredients) ingredientList = data.ingredients;
 }
 
-// A meal's calories, protein, carbs and fat for one person: each of its items for one person
-const mealNutrition = parts => sumNutrition(parts.flatMap(part => itemOnePersonRows(itemById(part.id))));
+// A meal's part as saved: its item and any quantity of its own
+const mealPartOut = p => ({ id: p.id, amount: (p.amount || '').trim(), unit: (p.unit || '').trim() });
+
+// One of a meal's items for one person: at the meal's own quantity where it has one (an amount
+// typed without a unit keeps the item's unit), else the item's
+function mealPartRows(part) {
+    const item = itemById(part.id);
+    if (!item) return [];
+    const amount = (part.amount || '').trim();
+    if (item.parts) return itemNutritionRows(item, '', '', partTimes(amount));
+    return itemNutritionRows(item, amount || item.amount, (part.unit || '').trim() || item.unit);
+}
+
+// A meal's calories, protein, carbs and fat for one person
+const mealNutrition = parts => sumNutrition(parts.flatMap(mealPartRows));
+
+// --- Meals calendar: a day's meals in a table, each item with its quantity and nutrition per
+// person, a total for each meal and one for the day. Meals and items are added, changed and
+// deleted from here, in their own dialogs over it. ---
+let mealDayDate = null; // the day showing (YYYY-MM-DD), or null
+let mealDayFamily = [];  // the family, as tabs along the top: [{ id, name }]
+let mealDayPerson = null; // the family member whose food is showing, or null for everyone (kept between days)
+
+function openMealDayView(date) {
+    mealDayDate = date;
+    document.getElementById('meal-day-heading').textContent = formatCalendarDate(date);
+    renderMealDayView();
+    bringModalToFront('meal-day-modal');
+    document.getElementById('meal-day-modal').style.display = 'flex';
+    fetch('/api/games/players').then(r => r.json()).then(family => {
+        mealDayFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+        if (!mealDayFamily.some(f => f.id === mealDayPerson)) mealDayPerson = null;
+        if (mealDayDate) renderMealDayView();
+    }).catch(() => { });
+}
+
+function setMealDayPerson(id) {
+    mealDayPerson = id;
+    renderMealDayView();
+}
+
+// Everyone, then each family member
+function renderMealDayFamily() {
+    const el = document.getElementById('meal-day-family');
+    el.hidden = !mealDayFamily.length;
+    el.innerHTML = [{ id: null, name: 'Everyone' }, ...mealDayFamily].map(f => `
+        <button type="button" role="tab" class="${f.id === mealDayPerson ? 'active' : ''}" aria-selected="${f.id === mealDayPerson}"
+            data-id="${escapeAttr(f.id || '')}">${escapeHtml(f.name)}</button>`).join('');
+    el.querySelectorAll('button').forEach(btn => {
+        btn.onclick = () => setMealDayPerson(btn.dataset.id || null);
+    });
+}
+
+// Whether a meal is the chosen person's: one for them, or one not set for anyone (as a planned
+// meal isn't)
+const mealDayForPerson = ev => !mealDayPerson || !ev.entry?.meal.family.length || ev.entry.meal.family.some(f => f.id === mealDayPerson);
+
+function closeMealDayView() {
+    document.getElementById('meal-day-modal').style.display = 'none';
+    mealDayDate = null;
+}
+
+// The day's meals as loaded for the calendar: its own, else the meal plan's (faded)
+const mealDayEvents = date => (calendarLoaded?.events || []).filter(ev => ev.start === date && (ev.entry?.meal || ev.planned));
+
+// How much of an item a meal part is per person, as shown, and whether it's the meal's own
+function mealPartQuantity(part, item) {
+    const own = !!((part.amount || '').trim() || (part.unit || '').trim());
+    if (!item) return { text: '', own };
+    if (item.parts) return { text: `${(part.amount || '').trim() || '1'} ×`, own };
+    const amount = (part.amount || '').trim() || item.amount;
+    const unit = (part.unit || '').trim() || item.unit;
+    return { text: [amount, unit].filter(Boolean).join(' '), own };
+}
+
+// The nutrition cells of a row: kcal, protein, carbs, fat, alcohol units ('+' where some of it
+// isn't counted; protein, carbs and fat left empty while nothing counted has them)
+function mealDayCells(t) {
+    if (!t.counted) return '<td class="num muted" colspan="5">' + (t.missing.length ? 'No calories set' : '') + '</td>';
+    const macros = t.noMacros.length < t.counted;
+    const more = t.missing.length ? '<span class="meal-day-more" title="Not counted: ' + escapeAttr(t.missing.join(', ')) + '">+</span>' : '';
+    return `<td class="num">${Math.round(t.kcal).toLocaleString()}${more}</td>`
+        + MACROS.map(([m]) => `<td class="num">${macros ? formatGrams(t[m]) : ''}</td>`).join('')
+        + `<td class="num">${t.alcohol > 0 ? formatAlcohol(t.alcohol).replace(' alcohol', '') : ''}</td>`;
+}
+
+// A row's picture: a single item's product picture (click for others), or the stack for one made of others
+function mealDayPicture(item) {
+    if (!item) return '';
+    if (item.parts) return `<span class="ingredient-pic item-group-pic meal-day-pic" title="Made of other items">${ITEM_GROUP_ICON}</span>`;
+    return `<button type="button" class="ingredient-pic meal-day-pic" data-pic="${escapeAttr(item.name)}" title="Choose a picture"></button>`;
+}
+
+// The single items the day view shows, for looking their pictures up
+function mealDayPictureNames() {
+    const names = [];
+    for (const ev of mealDayEvents(mealDayDate)) {
+        for (const part of (ev.entry?.meal || ev.planned).parts) {
+            const item = itemById(part.id);
+            if (!item) continue;
+            if (!item.parts) names.push(item.name);
+            else for (const p of item.parts) if (!itemById(p.itemId)?.parts) names.push(p.name);
+        }
+    }
+    return names;
+}
+
+function renderMealDayPictures() {
+    document.querySelectorAll('#meal-day-body [data-pic]').forEach(btn => {
+        setPictureButton(btn, shoppingProducts.get(shoppingLineKey(btn.dataset.pic)));
+    });
+}
+
+function renderMealDayView() {
+    const date = mealDayDate;
+    const body = document.getElementById('meal-day-body');
+    renderMealDayFamily();
+    const person = mealDayFamily.find(f => f.id === mealDayPerson);
+    const events = mealDayEvents(date).filter(mealDayForPerson);
+    const planned = events.some(ev => ev.planned);
+    const allParts = [];
+    const sections = events.map((ev, i) => {
+        const meal = ev.entry?.meal || ev.planned;
+        allParts.push(...meal.parts);
+        const who = ev.entry ? (meal.family.length ? `For ${meal.family.map(f => f.name).join(', ')}` : ev.entry.people ? `For ${ev.entry.people}` : '') : '';
+        const about = [who, ev.entry ? describeCalendarRepeat(ev.entry.repeat) : `From the meal plan (day ${ev.planned.day + 1})`].filter(Boolean).join(' · ');
+        const actions = ev.entry
+            ? `<button type="button" class="btn-control ghost btn-small" data-act="edit-meal" data-i="${i}">Edit</button>
+               <button type="button" class="btn-control ghost btn-small calendar-entry-delete" data-act="delete-meal" data-i="${i}">Delete</button>`
+            : `<button type="button" class="btn-control primary btn-small" data-act="add-planned" data-i="${i}">Add to the Day</button>`;
+        const rows = meal.parts.map(part => {
+            const item = itemById(part.id);
+            const qty = mealPartQuantity(part, item);
+            const row = `
+            <tr class="${itemUnconfirmed(item) ? 'unconfirmed' : ''}">
+                <td class="meal-day-pic-cell">${mealDayPicture(item)}</td>
+                <td><span class="meal-day-item">${escapeHtml(item?.name || part.name)}</span></td>
+                <td class="${qty.own ? 'meal-day-own' : ''}" title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</td>
+                ${mealDayCells(sumNutrition(mealPartRows(part)))}
+                <td class="meal-day-actions">${item ? `<button type="button" class="btn-control ghost btn-small" data-act="edit-item" data-id="${escapeAttr(item.id)}">Edit Item</button>` : ''}</td>
+            </tr>`;
+            // An item made of others lists what it's made of underneath, at the amounts this meal uses
+            if (!item?.parts) return row;
+            const times = partTimes(part.amount);
+            return row + item.parts.map(p => {
+                const child = itemById(p.itemId);
+                const childQty = !child ? '' : child.parts ? `${(Number((partTimes(p.amount) * times).toFixed(2)))} ×`
+                    : [p.amount && parseAmount(p.amount) != null ? Number((parseAmount(p.amount) * times).toFixed(2)) : p.amount, p.unit].filter(Boolean).join(' ');
+                const rowsOf = !child ? [] : child.parts ? itemNutritionRows(child, '', '', times * partTimes(p.amount)) : itemNutritionRows(child, p.amount, p.unit, times);
+                return `
+                <tr class="meal-day-sub${itemUnconfirmed(child) ? ' unconfirmed' : ''}">
+                    <td class="meal-day-pic-cell">${mealDayPicture(child)}</td>
+                    <td><span class="meal-day-item">${escapeHtml(child?.name || p.name)}</span></td>
+                    <td>${escapeHtml(childQty)}</td>
+                    ${mealDayCells(sumNutrition(rowsOf))}
+                    <td></td>
+                </tr>`;
+            }).join('');
+        }).join('');
+        return `
+        <tbody class="meal-day-meal${ev.planned ? ' planned' : ''}">
+            <tr class="meal-day-meal-head">
+                <th colspan="8">
+                    <span class="meal-day-meal-name">${escapeHtml(meal.name || mealEntryTitle(meal))}</span>
+                    ${about ? `<span class="meal-day-meal-about">${escapeHtml(about)}</span>` : ''}
+                </th>
+                <th class="meal-day-actions">${actions}</th>
+            </tr>
+            ${rows}
+            ${events.length > 1 ? `<tr class="meal-day-subtotal"><td colspan="3">Meal total</td>${mealDayCells(mealNutrition(meal.parts))}<td></td></tr>` : ''}
+        </tbody>`;
+    }).join('');
+    body.innerHTML = !events.length
+        ? `<p class="settings-hint meal-day-empty">Nothing planned${person ? ` for ${escapeHtml(person.name)}` : ''} on this day. Press + Add Meal to plan one.</p>`
+        : `<div class="meal-day-scroll"><table class="meal-day-table">
+            <thead><tr><th></th><th>Item</th><th>Quantity</th><th class="num">kcal</th><th class="num">Protein</th><th class="num">Carbs</th>
+                <th class="num">Fat</th><th class="num">Alcohol</th><th></th></tr></thead>
+            ${sections}
+            <tfoot><tr><td colspan="3">${person ? `Day total for ${escapeHtml(person.name)}` : 'Day total per person'}${planned ? ' <span class="meal-day-meal-about">(with the planned meal)</span>' : ''}</td>
+                ${mealDayCells(mealNutrition(allParts))}<td></td></tr></tfoot>
+        </table></div>`;
+    body.querySelectorAll('[data-pic]').forEach(btn => {
+        btn.onclick = () => openProductPicker(btn.dataset.pic);
+    });
+    renderMealDayPictures();
+    showShoppingPictures();
+    body.querySelectorAll('[data-act]').forEach(btn => {
+        const ev = events[Number(btn.dataset.i)];
+        btn.onclick = () => {
+            const act = btn.dataset.act;
+            if (act === 'edit-meal') openCalendarEntryModal(date, ev.entry);
+            else if (act === 'add-planned') openCalendarEntryModal(date);
+            else if (act === 'delete-meal') deleteMealFromDay(ev.entry);
+            else if (act === 'edit-item') openItemBuilder(itemById(btn.dataset.id), { onSaved: () => renderCalendar() });
+        };
+    });
+}
+
+// A repeating meal is deleted on this day only (the meal dialog can delete every occurrence)
+async function deleteMealFromDay(entry) {
+    const title = mealEntryTitle(entry.meal);
+    const date = mealDayDate;
+    const justOne = !!entry.repeat;
+    if (!confirm(justOne ? `Delete "${title}" on ${formatCalendarDate(date)} only?` : `Delete "${title}"?`)) return;
+    try {
+        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(entry.id)}` + (justOne ? `/occurrences/${date}` : ''), { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
+        renderCalendar();
+    } catch (err) {
+        showToast(`Couldn't delete: ${err.message}`, 'error', 4000);
+    }
+}
 
 // The line under a meal: its total per person (with "+" if some items aren't counted), or null if
 // none of it has calories
@@ -6694,7 +6925,7 @@ async function saveMealPlanDay() {
     btn.disabled = true;
     try {
         await putMealPlanDay(justOne ? planDay : sourceDay,
-            { name: document.getElementById('calendar-entry-meal-name').value.trim(), parts: parts.map(p => ({ id: p.id })), repeat });
+            { name: document.getElementById('calendar-entry-meal-name').value.trim(), parts: parts.map(mealPartOut), repeat });
     } catch (err) {
         setStatus(err.message, true);
     } finally {
@@ -6994,17 +7225,20 @@ let shoppingLookupRunning = false;
 
 const shoppingLineKey = line => line.trim().toLowerCase();
 
-// What needs a picture: the shopping list's lines, and the single items while their list is showing
+// What needs a picture: the shopping list's lines, and the single items while their list or a
+// meal day is showing
 function shoppingPictureItems() {
     const lines = document.getElementById('shopping-list').value.split('\n');
     const showing = appView === 'recipes' && mealsTab === 'ingredients';
-    return [...lines, ...(showing ? ingredientList.filter(i => !i.parts).map(i => i.name) : [])].map(shoppingLineKey);
+    return [...lines, ...(showing ? ingredientList.filter(i => !i.parts).map(i => i.name) : []),
+        ...(mealDayDate ? mealDayPictureNames() : [])].map(shoppingLineKey);
 }
 
 function renderProductPictures() {
     renderShoppingThumbs();
     renderIngredientPictures();
     renderItemBuilderPicture();
+    renderMealDayPictures();
 }
 
 // Draws the known pictures, then looks up the items that don't have one yet, one at a time
@@ -7379,6 +7613,9 @@ function openItemBuilder(item = null, options = {}) {
     itemBuilderField('unit').value = item?.unit || '';
     itemBuilderField('product-search').value = '';
     itemBuilderField('products').innerHTML = '';
+    itemBuilderField('foods').innerHTML = '';
+    clearTimeout(itemBuilderLookupTimer);
+    itemBuilderAutoQuery = '';
     itemBuilderField('part-search').value = '';
     itemBuilderField('delete-btn').style.display = item ? '' : 'none';
     setCalendarSettingsStatus('item-builder-status', '', false);
@@ -7459,12 +7696,31 @@ function focusItemBuilderProductSearch() {
 }
 
 let itemBuilderProductResults = [];
+let itemBuilderLookupTimer = null;
+let itemBuilderAutoQuery = ''; // what the search box was last filled with from the name
 
+// Typing a single item's name looks it up shortly after typing stops, unless a search of your own
+// has been typed in the box
+function scheduleItemBuilderLookup() {
+    clearTimeout(itemBuilderLookupTimer);
+    const search = itemBuilderField('product-search');
+    if (search.value.trim() && search.value.trim() !== itemBuilderAutoQuery) return;
+    const name = itemBuilderField('name').value.trim();
+    if (name.length < 3) return;
+    itemBuilderLookupTimer = setTimeout(() => {
+        if (!itemBuilder || itemBuilder.kind !== 'single' || itemBuilderField('name').value.trim() !== name) return;
+        search.value = itemBuilderAutoQuery = name;
+        searchItemBuilderProducts();
+    }, 700);
+}
+
+// UK foods (for calories) and Open Food Facts products (with pictures, and calories) for the search
 async function searchItemBuilderProducts() {
     const b = itemBuilder;
     const query = itemBuilderField('product-search').value.trim();
     const results = itemBuilderField('products');
     if (!b || !query) return;
+    searchItemBuilderFoods(query);
     results.innerHTML = '<p class="settings-hint shopping-picker-message">Searching Open Food Facts...</p>';
     try {
         const res = await fetch(`/api/shopping-list/products?${new URLSearchParams({ q: query })}`);
@@ -7489,10 +7745,62 @@ async function searchItemBuilderProducts() {
     }
 }
 
-// index into the results, or -1 for no picture. A product picked before a name is typed names it.
+// The best few UK food table matches, as a line of chips with their calories per 100 g
+async function searchItemBuilderFoods(query) {
+    const b = itemBuilder;
+    const el = itemBuilderField('foods');
+    try {
+        const res = await fetch(`/api/nutrition/search?source=cofid&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        if (itemBuilder !== b || itemBuilderField('product-search').value.trim() !== query) return;
+        const foods = data.foods.slice(0, 6);
+        el.innerHTML = foods.map((f, i) => `
+            <button type="button" class="calendar-entry-tag-chip${b.nutrition?.source === 'cofid' && b.nutrition.sourceId === f.id ? ' selected' : ''}"
+                data-i="${i}" title="Use its calories (UK food tables)">${escapeHtml(f.name)} · ${Math.round(f.kcalPer100g)} kcal/100g</button>`).join('');
+        el.querySelectorAll('[data-i]').forEach(btn => {
+            btn.onclick = async () => {
+                if (await setItemBuilderNutritionFrom('cofid', foods[Number(btn.dataset.i)].id)) {
+                    el.querySelectorAll('[data-i]').forEach(other => other.classList.toggle('selected', other === btn));
+                }
+            };
+        });
+    } catch (err) {
+        if (itemBuilder === b) el.innerHTML = '';
+    }
+}
+
+// Sets the item's calories from a looked-up food (weights it already had are kept unless the food
+// lists its own). Returns whether it worked; quiet says nothing when the lookup fails.
+async function setItemBuilderNutritionFrom(source, id, quiet = false) {
+    const b = itemBuilder;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('item-builder-status', text, isError);
+    try {
+        const res = await fetch(`/api/nutrition/food/${source}/${encodeURIComponent(id)}`);
+        const food = await res.json();
+        if (!res.ok) throw new Error(food.error || 'Lookup failed');
+        if (itemBuilder !== b) return false;
+        b.nutrition = {
+            kcalPer100g: food.kcalPer100g, proteinPer100g: food.proteinPer100g ?? null, carbsPer100g: food.carbsPer100g ?? null,
+            fatPer100g: food.fatPer100g ?? null, alcoholPer100g: food.alcoholPer100g ?? null,
+            gramsPerUnit: { ...(b.nutrition?.gramsPerUnit || {}), ...food.gramsPerUnit },
+            source: food.source, sourceId: food.id, sourceName: food.name,
+        };
+        renderItemBuilderCalories();
+        setStatus(`Calories from ${food.name}.`, false);
+        return true;
+    } catch (err) {
+        if (!quiet && itemBuilder === b) setStatus(err.message, true);
+        return false;
+    }
+}
+
+// index into the results, or -1 for no picture. A product picked before a name is typed names it;
+// its calories come with it, where Open Food Facts has them.
 function chooseItemBuilderProduct(index) {
+    const b = itemBuilder;
     const product = index < 0 ? null : itemBuilderProductResults[index];
-    itemBuilder.product = product;
+    b.product = product;
     const name = itemBuilderField('name');
     if (product && !name.value.trim()) {
         name.value = product.name;
@@ -7500,6 +7808,10 @@ function chooseItemBuilderProduct(index) {
     }
     itemBuilderField('products').querySelectorAll('.shopping-picker-option').forEach((btn, i) => btn.classList.toggle('selected', i === index));
     renderItemBuilderPicture();
+    if (!product) return;
+    setItemBuilderNutritionFrom('off', product.code, true).then(ok => {
+        if (!ok && itemBuilder === b) setCalendarSettingsStatus('item-builder-status', 'Picture chosen. Open Food Facts has no calories for it.', false);
+    });
 }
 
 // The single item's calories for one person; click to look them up or type them in

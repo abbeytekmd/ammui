@@ -1689,6 +1689,30 @@
 
 
     <!-- Calendar Entry Modal (Calendar tab and the Meals tab's calendar: click a day to add, an entry to edit) -->
+    <!-- Meals calendar: one day's meals, their items and the totals per person -->
+    <div id="meal-day-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeMealDayView()">
+        <div class="modal-content meal-day-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2 id="meal-day-heading"></h2>
+                </div>
+                <div class="item-builder-header-actions">
+                    <button type="button" class="btn-control primary" onclick="openCalendarEntryModal(mealDayDate)">+ Add Meal</button>
+                    <button class="btn-close" onclick="closeMealDayView()" title="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <!-- Whose food to show: everyone's, or one family member's -->
+            <div id="meal-day-family" class="nutrition-sources meal-day-family" role="tablist" aria-label="Whose food" hidden></div>
+            <div id="meal-day-body" class="modal-body meal-day-body"></div>
+        </div>
+    </div>
+
     <div id="calendar-entry-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
@@ -2384,7 +2408,7 @@
                     <label for="item-builder-name">Name</label>
                     <div class="recipe-name-row">
                         <input type="text" id="item-builder-name" class="recipe-name-input" maxlength="300" autocomplete="off"
-                            placeholder="e.g. Peas, or Sunday roast" oninput="onItemBuilderNameInput()"
+                            placeholder="e.g. Peas, or Sunday roast" oninput="onItemBuilderNameInput(); scheduleItemBuilderLookup()"
                             onkeydown="if(event.key==='Enter') { event.preventDefault(); saveItemBuilder(); }">
                         <label class="recipe-unconfirmed">
                             <input type="checkbox" id="item-builder-unconfirmed"> Unconfirmed
@@ -2397,6 +2421,18 @@
                     <button type="button" role="tab" data-kind="group" onclick="setItemBuilderKind('group')">Made of other items</button>
                 </div>
                 <div id="item-builder-single" class="item-builder-section">
+                    <!-- Looked up as the name is typed: pick a match to fill in the picture and calories -->
+                    <div class="settings-group">
+                        <label for="item-builder-product-search">Matches <span class="calendar-entry-tags-hint">— a product
+                            gives the picture and calories, a UK food the calories</span></label>
+                        <div class="nutrition-search-row">
+                            <input type="search" id="item-builder-product-search" autocomplete="off" placeholder="Search, e.g. frozen peas"
+                                onkeydown="if(event.key==='Enter') { event.preventDefault(); searchItemBuilderProducts(); }">
+                            <button type="button" class="btn-control btn-small primary" onclick="searchItemBuilderProducts()">Search</button>
+                        </div>
+                        <div id="item-builder-foods" class="item-builder-foods"></div>
+                        <div id="item-builder-products" class="shopping-picker-results item-builder-products"></div>
+                    </div>
                     <div class="item-builder-single-row">
                         <button type="button" id="item-builder-pic" class="ingredient-pic item-builder-pic"
                             onclick="focusItemBuilderProductSearch()" title="Choose a picture"></button>
@@ -2411,16 +2447,6 @@
                         </div>
                         <button type="button" id="item-builder-kcal" class="recipe-kcal item-builder-kcal"
                             onclick="openItemBuilderNutrition()"></button>
-                    </div>
-                    <div class="settings-group">
-                        <label for="item-builder-product-search">Find a product <span class="calendar-entry-tags-hint">— for
-                            its picture, and its name if none is typed</span></label>
-                        <div class="nutrition-search-row">
-                            <input type="search" id="item-builder-product-search" autocomplete="off" placeholder="e.g. frozen peas"
-                                onkeydown="if(event.key==='Enter') { event.preventDefault(); searchItemBuilderProducts(); }">
-                            <button type="button" class="btn-control btn-small primary" onclick="searchItemBuilderProducts()">Search</button>
-                        </div>
-                        <div id="item-builder-products" class="shopping-picker-results item-builder-products"></div>
                     </div>
                 </div>
                 <div id="item-builder-group" class="item-builder-section" hidden>

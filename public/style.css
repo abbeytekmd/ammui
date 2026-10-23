@@ -2372,6 +2372,208 @@ p.subtitle {
     cursor: grabbing;
 }
 
+/* Meals calendar day view: a big table of the day's meals */
+.modal-content.meal-day-content {
+    max-width: min(1100px, 96vw);
+    width: 96vw;
+    max-height: 90vh;
+}
+
+.nutrition-sources.meal-day-family {
+    flex-shrink: 0;
+    margin: 0 2rem 1rem;
+    overflow-x: auto;
+}
+
+.nutrition-sources.meal-day-family[hidden] {
+    display: none;
+}
+
+.nutrition-sources.meal-day-family button {
+    flex: 1 0 auto;
+    padding: 0.55rem 1rem;
+    font-size: 0.95rem;
+    white-space: nowrap;
+}
+
+.meal-day-scroll {
+    overflow-x: auto;
+}
+
+.meal-day-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.meal-day-table th,
+.meal-day-table td {
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.meal-day-table thead th {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+
+.meal-day-table .num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.meal-day-table .muted {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.meal-day-meal-head th {
+    padding-top: 1.1rem;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.meal-day-meal-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.meal-day-meal-about {
+    margin-left: 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.meal-day-meal.planned {
+    font-style: italic;
+    opacity: 0.75;
+}
+
+.meal-day-table tbody tr:not(.meal-day-meal-head):hover td {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.meal-day-table tr.unconfirmed td {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.meal-day-pic-cell {
+    width: 3rem;
+}
+
+.meal-day-table td.meal-day-pic-cell {
+    padding-right: 0;
+}
+
+.ingredient-pic.meal-day-pic {
+    width: 2.6rem;
+}
+
+.meal-day-sub .ingredient-pic.meal-day-pic {
+    width: 1.9rem;
+    height: 1.9rem;
+    flex-basis: 1.9rem;
+    margin-left: 0.7rem;
+}
+
+.meal-day-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+/* What an item made of others is made of, under it */
+.meal-day-sub td {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.meal-day-sub .meal-day-item {
+    padding-left: 0.75rem;
+}
+
+.meal-day-own {
+    font-weight: 700;
+}
+
+.meal-day-more {
+    margin-left: 0.15rem;
+    color: var(--text-muted);
+    cursor: help;
+}
+
+.meal-day-subtotal td {
+    font-weight: 600;
+    color: var(--text-muted);
+    border-top: 1px dashed var(--card-border);
+}
+
+.meal-day-table tfoot td {
+    padding-top: 0.9rem;
+    font-weight: 800;
+    font-size: 1rem;
+    border-top: 2px solid var(--card-border);
+}
+
+.meal-day-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.meal-day-actions .btn-control + .btn-control {
+    margin-left: 0.4rem;
+}
+
+.meal-day-empty {
+    padding: 2rem 0;
+    text-align: center;
+}
+
+/* A meal's own quantity for an item; empty shows the item's own, faded */
+.calendar-entry-parts .calendar-entry-part input {
+    width: auto;
+    min-width: 0;
+    padding: 0.25rem 0.4rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.calendar-entry-parts .calendar-entry-part input:hover,
+.calendar-entry-parts .calendar-entry-part input:focus {
+    outline: none;
+    border-color: var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.calendar-entry-parts .calendar-entry-part input.calendar-entry-part-amount {
+    flex: 0 0 3.75rem;
+    width: 3.75rem;
+}
+
+.calendar-entry-parts .calendar-entry-part input.calendar-entry-part-unit {
+    flex: 0 0 4.5rem;
+    width: 4.5rem;
+}
+
+.calendar-entry-part-times {
+    flex: 0 0 4.5rem;
+    color: var(--text-muted);
+}
+
 .calendar-entry-part-name {
     flex: 1;
     min-width: 0;
@@ -2552,7 +2754,7 @@ p.subtitle {
     overflow: hidden;
 }
 
-/* Under a meal on the meal plan and Meals calendar: its calories, protein, carbs and fat for one
+/* Under a meal on the meal plan: its calories, protein, carbs and fat for one
    person ("+": some items not counted) */
 .meal-nutrition {
     padding-left: 0.35rem;
@@ -3079,6 +3281,18 @@ p.subtitle {
 .item-builder-products {
     max-height: 18rem;
     overflow-y: auto;
+}
+
+.item-builder-products:empty,
+.item-builder-foods:empty {
+    display: none;
+}
+
+/* UK food table matches, as chips above the products */
+.item-builder-foods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
 }
 
 .item-builder-no-pic {

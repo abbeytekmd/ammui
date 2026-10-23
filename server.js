@@ -2971,7 +2971,7 @@ function cleanCalendarEntry(body) {
         repeat = { unit, interval, until };
     }
 
-    // A meal (on the Meals tab's calendar): { parts: [{ id }] (items), family: [family member ids] }
+    // A meal (on the Meals tab's calendar): { parts: [{ id, amount, unit }] (items), family: [family member ids] }
     let meal = null;
     if (body.meal) {
         const ids = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(Boolean))];
@@ -3092,19 +3092,21 @@ app.put('/api/meal-plan', express.json(), (req, res) => {
     res.json(getMealPlan());
 });
 
-// A meal's parts in order: each { id } (or a plain id) is an item. Returns them without repeats,
-// or a string saying what's wrong.
+// A meal's parts in order: each { id, amount, unit } (or a plain id) is an item, with any quantity
+// per person of its own ('' for the item's). Returns them without repeats, or a string saying what's wrong.
 function cleanMealParts(list) {
     const seen = new Set();
+    const text = v => String(v ?? '').trim();
     const parts = (Array.isArray(list) ? list : [])
-        .map(p => ({ id: String((p && typeof p === 'object' ? p.id : p) || '') }))
+        .map(p => p && typeof p === 'object' ? { id: text(p.id), amount: text(p.amount), unit: text(p.unit) } : { id: text(p), amount: '', unit: '' })
         .filter(p => p.id && !seen.has(p.id) && seen.add(p.id));
     if (parts.length > 20) return 'Too many items';
+    if (parts.some(p => p.amount.length > 20 || p.unit.length > 40)) return 'An amount or unit is too long';
     if (parts.some(p => !getIngredient(p.id))) return 'An item no longer exists';
     return parts;
 }
 
-// One day of the plan (0-based): { name, parts: [{ id }], repeat?: { unit: day|week, interval } },
+// One day of the plan (0-based): { name, parts: [{ id, amount, unit }], repeat?: { unit: day|week, interval } },
 // or { skipped: true } to leave it empty where another day's repeat would fill it. No parts clears it.
 app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
     const day = Number(req.params.day);
