@@ -2506,6 +2506,43 @@ p.subtitle {
     font-weight: 700;
 }
 
+.meal-day-qty-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+/* How many of an item: - 2 x + */
+.meal-day-count {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 0.6rem;
+    align-items: center;
+    gap: 0.1rem;
+    padding: 0.05rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+
+.meal-day-count .recipe-ingredient-btn {
+    opacity: 1;
+    font-size: 1rem;
+}
+
+.meal-day-count .recipe-ingredient-btn:disabled {
+    visibility: visible;
+    opacity: 0.3;
+    cursor: default;
+}
+
+.meal-day-times {
+    min-width: 2.2rem;
+    text-align: center;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
 .meal-day-more {
     margin-left: 0.15rem;
     color: var(--text-muted);

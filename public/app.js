@@ -5673,7 +5673,7 @@ let calendarMeals = false;
 const MEAL_ENTRY_COLOR = '#f59e0b';
 
 // A meal shows its name, or else its parts: "Roast chicken, Mash, Peas"
-const mealEntryTitle = meal => meal.name || meal.parts.map(p => p.name).join(', ') || 'Meal';
+const mealEntryTitle = meal => `${(meal.times || 1) !== 1 ? `${Number(meal.times.toFixed(2))} × ` : ''}${meal.name || meal.parts.map(p => p.name).join(', ') || 'Meal'}`;
 
 function showCalendar() {
     openCalendarView(false);
@@ -6172,8 +6172,9 @@ function renderCalendarEntryParts() {
     const list = document.getElementById('calendar-entry-parts');
     list.innerHTML = editing.parts.map((p, i) => {
         const item = itemById(p.id);
+        const many = mealPartTimes(p, item);
         const quantity = !item ? '' : item.parts ? `
-            <input type="text" class="calendar-entry-part-amount" data-field="amount" value="${escapeAttr(p.amount || '')}" maxlength="20"
+            <input type="text" class="calendar-entry-part-amount" data-field="times" value="${many === 1 ? '' : Number(many.toFixed(2))}" maxlength="20"
                 placeholder="1" aria-label="How many per person" title="How many per person">
             <span class="calendar-entry-part-times">×</span>` : `
             <input type="text" class="calendar-entry-part-amount" data-field="amount" value="${escapeAttr(p.amount || '')}" maxlength="20"
@@ -6184,7 +6185,7 @@ function renderCalendarEntryParts() {
         <li class="calendar-entry-part${itemUnconfirmed(item) ? ' unconfirmed' : ''}" data-i="${i}">
             <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
             ${quantity}
-            <span class="calendar-entry-part-name">${escapeHtml(item?.name || p.name)}</span>
+            <span class="calendar-entry-part-name">${!item?.parts && (p.times || 1) !== 1 ? `<span class="meal-day-times" title="How many (change it in the day view)">${formatTimes(p.times)}</span> ` : ''}${escapeHtml(item?.name || p.name)}</span>
             ${item ? '<button type="button" class="btn-control ghost btn-small" data-act="open" title="Edit this item">Edit</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
         </li>`;
@@ -6193,7 +6194,12 @@ function renderCalendarEntryParts() {
         const part = editing.parts[Number(row.dataset.i)];
         row.querySelector('.calendar-entry-part-handle').onpointerdown = e => dragCalendarEntryPart(e, row, list);
         row.querySelectorAll('input').forEach(input => {
-            input.oninput = () => { part[input.dataset.field] = input.value; };
+            input.oninput = () => {
+                if (input.dataset.field !== 'times') { part[input.dataset.field] = input.value; return; }
+                const n = parseAmount(input.value);
+                part.amount = '';
+                part.times = n > 0 ? n : 1;
+            };
             input.onkeydown = e => { if (e.key === 'Enter') e.preventDefault(); };
         });
         const open = row.querySelector('[data-act="open"]');
@@ -6320,6 +6326,7 @@ async function openCalendarEntryModal(date, entry = null) {
     if (calendarMeals) {
         await loadCalendarEntryMealOptions(meal || planned);
         calendarEntryEditing.parts = (meal ? meal.parts : planned ? planned.parts : []).map(p => ({ ...p }));
+        calendarEntryEditing.times = meal?.times || 1; // how many of the meal, changed in the day view
         // Who it's for: the meal's own family, else whoever the last saved meal was for
         let family = meal ? meal.family.map(f => f.id) : [];
         if (!family.length) {
@@ -6425,7 +6432,7 @@ async function saveCalendarEntry() {
         const { parts, family } = calendarEntryEditing;
         if (!parts.length) { setStatus('Add at least one item.', true); return; }
         if (calendarFamilyOptions.length && !family.length) { setStatus('Choose who it\'s for.', true); return; }
-        meal = { parts: parts.map(mealPartOut), family };
+        meal = { parts: parts.map(mealPartOut), family, times: calendarEntryEditing.times || 1 };
     }
     const title = document.getElementById(isMeal ? 'calendar-entry-meal-name' : 'calendar-entry-title').value.trim();
     const description = isMeal ? '' : document.getElementById('calendar-entry-description').value.trim();
@@ -6551,17 +6558,27 @@ async function loadMealNutritionData() {
     if (data?.ingredients) ingredientList = data.ingredients;
 }
 
-// A meal's part as saved: its item and any quantity of its own
-const mealPartOut = p => ({ id: p.id, amount: (p.amount || '').trim(), unit: (p.unit || '').trim() });
+// How many of a meal's item there are. For one made of others that's its only quantity (one saved
+// before counts were kept has it as its amount).
+const mealPartTimes = (part, item) => (item?.parts ? partTimes(part.amount) : 1) * (part.times || 1);
+
+// A meal's part as saved: its item, any quantity of its own and how many of it. An item made of
+// others keeps just the how many.
+function mealPartOut(p) {
+    const item = itemById(p.id);
+    if (item?.parts) return { id: p.id, amount: '', unit: '', times: mealPartTimes(p, item) };
+    return { id: p.id, amount: (p.amount || '').trim(), unit: (p.unit || '').trim(), times: p.times || 1 };
+}
 
 // One of a meal's items for one person: at the meal's own quantity where it has one (an amount
-// typed without a unit keeps the item's unit), else the item's
+// typed without a unit keeps the item's unit), else the item's, times how many of it
 function mealPartRows(part) {
     const item = itemById(part.id);
     if (!item) return [];
     const amount = (part.amount || '').trim();
-    if (item.parts) return itemNutritionRows(item, '', '', partTimes(amount));
-    return itemNutritionRows(item, amount || item.amount, (part.unit || '').trim() || item.unit);
+    const times = part.times || 1;
+    if (item.parts) return itemNutritionRows(item, '', '', partTimes(amount) * times);
+    return itemNutritionRows(item, amount || item.amount, (part.unit || '').trim() || item.unit, times);
 }
 
 // A meal's calories, protein, carbs and fat for one person
@@ -6620,7 +6637,7 @@ const mealDayEvents = date => (calendarLoaded?.events || []).filter(ev => ev.sta
 function mealPartQuantity(part, item) {
     const own = !!((part.amount || '').trim() || (part.unit || '').trim());
     if (!item) return { text: '', own };
-    if (item.parts) return { text: `${(part.amount || '').trim() || '1'} ×`, own };
+    if (item.parts) return { text: '', own: false }; // its count is how much of it
     const amount = (part.amount || '').trim() || item.amount;
     const unit = (part.unit || '').trim() || item.unit;
     return { text: [amount, unit].filter(Boolean).join(' '), own };
@@ -6671,41 +6688,51 @@ function renderMealDayView() {
     const person = mealDayFamily.find(f => f.id === mealDayPerson);
     const events = mealDayEvents(date).filter(mealDayForPerson);
     const planned = events.some(ev => ev.planned);
-    const allParts = [];
+    const dayRows = []; // every item of every meal, times how many of its meal
     const sections = events.map((ev, i) => {
         const meal = ev.entry?.meal || ev.planned;
-        allParts.push(...meal.parts);
+        const mealTimes = meal.times || 1;
+        const mealRows = meal.parts.flatMap(mealPartRows).map(r => ({ name: r.name, result: scaleNutrition(r.result, mealTimes) }));
+        dayRows.push(...mealRows);
+        // How many of the meal: - and + on the day's own meals (a planned one is added first)
+        const mealCount = ev.entry ? `<span class="meal-day-count" title="How many of this meal">
+                <button type="button" class="recipe-ingredient-btn" data-act="meal-count" data-i="${i}" data-step="-1"
+                    title="One fewer" ${mealTimes <= 1 ? 'disabled' : ''}>−</button>
+                <span class="meal-day-times">${formatTimes(mealTimes)}</span>
+                <button type="button" class="recipe-ingredient-btn" data-act="meal-count" data-i="${i}" data-step="1" title="One more">+</button>
+            </span>` : '';
         const who = ev.entry ? (meal.family.length ? `For ${meal.family.map(f => f.name).join(', ')}` : ev.entry.people ? `For ${ev.entry.people}` : '') : '';
         const about = [who, ev.entry ? describeCalendarRepeat(ev.entry.repeat) : `From the meal plan (day ${ev.planned.day + 1})`].filter(Boolean).join(' · ');
         const actions = ev.entry
             ? `<button type="button" class="btn-control ghost btn-small" data-act="edit-meal" data-i="${i}">Edit</button>
                <button type="button" class="btn-control ghost btn-small calendar-entry-delete" data-act="delete-meal" data-i="${i}">Delete</button>`
             : `<button type="button" class="btn-control primary btn-small" data-act="add-planned" data-i="${i}">Add to the Day</button>`;
-        const rows = meal.parts.map(part => {
+        const rows = meal.parts.map((part, j) => {
             const item = itemById(part.id);
             const qty = mealPartQuantity(part, item);
+            const times = mealPartTimes(part, item);
+            const count = times !== 1 ? `<span class="meal-day-times">${formatTimes(times)}</span>` : '';
             const row = `
             <tr class="${itemUnconfirmed(item) ? 'unconfirmed' : ''}">
                 <td class="meal-day-pic-cell">${mealDayPicture(item)}</td>
                 <td><span class="meal-day-item">${escapeHtml(item?.name || part.name)}</span></td>
-                <td class="${qty.own ? 'meal-day-own' : ''}" title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</td>
+                <td class="meal-day-qty"><span class="meal-day-qty-row">${count}<span class="${qty.own ? 'meal-day-own' : ''}"
+                    title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</span></span></td>
                 ${mealDayCells(sumNutrition(mealPartRows(part)))}
                 <td class="meal-day-actions">${item ? `<button type="button" class="btn-control ghost btn-small" data-act="edit-item" data-id="${escapeAttr(item.id)}">Edit Item</button>` : ''}</td>
             </tr>`;
-            // An item made of others lists what it's made of underneath, at the amounts this meal uses
+            // An item made of others lists what one of it is made of underneath, as the item has it;
+            // the row above carries how many and the figures
             if (!item?.parts) return row;
-            const times = partTimes(part.amount);
             return row + item.parts.map(p => {
                 const child = itemById(p.itemId);
-                const childQty = !child ? '' : child.parts ? `${(Number((partTimes(p.amount) * times).toFixed(2)))} ×`
-                    : [p.amount && parseAmount(p.amount) != null ? Number((parseAmount(p.amount) * times).toFixed(2)) : p.amount, p.unit].filter(Boolean).join(' ');
-                const rowsOf = !child ? [] : child.parts ? itemNutritionRows(child, '', '', times * partTimes(p.amount)) : itemNutritionRows(child, p.amount, p.unit, times);
+                const childQty = child?.parts ? '' : [p.amount, p.unit].filter(Boolean).join(' ');
                 return `
                 <tr class="meal-day-sub${itemUnconfirmed(child) ? ' unconfirmed' : ''}">
                     <td class="meal-day-pic-cell">${mealDayPicture(child)}</td>
                     <td><span class="meal-day-item">${escapeHtml(child?.name || p.name)}</span></td>
                     <td>${escapeHtml(childQty)}</td>
-                    ${mealDayCells(sumNutrition(rowsOf))}
+                    <td colspan="5"></td>
                     <td></td>
                 </tr>`;
             }).join('');
@@ -6714,13 +6741,15 @@ function renderMealDayView() {
         <tbody class="meal-day-meal${ev.planned ? ' planned' : ''}">
             <tr class="meal-day-meal-head">
                 <th colspan="8">
-                    <span class="meal-day-meal-name">${escapeHtml(meal.name || mealEntryTitle(meal))}</span>
+                    ${mealCount}
+                    <span class="meal-day-meal-name">${escapeHtml(meal.name || mealEntryTitle({ ...meal, times: 1 }))}</span>
                     ${about ? `<span class="meal-day-meal-about">${escapeHtml(about)}</span>` : ''}
                 </th>
                 <th class="meal-day-actions">${actions}</th>
             </tr>
             ${rows}
-            ${events.length > 1 ? `<tr class="meal-day-subtotal"><td colspan="3">Meal total</td>${mealDayCells(mealNutrition(meal.parts))}<td></td></tr>` : ''}
+            ${events.length > 1 || mealTimes !== 1 ? `<tr class="meal-day-subtotal"><td colspan="3">Meal total${mealTimes !== 1
+                ? ` <span class="meal-day-meal-about">(${formatTimes(mealTimes)} the items above)</span>` : ''}</td>${mealDayCells(sumNutrition(mealRows))}<td></td></tr>` : ''}
         </tbody>`;
     }).join('');
     body.innerHTML = !events.length
@@ -6730,7 +6759,7 @@ function renderMealDayView() {
                 <th class="num">Fat</th><th class="num">Alcohol</th><th></th></tr></thead>
             ${sections}
             <tfoot><tr><td colspan="3">${person ? `Day total for ${escapeHtml(person.name)}` : 'Day total per person'}${planned ? ' <span class="meal-day-meal-about">(with the planned meal)</span>' : ''}</td>
-                ${mealDayCells(mealNutrition(allParts))}<td></td></tr></tfoot>
+                ${mealDayCells(sumNutrition(dayRows))}<td></td></tr></tfoot>
         </table></div>`;
     body.querySelectorAll('[data-pic]').forEach(btn => {
         btn.onclick = () => openProductPicker(btn.dataset.pic);
@@ -6745,8 +6774,40 @@ function renderMealDayView() {
             else if (act === 'add-planned') openCalendarEntryModal(date);
             else if (act === 'delete-meal') deleteMealFromDay(ev.entry);
             else if (act === 'edit-item') openItemBuilder(itemById(btn.dataset.id), { onSaved: () => renderCalendar() });
+            else if (act === 'meal-count') changeMealDayCount(ev.entry, Number(btn.dataset.step));
         };
     });
+}
+
+// "2 ×", "1.5 ×"
+const formatTimes = n => `${Number(n.toFixed(2))} ×`;
+
+// One more or fewer of a meal (never below one; Delete removes it), saved straight away. A
+// repeating meal changes on this day only, as its own meal from then on.
+async function changeMealDayCount(entry, step) {
+    const current = entry.meal.times || 1;
+    const times = Math.max(1, Math.min(99, current + step));
+    if (times === current) return;
+    const parts = entry.meal.parts.map(mealPartOut);
+    const date = mealDayDate;
+    const justOne = !!entry.repeat;
+    document.querySelectorAll('#meal-day-body [data-act="meal-count"]').forEach(btn => { btn.disabled = true; });
+    try {
+        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(entry.id)}` + (justOne ? `/occurrences/${date}` : ''), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                date: justOne ? date : entry.startDate || entry.date, title: entry.meal.name, description: '',
+                repeat: justOne ? null : entry.repeat, tags: [],
+                meal: { parts, family: entry.meal.family.map(f => f.id), times },
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+    } catch (err) {
+        showToast(`Couldn't change it: ${err.message}`, 'error', 4000);
+    }
+    renderCalendar(); // redraws this day too
 }
 
 // A repeating meal is deleted on this day only (the meal dialog can delete every occurrence)
