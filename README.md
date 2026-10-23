@@ -31,9 +31,9 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
-* Meal planning: build **item groups** (e.g. Mash, Roast chicken) from one or more **items**, each with the amount for one person. Plan a meal on the Meals tab's own Calendar by adding one or more item groups or single items, an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan, Item Groups and Items tabs down the left, with the shopping list alongside. Items and item groups can be exported and imported.
-* A shopping list beside the meals, typed or by voice ("add milk"). It shares the items list with the item groups: saved items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
-* Calories, protein, carbs, fat and alcohol units for each item group per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
+* Meal planning with **items**. An item is either a single thing (e.g. Peas), with its quantity for one person, a picture and calories, or made of other items (e.g. Mash, Roast chicken), each at the amount it uses; those can be made of others in turn. Items are made and changed in the **item builder**, which searches Open Food Facts for a single item's name and picture, and your items for what one is made of. Plan a meal on the Meals tab's own Calendar by adding one or more items (or making a new one there and then), an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan and Items tabs down the left, with the shopping list alongside. Items can be exported and imported.
+* A shopping list beside the meals, typed or by voice ("add milk"). It shares the items list with the meals: saved single items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
+* Calories, protein, carbs, fat and alcohol units for each item and meal per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
@@ -326,7 +326,7 @@ Comparing a month with the same month a year earlier needs readings from both mo
 
 ## Calories
 
-The **Meals** tab can show how many calories, and how much protein, carbohydrate and fat, each item group has per person. These are set once on each item in the **Items** list. Each item group then adds up its own items for the amounts it uses.
+The **Meals** tab can show how many calories, and how much protein, carbohydrate and fat, each item and meal has per person. These are set once on each single item, from the **Items** list or the item builder. An item made of other items then adds up what it's made of, at the amounts it uses.
 
 ### Where calories come from
 
@@ -349,7 +349,7 @@ The key allows 1,000 lookups an hour.
 
 ### Adding calories to an item
 
-1. In the **Items** list, press **+ kcal** next to an item.
+1. In the **Items** list, press **+ kcal** next to a single item (or the calories button in the item builder).
 2. AMMUI searches for its name and lists matching foods with their calories per 100 g. Close misspellings are found too (*"brocolli"* finds broccoli). If nothing useful comes up, try another tab or a simpler name (*"chicken breast"* rather than *"skinless chicken fillets"*). For USDA, tick **Include branded products** to search US packaged foods as well.
 3. Pick the closest match. This fills in **Calories per 100 g** and the grams of **Protein**, **Carbs**, **Fat** and **Alcohol** per 100 g, plus any weights the source knows: the pack size for a UK product, or a cup, a slice and one medium item for a USDA food.
 4. If the item's unit isn't a weight, check the **Weight of 1 …** box (see below). The UK food tables don't list weights for single items, so for *"2 eggs"* or *"1 onion"* enter how much one weighs.
@@ -357,11 +357,11 @@ The key allows 1,000 lookups an hour.
 
 You can also skip the search and type the figures per 100 g from a packet label. Protein, carbs, fat and alcohol can be left empty; only calories are needed. Alcohol is grams per 100 g (or 100 ml), not % ABV: a 5% beer has about 4 g. Open Food Facts gives % ABV, and AMMUI converts it. Carbs are *available* carbohydrate, as UK labels give it (fibre isn't included), and USDA figures are adjusted to match. To change an item's calories later, click its calorie figure. **Remove** clears them.
 
-Each item is only looked up once. The result is saved in AMMUI's database, so item groups show their calories straight away and work without an internet connection.
+Each item is only looked up once. The result is saved in AMMUI's database, so items show their calories straight away and work without an internet connection.
 
 ### How amounts are converted
 
-Calories are worked out from the amount and unit each item group uses, so the same item can be measured differently in different item groups.
+Calories are worked out from the amount and unit each item made of others uses, so the same item can be measured differently in different ones. An item made of others that's part of another counts as many of it as its amount says (blank is one).
 
 | Unit | How it's converted |
 | --- | --- |
@@ -373,7 +373,7 @@ Calories are worked out from the amount and unit each item group uses, so the sa
 
 Amounts can be whole numbers, decimals (*0.5* or *0,5*), fractions (*1/2*, *1 1/2*, *½*) or ranges (*2-3* counts as 2.5). A unit typed with no amount, such as *pinch*, counts as one of it.
 
-Each item row shows its calories; hover over the figure for its weight, protein, carbs and fat. **? kcal** means AMMUI doesn't know the weight of that unit yet; click it to enter the weight. Under the items, the item group shows its total, e.g. *"About 650 kcal · 32 g protein · 70 g carbs · 21 g fat per person"*, with UK alcohol units added when any of its items has alcohol (one unit is 8 g), and how many items aren't counted yet. Hover over the total to see which ones those are, and which counted items have no protein, carbs or fat.
+Each item row shows its calories; hover over the figure for its weight, protein, carbs and fat. **? kcal** means AMMUI doesn't know the weight of that unit yet; click it to enter the weight. In the item builder, an item made of others shows its total, e.g. *"About 650 kcal · 32 g protein · 70 g carbs · 21 g fat per person"*, with UK alcohol units added when any of its items has alcohol (one unit is 8 g), and how many items aren't counted yet. Hover over the total to see which ones those are, and which counted items have no protein, carbs or fat.
 
 Items given calories before AMMUI kept protein, carbs, fat and alcohol get them filled in automatically when the server starts, from the food they were looked up from. That needs an internet connection for UK products and USDA foods (and the USDA key for those). Calories that were typed in aren't changed.
 

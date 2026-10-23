@@ -2317,82 +2317,6 @@ p.subtitle {
     display: none;
 }
 
-/* A new item or item group, made from the meal dialog */
-.calendar-entry-new-part {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    padding: 0.75rem;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid var(--card-border);
-    border-radius: 0.5rem;
-}
-
-.calendar-entry-new-part[hidden] {
-    display: none;
-}
-
-.calendar-entry-new-heading {
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.calendar-entry-new-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.calendar-entry-new-row input {
-    flex: 1;
-    min-width: 0;
-}
-
-.calendar-entry-new-row input.calendar-entry-new-amount {
-    flex: 0 0 5rem;
-}
-
-.calendar-entry-new-row input.calendar-entry-new-unit {
-    flex: 0 0 6rem;
-}
-
-.calendar-entry-new-items {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-}
-
-.calendar-entry-new-items:empty {
-    display: none;
-}
-
-.calendar-entry-new-remove {
-    margin-left: 0.3rem;
-    padding: 0;
-    border: none;
-    background: none;
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-    opacity: 0.7;
-}
-
-.calendar-entry-new-remove:hover {
-    opacity: 1;
-}
-
-.calendar-entry-new-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.5rem;
-}
-
-.calendar-entry-new-actions .calendar-status {
-    flex: 1;
-    margin: 0;
-}
-
 /* A meal's parts, in order */
 .calendar-entry-parts {
     list-style: none;
@@ -2588,11 +2512,6 @@ p.subtitle {
     gap: 0.75rem;
 }
 
-.meals-pane-meals {
-    flex-direction: row;
-    gap: 1.5rem;
-}
-
 .meals-pane[hidden] {
     display: none;
 }
@@ -2657,15 +2576,6 @@ p.subtitle {
     color: var(--text);
 }
 
-.recipes-list-panel {
-    width: 18rem;
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-height: 0;
-}
-
 .recipes-list-header {
     display: flex;
     align-items: center;
@@ -2724,166 +2634,6 @@ p.subtitle {
     box-shadow: 0 0 0 2px var(--primary-glow);
 }
 
-.recipes-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.recipe-list-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    padding: 0.6rem 0.75rem;
-    border: 1px solid transparent;
-    border-radius: 0.6rem;
-    background: transparent;
-    color: var(--text);
-    font-family: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.recipe-list-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-}
-
-/* An item group holding an unconfirmed item, shaded like the item itself */
-.recipe-list-item.unconfirmed {
-    background: rgba(0, 0, 0, 0.3);
-}
-
-.recipe-list-item.active {
-    background: color-mix(in srgb, var(--primary) 18%, transparent);
-    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
-}
-
-.recipe-list-item.active.unconfirmed {
-    background: color-mix(in srgb, var(--primary) 18%, rgba(0, 0, 0, 0.3));
-}
-
-.recipe-list-name {
-    font-size: 0.9rem;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.recipe-list-meta {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.recipes-list .settings-hint {
-    padding: 0.5rem 0.75rem;
-}
-
-.recipe-panel {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    overflow-y: auto;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem;
-}
-
-.recipe-empty {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-}
-
-.recipe-empty[hidden],
-.recipe-editor[hidden] {
-    display: none;
-}
-
-.recipe-editor {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.recipe-name-input {
-    font-size: 1.25rem;
-    font-weight: 800;
-}
-
-.recipe-editor h3 {
-    margin: 0.5rem 0 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.recipe-ingredients {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    counter-reset: ingredient;
-}
-
-.recipe-ingredients:empty::before {
-    content: 'No ingredients yet.';
-    font-size: 0.85rem;
-    color: var(--text-muted);
-}
-
-.recipe-ingredient {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    counter-increment: ingredient;
-}
-
-.recipe-ingredient::before {
-    content: counter(ingredient) '.';
-    width: 1.75rem;
-    flex-shrink: 0;
-    text-align: right;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-}
-
-/* Each ingredient can be corrected in place; it only looks like an input on hover/focus */
-.recipe-ingredient input {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 0.4rem;
-    padding: 0.35rem 0.5rem;
-    color: var(--text);
-    font-family: inherit;
-    font-size: 0.9rem;
-}
-
-.recipe-ingredient input:hover,
-.recipe-ingredient input:focus {
-    outline: none;
-    border-color: var(--card-border);
-    background: rgba(255, 255, 255, 0.05);
-}
-
-/* An item ticked as unconfirmed on the Items list, wherever it shows */
-.recipe-ingredient.unconfirmed {
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 0.4rem;
-}
-
 .recipe-ingredient-btn {
     width: 1.75rem;
     height: 1.75rem;
@@ -2900,11 +2650,6 @@ p.subtitle {
     transition: opacity 0.15s;
 }
 
-.recipe-ingredient:hover .recipe-ingredient-btn,
-.recipe-ingredient:focus-within .recipe-ingredient-btn {
-    opacity: 1;
-}
-
 .recipe-ingredient-btn:hover {
     background: rgba(255, 255, 255, 0.08);
     color: var(--text);
@@ -2912,35 +2657,6 @@ p.subtitle {
 
 .recipe-ingredient-btn:disabled {
     visibility: hidden;
-}
-
-.recipe-add-ingredient {
-    margin-left: 2.25rem;
-}
-
-/* Amount and unit sit in narrow columns before the ingredient */
-.recipe-ingredient input.recipe-amount,
-.tag-input-wrapper input.recipe-amount {
-    flex: 0 0 5rem;
-    width: 5rem;
-}
-
-.recipe-ingredient input.recipe-unit,
-.tag-input-wrapper input.recipe-unit {
-    flex: 0 0 6.5rem;
-    width: 6.5rem;
-}
-
-.recipe-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-top: 0.5rem;
-}
-
-.recipes-header-actions {
-    display: flex;
-    gap: 0.5rem;
 }
 
 /* Shopping list — a third column beside the meal editor; one item per line */
@@ -3206,11 +2922,6 @@ p.subtitle {
     padding: 0.5rem 0.75rem;
 }
 
-/* Rows reuse the meal editor's in-place inputs, minus its numbering */
-.ingredient-row::before {
-    content: none;
-}
-
 /* The product picture (as on the shopping list); click to choose another */
 .ingredient-pic {
     flex: 0 0 2.6rem;
@@ -3246,39 +2957,289 @@ p.subtitle {
     border-color: var(--primary);
 }
 
-/* The Unconfirmed tickbox at the start of each row */
-.ingredient-unconfirmed {
-    flex-shrink: 0;
+/* Items list: one row per item; click to open it in the item builder */
+.item-row {
     display: flex;
     align-items: center;
-    padding-left: 0.4rem;
+    gap: 0.6rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: 0.5rem;
     cursor: pointer;
 }
 
-.recipe-ingredient .ingredient-unconfirmed input {
-    flex: none;
-    width: 1rem;
-    height: 1rem;
-    margin: 0;
-    padding: 0;
-    accent-color: var(--primary);
-    cursor: pointer;
+.item-row:hover,
+.item-row:focus-visible {
+    outline: none;
+    background: rgba(255, 255, 255, 0.05);
 }
 
-/* Narrower quantity columns leave the name room beside the calories */
-.ingredient-row input.recipe-amount {
-    flex-basis: 3.75rem;
-    width: 3.75rem;
+/* An item ticked as unconfirmed, or made of one, wherever it shows */
+.item-row.unconfirmed,
+.item-builder-part.unconfirmed,
+.item-builder-result.unconfirmed {
+    background: rgba(0, 0, 0, 0.3);
 }
 
-.ingredient-row input.recipe-unit {
-    flex-basis: 5rem;
-    width: 5rem;
+.item-row.unconfirmed:hover {
+    background: rgba(0, 0, 0, 0.4);
 }
 
-.ingredient-add input:not(.recipe-amount):not(.recipe-unit) {
+.item-row-text {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.item-row-name,
+.item-row-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.item-row-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.item-row-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Where a single item's picture would be, an item made of others shows a stack */
+.ingredient-pic.item-group-pic {
+    cursor: inherit;
+    color: var(--primary);
+}
+
+/* The item builder */
+.item-builder-content {
+    max-width: 640px;
+}
+
+.item-builder-content .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.item-builder-content .settings-group {
+    margin: 0;
+}
+
+.item-builder-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.item-builder-section[hidden] {
+    display: none;
+}
+
+.item-builder-single-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.ingredient-pic.item-builder-pic {
+    flex: 0 0 4.5rem;
+    height: 4.5rem;
+    font-size: 1.5rem;
+}
+
+.item-builder-quantity {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.item-builder-quantity-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.item-builder-quantity-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.recipe-kcal.item-builder-kcal {
+    flex: 0 0 auto;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+}
+
+.item-builder-products {
+    max-height: 18rem;
+    overflow-y: auto;
+}
+
+.item-builder-no-pic {
+    align-self: center;
+}
+
+.item-builder-parts {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.item-builder-parts:empty::before {
+    content: 'Nothing yet. Search below for the items it is made of.';
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.item-builder-part {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 0.4rem;
+}
+
+/* Amount and unit can be corrected in place; they only look like inputs on hover/focus */
+.item-builder-part input {
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.item-builder-part input:hover,
+.item-builder-part input:focus {
+    outline: none;
+    border-color: var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.item-builder-part input.recipe-amount {
+    flex: 0 0 4.5rem;
+    width: 4.5rem;
+}
+
+.item-builder-part input.recipe-unit {
+    flex: 0 0 5.5rem;
+    width: 5.5rem;
+}
+
+.item-builder-times {
+    flex: 0 0 5.5rem;
+    color: var(--text-muted);
+}
+
+.item-builder-part-name,
+.item-builder-result-name {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+}
+
+.item-builder-part-name svg,
+.item-builder-result-name svg {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    color: var(--primary);
+}
+
+.item-builder-part:hover .recipe-ingredient-btn,
+.item-builder-part:focus-within .recipe-ingredient-btn {
+    opacity: 1;
+}
+
+.item-builder-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.4rem;
+}
+
+.item-builder-result {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.item-builder-result:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.item-builder-result-meta {
+    flex: 0 1 45%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.item-builder-create {
+    color: var(--primary);
+    font-size: 0.9rem;
+}
+
+/* A button that reads as a link, inside a line of text */
+.link-button {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.item-builder-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Under the header, beside Save, so what went wrong is in view */
+.item-builder-status {
+    padding: 0 2rem;
+    flex-shrink: 0;
+}
+
+.item-builder-status:empty {
+    display: none;
+}
+
+.item-builder-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
 }
 
 /* Calories for a row's amount; click to look them up or change them */
@@ -3484,11 +3445,6 @@ p.subtitle {
         overflow-y: auto;
     }
 
-    .recipes-list-panel,
-    .recipe-panel {
-        max-height: 60vh;
-    }
-
     .meals-pane {
         min-height: 60vh;
     }
@@ -3511,26 +3467,8 @@ p.subtitle {
         overflow-x: auto;
     }
 
-    .meals-pane-meals {
-        flex-direction: column;
-        gap: 1rem;
-    }
-
-    .recipes-list-panel {
-        width: auto;
-        max-height: 35vh;
-    }
-
     .shopping-panel {
         flex-shrink: 0;
-    }
-
-    .recipe-panel {
-        padding: 1rem;
-    }
-
-    .recipe-add-ingredient {
-        margin-left: 0;
     }
 
     .recipe-kcal-total {

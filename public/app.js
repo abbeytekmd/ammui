@@ -6135,11 +6135,9 @@ function setCalendarEntryScope(scope) {
 }
 
 // --- Entry or meal: a normal entry (Calendar tab) has a title, description and tags; a meal
-// (the Meals tab's calendar) has an optional name, one or more item groups or items and the family it's for ---
+// (the Meals tab's calendar) has an optional name, one or more items and the family it's for ---
 let calendarEntryKind = 'entry';
-let calendarItemGroupOptions = []; // every item group: [{ id, name, item: false }]
 let calendarFamilyOptions = [];    // every family member: [{ id, name }]
-let calendarItemOptions = [];      // every item, for adding one on its own: [{ id, name, item: true, amount, unit }]
 
 function setCalendarEntryKind(kind) {
     calendarEntryKind = kind;
@@ -6149,57 +6147,52 @@ function setCalendarEntryKind(kind) {
     setCalendarSettingsStatus('calendar-entry-status', '', false);
 }
 
-// The item groups, items and family to choose from. A part or person on the meal that's missing
-// from the list still shows, so it isn't lost.
+// The items (into ingredientList) and family to choose from. A person on the meal who's missing
+// from the list still shows, so they aren't lost.
 async function loadCalendarEntryMealOptions(meal) {
-    const [parts, family, items] = await Promise.all([
-        fetch('/api/recipes').then(r => r.json()).then(d => d.recipes || []).catch(() => []),
+    const [family, items] = await Promise.all([
         fetch('/api/games/players').then(r => r.json()).catch(() => []),
-        fetch('/api/ingredients').then(r => r.json()).then(d => d.ingredients || []).catch(() => [])
+        fetch('/api/ingredients').then(r => r.json()).then(d => d.ingredients).catch(() => null)
     ]);
-    calendarItemGroupOptions = parts.map(r => ({ id: r.id, name: r.name, item: false, unconfirmed: r.unconfirmed || r.unconfirmedItems }));
     calendarFamilyOptions = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
-    calendarItemOptions = items.map(i => ({ id: i.id, name: i.name, item: true, unconfirmed: i.unconfirmed, amount: i.amount, unit: i.unit }));
-    hideCalendarEntryNewPart();
-    for (const p of meal?.parts || []) {
-        const options = p.item ? calendarItemOptions : calendarItemGroupOptions;
-        if (!options.some(o => o.id === p.id)) options.push(p);
-    }
+    if (items) ingredientList = items;
     for (const f of meal?.family || []) if (!calendarFamilyOptions.some(o => o.id === f.id)) calendarFamilyOptions.push(f);
 }
 
-// The meal's parts in order, each with Open and Remove, then a dropdown of the rest to add
+// The meal's items in order, each with Edit and Remove, then a dropdown of the rest to add
 function renderCalendarEntryParts() {
     const editing = calendarEntryEditing;
     const list = document.getElementById('calendar-entry-parts');
-    // The options are loaded fresh with the dialog, so they say whether each is unconfirmed now
-    const unconfirmed = p => (p.item ? calendarItemOptions : calendarItemGroupOptions).find(o => o.id === p.id)?.unconfirmed;
-    list.innerHTML = editing.parts.map((p, i) => `
-        <li class="calendar-entry-part${unconfirmed(p) ? ' unconfirmed' : ''}" data-i="${i}">
+    list.innerHTML = editing.parts.map((p, i) => {
+        const item = itemById(p.id);
+        return `
+        <li class="calendar-entry-part${itemUnconfirmed(item) ? ' unconfirmed' : ''}" data-i="${i}">
             <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
-            <span class="calendar-entry-part-name">${escapeHtml(p.name)}</span>
-            <button type="button" class="btn-control ghost btn-small" data-act="open" title="${p.item ? 'Show this item' : 'Open this item group'}">Open</button>
+            <span class="calendar-entry-part-name">${escapeHtml(item?.name || p.name)}</span>
+            ${item ? '<button type="button" class="btn-control ghost btn-small" data-act="open" title="Edit this item">Edit</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
-        </li>`).join('');
+        </li>`;
+    }).join('');
     list.querySelectorAll('.calendar-entry-part').forEach(row => {
         const part = editing.parts[Number(row.dataset.i)];
         row.querySelector('.calendar-entry-part-handle').onpointerdown = e => dragCalendarEntryPart(e, row, list);
-        row.querySelector('[data-act="open"]').onclick = () => openMealPartFromEntry(part);
+        const open = row.querySelector('[data-act="open"]');
+        if (open) open.onclick = () => openMealPartFromEntry(part);
         row.querySelector('[data-act="remove"]').onclick = () => {
             editing.parts = editing.parts.filter(p => p !== part);
             renderCalendarEntryParts();
         };
     });
-    // Item groups, then items on their own, leaving out what the meal already has
+    // Items made of others, then single items, leaving out what the meal already has
     const select = document.getElementById('calendar-entry-part-add');
-    const unused = list => list.filter(o => !editing.parts.some(p => p.id === o.id));
-    const groups = unused(calendarItemGroupOptions);
-    const items = unused(calendarItemOptions);
-    const options = (list, kind) => list.map(o => `<option value="${kind}:${escapeHtml(o.id)}">${escapeHtml(o.name)}</option>`).join('');
-    select.innerHTML = `<option value="">${editing.parts.length ? 'Add another item group or item…' : 'Add an item group or item…'}</option>` +
-        '<option value="new:group">+ New item group…</option><option value="new:item">+ New item…</option>' +
-        (groups.length ? `<optgroup label="Item groups">${options(groups, 'group')}</optgroup>` : '') +
-        (items.length ? `<optgroup label="Items">${options(items, 'item')}</optgroup>` : '');
+    const unused = ingredientList.filter(o => !editing.parts.some(p => p.id === o.id));
+    const groups = unused.filter(o => o.parts);
+    const singles = unused.filter(o => !o.parts);
+    const options = list => list.map(o => `<option value="${escapeAttr(o.id)}">${escapeHtml(o.name)}</option>`).join('');
+    select.innerHTML = `<option value="">${editing.parts.length ? 'Add another item…' : 'Add an item…'}</option>` +
+        '<option value="new">+ New item…</option>' +
+        (groups.length ? `<optgroup label="Made of other items">${options(groups)}</optgroup>` : '') +
+        (singles.length ? `<optgroup label="Single items">${options(singles)}</optgroup>` : '');
 }
 
 // Drag a part up or down by its handle to change the order. Pointer events, so it works by touch
@@ -6232,146 +6225,23 @@ function dragCalendarEntryPart(e, row, list) {
     handle.addEventListener('pointercancel', end);
 }
 
-// value: "group:<id>" for an item group, "item:<id>" for an item on its own, or "new:group" /
-// "new:item" to make one
+// value: an item's id, or "new" to make one in the item builder (added to the meal once saved)
 function addCalendarEntryPart(value) {
-    const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)];
-    if (kind === 'new') {
-        document.getElementById('calendar-entry-part-add').value = '';
-        showCalendarEntryNewPart(id);
+    document.getElementById('calendar-entry-part-add').value = '';
+    if (!calendarEntryEditing || !value) return;
+    if (value === 'new') {
+        openItemBuilder(null, {
+            onSaved: saved => {
+                if (!saved || !calendarEntryEditing) return;
+                if (!calendarEntryEditing.parts.some(p => p.id === saved.id)) calendarEntryEditing.parts.push({ id: saved.id, name: saved.name });
+                renderCalendarEntryParts();
+            }
+        });
         return;
     }
-    const part = (kind === 'item' ? calendarItemOptions : calendarItemGroupOptions).find(o => o.id === id);
-    if (part && calendarEntryEditing && !calendarEntryEditing.parts.some(p => p.id === part.id)) calendarEntryEditing.parts.push(part);
-    if (calendarEntryEditing) renderCalendarEntryParts();
-}
-
-// --- Making a new item or item group from the meal dialog, added to the meal once saved ---
-let calendarNewGroupItems = []; // the new item group's items so far: [{ name, amount, unit }]
-
-function hideCalendarEntryNewPart() {
-    const box = document.getElementById('calendar-entry-new-part');
-    box.hidden = true;
-    box.innerHTML = '';
-}
-
-// kind: 'item' (a name and its quantity for one person) or 'group' (a name and its items, each at
-// its saved one-person quantity; amounts can be changed later under Item Groups)
-function showCalendarEntryNewPart(kind) {
-    const box = document.getElementById('calendar-entry-new-part');
-    const names = calendarItemOptions.map(o => `<option value="${escapeAttr(o.name)}">`).join('');
-    box.innerHTML = kind === 'item' ? `
-        <div class="calendar-entry-new-heading">New item <span class="calendar-entry-tags-hint">— quantity for one person</span></div>
-        <div class="calendar-entry-new-row">
-            <input type="text" data-field="name" placeholder="Item name, e.g. Peas" maxlength="300" autocomplete="off" aria-label="Item name">
-            <input type="text" data-field="amount" class="calendar-entry-new-amount" placeholder="Amount" maxlength="20" autocomplete="off" aria-label="Amount for one person">
-            <input type="text" data-field="unit" class="calendar-entry-new-unit" placeholder="Unit" maxlength="40" list="recipe-units" autocomplete="off" aria-label="Unit">
-        </div>
-        <div class="calendar-entry-new-actions">
-            <span class="calendar-status" data-status></span>
-            <button type="button" class="btn-control ghost btn-small" data-act="cancel">Cancel</button>
-            <button type="button" class="btn-control primary btn-small" data-act="create">Add Item</button>
-        </div>` : `
-        <div class="calendar-entry-new-heading">New item group</div>
-        <input type="text" data-field="name" placeholder="Item group name, e.g. Mash" maxlength="200" autocomplete="off" aria-label="Item group name">
-        <div class="calendar-entry-new-items" data-items></div>
-        <div class="calendar-entry-new-row">
-            <input type="text" data-field="item" placeholder="Add an item, e.g. Potatoes" maxlength="300" list="calendar-entry-new-names" autocomplete="off" aria-label="Item">
-            <button type="button" class="btn-control ghost btn-small" data-act="add">Add</button>
-        </div>
-        <datalist id="calendar-entry-new-names">${names}</datalist>
-        <div class="calendar-entry-new-actions">
-            <span class="calendar-status" data-status></span>
-            <button type="button" class="btn-control ghost btn-small" data-act="cancel">Cancel</button>
-            <button type="button" class="btn-control primary btn-small" data-act="create">Add Item Group</button>
-        </div>`;
-    box.hidden = false;
-    calendarNewGroupItems = [];
-    const field = name => box.querySelector(`[data-field="${name}"]`);
-    box.querySelector('[data-act="cancel"]').onclick = hideCalendarEntryNewPart;
-    box.querySelector('[data-act="create"]').onclick = () => createCalendarEntryNewPart(kind);
-    if (kind === 'group') {
-        box.querySelector('[data-act="add"]').onclick = addCalendarEntryNewGroupItem;
-        renderCalendarEntryNewGroupItems();
-    } else {
-        // Naming an item that exists already fills in its quantity, as elsewhere
-        field('name').oninput = () => fillIngredientQuantity(field('name'), field('amount'), field('unit'));
-    }
-    // Enter adds the item typed (for a group) or makes it, rather than saving the meal
-    box.querySelectorAll('input').forEach(input => {
-        input.onkeydown = e => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            e.stopPropagation();
-            if (kind === 'group' && input.dataset.field === 'item') addCalendarEntryNewGroupItem();
-            else createCalendarEntryNewPart(kind);
-        };
-    });
-    field('name').focus();
-}
-
-function addCalendarEntryNewGroupItem() {
-    const input = document.querySelector('#calendar-entry-new-part [data-field="item"]');
-    const name = input.value.trim();
-    input.value = '';
-    input.focus();
-    if (!name) return;
-    const saved = calendarItemOptions.find(o => o.name.toLowerCase() === name.toLowerCase());
-    calendarNewGroupItems.push({ name: saved ? saved.name : name, amount: saved?.amount || '', unit: saved?.unit || '' });
-    renderCalendarEntryNewGroupItems();
-}
-
-function renderCalendarEntryNewGroupItems() {
-    const list = document.querySelector('#calendar-entry-new-part [data-items]');
-    list.innerHTML = calendarNewGroupItems.map((ing, i) => `
-        <span class="calendar-entry-tag-chip selected" data-i="${i}">${escapeHtml([ing.amount, ing.unit, ing.name].filter(Boolean).join(' '))}
-            <button type="button" class="calendar-entry-new-remove" title="Remove" aria-label="Remove ${escapeAttr(ing.name)}">✕</button></span>`).join('');
-    list.querySelectorAll('[data-i]').forEach(chip => {
-        chip.querySelector('button').onclick = () => {
-            calendarNewGroupItems.splice(Number(chip.dataset.i), 1);
-            renderCalendarEntryNewGroupItems();
-        };
-    });
-}
-
-async function createCalendarEntryNewPart(kind) {
-    const box = document.getElementById('calendar-entry-new-part');
-    const value = name => box.querySelector(`[data-field="${name}"]`)?.value.trim() || '';
-    const status = box.querySelector('[data-status]');
-    const fail = text => { status.className = 'calendar-status error'; status.textContent = text; };
-    const name = value('name');
-    if (!name) { fail(kind === 'item' ? 'Enter a name for the item.' : 'Enter a name for the item group.'); box.querySelector('[data-field="name"]').focus(); return; }
-    // An item typed but not yet added still counts
-    if (kind === 'group' && value('item')) addCalendarEntryNewGroupItem();
-    if (kind === 'group' && !calendarNewGroupItems.length) { fail('Add at least one item.'); return; }
-    const create = box.querySelector('[data-act="create"]');
-    create.disabled = true;
-    try {
-        const body = kind === 'item' ? { name, amount: value('amount'), unit: value('unit') } : { name, ingredients: calendarNewGroupItems };
-        const res = await fetch(kind === 'item' ? '/api/ingredients' : '/api/recipes', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to save');
-        if (!calendarEntryEditing) return;
-        // Saving a group adds any of its items not seen before to the Items list
-        if (kind === 'group') await loadCalendarEntryMealOptions(calendarEntryEditing);
-        const part = kind === 'item'
-            ? { id: data.id, name: data.name, item: true, unconfirmed: false, amount: data.amount, unit: data.unit }
-            : { id: data.id, name: data.name, item: false, unconfirmed: false };
-        const options = kind === 'item' ? calendarItemOptions : calendarItemGroupOptions;
-        if (!options.some(o => o.id === part.id)) options.push(part);
-        options.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-        calendarEntryEditing.parts.push(part);
-        hideCalendarEntryNewPart();
-        renderCalendarEntryParts();
-        // Keep the Item Groups and Items lists up to date with what was made here
-        loadRecipes();
-        loadIngredients();
-    } catch (err) {
-        fail(err.message);
-        create.disabled = false;
-    }
+    const item = itemById(value);
+    if (item && !calendarEntryEditing.parts.some(p => p.id === item.id)) calendarEntryEditing.parts.push({ id: item.id, name: item.name });
+    renderCalendarEntryParts();
 }
 
 // Each family member as a chip to click on/off
@@ -6395,16 +6265,17 @@ function renderCalendarEntryFamily() {
     });
 }
 
-// An item group opens in its editor; an item is shown in the Items list
-async function openMealPartFromEntry(part) {
-    closeCalendarEntryModal();
-    if (part.item) {
-        document.getElementById('ingredients-filter').value = part.name;
-        await showRecipes('ingredients');
-        return;
-    }
-    await showRecipes('meals');
-    await selectRecipe(part.id);
+// Opens the item in the item builder over the meal; a change to it shows here, and deleting it
+// takes it out of the meal
+function openMealPartFromEntry(part) {
+    openItemBuilder(itemById(part.id), {
+        onSaved: saved => {
+            if (!calendarEntryEditing) return;
+            if (!saved) calendarEntryEditing.parts = calendarEntryEditing.parts.filter(p => p.id !== part.id);
+            else part.name = saved.name;
+            renderCalendarEntryParts();
+        }
+    });
 }
 
 
@@ -6531,9 +6402,9 @@ async function saveCalendarEntry() {
     let meal = null;
     if (isMeal) {
         const { parts, family } = calendarEntryEditing;
-        if (!parts.length) { setStatus('Add at least one item group or item.', true); return; }
+        if (!parts.length) { setStatus('Add at least one item.', true); return; }
         if (calendarFamilyOptions.length && !family.length) { setStatus('Choose who it\'s for.', true); return; }
-        meal = { parts: parts.map(p => ({ id: p.id, item: !!p.item })), family };
+        meal = { parts: parts.map(p => ({ id: p.id })), family };
     }
     const title = document.getElementById(isMeal ? 'calendar-entry-meal-name' : 'calendar-entry-title').value.trim();
     const description = isMeal ? '' : document.getElementById('calendar-entry-description').value.trim();
@@ -6612,7 +6483,7 @@ function showCalendarEntryDateFields(show) {
 // --- Meals tab's Meal Plan: a meal for each day of a block of weeks. From its start date it
 // repeats on the Meals calendar, where a new meal starts as the plan's meal for that day.
 // A day's meal can repeat every so many days or weeks within the plan ---
-let mealPlan = null; // { weeks, startDate, days: [{ day, name, parts: [{ id, name, item }], repeat, skipped }] }
+let mealPlan = null; // { weeks, startDate, days: [{ day, name, parts: [{ id, name }], repeat, skipped }] }
 
 const ymdToUtcDays = ymd => { const [y, m, d] = ymd.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
 
@@ -6652,36 +6523,15 @@ function mealPlanBaseDate() {
     return startOfCalendarWeek(new Date());
 }
 
-// Each item group's ingredients by id, for the per-person totals on the meal plan and Meals calendar
-let mealRecipeIngredients = new Map();
-
-// Item groups' ingredients and the saved items, for those totals. A failure just leaves them out.
+// The saved items, for the per-person totals on the meal plan and Meals calendar. A failure just
+// leaves them out.
 async function loadMealNutritionData() {
-    const [recipes, ingredients] = await Promise.all([
-        fetch('/api/recipes?ingredients=1').then(r => r.json()).catch(() => null),
-        fetch('/api/ingredients').then(r => r.json()).catch(() => null),
-    ]);
-    if (recipes?.recipes) mealRecipeIngredients = new Map(recipes.recipes.map(r => [r.id, r.ingredients]));
-    if (ingredients?.ingredients) ingredientList = ingredients.ingredients;
+    const data = await fetch('/api/ingredients').then(r => r.json()).catch(() => null);
+    if (data?.ingredients) ingredientList = data.ingredients;
 }
 
-// A meal's calories, protein, carbs and fat for one person: its single items at their one-person
-// amounts, plus each item group's items at the amounts it uses
-function mealNutrition(parts) {
-    const rows = [];
-    for (const part of parts) {
-        if (part.item) {
-            const ing = ingredientList.find(i => i.id === part.id);
-            if (ing) rows.push({ name: ing.name, result: ingredientCalories(ing.amount, ing.unit, ing.nutrition) });
-            continue;
-        }
-        for (const ri of mealRecipeIngredients.get(part.id) || []) {
-            const saved = recipeRowIngredient(ri);
-            rows.push({ name: saved?.name || ri.name, result: ingredientCalories(ri.amount, ri.unit, saved?.nutrition) });
-        }
-    }
-    return sumNutrition(rows);
-}
+// A meal's calories, protein, carbs and fat for one person: each of its items for one person
+const mealNutrition = parts => sumNutrition(parts.flatMap(part => itemOnePersonRows(itemById(part.id))));
 
 // The line under a meal: its total per person (with "+" if some items aren't counted), or null if
 // none of it has calories
@@ -6830,7 +6680,7 @@ async function putMealPlanDay(day, body) {
 async function saveMealPlanDay() {
     const { planDay, sourceDay, scope, parts } = calendarEntryEditing;
     const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
-    if (!parts.length) { setStatus('Add at least one item group or item.', true); return; }
+    if (!parts.length) { setStatus('Add at least one item.', true); return; }
     // "This occurrence" gives the day a meal of its own; otherwise the day the meal is planned on changes
     const justOne = scope === 'one';
     let repeat = null;
@@ -6844,7 +6694,7 @@ async function saveMealPlanDay() {
     btn.disabled = true;
     try {
         await putMealPlanDay(justOne ? planDay : sourceDay,
-            { name: document.getElementById('calendar-entry-meal-name').value.trim(), parts: parts.map(p => ({ id: p.id, item: !!p.item })), repeat });
+            { name: document.getElementById('calendar-entry-meal-name').value.trim(), parts: parts.map(p => ({ id: p.id })), repeat });
     } catch (err) {
         setStatus(err.message, true);
     } finally {
@@ -6960,35 +6810,20 @@ async function removeCalendar(id, btn) {
     }
 }
 
-// --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
-let recipeList = [];       // [{ id, name, ingredientCount, unconfirmed, unconfirmedItems }]
-let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, unconfirmed, ingredients: [{ ingredientId|null, name, amount, unit }] }
-let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
-
-const recipeSnapshot = d => JSON.stringify({ name: d.name, unconfirmed: d.unconfirmed, ingredients: d.ingredients });
-const recipeIsDirty = () => !!recipeDraft && recipeSnapshot(recipeDraft) !== recipeSavedJson;
-
-function setRecipeStatus(text, isError) {
-    setCalendarSettingsStatus('recipe-status', text, isError);
-}
-
-// Keeps whatever is open (including unsaved edits) when returning to the tab.
-// tab: which of Calendar | Meals | Ingredients to show, else the one last used.
+// tab: which of Calendar | Meal Plan | Items to show, else the one last used
 async function showRecipes(tab) {
     setAppView('recipes');
     setMealsTab(tab || mealsTab);
-    await Promise.all([loadRecipes(), loadIngredients(), loadShoppingList()]);
-    if (!recipeDraft) renderRecipeEditor();
-    if (mealsTab === 'ingredients') renderIngredientList();
+    await Promise.all([loadIngredients(), loadShoppingList()]);
 }
 
-// --- Meals tab: Calendar | Meals | Ingredients down the left; the shopping list stays beside each ---
-const MEALS_TABS = ['calendar', 'plan', 'meals', 'ingredients'];
-let mealsTab = 'meals';
+// --- Meals tab: Calendar | Meal Plan | Items down the left; the shopping list stays beside each ---
+const MEALS_TABS = ['calendar', 'plan', 'ingredients'];
+let mealsTab = 'ingredients';
 try { if (MEALS_TABS.includes(localStorage.getItem('mealsTab'))) mealsTab = localStorage.getItem('mealsTab'); } catch (e) { }
 
 function setMealsTab(tab) {
-    if (!MEALS_TABS.includes(tab)) tab = 'meals';
+    if (!MEALS_TABS.includes(tab)) tab = 'ingredients';
     mealsTab = tab;
     try { localStorage.setItem('mealsTab', tab); } catch (e) { }
     document.querySelectorAll('#recipes-view .meals-tab').forEach(btn => {
@@ -6999,7 +6834,7 @@ function setMealsTab(tab) {
     for (const name of MEALS_TABS) document.getElementById(`meals-pane-${name}`).hidden = name !== tab;
     if (tab === 'calendar') openCalendarView(true);
     if (tab === 'plan') loadMealPlan();
-    // Ingredients get their pictures while their list is showing
+    // Items get their pictures while their list is showing
     if (tab === 'ingredients') renderIngredientList();
 }
 
@@ -7047,7 +6882,7 @@ function updateShoppingSuggestions() {
     const atEnd = box.selectionStart === box.selectionEnd && box.selectionStart === line.end;
     const wordStarts = name => name.toLowerCase().split(/[^\p{L}\p{N}]+/u).some(w => w.startsWith(typed));
     shoppingSuggestions = !typed || !atEnd ? [] : ingredientList
-        .filter(i => i.name.toLowerCase() !== typed && wordStarts(i.name))
+        .filter(i => !i.parts && i.name.toLowerCase() !== typed && wordStarts(i.name))
         .sort((a, b) => b.name.toLowerCase().startsWith(typed) - a.name.toLowerCase().startsWith(typed))
         .slice(0, 6).map(i => i.name);
     shoppingSuggestIndex = -1;
@@ -7159,16 +6994,17 @@ let shoppingLookupRunning = false;
 
 const shoppingLineKey = line => line.trim().toLowerCase();
 
-// What needs a picture: the shopping list's lines, and the saved ingredients while their list is showing
+// What needs a picture: the shopping list's lines, and the single items while their list is showing
 function shoppingPictureItems() {
     const lines = document.getElementById('shopping-list').value.split('\n');
     const showing = appView === 'recipes' && mealsTab === 'ingredients';
-    return [...lines, ...(showing ? ingredientList.map(i => i.name) : [])].map(shoppingLineKey);
+    return [...lines, ...(showing ? ingredientList.filter(i => !i.parts).map(i => i.name) : [])].map(shoppingLineKey);
 }
 
 function renderProductPictures() {
     renderShoppingThumbs();
     renderIngredientPictures();
+    renderItemBuilderPicture();
 }
 
 // Draws the known pictures, then looks up the items that don't have one yet, one at a time
@@ -7248,8 +7084,9 @@ function openShoppingPicker(index) {
     if (line) openProductPicker(line);
 }
 
-// For a shopping list line or an ingredient's name; the choice shows in both places
+// For a shopping list line or an item's name; the choice shows in both places
 function openProductPicker(line) {
+    bringModalToFront('shopping-picker-modal');
     shoppingPickerLine = line;
     document.getElementById('shopping-picker-item').textContent = line;
     document.getElementById('shopping-picker-search').value = line;
@@ -7377,220 +7214,37 @@ async function runShoppingVoice(transcripts, quiet = false) {
     return false;
 }
 
-async function loadRecipes() {
-    try {
-        const res = await fetch('/api/recipes');
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load item groups');
-        recipeList = data.recipes || [];
-    } catch (err) {
-        recipeList = [];
-        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load item groups: ${escapeHtml(err.message)}</p>`;
-        return;
-    }
-    renderRecipeList();
-}
-
-function renderRecipeList() {
-    const listEl = document.getElementById('recipes-list');
-    const filter = document.getElementById('recipes-filter').value.trim().toLowerCase();
-    const shown = recipeList.filter(r => !filter || r.name.toLowerCase().includes(filter));
-    if (!recipeList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No item groups yet. Click + New to add one.</p>';
-        return;
-    }
-    if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No item groups match.</p>';
-        return;
-    }
-    listEl.innerHTML = shown.map(r => `
-        <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}${r.unconfirmed || r.unconfirmedItems ? ' unconfirmed' : ''}" data-id="${escapeHtml(r.id)}"
-            ${r.unconfirmed ? 'title="Unconfirmed"' : r.unconfirmedItems ? 'title="Has unconfirmed items"' : ''}>
-            <span class="recipe-list-name">${escapeHtml(r.name)}</span>
-            <span class="recipe-list-meta">${r.ingredientCount} item${r.ingredientCount === 1 ? '' : 's'}</span>
-        </button>`).join('');
-    listEl.querySelectorAll('.recipe-list-item').forEach(btn => {
-        btn.onclick = () => selectRecipe(btn.dataset.id);
-    });
-}
-
-function confirmDiscardRecipe() {
-    return !recipeIsDirty() || confirm('Discard the unsaved changes to this item group?');
-}
-
-function openRecipeDraft(recipe) {
-    recipeDraft = { id: recipe.id || null, name: recipe.name || '', unconfirmed: !!recipe.unconfirmed, ingredients: (recipe.ingredients || []).map(i => ({ ingredientId: i.ingredientId || null, name: i.name || '', amount: i.amount || '', unit: i.unit || '' })) };
-    recipeSavedJson = recipeSnapshot(recipeDraft);
-    setRecipeStatus('', false);
-    for (const f of ['amount', 'unit', 'ingredient']) document.getElementById(`recipe-${f}-input`).value = '';
-    renderRecipeEditor();
-    renderRecipeList();
-}
-
-async function selectRecipe(id) {
-    if (recipeDraft && recipeDraft.id === id) return;
-    if (!confirmDiscardRecipe()) return;
-    try {
-        const res = await fetch(`/api/recipes/${encodeURIComponent(id)}`);
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load item group');
-        openRecipeDraft(data);
-    } catch (err) {
-        showToast(`Couldn't open item group: ${err.message}`, 'error');
-        await loadRecipes();
-    }
-}
-
-function newRecipe() {
-    if (!confirmDiscardRecipe()) return;
-    openRecipeDraft({});
-    document.getElementById('recipe-name').focus();
-}
-
-function renderRecipeEditor() {
-    const editor = document.getElementById('recipe-editor');
-    document.getElementById('recipe-empty').hidden = !!recipeDraft;
-    editor.hidden = !recipeDraft;
-    if (!recipeDraft) return;
-    document.getElementById('recipe-name').value = recipeDraft.name;
-    document.getElementById('recipe-unconfirmed').checked = recipeDraft.unconfirmed;
-    renderRecipeIngredients();
-    updateRecipeButtons();
-}
-
-function renderRecipeIngredients() {
-    const list = document.getElementById('recipe-ingredients');
-    const items = recipeDraft.ingredients;
-    list.innerHTML = items.map((ing, i) => `
-        <li class="recipe-ingredient" data-i="${i}">
-            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(ing.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount ${i + 1}">
-            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(ing.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit ${i + 1}">
-            <input type="text" data-field="name" value="${escapeAttr(ing.name)}" maxlength="300" list="ingredient-names" aria-label="Ingredient ${i + 1}">
-            <button type="button" class="recipe-kcal"></button>
-            <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
-            <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === items.length - 1 ? 'disabled' : ''}>▼</button>
-            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
-        </li>`).join('');
-    list.querySelectorAll('.recipe-ingredient').forEach(row => {
-        const i = Number(row.dataset.i);
-        const field = name => row.querySelector(`input[data-field="${name}"]`);
-        row.querySelectorAll('input').forEach(input => {
-            input.oninput = () => {
-                // Picking a saved ingredient fills an empty amount/unit with its one-person quantity
-                if (input.dataset.field === 'name' && fillIngredientQuantity(input, field('amount'), field('unit'))) {
-                    items[i].amount = field('amount').value;
-                    items[i].unit = field('unit').value;
-                }
-                items[i][input.dataset.field] = input.value;
-                if (input.dataset.field === 'name') items[i].ingredientId = findIngredientByName(input.value)?.id || null;
-                updateRecipeButtons();
-                refreshRecipeCalories();
-            };
-            // Enter in a row jumps to the "add" boxes, ready for the next ingredient
-            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-amount-input').focus(); } };
-        });
-        row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
-            btn.onclick = () => {
-                const act = btn.dataset.act;
-                if (act === 'remove') items.splice(i, 1);
-                else {
-                    const j = act === 'up' ? i - 1 : i + 1;
-                    [items[i], items[j]] = [items[j], items[i]];
-                }
-                renderRecipeIngredients();
-                updateRecipeButtons();
-            };
-        });
-    });
-    refreshRecipeCalories();
-}
-
-function markRecipeDirty() {
-    if (!recipeDraft) return;
-    recipeDraft.name = document.getElementById('recipe-name').value;
-    recipeDraft.unconfirmed = document.getElementById('recipe-unconfirmed').checked;
-    updateRecipeButtons();
-}
-
-function updateRecipeButtons() {
-    const dirty = recipeIsDirty();
-    const isNew = !recipeDraft.id;
-    document.getElementById('recipe-save-btn').disabled = !dirty && !isNew;
-    document.getElementById('recipe-revert-btn').style.display = !dirty || isNew ? 'none' : '';
-    document.getElementById('recipe-delete-btn').textContent = isNew ? 'Cancel' : 'Delete';
-}
-
-function addRecipeIngredient() {
-    const [amount, unit, name] = ['amount', 'unit', 'ingredient'].map(f => {
-        const input = document.getElementById(`recipe-${f}-input`);
-        const value = input.value.trim();
-        input.value = '';
-        return value;
-    });
-    document.getElementById('recipe-amount-input').focus();
-    if (!name || !recipeDraft) return;
-    recipeDraft.ingredients.push({ ingredientId: findIngredientByName(name)?.id || null, name, amount, unit });
-    renderRecipeIngredients();
-    updateRecipeButtons();
-}
-
-function revertRecipe() {
-    if (!recipeDraft) return;
-    openRecipeDraft({ id: recipeDraft.id, ...JSON.parse(recipeSavedJson) });
-}
-
-async function saveRecipe() {
-    if (!recipeDraft) return;
-    // An ingredient typed but not yet added still counts
-    if (document.getElementById('recipe-ingredient-input').value.trim()) addRecipeIngredient();
-    const name = recipeDraft.name.trim();
-    if (!name) { setRecipeStatus('Enter an item group name.', true); document.getElementById('recipe-name').focus(); return; }
-    const ingredients = recipeDraft.ingredients
-        .map(i => ({ name: i.name.trim(), amount: i.amount.trim(), unit: i.unit.trim() }))
-        .filter(i => i.name);
-
-    const btn = document.getElementById('recipe-save-btn');
-    btn.disabled = true;
-    try {
-        const id = recipeDraft.id;
-        const res = await fetch(id ? `/api/recipes/${encodeURIComponent(id)}` : '/api/recipes', {
-            method: id ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, unconfirmed: recipeDraft.unconfirmed, ingredients })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to save');
-        openRecipeDraft(data);
-        setRecipeStatus('Saved.', false);
-        // Saving adds any ingredient names not seen before to the ingredient list
-        await Promise.all([loadRecipes(), loadIngredients()]);
-    } catch (err) {
-        setRecipeStatus(err.message, true);
-        updateRecipeButtons();
-    }
-}
-
-// --- Recipes tab: saved ingredients, each with the preferred quantity for one person ---
-let ingredientList = []; // [{ id, name, amount, unit, nutrition }] sorted by name
+// --- Meals tab: items. Each is a single item (a quantity for one person, calories, a picture) or
+// made of other items, each at the amount it uses. Meals are made of items. ---
+let ingredientList = []; // [{ id, name, amount, unit, unconfirmed, nutrition, parts: null | [{ itemId, name, amount, unit }] }] sorted by name
 
 // Safe inside a double-quoted attribute (escapeHtml leaves quotes alone)
 const escapeAttr = s => escapeHtml(s).replace(/"/g, '&quot;');
+
+const itemById = id => ingredientList.find(i => i.id === id);
 
 const findIngredientByName = name => {
     const key = (name || '').trim().toLowerCase();
     return key ? ingredientList.find(i => i.name.toLowerCase() === key) : undefined;
 };
 
-// When the ingredient box names a saved ingredient and amount/unit are still empty, fills them
-// with its one-person quantity. Returns whether anything was filled.
-function fillIngredientQuantity(textInput, amountInput, unitInput) {
-    const match = findIngredientByName(textInput.value);
-    if (!match || amountInput.value.trim() || unitInput.value.trim()) return false;
-    if (!match.amount && !match.unit) return false;
-    amountInput.value = match.amount;
-    unitInput.value = match.unit;
-    return true;
+// Whether an item, or anything it's made of, is ticked as unconfirmed
+function itemUnconfirmed(item, seen = new Set()) {
+    if (!item || seen.has(item.id)) return false;
+    if (item.unconfirmed) return true;
+    seen.add(item.id);
+    return (item.parts || []).some(p => itemUnconfirmed(itemById(p.itemId), seen));
 }
+
+// Whether item is made of the item with this id, directly or further down
+function itemContains(item, id, seen = new Set()) {
+    if (!item?.parts || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return item.parts.some(p => p.itemId === id || itemContains(itemById(p.itemId), id, seen));
+}
+
+// What an item is, under its name: its quantity, or what it's made of
+const itemSummary = item => item.parts ? item.parts.map(p => p.name).join(', ') : [item.amount, item.unit].filter(Boolean).join(' ');
 
 function setIngredientsStatus(text, isError) {
     setCalendarSettingsStatus('ingredients-status', text, isError);
@@ -7609,21 +7263,19 @@ async function loadIngredients() {
     renderIngredientList();
 }
 
-// Suggestions for the meal editor's ingredient boxes
-function renderIngredientNames() {
-    document.getElementById('ingredient-names').innerHTML =
-        ingredientList.map(i => `<option value="${escapeAttr(i.name)}">`).join('');
-}
+const ITEM_GROUP_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+    <polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`;
 
+// Every item, matching the search box (by its name, or the name of something it's made of). Click
+// one to open it in the item builder; a single item's picture and calories open their own dialogs.
 function renderIngredientList() {
-    renderIngredientNames();
-    refreshRecipeCalories();
-
     const listEl = document.getElementById('ingredients-list');
     const filter = document.getElementById('ingredients-filter').value.trim().toLowerCase();
-    const shown = ingredientList.filter(i => !filter || i.name.toLowerCase().includes(filter));
+    const matches = i => i.name.toLowerCase().includes(filter) || (i.parts || []).some(p => p.name.toLowerCase().includes(filter));
+    const shown = ingredientList.filter(i => !filter || matches(i));
     if (!ingredientList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No items yet. Add one below.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No items yet. Click + New Item to add one.</p>';
         return;
     }
     if (!shown.length) {
@@ -7632,47 +7284,48 @@ function renderIngredientList() {
     }
     listEl.innerHTML = shown.map(i => {
         const kcal = ingredientCaloriesButton(i);
+        const summary = itemSummary(i);
         return `
-        <div class="recipe-ingredient ingredient-row${i.unconfirmed ? ' unconfirmed' : ''}" data-id="${escapeAttr(i.id)}">
-            <label class="ingredient-unconfirmed" title="Unconfirmed">
-                <input type="checkbox" data-field="unconfirmed" ${i.unconfirmed ? 'checked' : ''} aria-label="Unconfirmed">
-            </label>
-            <button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>
-            <input type="text" data-field="name" value="${escapeAttr(i.name)}" maxlength="300" aria-label="Ingredient name">
-            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(i.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount for one person">
-            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(i.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">
+        <div class="item-row${itemUnconfirmed(i) ? ' unconfirmed' : ''}" data-id="${escapeAttr(i.id)}" role="button" tabindex="0"
+            title="${i.unconfirmed ? 'Unconfirmed. ' : itemUnconfirmed(i) ? 'Has unconfirmed items. ' : ''}Click to change">
+            ${i.parts ? `<span class="ingredient-pic item-group-pic" title="Made of other items">${ITEM_GROUP_ICON}</span>`
+                : '<button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>'}
+            <span class="item-row-text">
+                <span class="item-row-name">${escapeHtml(i.name)}</span>
+                ${summary ? `<span class="item-row-meta">${escapeHtml(summary)}</span>` : ''}
+            </span>
             <button type="button" class="recipe-kcal ${kcal.cls}" data-act="kcal" title="${escapeAttr(kcal.title)}">${escapeHtml(kcal.text)}</button>
-            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Delete">✕</button>
         </div>`;
     }).join('');
-    listEl.querySelectorAll('.ingredient-row').forEach(row => {
-        const ingredient = ingredientList.find(i => i.id === row.dataset.id);
-        // Each edit is saved as soon as you leave the box (or press Enter)
-        row.querySelectorAll('input').forEach(input => {
-            input.onchange = () => updateIngredient(ingredient, row);
-            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } };
-        });
-        row.querySelector('[data-act="remove"]').onclick = () => removeIngredient(ingredient);
-        row.querySelector('[data-act="kcal"]').onclick = () => openNutritionDialog(ingredient);
-        row.querySelector('[data-act="pic"]').onclick = () => openProductPicker(ingredient.name);
+    listEl.querySelectorAll('.item-row').forEach(row => {
+        const item = itemById(row.dataset.id);
+        row.onclick = e => { if (!e.target.closest('[data-act]')) openItemBuilder(item); };
+        row.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); openItemBuilder(item); } };
+        row.querySelector('[data-act="kcal"]').onclick = () => item.parts ? openItemBuilder(item) : openNutritionDialog(item);
+        const pic = row.querySelector('[data-act="pic"]');
+        if (pic) pic.onclick = () => openProductPicker(item.name);
     });
     showShoppingPictures();
 }
 
-// Each ingredient's product picture, the same one the shopping list shows for it; "+" for none
+// The product picture shown on a picture button: { product, picked } as looked up, or undefined
+function setPictureButton(btn, found) {
+    const state = !found ? '' : found.product ? found.product.image : '+';
+    if (btn.dataset.state === state) return; // unchanged: don't reload the image
+    btn.dataset.state = state;
+    btn.classList.toggle('empty', state === '+' || state === '');
+    btn.innerHTML = found?.product ? `<img src="${escapeAttr(found.product.image)}" alt="" loading="lazy">` : '+';
+    btn.title = found?.product
+        ? `${found.product.name}${found.product.brand ? ` (${found.product.brand})` : ''} - click for others`
+        : 'Choose a picture';
+}
+
+// Each single item's product picture, the same one the shopping list shows for it; "+" for none
 function renderIngredientPictures() {
-    document.querySelectorAll('#ingredients-list .ingredient-row').forEach(row => {
-        const ingredient = ingredientList.find(i => i.id === row.dataset.id);
-        const found = ingredient && shoppingProducts.get(shoppingLineKey(ingredient.name));
+    document.querySelectorAll('#ingredients-list .item-row').forEach(row => {
+        const ingredient = itemById(row.dataset.id);
         const btn = row.querySelector('[data-act="pic"]');
-        const state = !found ? '' : found.product ? found.product.image : '+';
-        if (btn.dataset.state === state) return; // unchanged: don't reload the image
-        btn.dataset.state = state;
-        btn.classList.toggle('empty', state === '+');
-        btn.innerHTML = found?.product ? `<img src="${escapeAttr(found.product.image)}" alt="" loading="lazy">` : state;
-        btn.title = found?.product
-            ? `${found.product.name}${found.product.brand ? ` (${found.product.brand})` : ''} - click for others`
-            : 'Choose a picture';
+        if (btn && ingredient) setPictureButton(btn, shoppingProducts.get(shoppingLineKey(ingredient.name)));
     });
 }
 
@@ -7683,75 +7336,394 @@ async function sendIngredient(url, method, body) {
     return data;
 }
 
-async function addIngredient() {
-    const inputs = ['name', 'amount', 'unit'].map(f => document.getElementById(`ingredient-add-${f}`));
-    const [name, amount, unit] = inputs.map(input => input.value.trim());
-    if (!name) { inputs[0].focus(); return; }
-    try {
-        await sendIngredient('/api/ingredients', 'POST', { name, amount, unit });
-        inputs.forEach(input => { input.value = ''; });
-        inputs[0].focus();
-        setIngredientsStatus('', false);
-        await loadIngredients();
-    } catch (err) {
-        setIngredientsStatus(err.message, true);
+// Opens a dialog over any others already showing
+function bringModalToFront(id) {
+    document.body.appendChild(document.getElementById(id));
+}
+
+// --- The item builder: makes or changes one item, either a single item (name, quantity for one
+// person, picture and calories, found by searching products) or one made of other items (found by
+// searching the items) ---
+let itemBuilder = null; // { id|null, kind: 'single'|'group', nutrition, parts: [{ itemId, name, amount, unit }],
+                        //   product (a picture chosen here, null for none, undefined if unchanged), originalName, onSaved, savedJson }
+
+const itemBuilderField = name => document.getElementById(`item-builder-${name}`);
+
+// What would be saved, to tell whether anything has changed
+function itemBuilderSnapshot() {
+    const b = itemBuilder;
+    return JSON.stringify({
+        name: itemBuilderField('name').value.trim(), kind: b.kind, unconfirmed: itemBuilderField('unconfirmed').checked,
+        amount: itemBuilderField('amount').value.trim(), unit: itemBuilderField('unit').value.trim(),
+        nutrition: b.nutrition, parts: b.parts, product: b.product,
+    });
+}
+
+// item: the item to change, or null for a new one. options.name starts a new one with that name;
+// options.onSaved(saved) is called with the saved item, or null once it's deleted.
+function openItemBuilder(item = null, options = {}) {
+    if (itemBuilder && !confirmDiscardItemBuilder()) return;
+    itemBuilder = {
+        id: item?.id || null,
+        kind: item?.parts ? 'group' : 'single',
+        nutrition: item?.nutrition || null,
+        parts: (item?.parts || []).map(p => ({ ...p })),
+        product: undefined,
+        originalName: item?.name || '',
+        onSaved: options.onSaved || null,
+    };
+    document.getElementById('item-builder-heading').textContent = item ? 'Edit Item' : 'New Item';
+    itemBuilderField('name').value = item?.name || options.name || '';
+    itemBuilderField('unconfirmed').checked = !!item?.unconfirmed;
+    itemBuilderField('amount').value = item?.amount || '';
+    itemBuilderField('unit').value = item?.unit || '';
+    itemBuilderField('product-search').value = '';
+    itemBuilderField('products').innerHTML = '';
+    itemBuilderField('part-search').value = '';
+    itemBuilderField('delete-btn').style.display = item ? '' : 'none';
+    setCalendarSettingsStatus('item-builder-status', '', false);
+    itemBuilder.savedJson = itemBuilderSnapshot();
+    setItemBuilderKind(itemBuilder.kind);
+    onItemBuilderNameInput();
+    bringModalToFront('item-builder-modal');
+    document.getElementById('item-builder-modal').style.display = 'flex';
+    itemBuilderField('name').focus();
+}
+
+const itemBuilderDirty = () => !!itemBuilder && itemBuilderSnapshot() !== itemBuilder.savedJson;
+
+function confirmDiscardItemBuilder() {
+    return !itemBuilderDirty() || confirm('Discard the changes to this item?');
+}
+
+function closeItemBuilder(force = false) {
+    if (!itemBuilder || (!force && !confirmDiscardItemBuilder())) return;
+    document.getElementById('item-builder-modal').style.display = 'none';
+    itemBuilder = null;
+}
+
+function setItemBuilderKind(kind) {
+    itemBuilder.kind = kind;
+    document.querySelectorAll('#item-builder-kinds [data-kind]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.kind === kind);
+        btn.setAttribute('aria-selected', btn.dataset.kind === kind ? 'true' : 'false');
+    });
+    itemBuilderField('single').hidden = kind !== 'single';
+    itemBuilderField('group').hidden = kind !== 'group';
+    if (kind === 'single') {
+        renderItemBuilderPicture();
+        renderItemBuilderCalories();
+    } else {
+        renderItemBuilderParts();
+        renderItemBuilderPartResults();
     }
 }
 
-async function updateIngredient(ingredient, row) {
-    const value = f => row.querySelector(`input[data-field="${f}"]`).value.trim();
-    const unconfirmed = row.querySelector('input[data-field="unconfirmed"]').checked;
-    const body = { name: value('name'), amount: value('amount'), unit: value('unit'), unconfirmed };
-    if (body.name === ingredient.name && body.amount === ingredient.amount && body.unit === ingredient.unit
-        && unconfirmed === ingredient.unconfirmed) return;
-    const renamed = body.name !== ingredient.name;
-    const reconfirmed = unconfirmed !== ingredient.unconfirmed;
-    try {
-        Object.assign(ingredient, await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'PUT', body));
-        setIngredientsStatus('Saved.', false);
-        row.classList.toggle('unconfirmed', ingredient.unconfirmed);
-        if (reconfirmed) loadRecipes(); // item groups holding it may change colour
-        const kcal = ingredientCaloriesButton(ingredient);
-        const kcalBtn = row.querySelector('[data-act="kcal"]');
-        kcalBtn.textContent = kcal.text;
-        kcalBtn.title = kcal.title;
-        kcalBtn.className = `recipe-kcal ${kcal.cls}`;
-        refreshRecipeCalories();
-        if (!renamed) return;
-        loadShoppingList(); // the server renamed it there too
-        showShoppingPictures(); // and the new name may picture differently
-        renameIngredientInDraft(ingredient);
-        ingredientList.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-        renderIngredientNames();
-        // Move it to its new place in the list, unless that would yank away a box being edited
-        if (!document.getElementById('ingredients-list').contains(document.activeElement)) renderIngredientList();
-    } catch (err) {
-        setIngredientsStatus(err.message, true);
-        renderIngredientList(); // put back the saved values
+// The name: another item already called that is offered to open instead (names are unique)
+function onItemBuilderNameInput() {
+    const b = itemBuilder;
+    const name = itemBuilderField('name').value.trim();
+    const same = findIngredientByName(name);
+    const note = itemBuilderField('name-note');
+    note.hidden = !same || same.id === b.id;
+    if (!note.hidden) {
+        note.innerHTML = `There's already an item called <b>${escapeHtml(same.name)}</b>. <button type="button" class="link-button">Edit it</button>`;
+        note.querySelector('button').onclick = () => {
+            if (!confirmDiscardItemBuilder()) return;
+            const onSaved = b.onSaved;
+            itemBuilder.savedJson = itemBuilderSnapshot(); // already confirmed
+            openItemBuilder(same, { onSaved });
+        };
+    }
+    if (b.kind === 'single') {
+        renderItemBuilderPicture();
+        renderItemBuilderCalories();
     }
 }
 
-// Meals refer to ingredients by id, so a rename already applies to every saved meal; bring the
-// open meal (and its saved snapshot, so it doesn't look edited) up to date as well.
-function renameIngredientInDraft(ingredient) {
-    if (!recipeDraft) return;
-    const rename = rows => rows.forEach(r => { if (r.ingredientId === ingredient.id) r.name = ingredient.name; });
-    rename(recipeDraft.ingredients);
-    const saved = JSON.parse(recipeSavedJson);
-    rename(saved.ingredients);
-    recipeSavedJson = JSON.stringify(saved);
-    renderRecipeIngredients();
-    updateRecipeButtons();
+// The single item's picture: one chosen here, else the one its name already has
+function renderItemBuilderPicture() {
+    if (!itemBuilder) return;
+    const btn = itemBuilderField('pic');
+    const name = itemBuilderField('name').value.trim();
+    const found = itemBuilder.product !== undefined ? { product: itemBuilder.product } : shoppingProducts.get(shoppingLineKey(name));
+    setPictureButton(btn, found || (name ? { product: null } : undefined));
 }
 
-async function removeIngredient(ingredient) {
-    if (!confirm(`Delete the item "${ingredient.name}"?`)) return;
+// Searching products for the picture (and the name, if none is typed yet)
+function focusItemBuilderProductSearch() {
+    const search = itemBuilderField('product-search');
+    if (!search.value.trim()) search.value = itemBuilderField('name').value.trim();
+    search.focus();
+    if (search.value.trim()) searchItemBuilderProducts();
+}
+
+let itemBuilderProductResults = [];
+
+async function searchItemBuilderProducts() {
+    const b = itemBuilder;
+    const query = itemBuilderField('product-search').value.trim();
+    const results = itemBuilderField('products');
+    if (!b || !query) return;
+    results.innerHTML = '<p class="settings-hint shopping-picker-message">Searching Open Food Facts...</p>';
     try {
-        await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'DELETE');
-        setIngredientsStatus('', false);
-        await loadIngredients();
+        const res = await fetch(`/api/shopping-list/products?${new URLSearchParams({ q: query })}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        if (itemBuilder !== b) return;
+        itemBuilderProductResults = data.products;
+        const current = b.product !== undefined ? b.product?.code
+            : shoppingProducts.get(shoppingLineKey(itemBuilderField('name').value))?.product?.code;
+        results.innerHTML = (data.products.length ? data.products.map((p, i) => `
+            <button type="button" class="shopping-picker-option${p.code === current ? ' selected' : ''}" data-i="${i}">
+                <img src="${escapeAttr(p.image)}" alt="" loading="lazy">
+                <span class="shopping-picker-name">${escapeHtml(p.name)}</span>
+                <span class="shopping-picker-brand">${escapeHtml(p.brand || '')}</span>
+            </button>`).join('') : '<p class="settings-hint shopping-picker-message">Nothing found. Try other words, such as a brand.</p>')
+            + '<button type="button" class="btn-control ghost btn-small item-builder-no-pic" data-i="-1">No picture</button>';
+        results.querySelectorAll('[data-i]').forEach(btn => {
+            btn.onclick = () => chooseItemBuilderProduct(Number(btn.dataset.i));
+        });
     } catch (err) {
-        setIngredientsStatus(err.message, true);
+        if (itemBuilder === b) results.innerHTML = `<p class="settings-hint shopping-picker-message">Couldn't search: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+// index into the results, or -1 for no picture. A product picked before a name is typed names it.
+function chooseItemBuilderProduct(index) {
+    const product = index < 0 ? null : itemBuilderProductResults[index];
+    itemBuilder.product = product;
+    const name = itemBuilderField('name');
+    if (product && !name.value.trim()) {
+        name.value = product.name;
+        onItemBuilderNameInput();
+    }
+    itemBuilderField('products').querySelectorAll('.shopping-picker-option').forEach((btn, i) => btn.classList.toggle('selected', i === index));
+    renderItemBuilderPicture();
+}
+
+// The single item's calories for one person; click to look them up or type them in
+function renderItemBuilderCalories() {
+    const b = itemBuilder;
+    if (!b) return;
+    const btn = itemBuilderField('kcal');
+    const unit = itemBuilderField('unit').value;
+    const result = ingredientCalories(itemBuilderField('amount').value, unit, b.nutrition);
+    const name = itemBuilderField('name').value.trim() || 'this item';
+    btn.classList.toggle('unset', !('kcal' in result));
+    if ('kcal' in result) {
+        const macros = formatMacros(result);
+        btn.textContent = formatKcal(result.kcal);
+        btn.title = `About ${Math.round(result.grams)} g for one person${macros ? `: ${macros}` : ''}. Click to change.`;
+    } else {
+        btn.textContent = result.missing === 'nutrition' ? '+ kcal' : result.missing === 'unit' ? '? kcal' : `${Math.round(b.nutrition.kcalPer100g)}/100g`;
+        btn.title = result.missing === 'nutrition' ? 'Set calories' : result.missing === 'unit' ? `Set how much ${unitLabel(unit, name)} weighs` : 'Enter an amount to count its calories';
+    }
+}
+
+// The calories dialog works on the builder's copy, kept until the item is saved
+function openItemBuilderNutrition() {
+    const b = itemBuilder;
+    const draft = { id: b.id, name: itemBuilderField('name').value.trim() || 'New item', amount: itemBuilderField('amount').value.trim(),
+        unit: itemBuilderField('unit').value.trim(), nutrition: b.nutrition };
+    openNutritionDialog(draft, draft.unit, nutrition => {
+        if (itemBuilder !== b) return;
+        b.nutrition = nutrition;
+        renderItemBuilderCalories();
+    });
+}
+
+// The items this one is made of, in order, each at the amount it uses: a single item in its amount
+// and unit, one made of others as how many of it
+function renderItemBuilderParts() {
+    const b = itemBuilder;
+    const list = itemBuilderField('parts');
+    list.innerHTML = b.parts.map((p, i) => {
+        const child = itemById(p.itemId);
+        const group = !!child?.parts;
+        return `
+        <li class="item-builder-part${itemUnconfirmed(child) ? ' unconfirmed' : ''}" data-i="${i}">
+            ${group ? `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="1" aria-label="How many" title="How many">
+                <span class="item-builder-times">×</span>`
+                : `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount">
+                <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(p.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">`}
+            <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}</span>
+            <span class="recipe-kcal" data-kcal></span>
+            <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === b.parts.length - 1 ? 'disabled' : ''}>▼</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
+        </li>`;
+    }).join('');
+    list.querySelectorAll('.item-builder-part').forEach(row => {
+        const i = Number(row.dataset.i);
+        row.querySelectorAll('input').forEach(input => {
+            input.oninput = () => {
+                b.parts[i][input.dataset.field] = input.value;
+                refreshItemBuilderCalories();
+            };
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); itemBuilderField('part-search').focus(); } };
+        });
+        row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
+            btn.onclick = () => {
+                const act = btn.dataset.act;
+                if (act === 'remove') b.parts.splice(i, 1);
+                else {
+                    const j = act === 'up' ? i - 1 : i + 1;
+                    [b.parts[i], b.parts[j]] = [b.parts[j], b.parts[i]];
+                }
+                renderItemBuilderParts();
+                renderItemBuilderPartResults();
+            };
+        });
+    });
+    refreshItemBuilderCalories();
+}
+
+// The rows of one part, at the amount it uses
+function itemPartRows(part) {
+    const child = itemById(part.itemId);
+    if (!child) return [{ name: part.name, result: { missing: 'nutrition' } }];
+    return child.parts ? itemNutritionRows(child, '', '', partTimes(part.amount)) : itemNutritionRows(child, part.amount, part.unit);
+}
+
+// Calories on each part and the total for one person, without redrawing the rows (so typing in
+// one isn't interrupted)
+function refreshItemBuilderCalories() {
+    const b = itemBuilder;
+    if (!b) return;
+    itemBuilderField('parts').querySelectorAll('.item-builder-part').forEach(row => {
+        const part = b.parts[Number(row.dataset.i)];
+        const cell = row.querySelector('[data-kcal]');
+        const t = sumNutrition(itemPartRows(part));
+        cell.classList.toggle('unset', !t.counted);
+        cell.textContent = t.counted ? formatKcal(t.kcal) + (t.missing.length ? ' +' : '') : '';
+        cell.title = t.counted ? [formatNutritionTotal(t), ...nutritionTotalNotes(t)].join('\n') : 'No calories set';
+    });
+    const totalEl = itemBuilderField('total');
+    const t = sumNutrition(b.parts.flatMap(itemPartRows));
+    if (!b.parts.length || !t.anySet) {
+        totalEl.textContent = b.parts.length ? 'Set calories on the items to see a total.' : '';
+        totalEl.title = '';
+        return;
+    }
+    totalEl.textContent = `About ${formatNutritionTotal(t)} per person`
+        + (t.missing.length ? ` · ${t.missing.length} item${t.missing.length === 1 ? '' : 's'} not counted` : '');
+    totalEl.title = nutritionTotalNotes(t).join('\n');
+}
+
+let itemBuilderPartMatches = []; // what the part search found, in order: items, or { create: name }
+
+// Items to add, matching the search box. Leaves out this item and any it's part of (an item can't
+// be made of itself); offers to make a new single item when no name matches exactly.
+function renderItemBuilderPartResults() {
+    const b = itemBuilder;
+    const query = itemBuilderField('part-search').value.trim();
+    const el = itemBuilderField('part-results');
+    const q = query.toLowerCase();
+    const allowed = i => i.id !== b.id && !(b.id && itemContains(i, b.id));
+    const found = !q ? [] : ingredientList.filter(i => allowed(i) && i.name.toLowerCase().includes(q))
+        .sort((x, y) => y.name.toLowerCase().startsWith(q) - x.name.toLowerCase().startsWith(q))
+        .slice(0, 8);
+    itemBuilderPartMatches = [...found];
+    if (q && !ingredientList.some(i => i.name.toLowerCase() === q)) itemBuilderPartMatches.push({ create: query });
+    el.innerHTML = itemBuilderPartMatches.map((m, i) => m.create
+        ? `<button type="button" class="item-builder-result item-builder-create" data-i="${i}">+ New single item “${escapeHtml(m.create)}”</button>`
+        : `<button type="button" class="item-builder-result${itemUnconfirmed(m) ? ' unconfirmed' : ''}" data-i="${i}">
+            <span class="item-builder-result-name">${m.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(m.name)}</span>
+            <span class="item-builder-result-meta">${escapeHtml(itemSummary(m))}</span>
+        </button>`).join('');
+    el.querySelectorAll('[data-i]').forEach(btn => {
+        btn.onclick = () => addItemBuilderPart(itemBuilderPartMatches[Number(btn.dataset.i)]);
+    });
+}
+
+// match: an item (added at its one-person quantity, or one of it), or { create: name } to make a
+// new single item first
+async function addItemBuilderPart(match) {
+    const b = itemBuilder;
+    if (!b || !match) return;
+    let item = match;
+    if (match.create) {
+        try {
+            item = await sendIngredient('/api/ingredients', 'POST', { name: match.create, amount: '', unit: '' });
+            ingredientList.push(item);
+            ingredientList.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
+            renderIngredientList();
+        } catch (err) {
+            setCalendarSettingsStatus('item-builder-status', err.message, true);
+            return;
+        }
+        if (itemBuilder !== b) return;
+    }
+    b.parts.push({ itemId: item.id, name: item.name, amount: item.parts ? '' : item.amount, unit: item.parts ? '' : item.unit });
+    const search = itemBuilderField('part-search');
+    search.value = '';
+    search.focus();
+    renderItemBuilderParts();
+    renderItemBuilderPartResults();
+}
+
+function onItemBuilderPartSearchKey(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (itemBuilderPartMatches.length) addItemBuilderPart(itemBuilderPartMatches[0]);
+}
+
+async function saveItemBuilder() {
+    const b = itemBuilder;
+    if (!b) return;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('item-builder-status', text, isError);
+    const name = itemBuilderField('name').value.trim();
+    if (!name) { setStatus('Enter a name.', true); itemBuilderField('name').focus(); return; }
+    const group = b.kind === 'group';
+    if (group && !b.parts.length) { setStatus('Add at least one item, or make it a single item.', true); itemBuilderField('part-search').focus(); return; }
+    const body = {
+        name, unconfirmed: itemBuilderField('unconfirmed').checked,
+        amount: group ? '' : itemBuilderField('amount').value.trim(),
+        unit: group ? '' : itemBuilderField('unit').value.trim(),
+        parts: group ? b.parts.map(p => ({ id: p.itemId, amount: p.amount.trim(), unit: p.unit.trim() })) : [],
+    };
+    if (!group) body.nutrition = b.nutrition;
+    const btn = itemBuilderField('save-btn');
+    btn.disabled = true;
+    try {
+        const saved = await sendIngredient(b.id ? `/api/ingredients/${encodeURIComponent(b.id)}` : '/api/ingredients', b.id ? 'PUT' : 'POST', body);
+        // The picture goes with the name (saved after it, so it's under the new name)
+        if (!group && b.product !== undefined) {
+            try {
+                const res = await fetch('/api/shopping-list/product', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: saved.name, product: b.product })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to save');
+                shoppingProducts.set(shoppingLineKey(saved.name), data);
+            } catch (err) {
+                showToast(`Saved, but not the picture: ${err.message}`, 'error', 4000);
+            }
+            refreshShoppingPictures();
+        }
+        if (b.originalName && saved.name !== b.originalName) loadShoppingList(); // the server renamed it there too
+        closeItemBuilder(true);
+        await loadIngredients();
+        b.onSaved?.(itemById(saved.id) || saved);
+    } catch (err) {
+        setStatus(err.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function deleteItemBuilderItem() {
+    const b = itemBuilder;
+    if (!b?.id) return;
+    if (!confirm(`Delete "${b.originalName}"? It's also taken out of the meals on the calendar and the meal plan.`)) return;
+    try {
+        await sendIngredient(`/api/ingredients/${encodeURIComponent(b.id)}`, 'DELETE');
+        closeItemBuilder(true);
+        await loadIngredients();
+        b.onSaved?.(null);
+    } catch (err) {
+        setCalendarSettingsStatus('item-builder-status', err.message, true);
     }
 }
 
@@ -7862,9 +7834,35 @@ const formatMacros = r => [...MACROS.filter(([m]) => r[m] != null).map(([m]) => 
     .filter(Boolean).join(' · ');
 const unitLabel = (unit, ingredientName) => (unit || '').trim() || `one ${ingredientName.toLowerCase()}`;
 
-// The saved ingredient a meal row refers to, if any
-const recipeRowIngredient = ing =>
-    (ing.ingredientId && ingredientList.find(i => i.id === ing.ingredientId)) || findIngredientByName(ing.name);
+// The result of ingredientCalories for k of it
+function scaleNutrition(result, k) {
+    if (k === 1 || !('kcal' in result)) return result;
+    const out = { ...result };
+    for (const key of ['grams', 'kcal', 'protein', 'carbs', 'fat', 'alcohol']) if (out[key] != null) out[key] *= k;
+    return out;
+}
+
+// How many of an item made of others a part means ('' is one)
+const partTimes = amount => parseAmount(amount) ?? 1;
+
+// Every single item in an item at the amounts it uses, as [{ name, result }] (each result from
+// ingredientCalories) for sumNutrition. A single item is counted at amount/unit; one made of
+// others counts what it's made of at their amounts, times how many of it there are.
+function itemNutritionRows(item, amount, unit, times = 1, seen = new Set()) {
+    if (!item) return [];
+    if (!item.parts) return [{ name: item.name, result: scaleNutrition(ingredientCalories(amount, unit, item.nutrition), times) }];
+    if (seen.has(item.id)) return [];
+    const inner = new Set(seen).add(item.id);
+    return item.parts.flatMap(p => {
+        const child = itemById(p.itemId);
+        if (!child) return [{ name: p.name, result: { missing: 'nutrition' } }];
+        return child.parts ? itemNutritionRows(child, '', '', times * partTimes(p.amount), inner)
+            : itemNutritionRows(child, p.amount, p.unit, times, inner);
+    });
+}
+
+// An item for one person: a single item at its one-person quantity, or one of an item made of others
+const itemOnePersonRows = item => item ? itemNutritionRows(item, item.amount, item.unit) : [];
 
 // Adds up [{ name, result }] (each result from ingredientCalories): { kcal, protein, carbs, fat, alcohol,
 // counted, missing: names not counted, noMacros: names counted without protein, carbs or fat,
@@ -7899,49 +7897,14 @@ const nutritionTotalNotes = t => [
     t.noMacros.length && t.noMacros.length < t.counted ? `No protein, carbs or fat for: ${t.noMacros.join(', ')}` : '',
 ].filter(Boolean);
 
-// Calories on each meal row, and the meal's total for one person. Only updates the figures, so
-// typing in a row isn't interrupted.
-function refreshRecipeCalories() {
-    const totalEl = document.getElementById('recipe-kcal-total');
-    if (!recipeDraft || !totalEl) return;
-    const rows = [];
-    document.querySelectorAll('#recipe-ingredients .recipe-ingredient').forEach(row => {
-        const ing = recipeDraft.ingredients[Number(row.dataset.i)];
-        const cell = row.querySelector('.recipe-kcal');
-        if (!ing || !cell) return;
-        const saved = recipeRowIngredient(ing);
-        row.classList.toggle('unconfirmed', !!saved?.unconfirmed);
-        const result = ingredientCalories(ing.amount, ing.unit, saved?.nutrition);
-        rows.push({ name: saved?.name || ing.name.trim(), result });
-        cell.onclick = null;
-        cell.disabled = !saved;
-        cell.classList.toggle('unset', !('kcal' in result));
-        if ('kcal' in result) {
-            cell.textContent = formatKcal(result.kcal);
-            const macros = formatMacros(result);
-            cell.title = `About ${Math.round(result.grams)} g${macros ? `: ${macros}` : ''}. Click to change ${saved.name}'s calories.`;
-        } else {
-            cell.textContent = result.missing === 'unit' ? '? kcal' : saved ? '+ kcal' : '';
-            cell.title = !saved ? 'Save the item group to add this item, then set its calories'
-                : result.missing === 'unit' ? `Set how much ${unitLabel(ing.unit, saved.name)} weighs`
-                : result.missing === 'amount' ? 'Enter an amount to count its calories'
-                : `Set calories for ${saved.name}`;
-        }
-        if (saved) cell.onclick = () => openNutritionDialog(saved, ing.unit);
-    });
-    const t = sumNutrition(rows);
-    if (!recipeDraft.ingredients.length || !t.anySet) {
-        totalEl.textContent = recipeDraft.ingredients.length ? 'Set calories on the items to see a total for this item group.' : '';
-        totalEl.title = '';
-        return;
-    }
-    totalEl.textContent = `About ${formatNutritionTotal(t)} per person`
-        + (t.missing.length ? ` · ${t.missing.length} item${t.missing.length === 1 ? '' : 's'} not counted` : '');
-    totalEl.title = nutritionTotalNotes(t).join('\n');
-}
-
-// The calories button on an ingredient row in the Ingredients list
+// The calories button on a row of the Items list. An item made of others shows its total.
 function ingredientCaloriesButton(ingredient) {
+    if (ingredient.parts) {
+        const t = sumNutrition(itemOnePersonRows(ingredient));
+        if (!t.counted) return { text: '', cls: 'unset', title: 'Set calories on the items it\'s made of to see a total' };
+        return { text: formatKcal(t.kcal) + (t.missing.length ? ' +' : ''), cls: '',
+            title: [`About ${formatNutritionTotal(t)} per person`, ...nutritionTotalNotes(t)].join('\n') };
+    }
     const result = ingredientCalories(ingredient.amount, ingredient.unit, ingredient.nutrition);
     if ('kcal' in result) {
         const macros = formatMacros(result);
@@ -7952,7 +7915,7 @@ function ingredientCaloriesButton(ingredient) {
     return { text: `${Math.round(ingredient.nutrition.kcalPer100g)}/100g`, cls: '', title: `${ingredient.nutrition.kcalPer100g} kcal per 100 g` };
 }
 
-let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit }
+let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit, onSave }
 const MACRO_INPUTS = { proteinPer100g: 'nutrition-protein', carbsPer100g: 'nutrition-carbs', fatPer100g: 'nutrition-fat', alcoholPer100g: 'nutrition-alcohol' };
 
 // Where calories can be looked up (the server's lib/nutrition.js)
@@ -7977,11 +7940,13 @@ function setNutritionStatus(text, isError) {
 }
 
 // unit: the unit to ask the weight of, if the ingredient's own isn't the one needed (a meal can
-// use an ingredient in a different unit)
-function openNutritionDialog(ingredient, unit = ingredient.unit) {
+// use an ingredient in a different unit). onSave(nutrition), if given, gets the figures (null for
+// none) instead of them being saved to the item, as the item builder does until its item is saved.
+function openNutritionDialog(ingredient, unit = ingredient.unit, onSave = null) {
     const n = ingredient.nutrition;
+    bringModalToFront('nutrition-modal');
     nutritionDialog = {
-        ingredient, unit,
+        ingredient, unit, onSave,
         source: n?.source || '',
         sourceId: n?.sourceId || '',
         sourceName: n?.sourceName || '',
@@ -8170,13 +8135,18 @@ async function pickNutritionFood(source, id, btn) {
 }
 
 async function sendNutrition(nutrition) {
-    const ing = nutritionDialog.ingredient;
+    const { ingredient: ing, onSave } = nutritionDialog;
+    if (onSave) {
+        closeNutritionDialog();
+        onSave(nutrition);
+        return;
+    }
     const saved = await sendIngredient(`/api/ingredients/${encodeURIComponent(ing.id)}`, 'PUT',
         { name: ing.name, amount: ing.amount, unit: ing.unit, nutrition });
     Object.assign(ing, saved);
     closeNutritionDialog();
     renderIngredientList();
-    refreshRecipeCalories();
+    refreshItemBuilderCalories();
 }
 
 async function saveNutrition() {
@@ -8198,28 +8168,6 @@ async function removeNutrition() {
         await sendNutrition(null);
     } catch (err) {
         setNutritionStatus(err.message, true);
-    }
-}
-
-// For a recipe not yet saved this button reads "Cancel" and just closes it
-async function deleteRecipe() {
-    if (!recipeDraft) return;
-    if (!recipeDraft.id) {
-        if (!confirmDiscardRecipe()) return;
-        recipeDraft = null;
-        renderRecipeEditor();
-        renderRecipeList();
-        return;
-    }
-    if (!confirm(`Delete the item group "${recipeDraft.name.trim() || 'Untitled'}"? It's also taken out of the meals on the calendar.`)) return;
-    try {
-        const res = await fetch(`/api/recipes/${encodeURIComponent(recipeDraft.id)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
-        recipeDraft = null;
-        renderRecipeEditor();
-        await loadRecipes();
-    } catch (err) {
-        setRecipeStatus(err.message, true);
     }
 }
 
@@ -10903,8 +10851,8 @@ const LIBRARY_DATA_PARTS = [
     { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
     { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
     // Ingredients before meals, so their one-person quantities are in place first
-    { key: 'ingredients', label: 'item', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
-    { key: 'meals', label: 'item group', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
+    { key: 'ingredients', label: 'single item', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
+    { key: 'meals', label: 'item made of others', many: 'items made of others', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
 ];
 let pendingLibraryData = null; // parsed import file, while the import dialog is open
 
@@ -10924,8 +10872,8 @@ async function loadLibraryDataCounts() {
         el.innerHTML = row('Favourites', c.favourites)
             + row('Deleted photos', c.deleted)
             + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0)
-            + row('Items', c.ingredients)
-            + row('Item groups', c.meals);
+            + row('Single items', c.ingredients)
+            + row('Items made of others', c.meals);
     } catch (e) {
         el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
     }
@@ -10955,7 +10903,7 @@ async function exportLibraryData() {
         a.remove();
         URL.revokeObjectURL(url);
 
-        showToast(`Exported ${LIBRARY_DATA_PARTS.map((part, i) => plural(parts[i].length, part.label)).join(', ')}`, 'success', 3000);
+        showToast(`Exported ${LIBRARY_DATA_PARTS.map((part, i) => plural(parts[i].length, part.label, part.many)).join(', ')}`, 'success', 3000);
     } catch (err) {
         console.error('Failed to export:', err);
         showToast('Failed to export');
@@ -11022,7 +10970,7 @@ function describeImportResult(part, result) {
     if (result.invalid) extras.push(`${result.invalid} invalid`);
     const main = part.key === 'tags'
         ? `${plural(result.tagsAdded, 'tag')} on ${plural(result.filesProcessed, 'file')}`
-        : plural(result.added, part.label);
+        : plural(result.added, part.label, part.many);
     return main + (extras.length ? ` (${extras.join(', ')})` : '');
 }
 
@@ -11037,14 +10985,14 @@ async function runLibraryDataImport() {
     try {
         // One at a time: each may scan the library to find files that have moved
         for (const part of chosen) {
-            setCalendarSettingsStatus('import-library-data-status', `Importing ${part.label}s...`, false);
+            setCalendarSettingsStatus('import-library-data-status', `Importing ${part.many || `${part.label}s`}...`, false);
             const response = await fetch(part.importUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ [part.key]: data[part.key] })
             });
             const result = await response.json();
-            if (!response.ok) throw new Error(result.error || `Importing ${part.label}s failed`);
+            if (!response.ok) throw new Error(result.error || `Importing ${part.many || `${part.label}s`} failed`);
             done.push(describeImportResult(part, result));
         }
         closeLibraryDataImport();

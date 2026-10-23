@@ -46,8 +46,8 @@ import {
     getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealFamily,
     getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
-    listRecipes, getRecipe, saveRecipe, deleteRecipe,
-    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient, mealsUsingIngredient,
+    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient,
+    itemsUsingIngredient, itemPartsLoop,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
 } from './lib/db.js';
@@ -2971,14 +2971,14 @@ function cleanCalendarEntry(body) {
         repeat = { unit, interval, until };
     }
 
-    // A meal (on the Meals tab's calendar): { parts: [{ id, item }], family: [family member ids] }
+    // A meal (on the Meals tab's calendar): { parts: [{ id }] (items), family: [family member ids] }
     let meal = null;
     if (body.meal) {
         const ids = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(Boolean))];
         const parts = cleanMealParts(body.meal.parts);
         if (typeof parts === 'string') return parts;
         meal = { parts, family: ids(body.meal.family) };
-        if (!meal.parts.length) return 'Add at least one item group or item';
+        if (!meal.parts.length) return 'Add at least one item';
         if (meal.family.some(id => !getGamePlayer(id))) return 'A family member no longer exists';
     }
     // Meals don't need tags; other entries do
@@ -3092,19 +3092,19 @@ app.put('/api/meal-plan', express.json(), (req, res) => {
     res.json(getMealPlan());
 });
 
-// A meal's parts in order: each { id, item } is an item (item: true) or an item group (a plain id
-// is taken as an item group). Returns them without repeats, or a string saying what's wrong.
+// A meal's parts in order: each { id } (or a plain id) is an item. Returns them without repeats,
+// or a string saying what's wrong.
 function cleanMealParts(list) {
     const seen = new Set();
     const parts = (Array.isArray(list) ? list : [])
-        .map(p => p && typeof p === 'object' ? { id: String(p.id || ''), item: !!p.item } : { id: String(p || ''), item: false })
+        .map(p => ({ id: String((p && typeof p === 'object' ? p.id : p) || '') }))
         .filter(p => p.id && !seen.has(p.id) && seen.add(p.id));
-    if (parts.length > 20) return 'Too many item groups and items';
-    if (parts.some(p => !(p.item ? getIngredient(p.id) : getRecipe(p.id)))) return 'An item group or item no longer exists';
+    if (parts.length > 20) return 'Too many items';
+    if (parts.some(p => !getIngredient(p.id))) return 'An item no longer exists';
     return parts;
 }
 
-// One day of the plan (0-based): { name, parts: [{ id, item }], repeat?: { unit: day|week, interval } },
+// One day of the plan (0-based): { name, parts: [{ id }], repeat?: { unit: day|week, interval } },
 // or { skipped: true } to leave it empty where another day's repeat would fill it. No parts clears it.
 app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
     const day = Number(req.params.day);
@@ -3124,56 +3124,6 @@ app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
     }
     saveMealPlanDay(day, { name, parts: skipped ? [] : parts, repeat, skipped });
     res.json(getMealPlan());
-});
-
-// --- Recipes (Recipes tab) ---
-// Returns a clean recipe, or a string saying what's wrong
-function cleanRecipe(body) {
-    const name = String(body.name || '').trim();
-    // Each ingredient is { name, amount, unit } (the name is matched to a saved ingredient on save);
-    // a plain string is taken as just the name
-    const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : [])
-        .map(i => i && typeof i === 'object' ? i : { name: i })
-        .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), name: String(i.name ?? '').trim() }))
-        .filter(i => i.name);
-    if (!name) return 'An item group name is required';
-    if (name.length > 200) return 'The name is too long';
-    if (!ingredients.length) return 'Add at least one item';
-    if (ingredients.length > 500) return 'Too many items';
-    if (ingredients.some(i => i.name.length > 300)) return 'An item is too long';
-    if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
-    return { name, unconfirmed: !!body.unconfirmed, ingredients };
-}
-
-// ?ingredients=1 includes each one's ingredients, for adding up the calories of planned meals
-app.get('/api/recipes', (req, res) => {
-    const recipes = listRecipes();
-    if (req.query.ingredients !== '1') return res.json({ recipes });
-    res.json({ recipes: recipes.map(r => ({ ...r, ingredients: getRecipe(r.id)?.ingredients || [] })) });
-});
-
-app.get('/api/recipes/:id', (req, res) => {
-    const recipe = getRecipe(req.params.id);
-    if (!recipe) return res.status(404).json({ error: 'Item group not found' });
-    res.json(recipe);
-});
-
-app.post('/api/recipes', express.json(), (req, res) => {
-    const recipe = cleanRecipe(req.body);
-    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
-    res.json(saveRecipe({ id: crypto.randomUUID(), ...recipe }));
-});
-
-app.put('/api/recipes/:id', express.json(), (req, res) => {
-    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Item group not found' });
-    const recipe = cleanRecipe(req.body);
-    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
-    res.json(saveRecipe({ id: req.params.id, ...recipe }));
-});
-
-app.delete('/api/recipes/:id', (req, res) => {
-    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Item group not found' });
-    res.json({ success: true });
 });
 
 // The shopping list's items are the saved ingredients, the same list meals use. Any item that isn't
@@ -3367,8 +3317,9 @@ app.put('/api/games/players/:id/game', express.json(), (req, res) => {
     res.json({ guesses, status, stats: getWordGameStats(req.params.id, day) });
 });
 
-// --- Ingredients (Recipes tab): each with the preferred quantity for one person ---
-// Returns a clean ingredient, or a string saying what's wrong
+// --- Items (Meals tab): a single item with its quantity for one person, or one made of other items ---
+// Returns a clean item, or a string saying what's wrong. id is the item being changed (null for a
+// new one). parts, if given, is [{ id, amount, unit }]: the items it's made of, or [] for a single item.
 function cleanIngredient(body, id) {
     const name = String(body.name ?? '').trim();
     const amount = String(body.amount ?? '').trim();
@@ -3378,11 +3329,28 @@ function cleanIngredient(body, id) {
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
     const sameName = findIngredientIdByName(name);
     if (sameName && sameName !== id) return `"${name}" is already in the list`;
-    // Left out, unconfirmed stays as it is
+    // Left out, unconfirmed and parts stay as they are
     const unconfirmed = 'unconfirmed' in body ? !!body.unconfirmed : undefined;
-    if (!('nutrition' in body)) return { name, amount, unit, unconfirmed };
+    let parts;
+    if ('parts' in body) {
+        parts = cleanItemParts(body.parts, id);
+        if (typeof parts === 'string') return parts;
+    }
+    if (!('nutrition' in body)) return { name, amount, unit, unconfirmed, parts };
     const nutrition = cleanNutrition(body.nutrition);
-    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, unconfirmed, nutrition };
+    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, unconfirmed, parts, nutrition };
+}
+
+// The items an item is made of: [{ id, amount, unit }] in order (an item can be in it more than
+// once). Returns a string saying what's wrong.
+function cleanItemParts(list, id) {
+    if (!Array.isArray(list)) return 'Invalid items';
+    const parts = list.map(p => ({ id: String(p?.id || ''), amount: String(p?.amount ?? '').trim(), unit: String(p?.unit ?? '').trim() }));
+    if (parts.length > 200) return 'Too many items';
+    if (parts.some(p => p.amount.length > 20 || p.unit.length > 40)) return 'An amount or unit is too long';
+    if (parts.some(p => !p.id || !getIngredient(p.id))) return 'An item no longer exists';
+    if (id && (parts.some(p => p.id === id) || itemPartsLoop(id, parts.map(p => p.id)))) return "An item can't be made of itself";
+    return parts;
 }
 
 // An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g, alcoholPer100g,
@@ -3488,10 +3456,10 @@ app.put('/api/ingredients/:id', express.json(), (req, res) => {
 });
 
 app.delete('/api/ingredients/:id', (req, res) => {
-    const meals = mealsUsingIngredient(req.params.id);
-    if (meals.length) {
-        const shown = meals.slice(0, 3).join(', ') + (meals.length > 3 ? ` and ${meals.length - 3} more` : '');
-        return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that item group' : 'those item groups'} first.` });
+    const users = itemsUsingIngredient(req.params.id);
+    if (users.length) {
+        const shown = users.slice(0, 3).join(', ') + (users.length > 3 ? ` and ${users.length - 3} more` : '');
+        return res.status(409).json({ error: `It's part of ${shown}. Take it out of ${users.length === 1 ? 'that item' : 'those items'} first.` });
     }
     const ingredient = getIngredient(req.params.id);
     if (!ingredient) return res.status(404).json({ error: 'Item not found' });
@@ -4801,20 +4769,22 @@ app.get('/api/library-data/counts', (req, res) => {
         deleted: Object.keys(getAllDeletedPhotos()).length,
         tags: fileTags.reduce((n, tags) => n + tags.length, 0),
         taggedFiles: fileTags.length,
-        ingredients: listIngredients().length,
-        meals: listRecipes().length,
+        ingredients: listIngredients().filter(i => !i.parts).length,
+        meals: listIngredients().filter(i => i.parts).length,
     });
 });
 
-// Meals and ingredients export by name (ids mean nothing on another instance)
+// Items export by name (ids mean nothing on another instance): single items as "ingredients",
+// items made of other items as "meals" (the format item groups had)
 app.get('/api/ingredients/export', (req, res) => {
-    const ingredients = listIngredients().map(({ name, amount, unit, unconfirmed, nutrition }) => ({ name, amount, unit, unconfirmed, nutrition }));
+    const ingredients = listIngredients().filter(i => !i.parts)
+        .map(({ name, amount, unit, unconfirmed, nutrition }) => ({ name, amount, unit, unconfirmed, nutrition }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
 });
 
 app.get('/api/meals/export', (req, res) => {
-    const meals = listRecipes().map(r => getRecipe(r.id)).filter(Boolean)
-        .map(m => ({ name: m.name, unconfirmed: m.unconfirmed, ingredients: m.ingredients.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
+    const meals = listIngredients().filter(i => i.parts)
+        .map(m => ({ name: m.name, unconfirmed: m.unconfirmed, ingredients: m.parts.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
 });
 
@@ -4834,6 +4804,7 @@ app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) =
             continue;
         }
         const current = getIngredient(id);
+        if (current.parts) { existing++; continue; }
         const fillQuantity = !current.amount && !current.unit && (clean.amount || clean.unit);
         const fillNutrition = !current.nutrition && clean.nutrition;
         if (fillQuantity || fillNutrition) {
@@ -4850,20 +4821,37 @@ app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) =
     res.json({ success: true, added, updated, existing, invalid, total: ingredients.length });
 });
 
-// Meals whose name is already here are skipped rather than overwritten. Their ingredients are
-// matched by name, and any not seen before are added to the ingredient list.
+// Items made of other items ({ name, unconfirmed, ingredients: [{ name, amount, unit }] }, as item
+// groups were exported). One whose name is already here is skipped rather than overwritten. What
+// they're made of is matched by name, including each other; names not seen before become single items.
 app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
     const { meals } = req.body;
     if (!Array.isArray(meals)) return res.status(400).json({ error: 'meals array required' });
-    const names = new Set(listRecipes().map(r => r.name.toLowerCase()));
     let added = 0, existing = 0, invalid = 0;
-    for (const item of meals) {
-        const meal = item && typeof item === 'object' ? cleanRecipe(item) : 'invalid';
-        if (typeof meal === 'string') { invalid++; continue; }
-        if (names.has(meal.name.toLowerCase())) { existing++; continue; }
-        saveRecipe({ id: crypto.randomUUID(), ...meal });
-        names.add(meal.name.toLowerCase());
+    const clean = meals.map(m => {
+        const name = String(m?.name ?? '').trim();
+        const parts = (Array.isArray(m?.ingredients) ? m.ingredients : [])
+            .map(i => i && typeof i === 'object' ? i : { name: i })
+            .map(i => ({ name: String(i.name ?? '').trim(), amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim() }))
+            .filter(i => i.name && i.name.length <= 300 && i.amount.length <= 20 && i.unit.length <= 40);
+        return name && name.length <= 300 && parts.length && parts.length <= 200 ? { name, unconfirmed: !!m.unconfirmed, parts } : null;
+    });
+    // Made first, so they can be made of each other
+    const made = [];
+    for (const m of clean) {
+        if (!m) { invalid++; continue; }
+        if (findIngredientIdByName(m.name)) { existing++; continue; }
+        const id = crypto.randomUUID();
+        saveIngredient({ id, name: m.name, amount: '', unit: '', unconfirmed: m.unconfirmed });
+        made.push({ id, ...m });
         added++;
+    }
+    const idFor = name => findIngredientIdByName(name)
+        || saveIngredient({ id: crypto.randomUUID(), name: name.charAt(0).toUpperCase() + name.slice(1), amount: '', unit: '' }).id;
+    for (const m of made) {
+        const parts = m.parts.map(p => ({ id: idFor(p.name), amount: p.amount, unit: p.unit }))
+            .filter(p => p.id !== m.id && !itemPartsLoop(m.id, [p.id]));
+        saveIngredient({ id: m.id, name: m.name, amount: '', unit: '', parts });
     }
     console.log(`[Meals Import] added=${added} existing=${existing} invalid=${invalid}`);
     res.json({ success: true, added, existing, invalid, total: meals.length });

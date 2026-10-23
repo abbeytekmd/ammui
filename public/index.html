@@ -529,14 +529,6 @@
                     </svg>
                     <span>Meal Plan</span>
                 </button>
-                <button type="button" class="meals-tab" data-tab="meals" role="tab" onclick="setMealsTab('meals')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z"></path>
-                        <line x1="6" y1="17" x2="18" y2="17"></line>
-                    </svg>
-                    <span>Item Groups</span>
-                </button>
                 <button type="button" class="meals-tab" data-tab="ingredients" role="tab" onclick="setMealsTab('ingredients')">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -575,84 +567,25 @@
                 <div id="meal-plan-status" class="calendar-status"></div>
                 <div id="meal-plan-grid" class="calendar-grid meal-plan-grid" onclick="onMealPlanGridClick(event)"></div>
             </div>
-            <div id="meals-pane-meals" class="meals-pane meals-pane-meals" hidden>
-                <aside class="recipes-list-panel">
-                    <div class="recipes-list-header">
-                        <h2>Item Groups</h2>
-                        <div class="recipes-header-actions">
-                            <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
-                        </div>
-                    </div>
-                    <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search item groups..."
-                        autocomplete="off" oninput="renderRecipeList()">
-                    <div id="recipes-list" class="recipes-list"></div>
-                </aside>
-                <div id="recipe-panel" class="recipe-panel">
-                    <div id="recipe-empty" class="recipe-empty">
-                        <p>Select an item group, or add a new one.</p>
-                    </div>
-                    <div id="recipe-editor" class="recipe-editor" hidden>
-                        <div class="recipe-name-row">
-                            <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Item group name, e.g. Mash"
-                                maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
-                            <label class="recipe-unconfirmed">
-                                <input type="checkbox" id="recipe-unconfirmed" onchange="markRecipeDirty()"> Unconfirmed
-                            </label>
-                        </div>
-                        <h3>Items <span class="recipe-per-person">— amounts for one person</span></h3>
-                        <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
-                        <div class="tag-input-wrapper recipe-add-ingredient"
-                            onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
-                            <input type="text" id="recipe-amount-input" class="recipe-amount" placeholder="Amount"
-                                maxlength="20" autocomplete="off" aria-label="Amount">
-                            <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                                maxlength="40" autocomplete="off" aria-label="Unit">
-                            <input type="text" id="recipe-ingredient-input" placeholder="Add an item, e.g. onions, chopped"
-                                maxlength="300" autocomplete="off" aria-label="Item" list="ingredient-names"
-                                oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
-                            <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
-                        </div>
-                        <p id="recipe-kcal-total" class="recipe-kcal-total"></p>
-                        <datalist id="recipe-units">
-                            <option value="g"><option value="kg"><option value="ml"><option value="l">
-                            <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
-                            <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
-                            <option value="clove"><option value="slice"><option value="piece">
-                        </datalist>
-                        <!-- Saved ingredients, offered while typing an ingredient (filled by renderIngredientList) -->
-                        <datalist id="ingredient-names"></datalist>
-                        <div id="recipe-status" class="calendar-status"></div>
-                        <div class="recipe-actions">
-                            <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
-                                onclick="deleteRecipe()">Delete</button>
-                            <span style="flex: 1;"></span>
-                            <button type="button" id="recipe-revert-btn" class="btn-control ghost" onclick="revertRecipe()">Discard Changes</button>
-                            <button type="button" id="recipe-save-btn" class="btn-control primary" onclick="saveRecipe()">Save</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
             <div id="meals-pane-ingredients" class="meals-pane" hidden>
                 <div class="recipes-list-header">
                     <h2>Items</h2>
+                    <button type="button" class="btn-control btn-small primary" onclick="openItemBuilder()">+ New Item</button>
                 </div>
                 <div class="ingredients-panel">
-                    <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to an item group fills in its quantity. Tick an item that's unconfirmed to shade it, and any item group it's in. Item groups have their own tickbox too.</p>
+                    <p class="ingredients-hint">An item is a single thing, with its quantity for one person, or made of
+                        other items. Click one to change it. Unconfirmed items, and anything made of one, are shaded.</p>
                     <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search items..."
                         autocomplete="off" oninput="renderIngredientList()">
                     <div id="ingredients-list" class="ingredients-list"></div>
-                    <div class="tag-input-wrapper ingredient-add"
-                        onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
-                        <input type="text" id="ingredient-add-name" placeholder="New item" maxlength="300"
-                            autocomplete="off" aria-label="Item name">
-                        <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
-                            autocomplete="off" aria-label="Amount for one person">
-                        <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                            maxlength="40" autocomplete="off" aria-label="Unit">
-                        <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
-                    </div>
                     <div id="ingredients-status" class="calendar-status"></div>
                 </div>
+                <datalist id="recipe-units">
+                    <option value="g"><option value="kg"><option value="ml"><option value="l">
+                    <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
+                    <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
+                    <option value="clove"><option value="slice"><option value="piece">
+                </datalist>
             </div>
             <aside class="shopping-panel">
                 <div class="recipes-list-header">
@@ -978,14 +911,14 @@
                 </label>
                 <label class="settings-check">
                     <input type="checkbox" id="import-include-ingredients" onchange="updateLibraryDataImportButton()">
-                    <span>Items <span class="settings-hint" id="import-count-ingredients"></span>
+                    <span>Single items <span class="settings-hint" id="import-count-ingredients"></span>
                         <span class="settings-hint">New ones are added; existing ones are kept, with any missing
                             quantity filled in.</span></span>
                 </label>
                 <label class="settings-check">
                     <input type="checkbox" id="import-include-meals" onchange="updateLibraryDataImportButton()">
-                    <span>Item groups <span class="settings-hint" id="import-count-meals"></span>
-                        <span class="settings-hint">Item groups with a name already here are skipped, not
+                    <span>Items made of others <span class="settings-hint" id="import-count-meals"></span>
+                        <span class="settings-hint">Ones with a name already here are skipped, not
                             overwritten.</span></span>
                 </label>
                 <div id="import-library-data-status" class="calendar-status"></div>
@@ -1155,7 +1088,7 @@
                         <h3>Export &amp; Import</h3>
                         <div class="settings-group">
                             <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos,
-                                file tags, items and item groups to one file, or import a file exported from another
+                                file tags and items to one file, or import a file exported from another
                                 instance of this app. On import you can choose which of them to bring in.</p>
                             <div id="library-data-counts" class="local-stats-grid">
                                 <span class="settings-hint">Loading...</span>
@@ -1777,7 +1710,7 @@
                     <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="all" role="tab"
                         onclick="setCalendarEntryScope('all')">Every occurrence</button>
                 </div>
-                <!-- A meal: optional name, one or more item groups or items, and the family it's for -->
+                <!-- A meal: optional name, one or more items, and the family it's for -->
                 <div id="calendar-entry-meal-fields" class="calendar-entry-normal-fields">
                     <div class="settings-group">
                         <label for="calendar-entry-meal-name">Name <span class="calendar-entry-tags-hint">— optional, e.g. Sunday roast</span></label>
@@ -1785,12 +1718,10 @@
                             onkeydown="if(event.key==='Enter') saveCalendarEntry()">
                     </div>
                     <div class="settings-group">
-                        <label for="calendar-entry-part-add">Item groups and items <span class="calendar-entry-tags-hint">— one or more</span></label>
+                        <label for="calendar-entry-part-add">Items <span class="calendar-entry-tags-hint">— one or more</span></label>
                         <ol id="calendar-entry-parts" class="calendar-entry-parts"></ol>
                         <select id="calendar-entry-part-add" class="calendar-entry-recipe-select"
                             onchange="addCalendarEntryPart(this.value)"></select>
-                        <!-- A new item or item group, made from here and added to the meal (filled by showCalendarEntryNewPart) -->
-                        <div id="calendar-entry-new-part" class="calendar-entry-new-part" hidden></div>
                     </div>
                     <div id="calendar-entry-family-group" class="settings-group">
                         <label>For <span class="calendar-entry-tags-hint">— who's eating</span></label>
@@ -2427,6 +2358,89 @@
     <div id="toast-container" class="toast-container"></div>
 
     <!-- Meals tab: choosing a shopping list item's picture (opened by clicking it) -->
+    <!-- Meals tab: makes or changes an item, either a single item (found by searching products for its
+         name and picture) or one made of other items (found by searching the items) -->
+    <div id="item-builder-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeItemBuilder()">
+        <div class="modal-content item-builder-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2 id="item-builder-heading">New Item</h2>
+                </div>
+                <!-- Save stays up here, in reach however long the search results below get -->
+                <div class="item-builder-header-actions">
+                    <button type="button" id="item-builder-save-btn" class="btn-control primary" onclick="saveItemBuilder()">Save</button>
+                    <button class="btn-close" onclick="closeItemBuilder()" title="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="item-builder-status" class="calendar-status item-builder-status"></div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <label for="item-builder-name">Name</label>
+                    <div class="recipe-name-row">
+                        <input type="text" id="item-builder-name" class="recipe-name-input" maxlength="300" autocomplete="off"
+                            placeholder="e.g. Peas, or Sunday roast" oninput="onItemBuilderNameInput()"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); saveItemBuilder(); }">
+                        <label class="recipe-unconfirmed">
+                            <input type="checkbox" id="item-builder-unconfirmed"> Unconfirmed
+                        </label>
+                    </div>
+                    <p id="item-builder-name-note" class="settings-hint" hidden></p>
+                </div>
+                <div id="item-builder-kinds" class="nutrition-sources item-builder-kinds" role="tablist" aria-label="Kind of item">
+                    <button type="button" role="tab" data-kind="single" onclick="setItemBuilderKind('single')">Single item</button>
+                    <button type="button" role="tab" data-kind="group" onclick="setItemBuilderKind('group')">Made of other items</button>
+                </div>
+                <div id="item-builder-single" class="item-builder-section">
+                    <div class="item-builder-single-row">
+                        <button type="button" id="item-builder-pic" class="ingredient-pic item-builder-pic"
+                            onclick="focusItemBuilderProductSearch()" title="Choose a picture"></button>
+                        <div class="item-builder-quantity">
+                            <label for="item-builder-amount">Quantity for one person</label>
+                            <div class="item-builder-quantity-row">
+                                <input type="text" id="item-builder-amount" maxlength="20" placeholder="Amount" autocomplete="off"
+                                    aria-label="Amount for one person" oninput="renderItemBuilderCalories()">
+                                <input type="text" id="item-builder-unit" maxlength="40" placeholder="Unit" list="recipe-units"
+                                    autocomplete="off" aria-label="Unit" oninput="renderItemBuilderCalories()">
+                            </div>
+                        </div>
+                        <button type="button" id="item-builder-kcal" class="recipe-kcal item-builder-kcal"
+                            onclick="openItemBuilderNutrition()"></button>
+                    </div>
+                    <div class="settings-group">
+                        <label for="item-builder-product-search">Find a product <span class="calendar-entry-tags-hint">— for
+                            its picture, and its name if none is typed</span></label>
+                        <div class="nutrition-search-row">
+                            <input type="search" id="item-builder-product-search" autocomplete="off" placeholder="e.g. frozen peas"
+                                onkeydown="if(event.key==='Enter') { event.preventDefault(); searchItemBuilderProducts(); }">
+                            <button type="button" class="btn-control btn-small primary" onclick="searchItemBuilderProducts()">Search</button>
+                        </div>
+                        <div id="item-builder-products" class="shopping-picker-results item-builder-products"></div>
+                    </div>
+                </div>
+                <div id="item-builder-group" class="item-builder-section" hidden>
+                    <ol id="item-builder-parts" class="item-builder-parts"></ol>
+                    <div class="settings-group">
+                        <input type="search" id="item-builder-part-search" autocomplete="off" placeholder="Search items to add..."
+                            aria-label="Search items to add" oninput="renderItemBuilderPartResults()"
+                            onkeydown="onItemBuilderPartSearchKey(event)">
+                        <div id="item-builder-part-results" class="item-builder-results"></div>
+                    </div>
+                    <p id="item-builder-total" class="recipe-kcal-total"></p>
+                </div>
+                <div class="item-builder-actions">
+                    <button type="button" id="item-builder-delete-btn" class="btn-control ghost calendar-entry-delete"
+                        onclick="deleteItemBuilderItem()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="shopping-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeShoppingPicker()">
         <div class="modal-content shopping-picker-content">
             <div class="modal-header">
