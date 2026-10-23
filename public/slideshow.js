@@ -181,14 +181,15 @@ class Slideshow {
         this.resetIdleTimer();
     }
 
-    // Today's and tomorrow's entries (from the Calendar tab) and events (from subscribed calendars) in
-    // the side panel, which only shows on landscape screens. A day with nothing on is left out, and the
-    // panel is left empty, and so hidden, when neither has anything.
+    // The coming week's entries (from the Calendar tab, not meals) and events (from subscribed
+    // calendars) in the side panel, which only shows on landscape screens and scrolls when they don't
+    // fit. A day with nothing on is left out, and the panel is left empty, and so hidden, when no day has anything.
     async loadAgenda() {
         const el = document.getElementById('ss-agenda');
         if (!el) return;
         const now = new Date();
-        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2))}`;
+        const AGENDA_DAYS = 7;
+        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + AGENDA_DAYS))}`;
         try {
             const [cals, entryData, tagData, feedData] = await Promise.all([
                 fetch('/api/calendars').then(r => r.json()),
@@ -197,10 +198,11 @@ class Slideshow {
                 fetch(`/api/calendars/events?${range}`).then(r => r.ok ? r.json() : { events: [] }),
             ]);
             const calsById = Object.fromEntries(cals.map(c => [c.id, c]));
-            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from (or as a meal)
-            const entries = (entryData.entries || []).map(e => ({
-                title: e.meal ? mealEntryTitle(e.meal) : e.title, allDay: true, startKey: e.date, endKey: e.date,
-                source: e.meal ? 'Meal' : e.tags?.[0] || '', color: e.meal ? MEAL_ENTRY_COLOR : tagData.colors?.[e.tags?.[0]],
+            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes
+            // from. Meals stay on the Meals tab.
+            const entries = (entryData.entries || []).filter(e => !e.meal).map(e => ({
+                title: e.title, allDay: true, startKey: e.date, endKey: e.date,
+                source: e.tags?.[0] || '', color: tagData.colors?.[e.tags?.[0]],
             }));
             // All-day events carry date keys with an exclusive end; timed ones carry ISO times
             const events = (feedData.events || []).map(ev => ({
@@ -211,9 +213,11 @@ class Slideshow {
             }));
             const all = [...entries, ...events];
             const time = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            // Each day lists what overlaps it (so a multi-day event shows on both), all-day first, then by time
-            const days = [['Today', 0], ['Tomorrow', 1]].map(([label, offset]) => {
+            // Each day lists what overlaps it (so a multi-day event shows on each), all-day first, then by time
+            const days = Array.from({ length: AGENDA_DAYS }, (_, offset) => {
                 const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+                const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow'
+                    : dayStart.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' });
                 const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1);
                 const key = calendarDateKey(dayStart);
                 const items = all.filter(it => it.allDay

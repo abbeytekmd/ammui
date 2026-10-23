@@ -7770,13 +7770,18 @@ input:checked+.slider:before {
         font-size: clamp(18px, 1.5vw, 27px);
     }
 
-    /* Today's calendar, under the music bar; it takes no space when there's nothing on */
+    /* The week's calendar, under the music bar; it takes no space when there's nothing on, and
+       scrolls when there's more than fits */
     .ss-agenda:not(:empty) {
         display: block;
+        flex-shrink: 0;
         margin: 16px 8px 0;
         padding: 10px 10px;
         max-height: 30vh;
-        overflow: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
         z-index: 10003;
         color: #fff;
         /* A card like the map's, so it reads apart from the photo details below */
@@ -7786,7 +7791,7 @@ input:checked+.slider:before {
     }
 }
 
-/* Today's calendar in the slideshow's side panel (placed in the landscape rules above) */
+/* The week's calendar in the slideshow's side panel (placed in the landscape rules above) */
 .ss-agenda-title {
     font-size: clamp(13px, 1vw, 18px);
     font-weight: 700;
