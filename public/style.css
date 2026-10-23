@@ -1817,6 +1817,7 @@ p.subtitle {
 .library-mode-tabs .lib-tab[data-mode="smarthome"] svg { color: #34d399; }
 .library-mode-tabs .lib-tab[data-mode="energy"] svg { color: #facc15; }
 .library-mode-tabs .lib-tab[data-mode="games"] svg { color: #2dd4bf; }
+.library-mode-tabs .lib-tab[data-mode="alarms"] svg { color: #60a5fa; }
 
 .library-mode-tabs .lib-tab:hover {
     color: var(--text);
@@ -2437,6 +2438,21 @@ p.subtitle {
 .meal-day-meal-head th {
     padding-top: 1.1rem;
     border-bottom: 1px solid var(--card-border);
+}
+
+.meal-day-toggle {
+    width: 1.5rem;
+    margin-right: 0.35rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+.meal-day-toggle:hover {
+    color: var(--text);
 }
 
 .meal-day-meal-name {
@@ -10264,4 +10280,154 @@ input:checked+.slider:before {
     height: 22px;
     border-width: 3px;
     flex-shrink: 0;
+}
+
+/* ─── Alarms tab ──────────────────────────────────────────────────────── */
+.alarms-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 1.5rem;
+    padding-top: 1rem;
+    overflow-y: auto;
+}
+
+.alarms-view[hidden] {
+    display: none;
+}
+
+.alarms-side {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.timer-shortcuts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
+    gap: 0.6rem;
+}
+
+.timer-shortcut {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.6rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.timer-shortcut span {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.timer-shortcut:hover {
+    border-color: var(--text-muted);
+}
+
+.timer-shortcut:active {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.alarms-form {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.alarms-input {
+    width: 8rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.1rem;
+    color-scheme: dark;
+}
+
+.alarms-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.alarms-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    background: var(--card-bg);
+}
+
+.alarms-row.off .alarms-big {
+    color: var(--text-muted);
+}
+
+.alarms-big {
+    min-width: 5.5rem;
+    font-size: 1.8rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.alarms-about {
+    flex: 1;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.alarms-form .alarms-about {
+    flex: none;
+}
+
+.alarms-empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.alarm-ring-content {
+    align-items: center;
+    gap: 1rem;
+    padding: 2rem;
+    max-width: 420px;
+    text-align: center;
+}
+
+.alarm-ring-content h2 {
+    margin: 0;
+    font-size: 2rem;
+}
+
+.alarm-ring-list {
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.alarm-stop-btn {
+    width: 100%;
+    padding: 1.1rem;
+    font-size: 1.4rem;
+    justify-content: center;
+}
+
+@media (max-width: 800px) {
+    .alarms-view {
+        flex-direction: column;
+    }
 }

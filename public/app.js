@@ -5640,7 +5640,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view' };
 
 function setAppView(view) {
     appView = view;
@@ -6590,6 +6590,10 @@ const mealNutrition = parts => sumNutrition(parts.flatMap(mealPartRows));
 let mealDayDate = null; // the day showing (YYYY-MM-DD), or null
 let mealDayFamily = [];  // the family, as tabs along the top: [{ id, name }]
 let mealDayPerson = null; // the family member whose food is showing, or null for everyone (kept between days)
+const mealDayExpanded = new Set(); // meals showing their items; the rest show only their heading (kept between days)
+
+// A meal's key for remembering it is expanded: the day's own meal by its entry, a planned one by its plan day and name
+const mealDayKey = ev => ev.entry ? `entry:${ev.entry.id}` : `planned:${ev.planned.day}:${ev.planned.name || ''}`;
 
 function openMealDayView(date) {
     mealDayDate = date;
@@ -6707,7 +6711,10 @@ function renderMealDayView() {
             ? `<button type="button" class="btn-control ghost btn-small" data-act="edit-meal" data-i="${i}">Edit</button>
                <button type="button" class="btn-control ghost btn-small calendar-entry-delete" data-act="delete-meal" data-i="${i}">Delete</button>`
             : `<button type="button" class="btn-control primary btn-small" data-act="add-planned" data-i="${i}">Add to the Day</button>`;
-        const rows = meal.parts.map((part, j) => {
+        const collapsed = !mealDayExpanded.has(mealDayKey(ev));
+        const toggle = `<button type="button" class="meal-day-toggle" data-act="toggle-meal" data-i="${i}"
+                aria-expanded="${!collapsed}" title="${collapsed ? 'Show the items' : 'Hide the items'}">${collapsed ? '&#9654;' : '&#9660;'}</button>`;
+        const rows = collapsed ? '' : meal.parts.map((part, j) => {
             const item = itemById(part.id);
             const qty = mealPartQuantity(part, item);
             const times = mealPartTimes(part, item);
@@ -6741,6 +6748,7 @@ function renderMealDayView() {
         <tbody class="meal-day-meal${ev.planned ? ' planned' : ''}">
             <tr class="meal-day-meal-head">
                 <th colspan="8">
+                    ${toggle}
                     ${mealCount}
                     <span class="meal-day-meal-name">${escapeHtml(meal.name || mealEntryTitle({ ...meal, times: 1 }))}</span>
                     ${about ? `<span class="meal-day-meal-about">${escapeHtml(about)}</span>` : ''}
@@ -6748,7 +6756,7 @@ function renderMealDayView() {
                 <th class="meal-day-actions">${actions}</th>
             </tr>
             ${rows}
-            ${events.length > 1 || mealTimes !== 1 ? `<tr class="meal-day-subtotal"><td colspan="3">Meal total${mealTimes !== 1
+            ${collapsed || events.length > 1 || mealTimes !== 1 ? `<tr class="meal-day-subtotal"><td colspan="3">Meal total${mealTimes !== 1
                 ? ` <span class="meal-day-meal-about">(${formatTimes(mealTimes)} the items above)</span>` : ''}</td>${mealDayCells(sumNutrition(mealRows))}<td></td></tr>` : ''}
         </tbody>`;
     }).join('');
@@ -6775,6 +6783,11 @@ function renderMealDayView() {
             else if (act === 'delete-meal') deleteMealFromDay(ev.entry);
             else if (act === 'edit-item') openItemBuilder(itemById(btn.dataset.id), { onSaved: () => renderCalendar() });
             else if (act === 'meal-count') changeMealDayCount(ev.entry, Number(btn.dataset.step));
+            else if (act === 'toggle-meal') {
+                const key = mealDayKey(ev);
+                if (!mealDayExpanded.delete(key)) mealDayExpanded.add(key);
+                renderMealDayView();
+            }
         };
     });
 }

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=65">
+    <link rel="stylesheet" href="style.css?v=66">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -61,6 +61,16 @@
                         <line x1="6" y1="17" x2="18" y2="17"></line>
                     </svg>
                     <span>Meals</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="alarms" onclick="showAlarms()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="13" r="8"></circle>
+                        <path d="M12 9v4l2 2"></path>
+                        <path d="M5 3 2 6"></path>
+                        <path d="m22 6-3-3"></path>
+                    </svg>
+                    <span>Alarms</span>
                 </button>
                 <button type="button" class="lib-tab" data-mode="smarthome" onclick="showSmartHome()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -659,6 +669,29 @@
             <div id="smarthome-energy" class="smarthome-section" hidden>
                 <div id="smarthome-energy-banner" class="smarthome-banner energy-banner" aria-hidden="true"></div>
                 <div id="smarthome-energy-grid" class="energy-grid"></div>
+            </div>
+        </section>
+
+        <!-- Alarms tab: countdown timers and alarms at a time of day (built by timers.js) -->
+        <section id="alarms-view" class="alarms-view" hidden>
+            <div class="alarms-side">
+                <div class="smarthome-header"><h2>Timers</h2></div>
+                <div id="timer-shortcuts" class="timer-shortcuts"></div>
+                <form class="alarms-form" onsubmit="event.preventDefault(); startTimerFromForm()">
+                    <input type="number" id="timer-minutes" class="alarms-input" min="1" max="1440" step="any"
+                        placeholder="Minutes" inputmode="numeric" required>
+                    <span class="alarms-about">minutes</span>
+                    <button type="submit" class="btn-control primary">Go</button>
+                </form>
+                <div id="timer-list" class="alarms-list"></div>
+            </div>
+            <div class="alarms-side">
+                <div class="smarthome-header"><h2>Alarms</h2></div>
+                <form class="alarms-form" onsubmit="event.preventDefault(); addAlarmFromForm()">
+                    <input type="time" id="alarm-time" class="alarms-input" required>
+                    <button type="submit" class="btn-control primary">Set</button>
+                </form>
+                <div id="alarm-list" class="alarms-list"></div>
             </div>
         </section>
 
@@ -1688,6 +1721,15 @@
 
 
 
+    <!-- A timer or alarm going off: it beeps until Stop is pressed -->
+    <div id="alarm-ring-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content alarm-ring-content" role="alertdialog" aria-labelledby="alarm-ring-title">
+            <h2 id="alarm-ring-title">Time's up</h2>
+            <div id="alarm-ring-list" class="alarm-ring-list"></div>
+            <button type="button" class="btn-control primary alarm-stop-btn" onclick="stopRinging()">Stop</button>
+        </div>
+    </div>
+
     <!-- Calendar Entry Modal (Calendar tab and the Meals tab's calendar: click a day to add, an entry to edit) -->
     <!-- Meals calendar: one day's meals, their items and the totals per person -->
     <div id="meal-day-modal" class="modal-overlay" style="display: none;"
@@ -2533,8 +2575,9 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=61"></script>
+    <script src="app.js?v=62"></script>
     <script src="slideshow.js?v=9"></script>
+    <script src="timers.js?v=1"></script>
 </body>
 
 </html>
