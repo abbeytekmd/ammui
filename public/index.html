@@ -921,8 +921,13 @@
                             <label for="nutrition-fat">Fat (g)</label>
                             <input type="number" id="nutrition-fat" min="0" max="100" step="any" oninput="updateNutritionPreview()">
                         </div>
+                        <div>
+                            <label for="nutrition-alcohol">Alcohol (g)</label>
+                            <input type="number" id="nutrition-alcohol" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
                     </div>
-                    <p class="settings-hint">Protein, carbs and fat are per 100 g too, and can be left empty.</p>
+                    <p class="settings-hint">Protein, carbs, fat and alcohol are per 100 g too, and can be left empty.
+                        Alcohol is grams, not % ABV: a 5% beer has about 4 g per 100 ml.</p>
                     <div id="nutrition-unit-group" class="settings-group" style="padding: 0;">
                         <label for="nutrition-unit-grams" id="nutrition-unit-label"></label>
                         <input type="number" id="nutrition-unit-grams" min="0" step="any" oninput="updateNutritionPreview()">

@@ -7691,8 +7691,11 @@ function gramsPerOne(key, gramsPerUnit) {
 
 const MACROS = [['protein', 'proteinPer100g'], ['carbs', 'carbsPer100g'], ['fat', 'fatPer100g']];
 
-// { kcal, grams, protein, carbs, fat } for an amount of an ingredient (a macro is null if not
-// known), or { missing } saying what's needed: 'nutrition' (no calories set), 'amount' (no
+// UK alcohol units: one is 10 ml, or 8 g, of pure alcohol
+const ALCOHOL_GRAMS_PER_UNIT = 8;
+
+// { kcal, grams, protein, carbs, fat, alcohol } for an amount of an ingredient (a macro is null if
+// not known; alcohol is grams, 0 if not known), or { missing } saying what's needed: 'nutrition' (no calories set), 'amount' (no
 // quantity) or 'unit' (unknown weight of one).
 function ingredientCalories(amount, unit, nutrition) {
     if (!nutrition) return { missing: 'nutrition' };
@@ -7706,25 +7709,34 @@ function ingredientCalories(amount, unit, nutrition) {
     const grams = qty * perOne;
     const result = { grams, kcal: grams * nutrition.kcalPer100g / 100 };
     for (const [macro, key] of MACROS) result[macro] = nutrition[key] == null ? null : grams * nutrition[key] / 100;
+    result.alcohol = grams * (nutrition.alcoholPer100g ?? 0) / 100;
     return result;
 }
 
 const formatKcal = kcal => `${Math.round(kcal).toLocaleString()} kcal`;
 const formatGrams = g => `${g < 10 ? Math.round(g * 10) / 10 : Math.round(g).toLocaleString()} g`;
 
-// "12 g protein · 30 g carbs · 5 g fat" for the macros that are known, or ''
-const formatMacros = r => MACROS.filter(([m]) => r[m] != null).map(([m]) => `${formatGrams(r[m])} ${m}`).join(' · ');
+// "1.5 units alcohol", or '' for none
+const formatAlcohol = grams => {
+    if (!(grams > 0)) return '';
+    const units = Math.round(grams / ALCOHOL_GRAMS_PER_UNIT * 10) / 10;
+    return `${units || '<0.1'} unit${units === 1 ? '' : 's'} alcohol`;
+};
+
+// "12 g protein · 30 g carbs · 5 g fat" for the macros that are known (then any alcohol), or ''
+const formatMacros = r => [...MACROS.filter(([m]) => r[m] != null).map(([m]) => `${formatGrams(r[m])} ${m}`), formatAlcohol(r.alcohol)]
+    .filter(Boolean).join(' · ');
 const unitLabel = (unit, ingredientName) => (unit || '').trim() || `one ${ingredientName.toLowerCase()}`;
 
 // The saved ingredient a meal row refers to, if any
 const recipeRowIngredient = ing =>
     (ing.ingredientId && ingredientList.find(i => i.id === ing.ingredientId)) || findIngredientByName(ing.name);
 
-// Adds up [{ name, result }] (each result from ingredientCalories): { kcal, protein, carbs, fat,
+// Adds up [{ name, result }] (each result from ingredientCalories): { kcal, protein, carbs, fat, alcohol,
 // counted, missing: names not counted, noMacros: names counted without protein, carbs or fat,
 // anySet: whether any has calories set }. Rows with no name aren't listed as missing.
 function sumNutrition(rows) {
-    const t = { kcal: 0, protein: 0, carbs: 0, fat: 0, counted: 0, missing: [], noMacros: [], anySet: false };
+    const t = { kcal: 0, protein: 0, carbs: 0, fat: 0, alcohol: 0, counted: 0, missing: [], noMacros: [], anySet: false };
     for (const { name, result } of rows) {
         if (result.missing !== 'nutrition') t.anySet = true;
         if (!('kcal' in result)) {
@@ -7734,15 +7746,16 @@ function sumNutrition(rows) {
         t.kcal += result.kcal;
         t.counted++;
         for (const [m] of MACROS) t[m] += result[m] ?? 0;
+        t.alcohol += result.alcohol;
         if (MACROS.some(([m]) => result[m] == null)) t.noMacros.push(name);
     }
     return t;
 }
 
-// "650 kcal · 32 g protein · 70 g carbs · 21 g fat". Protein, carbs and fat are left out until at
-// least one counted item has them.
+// "650 kcal · 32 g protein · 70 g carbs · 21 g fat · 2 units alcohol". Protein, carbs and fat are
+// left out until at least one counted item has them; alcohol only shows when there is some.
 const formatNutritionTotal = t => {
-    const macros = t.noMacros.length < t.counted ? formatMacros(t) : '';
+    const macros = t.noMacros.length < t.counted ? formatMacros(t) : formatAlcohol(t.alcohol);
     return `${formatKcal(t.kcal)}${macros ? ` · ${macros}` : ''}`;
 };
 
@@ -7806,7 +7819,7 @@ function ingredientCaloriesButton(ingredient) {
 }
 
 let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit }
-const MACRO_INPUTS = { proteinPer100g: 'nutrition-protein', carbsPer100g: 'nutrition-carbs', fatPer100g: 'nutrition-fat' };
+const MACRO_INPUTS = { proteinPer100g: 'nutrition-protein', carbsPer100g: 'nutrition-carbs', fatPer100g: 'nutrition-fat', alcoholPer100g: 'nutrition-alcohol' };
 
 // Where calories can be looked up (the server's lib/nutrition.js)
 const NUTRITION_SOURCES = {

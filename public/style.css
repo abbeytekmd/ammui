@@ -3372,10 +3372,10 @@ p.subtitle {
     white-space: nowrap;
 }
 
-/* Calories dialog: protein, carbs and fat side by side */
+/* Calories dialog: protein, carbs, fat and alcohol side by side */
 .nutrition-macros {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.75rem;
 }
 

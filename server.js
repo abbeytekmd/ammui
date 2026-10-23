@@ -47,7 +47,7 @@ import {
     getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listRecipes, getRecipe, saveRecipe, deleteRecipe,
-    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, deleteIngredient, mealsUsingIngredient,
+    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient, mealsUsingIngredient,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
 } from './lib/db.js';
@@ -3385,7 +3385,7 @@ function cleanIngredient(body, id) {
     return typeof nutrition === 'string' ? nutrition : { name, amount, unit, unconfirmed, nutrition };
 }
 
-// An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g,
+// An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g, alcoholPer100g,
 // gramsPerUnit: { unit: grams }, source, sourceId, sourceName } (a macro is null if not known; source
 // is the food table it came from, or '' if typed in). Returns a string saying what's wrong.
 function cleanNutrition(n) {
@@ -3394,7 +3394,7 @@ function cleanNutrition(n) {
     const kcalPer100g = Number(n.kcalPer100g);
     if (!Number.isFinite(kcalPer100g) || kcalPer100g < 0 || kcalPer100g > 1000) return 'Calories per 100 g must be between 0 and 1000';
     const macros = {};
-    for (const [key, label] of [['proteinPer100g', 'Protein'], ['carbsPer100g', 'Carbs'], ['fatPer100g', 'Fat']]) {
+    for (const [key, label] of [['proteinPer100g', 'Protein'], ['carbsPer100g', 'Carbs'], ['fatPer100g', 'Fat'], ['alcoholPer100g', 'Alcohol']]) {
         if (n[key] == null || n[key] === '') { macros[key] = null; continue; }
         const g = Number(n[key]);
         if (!Number.isFinite(g) || g < 0 || g > 100) return `${label} per 100 g must be between 0 and 100`;
@@ -3441,27 +3441,29 @@ app.get('/api/nutrition/food/:source/:id', async (req, res) => {
     }
 });
 
-// Items given calories before protein, carbs and fat were kept get them from the food they were
-// looked up from. Online sources are asked one at a time; anything that fails is tried again on
-// the next start.
+// Items given calories before protein, carbs and fat (or alcohol) were kept get them from the food
+// they were looked up from. Online sources are asked one at a time; anything that fails is tried
+// again on the next start.
 async function fillMissingMacros() {
+    const noMacros = n => n.proteinPer100g == null && n.carbsPer100g == null && n.fatPer100g == null;
     const missing = listIngredients().filter(i => i.nutrition?.source && i.nutrition.sourceId
-        && i.nutrition.proteinPer100g == null && i.nutrition.carbsPer100g == null && i.nutrition.fatPer100g == null
+        && (noMacros(i.nutrition) || i.nutrition.alcoholPer100g == null)
         && (i.nutrition.source !== 'usda' || settings.usdaApiKey));
     let filled = 0;
     for (const ingredient of missing) {
         const { source, sourceId } = ingredient.nutrition;
         try {
             const food = await getFood(source, sourceId, { usdaKey: settings.usdaApiKey });
-            if (food.proteinPer100g == null && food.carbsPer100g == null && food.fatPer100g == null) continue;
-            setIngredientMacros(ingredient.id, food);
-            filled++;
+            let changed = false;
+            if (noMacros(ingredient.nutrition) && !noMacros(food)) { setIngredientMacros(ingredient.id, food); changed = true; }
+            if (ingredient.nutrition.alcoholPer100g == null && food.alcoholPer100g != null) { setIngredientAlcohol(ingredient.id, food.alcoholPer100g); changed = true; }
+            if (changed) filled++;
         } catch (err) {
-            console.warn(`[Nutrition] Couldn't look up protein, carbs and fat for "${ingredient.name}": ${err.message}`);
+            console.warn(`[Nutrition] Couldn't look up protein, carbs, fat and alcohol for "${ingredient.name}": ${err.message}`);
             if (err.status === 429) break;
         }
     }
-    if (filled) console.log(`[Nutrition] Added protein, carbs and fat to ${filled} item${filled === 1 ? '' : 's'}`);
+    if (filled) console.log(`[Nutrition] Added protein, carbs, fat or alcohol to ${filled} item${filled === 1 ? '' : 's'}`);
 }
 fillMissingMacros().catch(err => console.error('[Nutrition]', err));
 
