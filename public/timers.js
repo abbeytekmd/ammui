@@ -63,16 +63,70 @@ function formatTimeLeft(ms) {
     return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}` : `${m}:${String(sec).padStart(2, '0')}`;
 }
 
+const RING_LENGTH = 2 * Math.PI * 45; // circumference of the countdown rings (r=45 in a 100 box)
+const TIMER_ENDING_MS = 60000; // the last minute shows in red
+
+// How much of the timer is still to run, 1 → 0
+const timerFraction = (t, now) => Math.min(1, Math.max(0, (t.endsAt - now) / (t.minutes * 60000)));
+
+// A ring that drains as the timer runs down; an idle ring (no timer) is just the track
+function countdownRing(t, now) {
+    const progress = t ? `<circle class="countdown-progress" cx="50" cy="50" r="45" data-timer-ring="${t.id}"
+            stroke-dasharray="${RING_LENGTH}" stroke-dashoffset="${RING_LENGTH * (1 - timerFraction(t, now))}"/>` : '';
+    return `<svg class="countdown-ring" viewBox="0 0 100 100" aria-hidden="true">
+            <circle class="countdown-track" cx="50" cy="50" r="45"/>${progress}
+        </svg>`;
+}
+
+// The big dial shows the timer that ends first; the others are listed under the shortcuts
 function renderTimerList() {
-    const list = document.getElementById('timer-list');
-    list.innerHTML = !timers.length
-        ? '<p class="alarms-empty">No timers running. Press a shortcut, or enter the minutes and press Go.</p>'
-        : timers.map(t => `
-            <div class="alarms-row">
-                <span class="alarms-big" data-timer-left="${t.id}">${formatTimeLeft(t.endsAt - Date.now())}</span>
-                <span class="alarms-about">${escapeHtml(timerLabel(t))}</span>
+    const now = Date.now();
+    const [first, ...rest] = timers;
+    document.getElementById('timer-hero').innerHTML = first ? `
+        <div class="countdown-dial" data-timer-dial="${first.id}">
+            ${countdownRing(first, now)}
+            <div class="countdown-face">
+                <span class="countdown-time" data-timer-left="${first.id}">${formatTimeLeft(first.endsAt - now)}</span>
+                <span class="countdown-label">${escapeHtml(timerLabel(first))}</span>
+                <span class="countdown-ends">Ends ${clockTime(first.endsAt)}</span>
+            </div>
+        </div>
+        <button type="button" class="btn-control ghost btn-small" onclick="cancelTimer('${first.id}')">Cancel</button>` : `
+        <div class="countdown-dial idle">
+            ${countdownRing(null, now)}
+            <div class="countdown-face">
+                <span class="countdown-time">0:00</span>
+                <span class="countdown-label">No timer running</span>
+            </div>
+        </div>`;
+
+    document.getElementById('timer-list').innerHTML = rest.map(t => `
+            <div class="alarms-row" data-timer-dial="${t.id}">
+                <span class="countdown-mini">${countdownRing(t, now)}</span>
+                <span class="alarms-big" data-timer-left="${t.id}">${formatTimeLeft(t.endsAt - now)}</span>
+                <span class="alarms-about">${escapeHtml(timerLabel(t))} · ends ${clockTime(t.endsAt)}</span>
                 <button type="button" class="btn-control ghost btn-small" onclick="cancelTimer('${t.id}')">Cancel</button>
             </div>`).join('');
+    updateCountdowns(now);
+}
+
+// Ticks the clocks, rings and "in 2h 5m"s along without rebuilding the lists
+function updateCountdowns(now) {
+    for (const t of timers) {
+        const left = t.endsAt - now;
+        document.querySelectorAll(`[data-timer-left="${t.id}"]`).forEach(el => {
+            el.textContent = formatTimeLeft(left);
+            el.classList.toggle('long', left >= 3600000);
+        });
+        document.querySelectorAll(`[data-timer-ring="${t.id}"]`).forEach(el =>
+            el.setAttribute('stroke-dashoffset', RING_LENGTH * (1 - timerFraction(t, now))));
+        document.querySelectorAll(`[data-timer-dial="${t.id}"]`).forEach(el =>
+            el.classList.toggle('ending', left <= TIMER_ENDING_MS));
+    }
+    for (const a of alarms) {
+        const el = document.querySelector(`[data-alarm-about="${a.id}"]`);
+        if (el) el.textContent = alarmAbout(a, now);
+    }
 }
 
 // --- Alarms at a time of day ---
@@ -112,11 +166,14 @@ function deleteAlarm(id) {
     renderAlarmList();
 }
 
-// "Today", "Tomorrow", or "Off"
-function alarmWhen(alarm) {
+// "Today · in 2h 5m", "Tomorrow · in 9h 30m", or "Off"
+function alarmAbout(alarm, now) {
     if (!alarm.at) return 'Off';
-    const day = new Date(alarm.at).toDateString();
-    return day === new Date().toDateString() ? 'Today' : 'Tomorrow';
+    const day = new Date(alarm.at).toDateString() === new Date(now).toDateString() ? 'Today' : 'Tomorrow';
+    const mins = Math.ceil((alarm.at - now) / 60000);
+    const h = Math.floor(mins / 60), m = mins % 60;
+    const until = mins <= 1 ? 'in under a minute' : h ? `in ${h}h ${m}m` : `in ${m}m`;
+    return `${day} · ${until}`;
 }
 
 function renderAlarmList() {
@@ -126,7 +183,7 @@ function renderAlarmList() {
         : alarms.map(a => `
             <div class="alarms-row${a.at ? '' : ' off'}">
                 <span class="alarms-big">${escapeHtml(a.time)}</span>
-                <span class="alarms-about">${alarmWhen(a)}</span>
+                <span class="alarms-about" data-alarm-about="${a.id}">${alarmAbout(a, Date.now())}</span>
                 <label class="switch" title="${a.at ? 'Turn off' : 'Turn on'}">
                     <input type="checkbox" ${a.at ? 'checked' : ''} onchange="setAlarmOn('${a.id}', this.checked)">
                     <span class="slider round"></span>
@@ -207,10 +264,7 @@ function checkAlarms() {
         renderAlarmsView();
     }
     if (due.length) ring(due);
-    document.querySelectorAll('[data-timer-left]').forEach(el => {
-        const t = timers.find(t => t.id === el.dataset.timerLeft);
-        if (t) el.textContent = formatTimeLeft(t.endsAt - now);
-    });
+    updateCountdowns(now);
 }
 
 document.getElementById('timer-shortcuts').innerHTML = TIMER_SHORTCUTS.map(m =>
