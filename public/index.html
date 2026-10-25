@@ -551,9 +551,30 @@
                     </svg>
                     <span>Items</span>
                 </button>
+                <button type="button" class="meals-tab" data-tab="stats" role="tab" onclick="setMealsTab('stats')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                    <span>Stats</span>
+                </button>
             </nav>
             <!-- The Calendar tab's calendar is moved in here while it shows meals (see openCalendarView) -->
             <div id="meals-pane-calendar" class="meals-pane" hidden></div>
+            <!-- What was eaten each day of the last week or month, against the UK's recommended amounts -->
+            <div id="meals-pane-stats" class="meals-pane" hidden>
+                <div class="meal-plan-header">
+                    <h2>Stats</h2>
+                    <div id="meal-stats-period" class="nutrition-sources meal-stats-period" role="tablist" aria-label="Period">
+                        <button type="button" role="tab" data-days="7" onclick="setMealStatsDays(7)">Week</button>
+                        <button type="button" role="tab" data-days="30" onclick="setMealStatsDays(30)">Month</button>
+                    </div>
+                </div>
+                <div id="meal-stats-family" class="nutrition-sources meal-stats-family" role="tablist" aria-label="Whose food" hidden></div>
+                <div id="meal-stats-body" class="meal-stats-body"></div>
+            </div>
             <!-- A meal for each day of a block of weeks; it repeats on the Calendar from its start date -->
             <div id="meals-pane-plan" class="meals-pane" hidden>
                 <div class="meal-plan-header">
@@ -1027,6 +1048,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
+                <button class="settings-tab" data-tab="export" onclick="switchSettingsTab('export', this)">Export &amp; Import</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
@@ -1112,6 +1134,8 @@
                             <span class="settings-hint">Loading...</span>
                         </div>
                     </div>
+                </div>
+                <div id="settings-export" class="settings-panel">
                     <div class="manage-section">
                         <h3>Export &amp; Import</h3>
                         <div class="settings-group">

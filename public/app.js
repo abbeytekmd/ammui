@@ -7339,7 +7339,7 @@ async function showRecipes(tab) {
 }
 
 // --- Meals tab: Calendar | Meal Plan | Items down the left; the shopping list stays beside each ---
-const MEALS_TABS = ['calendar', 'plan', 'ingredients'];
+const MEALS_TABS = ['calendar', 'plan', 'ingredients', 'stats'];
 let mealsTab = 'ingredients';
 try { if (MEALS_TABS.includes(localStorage.getItem('mealsTab'))) mealsTab = localStorage.getItem('mealsTab'); } catch (e) { }
 
@@ -7357,6 +7357,221 @@ function setMealsTab(tab) {
     if (tab === 'plan') loadMealPlan();
     // Items get their pictures while their list is showing
     if (tab === 'ingredients') renderIngredientList();
+    if (tab === 'stats') loadMealStats();
+}
+
+// --- Meals tab: Stats. Each day's food over the last week or month, from the meals on the calendar
+// (the meal plan only fills days from today on, so it isn't counted), against UK guidance for an
+// adult: the NHS's 2,000 / 2,500 kcal for women and men, the reference intakes on food labels, and
+// the Chief Medical Officers' 14 units of alcohol a week (2 a day on average).
+const MEAL_STATS_MEASURES = [
+    { key: 'kcal', label: 'Calories', unit: 'kcal a day', guides: [{ value: 2000, label: '2,000 women' }, { value: 2500, label: '2,500 men' }],
+        about: 'NHS: about 2,000 kcal a day for women, 2,500 for men' },
+    { key: 'protein', label: 'Protein', unit: 'g a day', guides: [{ value: 50, label: '50 g' }], about: 'Reference intake: 50 g a day' },
+    { key: 'carbs', label: 'Carbs', unit: 'g a day', guides: [{ value: 260, label: '260 g' }], about: 'Reference intake: 260 g a day' },
+    { key: 'fat', label: 'Fat', unit: 'g a day', guides: [{ value: 70, label: '70 g' }], about: 'Reference intake: no more than 70 g a day' },
+    { key: 'units', label: 'Alcohol', unit: 'units a day', guides: [{ value: 2, label: '2 (14 a week)' }],
+        about: 'No more than 14 units a week, spread over 3 or more days' },
+];
+let mealStatsDays = 7; // 7 or 30, the days up to and including today
+try { if (localStorage.getItem('mealStatsDays') === '30') mealStatsDays = 30; } catch (e) { }
+let mealStatsEntries = null; // the last 30 days' meals from the calendar, or null until loaded
+let mealStatsFamily = []; // [{ id, name }]
+let mealStatsPerson = null; // whose food is showing, or null for everyone
+let mealStatsDayRows = []; // the days drawn, for the hover tooltip
+let mealStatsToken = 0;
+
+async function loadMealStats() {
+    const token = ++mealStatsToken;
+    const today = new Date();
+    const start = calendarDateKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29));
+    const end = calendarDateKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+    renderMealStats();
+    try {
+        const [entryData, family] = await Promise.all([
+            fetch(`/api/calendar-entries?start=${start}&end=${end}`).then(r => r.json()),
+            fetch('/api/games/players').then(r => r.json()).catch(() => []),
+            loadMealNutritionData()
+        ]);
+        if (token !== mealStatsToken) return;
+        if (!entryData.entries) throw new Error(entryData.error || 'Failed to load the meals');
+        mealStatsEntries = entryData.entries.filter(entry => entry.meal);
+        mealStatsFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+        if (!mealStatsFamily.some(f => f.id === mealStatsPerson)) mealStatsPerson = null;
+        renderMealStats();
+    } catch (err) {
+        if (token !== mealStatsToken) return;
+        document.getElementById('meal-stats-body').innerHTML = `<p class="settings-hint meal-stats-empty">Couldn't load the meals: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+function setMealStatsDays(days) {
+    mealStatsDays = days;
+    try { localStorage.setItem('mealStatsDays', String(days)); } catch (e) { }
+    renderMealStats();
+}
+
+function setMealStatsPerson(id) {
+    mealStatsPerson = id;
+    renderMealStats();
+}
+
+// As on a day's view: a meal is the person's if it's for them or not set for anyone
+const mealStatsForPerson = entry => !mealStatsPerson || !entry.meal.family.length || entry.meal.family.some(f => f.id === mealStatsPerson);
+
+// The period's days, oldest first: { date, d, logged (any meals), t (sumNutrition of them) }
+function mealStatsDayList() {
+    const today = new Date();
+    return Array.from({ length: mealStatsDays }, (_, i) => {
+        const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (mealStatsDays - 1 - i));
+        const date = calendarDateKey(d);
+        const meals = mealStatsEntries.filter(entry => entry.date === date && mealStatsForPerson(entry));
+        return { date, d, logged: meals.length > 0, t: sumNutrition(meals.flatMap(entry => mealDayRows(entry.meal))) };
+    });
+}
+
+// A day's figure for a measure, or null if it has none (no meals, nothing with calories set, or
+// protein, carbs and fat set on none of what's counted)
+function mealStatsValue(day, key) {
+    const t = day.t;
+    if (!day.logged || !t.counted) return null;
+    if (key === 'kcal') return t.kcal;
+    if (key === 'units') return t.alcohol / ALCOHOL_GRAMS_PER_UNIT;
+    return t.noMacros.length < t.counted ? t[key] : null;
+}
+
+function formatMealStat(key, value) {
+    if (key === 'kcal') return formatKcal(value);
+    if (key === 'units') {
+        const units = Math.round(value * 10) / 10;
+        return `${units} unit${units === 1 ? '' : 's'}`;
+    }
+    return formatGrams(value);
+}
+
+// The smallest round number (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten) that's at
+// least v, for the top of a chart
+function niceCeil(v) {
+    if (!(v > 0)) return 1;
+    const pow = 10 ** Math.floor(Math.log10(v));
+    return [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(m => m * pow).find(n => n >= v - 1e-9);
+}
+
+function renderMealStatsFamily() {
+    const el = document.getElementById('meal-stats-family');
+    el.hidden = !mealStatsFamily.length;
+    el.innerHTML = [{ id: null, name: 'Everyone' }, ...mealStatsFamily].map(f => `
+        <button type="button" role="tab" class="${f.id === mealStatsPerson ? 'active' : ''}" aria-selected="${f.id === mealStatsPerson}"
+            data-id="${escapeAttr(f.id || '')}">${escapeHtml(f.name)}</button>`).join('');
+    el.querySelectorAll('button').forEach(btn => {
+        btn.onclick = () => setMealStatsPerson(btn.dataset.id || null);
+    });
+}
+
+// The average of a measure over the days that have it: a day's for most, a week's for alcohol
+function mealStatsTile(m, days) {
+    const values = days.map(d => mealStatsValue(d, m.key)).filter(v => v != null);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const value = !values.length ? '–'
+        : m.key === 'units' ? `${Math.round(avg * 7 * 10) / 10} a week` : formatMealStat(m.key, avg).replace(' kcal', '');
+    return `
+        <div class="meal-stats-tile">
+            <span class="meal-stats-tile-label">${m.label}${m.key === 'kcal' && values.length ? ' (kcal)' : ''}</span>
+            <span class="meal-stats-tile-value${values.length ? '' : ' muted'}">${escapeHtml(value)}</span>
+            <span class="meal-stats-tile-guide">${values.length ? escapeHtml(m.about) : 'No figures set'}</span>
+        </div>`;
+}
+
+// A bar for each day, with a dashed line at each recommended amount
+function mealStatsChart(m, days) {
+    const values = days.map(d => mealStatsValue(d, m.key));
+    const top = niceCeil(Math.max(...values.filter(v => v != null), ...m.guides.map(g => g.value)) * 1.08);
+    const pct = v => `${Math.min(100, v / top * 100).toFixed(2)}%`;
+    const month = days.length > 7;
+    const bars = values.map((v, i) => `
+        <div class="meal-stats-col" data-key="${m.key}" data-i="${i}">
+            ${v > 0 ? `<span class="meal-stats-bar" style="height:${pct(v)}"></span>` : ''}
+        </div>`).join('');
+    // Labels at alternate ends, so two lines close together don't have theirs on top of each other
+    const guides = m.guides.map((g, i) => `
+        <div class="meal-stats-guide${i % 2 ? ' left' : ''}" style="bottom:${pct(g.value)}"><span>${escapeHtml(g.label)}</span></div>`).join('');
+    const xLabels = days.map((d, i) => `<span>${month
+        ? (i === 0 || d.d.getDate() % 5 === 0 ? d.d.getDate() : '')
+        : d.d.toLocaleDateString(undefined, { weekday: 'short' })}</span>`).join('');
+    return `
+        <figure class="meal-stats-chart">
+            <figcaption><span class="meal-stats-chart-title">${m.label}</span> <span class="meal-stats-chart-unit">${m.unit}</span></figcaption>
+            <div class="meal-stats-plot">
+                <span class="meal-stats-top">${top.toLocaleString()}</span>
+                <div class="meal-stats-bars">${bars}${guides}</div>
+            </div>
+            <div class="meal-stats-xaxis">${xLabels}</div>
+        </figure>`;
+}
+
+function renderMealStats() {
+    document.querySelectorAll('#meal-stats-period button').forEach(btn => {
+        const on = Number(btn.dataset.days) === mealStatsDays;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    renderMealStatsFamily();
+    const body = document.getElementById('meal-stats-body');
+    if (!mealStatsEntries) {
+        body.innerHTML = '<p class="settings-hint meal-stats-empty">Loading…</p>';
+        return;
+    }
+    const days = mealStatsDayRows = mealStatsDayList();
+    const logged = days.filter(d => d.logged).length;
+    const person = mealStatsFamily.find(f => f.id === mealStatsPerson);
+    const period = mealStatsDays === 7 ? 'week' : 'month';
+    if (!logged) {
+        body.innerHTML = `<p class="settings-hint meal-stats-empty">No meals on the calendar${person ? ` for ${escapeHtml(person.name)}` : ''}
+            in the last ${period}. Meals added to days on the Calendar tab are counted here.</p>`;
+        return;
+    }
+    const missing = [...new Set(days.flatMap(d => d.t.missing))];
+    const tableRows = days.map((d, i) => `
+        <tr><td>${escapeHtml(d.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
+            ${MEAL_STATS_MEASURES.map(m => {
+                const v = mealStatsValue(d, m.key);
+                return `<td class="num">${v == null ? '' : escapeHtml(formatMealStat(m.key, v))}</td>`;
+            }).join('')}</tr>`).join('');
+    body.innerHTML = `
+        <p class="settings-hint">Daily averages ${person ? `for ${escapeHtml(person.name)}` : 'per person'} over the
+            ${logged} day${logged === 1 ? '' : 's'} with meals on the calendar in the last ${period} (including today).
+            Days with no meals are left out. Lines show UK guidance for an adult.</p>
+        <div class="meal-stats-tiles">${MEAL_STATS_MEASURES.map(m => mealStatsTile(m, days)).join('')}</div>
+        <div class="meal-stats-charts">${MEAL_STATS_MEASURES.map(m => mealStatsChart(m, days)).join('')}</div>
+        ${missing.length ? `<p class="settings-hint">Not counted, as they have no calories set: ${escapeHtml(missing.join(', '))}</p>` : ''}
+        <details class="meal-stats-table">
+            <summary>Show as a table</summary>
+            <div class="meal-day-scroll"><table class="meal-day-table">
+                <thead><tr><th>Day</th>${MEAL_STATS_MEASURES.map(m => `<th class="num">${m.label}</th>`).join('')}</tr></thead>
+                <tbody>${tableRows}</tbody>
+            </table></div>
+        </details>
+        <div id="meal-stats-tip" class="meal-stats-tip" hidden></div>`;
+    body.querySelectorAll('.meal-stats-col').forEach(col => {
+        col.onpointerenter = () => showMealStatsTip(col);
+        col.onpointerleave = () => { document.getElementById('meal-stats-tip').hidden = true; };
+    });
+}
+
+// The day's figure over its bar
+function showMealStatsTip(col) {
+    const tip = document.getElementById('meal-stats-tip');
+    const day = mealStatsDayRows[Number(col.dataset.i)];
+    if (!tip || !day) return;
+    const v = mealStatsValue(day, col.dataset.key);
+    const what = v != null ? formatMealStat(col.dataset.key, v) : day.logged ? 'No figures set' : 'No meals on the calendar';
+    tip.innerHTML = `<b>${escapeHtml(day.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>${escapeHtml(what)}`;
+    tip.hidden = false;
+    const body = document.getElementById('meal-stats-body').getBoundingClientRect();
+    const rect = (col.querySelector('.meal-stats-bar') || col).getBoundingClientRect();
+    const left = Math.max(0, Math.min(body.width - tip.offsetWidth, rect.left - body.left + rect.width / 2 - tip.offsetWidth / 2));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${rect.top - body.top + document.getElementById('meal-stats-body').scrollTop - tip.offsetHeight - 6}px`;
 }
 
 // --- Meals tab: shopping list, free text with one item per line, saved shortly after each change ---
