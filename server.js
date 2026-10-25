@@ -3280,7 +3280,24 @@ app.put('/api/shopping-list', express.json(), (req, res) => {
     res.json({ text, ingredientsAdded: addShoppingIngredients(text, skipLine) });
 });
 
-// Emails the saved list to the nominated address
+// Where an emailed item links to: its search on the chosen supermarket's website, or null with
+// none chosen. A picture chosen by hand names the exact product ("Heinz Baked Beans"), though
+// without another supermarket's name; otherwise it's the item without its amount ("2 pints of Milk" -> "Milk").
+function supermarketSearchUrl(line) {
+    const supermarket = SUPERMARKETS.find(s => s.id === settings.supermarket);
+    if (!supermarket?.search) return null;
+    const product = getShoppingProductPick(shoppingItemKey(line))?.product;
+    let query = splitShoppingLine(line).item.trim() || line;
+    if (product?.name) {
+        const brand = product.brand?.split(',')[0].trim();
+        const brandTag = brand?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const otherShop = SUPERMARKETS.some(s => s !== supermarket && s.brands.includes(brandTag));
+        query = brand && !otherShop && !product.name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${product.name}` : product.name;
+    }
+    return supermarket.search + encodeURIComponent(query);
+}
+
+// Emails the saved list to the nominated address, each item linked to its search on the chosen supermarket's website
 app.post('/api/shopping-list/email', async (req, res) => {
     if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
     if (!settings.shoppingEmail) return res.status(400).json({ error: 'Set an email address in Server Settings → Shopping first' });
@@ -3296,7 +3313,10 @@ app.post('/api/shopping-list/email', async (req, res) => {
             to: settings.shoppingEmail,
             subject: `Shopping list – ${date}`,
             text: lines.map(l => `- ${l}`).join('\n'),
-            html: `<ul>${lines.map(l => `<li>${escape(l)}</li>`).join('')}</ul>`
+            html: `<ul>${lines.map(l => {
+                const url = supermarketSearchUrl(l);
+                return `<li>${url ? `<a href="${escape(url)}">${escape(l)}</a>` : escape(l)}</li>`;
+            }).join('')}</ul>`
         });
         console.log(`Shopping list (${lines.length} items) emailed to ${settings.shoppingEmail}.`);
         res.json({ ok: true, to: settings.shoppingEmail, items: lines.length });
