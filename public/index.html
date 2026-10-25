@@ -77,7 +77,7 @@
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1Z"></path>
                     </svg>
-                    <span>Smart Home</span>
+                    <span>Plugs and Lights</span>
                 </button>
                 <button type="button" class="lib-tab" data-mode="energy" onclick="showEnergy()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -600,7 +600,11 @@
             <aside class="shopping-panel">
                 <div class="recipes-list-header">
                     <h2>Shopping List</h2>
-                    <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
+                    <div class="shopping-header-actions">
+                        <button type="button" id="btn-shopping-email" class="btn-control ghost btn-small" onclick="emailShoppingList()"
+                            title="Email the list to the address set in Server Settings → Shopping">Email</button>
+                        <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
+                    </div>
                 </div>
                 <!-- One item per line, saved as you type. Lines don't wrap, so each has a picture beside it. -->
                 <div class="shopping-list-wrap">
@@ -628,7 +632,7 @@
 
         <section id="smarthome-view" class="smarthome-view" hidden>
             <div class="smarthome-header">
-                <h2>Smart Home</h2>
+                <h2>Plugs and Lights</h2>
                 <div class="smarthome-actions">
                     <button type="button" id="btn-smarthome-voice" class="btn-control btn-small" onclick="toggleVoiceCommand()"
                         title="Voice: &quot;turn on &lt;device&gt;&quot;, &quot;turn off all the lights&quot;, &quot;set &lt;device&gt; to 50 percent&quot;">
@@ -1016,8 +1020,10 @@
                     </svg>
                 </button>
             </div>
-            <div class="settings-tabs">
+            <div class="settings-side-layout">
+            <div class="settings-tabs settings-tabs-side">
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
+                <button class="settings-tab" onclick="switchSettingsTab('shopping', this)">Shopping</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
@@ -1053,18 +1059,6 @@
                             <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
                                 onchange="saveSlideshowSettings()">
                             <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
-                        </div>
-                    </div>
-                    <div class="manage-section">
-                        <h3>Shopping List</h3>
-                        <div class="settings-group">
-                            <label for="supermarket-select">Supermarket</label>
-                            <select id="supermarket-select" class="key-source-select" onchange="saveSupermarket()">
-                                <option value="">Any</option>
-                            </select>
-                            <p class="settings-hint">Each item on the Meals tab's shopping list shows a picture of a
-                                matching product from Open Food Facts. Pick a supermarket to prefer its own-brand
-                                products where it has a close match.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -1137,6 +1131,27 @@
                         </div>
                     </div>
                 </div>
+                <div id="settings-shopping" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Shopping List</h3>
+                        <div class="settings-group">
+                            <label for="supermarket-select">Supermarket</label>
+                            <select id="supermarket-select" class="key-source-select" onchange="saveSupermarket()">
+                                <option value="">Any</option>
+                            </select>
+                            <p class="settings-hint">Each item on the Meals tab's shopping list shows a picture of a
+                                matching product from Open Food Facts. Pick a supermarket to prefer its own-brand
+                                products where it has a close match.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="shopping-email-input">Email The List To</label>
+                            <input type="email" id="shopping-email-input" placeholder="e.g. you@example.com"
+                                autocomplete="email" onchange="saveShoppingEmail()">
+                            <p class="settings-hint">The Email button on the shopping list sends it here. It's sent
+                                through the mail server set in <b>Integrations</b>.</p>
+                        </div>
+                    </div>
+                </div>
                 <div id="settings-integrations" class="settings-panel">
                     <div class="manage-section">
                         <h3>Integrations</h3>
@@ -1149,7 +1164,7 @@
                                 <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
                             </div>
                             <p class="settings-hint">Fetches the Discogs, AcoustID, YouTube and USDA keys, the S3 connection
-                                details and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
+                                details, the mail server and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
                             <label class="settings-check" style="margin-top: 0.5rem;">
                                 <input type="checkbox" id="key-sharing-allow" onchange="saveKeySharing()">
@@ -1216,6 +1231,48 @@
                             <p class="settings-hint">Optional. Adds US foods to the places the Meals tab can look up
                                 ingredient calories; UK foods and UK products work without a key. <a href="https://fdc.nal.usda.gov/api-key-signup"
                                     target="_blank" rel="noopener">Get a free key here</a>.</p>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Email (Outgoing Mail Server)</h3>
+                        <p class="settings-hint">Used to email the shopping list. Your email provider lists these
+                            as its SMTP settings; Gmail and Outlook need an app password rather than your normal one.</p>
+                        <div class="settings-group">
+                            <label for="email-host-input">SMTP Server</label>
+                            <input type="text" id="email-host-input" placeholder="e.g. smtp.gmail.com" autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-port-input">Port</label>
+                            <input type="number" id="email-port-input" min="1" max="65535" placeholder="587">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-security-select">Security</label>
+                            <select id="email-security-select" class="key-source-select" onchange="emailSecurityChanged()">
+                                <option value="starttls">STARTTLS (usually port 587)</option>
+                                <option value="ssl">SSL/TLS (usually port 465)</option>
+                                <option value="none">None</option>
+                            </select>
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-username-input">Username</label>
+                            <input type="text" id="email-username-input" placeholder="Usually your email address"
+                                autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-password-input">Password</label>
+                            <input type="password" id="email-password-input" autocomplete="new-password">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-from-input">From Address</label>
+                            <input type="email" id="email-from-input" placeholder="Leave empty to use the username"
+                                autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                                <button class="btn-control btn-small primary" onclick="saveEmailSettings()">Save</button>
+                                <button class="btn-control btn-small" onclick="testEmailSettings()">Test Connection</button>
+                            </div>
+                            <div id="email-settings-status" class="calendar-status"></div>
                         </div>
                     </div>
                 </div>
@@ -1475,6 +1532,7 @@
                     </div>
                 </div>
             </div>
+            </div>
         </div>
     </div>
 
@@ -1496,7 +1554,7 @@
                 <button class="settings-tab active" onclick="switchSettingsTab('servers', this)">Servers</button>
                 <button class="settings-tab" onclick="switchSettingsTab('players', this)">Players</button>
                 <button class="settings-tab" onclick="switchSettingsTab('airplay', this)">AirPlay</button>
-                <button class="settings-tab" data-tab="smarthome" onclick="switchSettingsTab('smarthome', this)">Smart Home</button>
+                <button class="settings-tab" data-tab="smarthome" onclick="switchSettingsTab('smarthome', this)">Plugs and Lights</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-servers" class="settings-panel active">
@@ -2242,6 +2300,17 @@
                         <rect x="9" y="2" width="6" height="12" rx="3"></rect>
                         <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
                         <line x1="12" y1="18" x2="12" y2="22"></line>
+                    </svg>
+                </button>
+                <!-- Straight to the shopping list, listening for "add ..." / "remove ..." -->
+                <button id="btn-ss-shopping" class="btn-ss-music btn-ss-shopping" onclick="slideshowShoppingVoice()"
+                    ontouchend="slideshowShoppingVoice(); event.preventDefault();" title="Add to the shopping list by voice">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <!-- Shopping bag -->
+                        <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <path d="M16 10a4 4 0 0 1-8 0"></path>
                     </svg>
                 </button>
                 <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"

@@ -1863,6 +1863,28 @@ function toggleVoiceCommand() {
 
 // Listens once (or stops listening if already) and passes the recogniser's guesses to onResult.
 // buttonIds show the listening state while it lasts.
+let listeningChimeAudio = null;
+
+// Two quick rising notes, soft enough not to be heard as speech
+function playListeningChime() {
+    const ctx = listeningChimeAudio;
+    if (!ctx) return;
+    const start = ctx.currentTime;
+    [660, 990].forEach((freq, k) => {
+        const t = start + k * 0.11;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.25, t + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.15);
+    });
+}
+
 function toggleListening(buttonIds, hint, onResult) {
     if (voiceRecognition) {
         voiceRecognition.abort();
@@ -1897,6 +1919,14 @@ Switch to ${secureUrl} ?`)) {
         voiceRecognition = null;
         btns.forEach(b => b.classList.remove('listening'));
     };
+    // "Go ahead": a chime once the microphone is actually on
+    rec.onstart = playListeningChime;
+
+    // Readied now, within the press: browsers only allow sound that a press started
+    try {
+        listeningChimeAudio ||= new (window.AudioContext || window.webkitAudioContext)();
+        if (listeningChimeAudio.state === 'suspended') listeningChimeAudio.resume();
+    } catch (e) { }
 
     voiceRecognition = rec;
     btns.forEach(b => b.classList.add('listening'));
@@ -3514,6 +3544,70 @@ async function saveUsdaKey() {
     }
 }
 
+// --- Outgoing mail server (Integrations), used to email the shopping list ---
+const EMAIL_FIELDS = { host: 'email-host-input', port: 'email-port-input', security: 'email-security-select', username: 'email-username-input', password: 'email-password-input', from: 'email-from-input' };
+const EMAIL_DEFAULT_PORTS = { starttls: 587, ssl: 465, none: 25 };
+
+function emailSettingsFromForm() {
+    return Object.fromEntries(Object.entries(EMAIL_FIELDS).map(([k, id]) => [k, document.getElementById(id).value.trim()]));
+}
+
+async function loadEmailSettings() {
+    try {
+        const res = await fetch('/api/settings/email');
+        if (!res.ok) return;
+        const data = await res.json();
+        for (const [k, id] of Object.entries(EMAIL_FIELDS)) {
+            const el = document.getElementById(id);
+            if (el) el.value = data[k] ?? '';
+        }
+        setCalendarSettingsStatus('email-settings-status', '');
+    } catch (e) {
+        console.warn('Failed to load the mail server settings:', e);
+    }
+}
+
+// Picking a security type moves the port to its usual one, unless a different port was typed
+function emailSecurityChanged() {
+    const port = document.getElementById('email-port-input');
+    const security = document.getElementById('email-security-select').value;
+    if (!port.value || Object.values(EMAIL_DEFAULT_PORTS).includes(Number(port.value))) {
+        port.value = EMAIL_DEFAULT_PORTS[security];
+    }
+}
+
+async function saveEmailSettings() {
+    try {
+        const res = await fetch('/api/settings/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(emailSettingsFromForm())
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast('Mail server saved', 'success', 2000);
+        await loadEmailSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('email-settings-status', `Couldn't save: ${err.message}`, true);
+    }
+}
+
+async function testEmailSettings() {
+    setCalendarSettingsStatus('email-settings-status', 'Connecting…');
+    try {
+        const res = await fetch('/api/settings/email/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(emailSettingsFromForm())
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setCalendarSettingsStatus('email-settings-status', 'Connected and logged in. Remember to save.');
+    } catch (err) {
+        setCalendarSettingsStatus('email-settings-status', `Couldn't connect: ${err.message}`, true);
+    }
+}
+
 async function loadKeySharing() {
     const box = document.getElementById('key-sharing-allow');
     if (!box) return;
@@ -3574,7 +3668,7 @@ async function importKeysFromDevice() {
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
         if (data.s3Verified === false) showToast(`The S3 details from ${data.source} were copied but the connection test failed here`, 'error');
-        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), fetchS3Settings()]);
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadEmailSettings(), fetchS3Settings()]);
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -4342,6 +4436,7 @@ function openServerSettingsModal() {
         loadAcoustidKey();
         loadYoutubeKey();
         loadUsdaKey();
+        loadEmailSettings();
         loadKeySources();
         loadKeySharing();
         loadCalendarSettings();
@@ -7404,6 +7499,27 @@ async function saveShoppingListNow() {
     }
 }
 
+// Saves any unsaved typing first, so what's sent is what's on screen
+async function emailShoppingList() {
+    const btn = document.getElementById('btn-shopping-email');
+    if (!document.getElementById('shopping-list').value.trim()) {
+        showToast('The shopping list is empty');
+        return;
+    }
+    btn.disabled = true;
+    try {
+        await saveShoppingListNow();
+        const res = await fetch('/api/shopping-list/email', { method: 'POST' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast(`Shopping list emailed to ${data.to}`, 'success', 3000);
+    } catch (err) {
+        showToast(err.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 function clearShoppingList() {
     const box = document.getElementById('shopping-list');
     if (!box.value.trim() || !confirm('Clear the whole shopping list?')) return;
@@ -7592,6 +7708,16 @@ const shoppingKey = (text) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ''
 
 function toggleShoppingVoice() {
     toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"', transcripts => runShoppingVoice(transcripts));
+}
+
+// The slideshow's shopping button: leaves the slideshow for the shopping list and listens straight
+// away. The microphone has to start within the tap, so it doesn't wait for the list to load;
+// what's heard is applied once it has.
+function slideshowShoppingVoice() {
+    stopSlideshow();
+    const loaded = showRecipes().catch(() => { });
+    toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"',
+        transcripts => loaded.then(() => runShoppingVoice(transcripts)));
 }
 
 // Acts on "add <item>" or "remove <item>" (optionally "... to/from the shopping list"). Returns
@@ -11572,7 +11698,9 @@ async function fetchGeneralSettings() {
     }
 }
 
-function applySupermarketSetting({ supermarket = '', supermarkets = [] }) {
+function applySupermarketSetting({ supermarket = '', supermarkets = [], shoppingEmail = '' }) {
+    const emailInput = document.getElementById('shopping-email-input');
+    if (emailInput) emailInput.value = shoppingEmail;
     const select = document.getElementById('supermarket-select');
     if (!select) return;
     select.innerHTML = '<option value="">Any</option>' + supermarkets
@@ -11594,6 +11722,23 @@ async function saveSupermarket() {
     } catch (err) {
         console.error('Failed to save the supermarket:', err);
         showToast('Failed to save settings');
+    }
+}
+
+async function saveShoppingEmail() {
+    const input = document.getElementById('shopping-email-input');
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shoppingEmail: input.value.trim() })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save the shopping list email address:', err);
+        showToast(`Failed to save: ${err.message}`);
     }
 }
 
@@ -12825,7 +12970,7 @@ function renderPlugList() {
                 <div class="manage-item-actions">
                     <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn-toggle ${p.hidden ? 'btn-enable' : 'btn-disable'}" onclick="togglePlugHidden(${i})"
-                            title="Show or hide this plug on the Smart Home tab">${p.hidden ? 'Show' : 'Hide'}</button>
+                            title="Show or hide this plug on the Plugs and Lights tab">${p.hidden ? 'Show' : 'Hide'}</button>
                     </div>
                     <button class="btn-delete" onclick="forgetPlug(${i})" title="Remove this plug">Forget</button>
                 </div>

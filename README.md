@@ -8,7 +8,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 </tr>
 <tr>
 <td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars</td>
-<td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - smart plugs and Twinkly lights</td>
+<td><img src="images/ammui-smarthome.png" /><br/><b>Plugs and Lights</b> - smart plugs and Twinkly lights</td>
 </tr>
 <tr>
 <td><img src="images/ammui-energy.png" /><br/><b>Energy</b> - electricity and gas use from your smart meter</td>
@@ -27,7 +27,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
 * Watch a track's music video on YouTube, right from the track list (via a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
-* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Smart Home tab (see [Smart Home](#smart-home)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
+* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Plugs and Lights tab (see [Plugs and Lights](#plugs-and-lights)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
@@ -236,7 +236,7 @@ Watch a track's music video on YouTube, right from the track list. When the vide
 
 ## Voice Commands
 
-Press the glowing **Voice** button at the right-hand end of the music browser's toolbar (or the one on the Smart Home tab) and say what you want. Music plays on the currently selected player, from the currently selected media server. Smart home commands work from either button and don't need a player selected.
+Press the glowing **Voice** button at the right-hand end of the music browser's toolbar (or the one on the Plugs and Lights tab) and say what you want. Music plays on the currently selected player, from the currently selected media server. Smart home commands work from either button and don't need a player selected.
 
 | Say | What happens |
 |---|---|
@@ -255,7 +255,7 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 * A control word on its own is a command, but with "play" in front it's a search: "stop" stops the music, while "play Stop" finds a song called Stop.
 * If a song and an album have the same name, the song is played unless you say "album".
 * "play something by the Beatles" plays the song "Something" if the artist has one, and only otherwise plays a mix of their songs.
-* Devices are matched by the names on the Smart Home tab, loosely: "the tree lights" finds "small christmas tree", and "matrix two" finds "matrix2". If two devices fit equally well, nothing is switched and it says which two it could be; renaming one in **Manage Plugs** fixes that. Hidden devices aren't switched by voice.
+* Devices are matched by the names on the Plugs and Lights tab, loosely: "the tree lights" finds "small christmas tree", and "matrix two" finds "matrix2". If two devices fit equally well, nothing is switched and it says which two it could be; renaming one in **Manage Plugs** fixes that. Hidden devices aren't switched by voice.
 * Matching allows for how speech recognition writes things, so "rumors" finds "Rumours", "and" matches "&", "AC DC" finds "AC/DC", and your pronunciation of an artist's name doesn't have to produce the exact spelling.
 
 ### Requirements and privacy
@@ -264,9 +264,9 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 * Works in Chrome, Edge and Safari. Firefox has no speech recognition, so the button is hidden there.
 * The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music and switching devices happens entirely on your server and network.
 
-## Smart Home
+## Plugs and Lights
 
-The **Smart Home** tab shows a card for each smart plug and set of Twinkly lights on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing, and Twinkly lights have a brightness slider. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
+The **Plugs and Lights** tab shows a card for each smart plug and set of Twinkly lights on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing, and Twinkly lights have a brightness slider. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
 
 ### Supported plugs
 
@@ -294,7 +294,7 @@ Timers aren't offered on Kasa power strips yet.
 1. Set the plugs up in the Tapo or Kasa app (or the lights in the Twinkly app) as usual, on the same network as the AMMUI server.
 2. Open **Devices** from the menu and go to the **Plugs** tab. Plugs are found automatically when the server starts and every 10 minutes after that; press **Seek** to search now.
 3. For Tapo plugs, enter the **email and password of the TP-Link account** the plugs were set up with, and press **Save & Connect**. It should say how many plugs it connected to. Kasa plugs on the original firmware and Twinkly lights don't need a login.
-4. Rename a plug with the pencil button, or **Hide** one you don't want on the Smart Home tab. **Forget** removes a plug from the list; it comes back the next time it's found.
+4. Rename a plug with the pencil button, or **Hide** one you don't want on the Plugs and Lights tab. **Forget** removes a plug from the list; it comes back the next time it's found.
 
 Plugs and lights take their names from the Tapo or Twinkly app unless you rename them here.
 
@@ -314,7 +314,7 @@ The **Energy** tab shows your electricity and gas use from your smart meter, wit
 
 Costs are shown alongside where the Bright account has them. It's read through the free **Bright** app (by Hildebrand), so you need a Bright account linked to your meter first.
 
-To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Smart Home** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
+To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Plugs and Lights** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
 
 ### How far back the history goes
 

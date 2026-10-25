@@ -59,6 +59,7 @@ import { xmlEscape } from './lib/upnp.js';
 import { splitShoppingLine } from './public/shopping-items.js';
 import { searchFoods, getFood, NutritionError, SOURCES as NUTRITION_SOURCES, SUPERMARKETS, findShoppingProduct, searchShoppingProducts, shoppingProductKey, shoppingItemKey } from './lib/nutrition.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
+import nodemailer from 'nodemailer';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
 import { createRequire } from 'module';
@@ -204,6 +205,16 @@ let settings = {
     slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
     slideshowPhotoSeconds: 60, // how long each photo shows
     supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
+    shoppingEmail: '', // where the Email button on the shopping list sends it
+    // Outgoing mail server, for emailing the shopping list
+    email: {
+        host: '',
+        port: 587,
+        security: 'starttls', // 'starttls', 'ssl' (TLS from the start, usually port 465) or 'none'
+        username: '',
+        password: '',
+        from: '' // sender address; the username when empty
+    },
     calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
     calendarTagColors: {}, // { tag: '#rrggbb' } colours of calendar entry tags
     screensaver: {
@@ -247,6 +258,8 @@ function loadSettings() {
     settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
     settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
     settings.supermarket = getSetting('supermarket', '') || '';
+    settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
+    settings.email = { ...settings.email, ...(getSetting('email', {}) || {}) };
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
@@ -280,6 +293,8 @@ function saveSettings() {
     setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
     setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
     setSetting('supermarket', settings.supermarket);
+    setSetting('shoppingEmail', settings.shoppingEmail);
+    setSetting('email', settings.email);
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
@@ -2592,6 +2607,66 @@ app.post('/api/settings/usda', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+// --- Outgoing email (the mail server the shopping list is sent through) ---
+const isEmailAddress = s => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s);
+const EMAIL_SECURITY = ['starttls', 'ssl', 'none'];
+
+// The mail server fields from a request, falling back to the current ones; a password left
+// out (or still masked) keeps the saved one
+function cleanEmailSettings(body, current) {
+    const str = v => (typeof v === 'string' ? v.trim() : '');
+    const port = Math.round(Number(body.port));
+    const password = typeof body.password === 'string' && !body.password.includes('****') ? body.password : current.password;
+    return {
+        host: str(body.host),
+        port: port > 0 && port < 65536 ? port : 587,
+        security: EMAIL_SECURITY.includes(body.security) ? body.security : 'starttls',
+        username: str(body.username),
+        password: str(body.username) ? password : '',
+        from: str(body.from)
+    };
+}
+
+function emailTransport(email = settings.email) {
+    return nodemailer.createTransport({
+        host: email.host,
+        port: email.port,
+        secure: email.security === 'ssl',
+        requireTLS: email.security === 'starttls',
+        ignoreTLS: email.security === 'none',
+        auth: email.username ? { user: email.username, pass: email.password } : undefined,
+        connectionTimeout: 15000
+    });
+}
+
+const emailSender = (email = settings.email) => email.from || email.username;
+
+app.get('/api/settings/email', (req, res) => {
+    const { password, ...email } = settings.email;
+    res.json({ ...email, password: password ? '****************' : '' });
+});
+
+app.post('/api/settings/email', express.json(), (req, res) => {
+    const email = cleanEmailSettings(req.body || {}, settings.email);
+    if (email.from && !isEmailAddress(email.from)) return res.status(400).json({ error: 'The From address isn\'t an email address' });
+    settings.email = email;
+    saveSettings();
+    console.log(`Mail server ${email.host ? `set to ${email.host}:${email.port}` : 'removed'}.`);
+    res.json({ success: true });
+});
+
+// Connects and logs in to the mail server with the details given, without sending anything
+app.post('/api/settings/email/test', express.json(), async (req, res) => {
+    const email = cleanEmailSettings(req.body || {}, settings.email);
+    if (!email.host) return res.status(400).json({ error: 'Enter the mail server first' });
+    try {
+        await emailTransport(email).verify();
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
+
 // --- Copying API keys between AMMUI installs on the same network ---
 const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey', 'usdaApiKey'];
 
@@ -2635,6 +2710,7 @@ app.get('/api/peer/keys', (req, res) => {
     if (tplink?.username && tplink?.password) keys.tplinkAccount = { username: tplink.username, password: tplink.password };
     const glow = getSetting('glowAccount', null);
     if (glow?.username && glow?.password) keys.glowAccount = { username: glow.username, password: glow.password };
+    if (settings.email.host) keys.email = { ...settings.email };
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
 });
@@ -2687,6 +2763,11 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
         // Saved even if the login check fails here; the Smart Home tab shows the error
         await energy.setAccount({ username: glow.username, password: glow.password }).catch(() => { });
         imported.push('glowAccount');
+    }
+    const email = keys?.email;
+    if (typeof email?.host === 'string' && email.host.trim()) {
+        settings.email = cleanEmailSettings(email, settings.email);
+        imported.push('email');
     }
     if (imported.length) saveSettings();
     console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);
@@ -2825,7 +2906,8 @@ app.get('/api/settings/general', (req, res) => {
         slideshowIdleSeconds: settings.slideshowIdleSeconds,
         slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
         supermarket: settings.supermarket,
-        supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name }))
+        supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
+        shoppingEmail: settings.shoppingEmail
     });
 });
 
@@ -2847,6 +2929,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         const id = req.body.supermarket;
         if (id && !SUPERMARKETS.some(s => s.id === id)) return res.status(400).json({ error: 'Unknown supermarket' });
         settings.supermarket = id;
+        saveSettings();
+    }
+    if (typeof req.body.shoppingEmail === 'string') {
+        const address = req.body.shoppingEmail.trim();
+        if (address && !isEmailAddress(address)) return res.status(400).json({ error: 'That isn\'t an email address' });
+        settings.shoppingEmail = address;
         saveSettings();
     }
     const deviceName = String(req.body.deviceName || '').trim();
@@ -3190,6 +3278,32 @@ app.put('/api/shopping-list', express.json(), (req, res) => {
     setSetting('shoppingList', { text });
     const skipLine = Number.isInteger(req.body.skipLine) ? req.body.skipLine : -1;
     res.json({ text, ingredientsAdded: addShoppingIngredients(text, skipLine) });
+});
+
+// Emails the saved list to the nominated address
+app.post('/api/shopping-list/email', async (req, res) => {
+    if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
+    if (!settings.shoppingEmail) return res.status(400).json({ error: 'Set an email address in Server Settings → Shopping first' });
+    const sender = emailSender();
+    if (!isEmailAddress(sender)) return res.status(400).json({ error: 'Set a From address for the mail server first' });
+    const lines = shoppingListText().split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: 'The shopping list is empty' });
+    const date = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+    const escape = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    try {
+        await emailTransport().sendMail({
+            from: { name: settings.deviceName || 'AMMUI', address: sender },
+            to: settings.shoppingEmail,
+            subject: `Shopping list – ${date}`,
+            text: lines.map(l => `- ${l}`).join('\n'),
+            html: `<ul>${lines.map(l => `<li>${escape(l)}</li>`).join('')}</ul>`
+        });
+        console.log(`Shopping list (${lines.length} items) emailed to ${settings.shoppingEmail}.`);
+        res.json({ ok: true, to: settings.shoppingEmail, items: lines.length });
+    } catch (err) {
+        console.error('Emailing the shopping list failed:', err.message);
+        res.status(502).json({ error: `Couldn't send the email: ${err.message}` });
+    }
 });
 
 // The product picture for one shopping list line: { product: { code, name, brand, image } | null, picked }.
