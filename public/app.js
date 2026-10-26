@@ -173,6 +173,7 @@ function setRendererOffline(state, caller = 'unknown') {
 
     renderDevices();
     updateTransportControls();
+    updateStopAfterTrackButton();
 }
 
 async function handleRetry() {
@@ -1649,6 +1650,7 @@ function updateStopAfterTrackButton() {
         const btn = document.getElementById(id);
         if (!btn) return;
         btn.title = label;
+        btn.disabled = isRendererOffline;
         if (stopAfterTrack) {
             btn.classList.add('armed');
         } else {
@@ -5195,7 +5197,7 @@ function clearLyrics() {
 function updateSsLyricsVisibility() {
     const panel = document.getElementById('ss-lyrics-panel');
     if (!panel) return;
-    // Landscape screens put the lyrics where the map goes, so the map hides while they're up
+    // Landscape screens put the lyrics where the shopping list goes, so it hides while they're up
     document.getElementById('screensaver-overlay')?.classList.toggle('has-lyrics', isLyricsDisplayActive());
     if (isLyricsDisplayActive()) {
         panel.style.display = 'block';
@@ -8004,14 +8006,10 @@ function toggleShoppingVoice() {
     toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"', transcripts => runShoppingVoice(transcripts));
 }
 
-// The slideshow's shopping button: leaves the slideshow for the shopping list and listens straight
-// away. The microphone has to start within the tap, so it doesn't wait for the list to load;
-// what's heard is applied once it has.
-function slideshowShoppingVoice() {
+// A tap on the slideshow's shopping list: leaves the slideshow for the one on the Meals tab.
+function slideshowShopping() {
     stopSlideshow();
-    const loaded = showRecipes().catch(() => { });
-    toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"',
-        transcripts => loaded.then(() => runShoppingVoice(transcripts)));
+    showRecipes().catch(() => { });
 }
 
 // Acts on "add <item>" or "remove <item>" (optionally "... to/from the shopping list"). Returns

@@ -605,14 +605,14 @@ p.subtitle {
     }
 }
 
-/* Stop After Track button */
+/* Stop After Track button: like the other buttons, dimmed only while the player is offline */
 .btn-stop-after {
-    opacity: 0.45;
     transition: opacity 0.2s, box-shadow 0.2s, color 0.2s;
 }
 
-.btn-stop-after:hover {
-    opacity: 0.85;
+.btn-stop-after:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .btn-stop-after.armed {
@@ -7598,7 +7598,7 @@ input:checked+.slider:before {
 /* Slideshow mini-map */
 .ss-map-window {
     position: absolute;
-    top: calc(70px + env(safe-area-inset-top));
+    top: calc(56px + env(safe-area-inset-top));   /* just under the now-playing label (landscape moves both) */
     left: 20px;
     width: 220px;
     height: 160px;
@@ -8179,22 +8179,6 @@ input:checked+.slider:before {
     .btn-ss-voice.listening { animation: none; }
 }
 
-/* Shopping list by voice: a solid pink-to-purple, so it stands out from the tinted glass ones */
-.btn-ss-music.btn-ss-shopping {
-    background: linear-gradient(135deg, #ec4899, #a855f7);
-    border-color: rgba(244, 114, 182, 0.55);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 4px 14px rgba(217, 70, 239, 0.45);
-    color: #fff;
-}
-
-.btn-ss-music.btn-ss-shopping:hover {
-    background: linear-gradient(135deg, #f472b6, #c084fc);
-}
-
-.btn-ss-music.btn-ss-shopping:active {
-    background: linear-gradient(135deg, #db2777, #9333ea);
-}
-
 /* The photo controls share the music bar's soft glass look (see .btn-ss-music). Their buttons
    ignore the pointer, so hover and press are read from the item around each one. */
 .screensaver-controls .ss-control-item button {
@@ -8261,7 +8245,8 @@ input:checked+.slider:before {
     display: contents;
 }
 
-.ss-agenda {
+.ss-agenda,
+.ss-shopping {
     display: none;
 }
 
@@ -8341,14 +8326,23 @@ input:checked+.slider:before {
         height: 26px;
     }
 
-    /* Pushed down to sit above the lyrics or map (or the controls), leaving any spare room above it */
+    /* Bottom left over the photo, as in portrait, kept clear of the panel */
     .screensaver-info {
-        position: static;
-        max-width: none;
-        margin: auto 16px 0;
-        padding-top: 12px;   /* a gap under the calendar when space is tight */
+        max-width: calc(100% - var(--ss-panel-w) - 80px);
         z-index: 10003;
         overflow-wrap: anywhere;
+    }
+
+    /* The photo details sit over the photo, so this spacer (after the music bar and calendar)
+       pushes the lyrics or map and the controls down, leaving any spare room above them */
+    .ss-side-panel::before {
+        content: '';
+        flex: 1 1 0;
+    }
+
+    .screensaver-music-bar,
+    .ss-agenda {
+        order: -1;
     }
 
     .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
@@ -8385,33 +8379,26 @@ input:checked+.slider:before {
 
     .ss-nav-next { right: calc(var(--ss-panel-w) + 16px); }
 
+    /* In the panel just under the music bar, which frees the photo's top left for the map */
     .ss-now-playing-label {
-        max-width: calc(100% - var(--ss-panel-w) - 40px);
+        position: static;
+        order: -1;
+        max-width: calc(100% - 32px);   /* the panel's width, less its side margins */
+        margin: 12px 16px 0;
+        align-self: flex-start;
+        font-size: clamp(16px, 1.3vw, 22px);
     }
 
-    /* The map fills the panel's width */
-    .ss-side-panel > .ss-map-window {
-        flex: 0 1 auto;
-        min-height: 0;
+    .ss-now-playing-label .ss-np-label {
+        font-size: clamp(12px, 1vw, 16px);
     }
 
     .ss-map-window {
-        position: static;
-        width: auto;
-        height: auto;
-        aspect-ratio: 4 / 3;
-        max-height: 40vh;
-        margin: 16px 16px 0;
+        top: calc(20px + env(safe-area-inset-top));
     }
 
-    .ss-map-window.expanded {
-        width: auto;
-        height: auto;
-        aspect-ratio: 1;
-        max-height: 60vh;
-    }
-
-    /* Lyrics take the map's place in the panel (the map gives way if a photo has a location) */
+    /* The map floats over the photo at the top left, as in portrait, and the shopping list takes its
+       place in the panel. Lyrics take the shopping list's place while they're up. */
     .ss-side-panel > .ss-lyrics-panel {
         flex: 0 1 40vh;
         min-height: 0;
@@ -8430,8 +8417,31 @@ input:checked+.slider:before {
         mask-image: none;
     }
 
-    .screensaver-overlay.has-lyrics .ss-map-window {
-        display: none !important;
+    .ss-side-panel > .ss-shopping {
+        flex: 0 1 auto;
+        min-height: 0;
+    }
+
+    .ss-shopping:not(:empty) {
+        display: block;
+        margin: 16px 16px 0;
+        padding: 10px 10px;
+        max-height: 40vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+        z-index: 10003;
+        color: #fff;
+        cursor: pointer;
+        /* The same card as the calendar's */
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
+    }
+
+    .screensaver-overlay.has-lyrics .ss-shopping {
+        display: none;
     }
 
     .ss-lyrics-content {
@@ -8450,7 +8460,7 @@ input:checked+.slider:before {
         font-size: clamp(18px, 1.5vw, 27px);
     }
 
-    /* The week's calendar, under the music bar; it takes no space when there's nothing on, and
+    /* Today's and tomorrow's calendar, under the music bar; it takes no space when there's nothing on, and
        scrolls when there's more than fits */
     .ss-agenda:not(:empty) {
         display: block;
@@ -8464,14 +8474,15 @@ input:checked+.slider:before {
         scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
         z-index: 10003;
         color: #fff;
-        /* A card like the map's, so it reads apart from the photo details below */
+        cursor: pointer;   /* a tap goes to the Calendar tab */
+        /* A card like the map's */
         background: rgba(255, 255, 255, 0.05);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 14px;
     }
 }
 
-/* The week's calendar in the slideshow's side panel (placed in the landscape rules above) */
+/* Today's and tomorrow's calendar in the slideshow's side panel (placed in the landscape rules above) */
 .ss-agenda-title {
     font-size: clamp(13px, 1vw, 18px);
     font-weight: 700;
@@ -8485,6 +8496,20 @@ input:checked+.slider:before {
     list-style: none;
     margin: 0;
     padding: 0;
+}
+
+.ss-shopping-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ss-shopping-list li {
+    padding: 3px 0;
+    font-size: clamp(14px, 1.1vw, 20px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .ss-agenda-list + .ss-agenda-title {

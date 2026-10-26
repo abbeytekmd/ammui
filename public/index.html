@@ -2379,17 +2379,6 @@
                         <circle cx="17.5" cy="15.5" r="2.5" fill="currentColor" stroke="none"></circle>
                     </svg>
                 </button>
-                <!-- Straight to the shopping list, listening for "add ..." / "remove ..." -->
-                <button id="btn-ss-shopping" class="btn-ss-music btn-ss-shopping" onclick="slideshowShoppingVoice()"
-                    ontouchend="slideshowShoppingVoice(); event.preventDefault();" title="Add to the shopping list by voice">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <!-- Shopping bag -->
-                        <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
-                        <line x1="3" y1="6" x2="21" y2="6"></line>
-                        <path d="M16 10a4 4 0 0 1-8 0"></path>
-                    </svg>
-                </button>
                 <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
                     ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
                     title="Exit Slideshow">
@@ -2400,12 +2389,15 @@
                     </svg>
                 </button>
             </div>
-            <!-- The week's calendar, in the side panel (filled by slideshow.js) -->
-            <div id="ss-agenda" class="ss-agenda"></div>
+            <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
+            <!-- Today's and tomorrow's calendar, in the side panel (filled by slideshow.js); a tap goes to the Calendar tab -->
+            <div id="ss-agenda" class="ss-agenda" onclick="event.stopPropagation(); stopSlideshow(); showCalendar();"></div>
             <div class="screensaver-info" id="screensaver-info"></div>
             <div id="ss-lyrics-panel" class="ss-lyrics-panel" style="display:none;">
                 <div id="ss-lyrics-content" class="ss-lyrics-content"></div>
             </div>
+            <!-- The shopping list, under the lyrics' place in the side panel (filled by slideshow.js); a tap goes to it -->
+            <div id="ss-shopping" class="ss-shopping" onclick="event.stopPropagation(); slideshowShopping();"></div>
             <div id="ss-map-window" class="ss-map-window" style="display:none;">
                 <div id="ss-map" class="ss-map"></div>
             </div>
@@ -2480,7 +2472,6 @@
                 </div>
             </div>
         </div>
-        <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
 
 
 

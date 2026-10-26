@@ -155,10 +155,11 @@ class Slideshow {
             setTimeout(() => this.overlay.classList.add('active'), 0);
         }
 
-        // 15-minutely, which also moves it on to the new day after midnight
+        // 15-minutely, which also moves the calendar on to the new day after midnight
         this.loadAgenda();
+        this.loadShopping();
         clearInterval(this._agendaTimer);
-        this._agendaTimer = setInterval(() => this.loadAgenda(), 15 * 60 * 1000);
+        this._agendaTimer = setInterval(() => { this.loadAgenda(); this.loadShopping(); }, 15 * 60 * 1000);
 
         if (this.info) {
             this.info.style.cursor = 'pointer';
@@ -216,14 +217,14 @@ class Slideshow {
         this.resetIdleTimer();
     }
 
-    // The coming week's entries (from the Calendar tab, not meals) and events (from subscribed
+    // Today's and tomorrow's entries (from the Calendar tab, not meals) and events (from subscribed
     // calendars) in the side panel, which only shows on landscape screens and scrolls when they don't
-    // fit. A day with nothing on is left out, and the panel is left empty, and so hidden, when no day has anything.
+    // fit. A day with nothing on is left out, and the panel is left empty, and so hidden, when neither has anything.
     async loadAgenda() {
         const el = document.getElementById('ss-agenda');
         if (!el) return;
         const now = new Date();
-        const AGENDA_DAYS = 7;
+        const AGENDA_DAYS = 2;
         const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + AGENDA_DAYS))}`;
         try {
             const [cals, entryData, tagData, feedData] = await Promise.all([
@@ -251,8 +252,7 @@ class Slideshow {
             // Each day lists what overlaps it (so a multi-day event shows on each), all-day first, then by time
             const days = Array.from({ length: AGENDA_DAYS }, (_, offset) => {
                 const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-                const label = offset === 0 ? 'Today' : offset === 1 ? 'Tomorrow'
-                    : dayStart.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'short' });
+                const label = offset === 0 ? 'Today' : 'Tomorrow';
                 const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1);
                 const key = calendarDateKey(dayStart);
                 const items = all.filter(it => it.allDay
@@ -274,6 +274,22 @@ class Slideshow {
                 </li>`).join('')}</ul>`).join('');
         } catch (err) {
             console.warn('[SLIDESHOW] Calendar load failed:', err.message);
+        }
+    }
+
+    // The shopping list in the side panel, one item per line, left empty (and so hidden) when there's nothing on it
+    async loadShopping() {
+        const el = document.getElementById('ss-shopping');
+        if (!el) return;
+        try {
+            const res = await fetch('/api/shopping-list');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to load the shopping list');
+            const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
+            el.innerHTML = !lines.length ? '' : `<div class="ss-agenda-title">Shopping List</div><ul class="ss-shopping-list">${
+                lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`;
+        } catch (err) {
+            console.warn('[SLIDESHOW] Shopping list load failed:', err.message);
         }
     }
 
@@ -538,7 +554,7 @@ class Slideshow {
         }
         if (this.slideIsVideo || this.img.classList.contains('panorama')) return;
         const r = this.img.getBoundingClientRect();
-        const s = 2.5;
+        const s = 3.5;
         // Clamped to the photo's box, so a tap in the margin doesn't zoom into black
         const dx = Math.min(Math.max(x, r.left), r.right) - (r.left + r.width / 2);
         const dy = Math.min(Math.max(y, r.top), r.bottom) - (r.top + r.height / 2);
