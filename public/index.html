@@ -1103,6 +1103,31 @@
                                 onchange="saveSlideshowSettings()">
                             <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
                         </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-videos-input" onchange="saveSlideshowSettings()">
+                                <span>Include videos
+                                    <span class="settings-hint">Videos in the slideshow's photo folder, such as
+                                        iPhone Live Photos. Importing files puts a Live Photo's video beside its
+                                        photo, and the slideshow plays it in the photo's place.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-video-seconds-input">Play each video for up to (seconds)</label>
+                            <input type="number" id="slideshow-video-seconds-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">A shorter video plays once and stays on its last frame for
+                                the rest of the photo time. 0 plays every video to its end.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-video-sound-input" onchange="saveSlideshowSettings()">
+                                <span>Play video sound
+                                    <span class="settings-hint">Off, videos play silently over any music.</span>
+                                </span>
+                            </label>
+                        </div>
                     </div>
                     <div class="manage-section">
                         <h3>Secure Access (HTTPS)</h3>
@@ -2282,6 +2307,7 @@
     <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;">
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
+        <video id="screensaver-video" class="screensaver-video" playsinline muted preload="auto" style="display: none;"></video>
         <!-- Landscape screens: the column right of the photo, holding these from top to bottom (see style.css).
              Elsewhere it has no box of its own and they sit over the photo. -->
         <div id="ss-side-panel" class="ss-side-panel">

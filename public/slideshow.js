@@ -43,6 +43,11 @@ class Slideshow {
         // UI binds
         this.overlay = document.getElementById('screensaver-overlay');
         this.img = document.getElementById('screensaver-img');
+        this.video = document.getElementById('screensaver-video');
+        this.videoMaxSeconds = 60; // longest a video slide plays (0 = to its end)
+        this.videoSound = false;
+        this.videoShowing = false; // the video element is up instead of the photo
+        this.slideIsVideo = false; // the slide being shown (or faded to) is a video
         this.bg = document.getElementById('screensaver-bg');
         this.info = document.getElementById('screensaver-info');
         this.favBtn = document.getElementById('btn-ss-favourite');
@@ -65,6 +70,15 @@ class Slideshow {
         });
         this.resetIdleTimer();
         this.updateModeUI();
+
+        // Holding a Live Photo plays its clip again, with sound, as on an iPhone
+        let holdTimer = null;
+        this.img.addEventListener('pointerdown', () => {
+            clearTimeout(holdTimer);
+            holdTimer = setTimeout(() => this.playLive(this.currentPhotoData, true), 400);
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(name => this.img.addEventListener(name, () => clearTimeout(holdTimer)));
+        this.img.addEventListener('contextmenu', (e) => { if (this.currentPhotoData?.liveVideo) e.preventDefault(); });
     }
 
     resetIdleTimer(e) {
@@ -85,6 +99,13 @@ class Slideshow {
         if (photoSeconds >= 0) this.duration = photoSeconds * 1000;
         if (this.isActive) this.resetInterval();
         else this.resetIdleTimer();
+    }
+
+    // From the General settings: how long videos play and whether they're heard
+    setVideoOptions({ maxSeconds, sound }) {
+        if (maxSeconds >= 0) this.videoMaxSeconds = maxSeconds;
+        this.videoSound = !!sound;
+        if (this.videoShowing) this.video.muted = !this.videoSound;
     }
 
     async start(items = null, index = -1) {
@@ -147,6 +168,8 @@ class Slideshow {
         this._browserCurrentHidden = false;
         this.closeBrowser();
         this.isActive = false;
+        this.stopVideo();
+        this.slideIsVideo = false;
         if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
         if ((this.mode === 'onThisDay' || this.mode === 'recent' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
             const currentItem = this.items[this.index];
@@ -244,7 +267,9 @@ class Slideshow {
 
     resetInterval() {
         if (this.interval) clearInterval(this.interval);
-        if (this.isActive && this.duration > 0) {
+        // A playing video moves the slideshow on itself, when it ends or runs out of time
+        const videoPlaying = this.slideIsVideo && this.videoShowing && !this.video.ended;
+        if (this.isActive && this.duration > 0 && !videoPlaying) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }
@@ -274,13 +299,15 @@ class Slideshow {
                     camera: item.camera || '',
                     tags: item.tags || [],
                     key: item.key,
+                    isVideo: !!item.isVideo,
+                    liveVideo: item.liveVideo || null,
                     manualRotation: manualRotations[item.key || originalUrl] || 0,
                     folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                     folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
                 };
 
                 // Proxy if remote
-                if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+                if (!data.isVideo && data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
                     data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
                 }
             } else if (this.mode === 'nowPlaying') {
@@ -427,11 +454,13 @@ class Slideshow {
                 camera: item.camera || '',
                 tags: item.tags || [],
                 key: item.key,
+                isVideo: !!item.isVideo,
+                liveVideo: item.liveVideo || null,
                 manualRotation: manualRotations[item.key || originalUrl] || 0,
                 folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                 folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
             };
-            if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+            if (!data.isVideo && data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
                 data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
             }
             this.renderPhoto(data);
@@ -486,13 +515,18 @@ class Slideshow {
     }
 
     renderPhoto(data) {
+        if (data.isVideo) return this.renderVideo(data);
         if (data.url === this.currentPhoto && this.img.style.opacity == 1) {
             if (this.mode === 'nowPlaying') this.updateInfoUI(data);
             return;
         }
+        this.slideIsVideo = false;
+        this._videoToken = null; // a video still fading in gives way to this photo
 
         const doTransition = (naturalWidth, naturalHeight) => {
             const fx = this.pickTransition();
+            // Coming from a video: fade it out while the transition's exit runs
+            if (this.videoShowing) this.video.style.opacity = 0;
             // A panning panorama's transform belongs to its CSS animation, so only fade it out
             this.animateImg(this.img.classList.contains('panorama') ? SS_TRANSITIONS.fade : fx, 'out');
             this.img.style.opacity = 0;
@@ -506,6 +540,7 @@ class Slideshow {
                         data: this.currentPhotoData
                     };
                 }
+                this.stopVideo();
 
                 if (this.bg) {
                     this.bg.style.opacity = 0;
@@ -563,6 +598,7 @@ class Slideshow {
                 } else {
                     this.img.onload = () => applyDisplay(this.img.naturalWidth, this.img.naturalHeight);
                 }
+                if (data.liveVideo) setTimeout(() => this.playLive(data), fx.inMs);
             }, fx.outMs);
         };
 
@@ -571,6 +607,120 @@ class Slideshow {
         preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight);
         preload.onerror = () => doTransition(0, 1);
         preload.src = mediaUrl(data.url);
+    }
+
+    // A video slide (usually a Live Photo) fades in once it's playing, muted unless video sound is
+    // on, and plays once. With photos moving on by themselves it stays up for the photo time,
+    // holding on its last frame if it's shorter, and a longer one is cut short at the video limit.
+    renderVideo(data) {
+        this.slideIsVideo = true;
+        const fx = SS_TRANSITIONS.fade;
+        if (this.videoShowing) this.video.style.opacity = 0;
+        else {
+            this.animateImg(this.img.classList.contains('panorama') ? fx : this.pickTransition(), 'out');
+            this.img.style.opacity = 0;
+        }
+        if (this.info) this.info.style.opacity = 0;
+        const token = this._videoToken = {};
+
+        setTimeout(() => {
+            if (this._videoToken !== token || !this.isActive) return;
+            if (this.currentPhoto) {
+                this.previousPhoto = { url: this.currentPhoto, rotation: this.rotation, data: this.currentPhotoData };
+            }
+            this.stopVideo();
+            this.img.style.display = 'none';
+            this.img.classList.remove('panorama');
+            this.img.style.animation = '';
+
+            const src = data.originalUrl || data.url;
+            if (this.bg) {
+                const thumb = photoGridThumbUrl(src);
+                this.bg.style.backgroundImage = thumb ? `url("${thumb.replace(/"/g, '%22')}")` : 'none';
+            }
+            this.currentPhoto = data.url;
+            this.originalUrl = src;
+            this.currentPhotoData = data;
+            this.rotation = data.manualRotation || 0;
+            if (this.favBtn) this.favBtn.classList.toggle('is-favourite', !!data.tags?.includes('fav'));
+            this.updateInfoUI(data);
+
+            const v = this.video;
+            const autoAdvance = this.duration > 0;
+            this.videoShowing = true;
+            if (this.interval) clearInterval(this.interval);
+            v.style.display = '';
+            v.style.opacity = 0;
+            v.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+            v.muted = !this.videoSound;
+            let startedAt = 0;
+            v.onplaying = () => {
+                v.onplaying = null;
+                startedAt = Date.now();
+                v.style.opacity = 1;
+                if (this.info) this.info.style.opacity = 1;
+                if (!autoAdvance) return;
+                // Up for at least the photo time, and cut short at the video limit
+                this._videoTimer = setTimeout(() => { if (v.ended) this.next(); }, this.duration);
+                if (this.videoMaxSeconds > 0) {
+                    this._videoMaxTimer = setTimeout(() => this.next(), Math.max(this.videoMaxSeconds * 1000, this.duration));
+                }
+            };
+            v.onended = () => { if (autoAdvance && Date.now() - startedAt >= this.duration) this.next(); };
+            v.onerror = () => {
+                console.warn('[SLIDESHOW] Video failed to play:', src);
+                if (autoAdvance) this._videoTimer = setTimeout(() => this.next(), 3000);
+            };
+            v.src = mediaUrl(browserPlayableVideoUrl(src));
+            // Browsers can refuse to start a video with sound until the page has been used; play it silently then
+            v.play().catch(() => {
+                if (v.muted) return;
+                v.muted = true;
+                v.play().catch(() => { });
+            });
+        }, fx.outMs);
+    }
+
+    // A Live Photo's clip, played once in place of its photo and then back to the still: when the
+    // photo comes up (heard only with video sound on), and again when it's held down
+    playLive(data, withSound = this.videoSound) {
+        if (!data?.liveVideo || this.currentPhotoData !== data || this.slideIsVideo || !this.isActive) return;
+        this.stopVideo();
+        const v = this.video;
+        this.videoShowing = true;
+        v.muted = !withSound;
+        // Swapped in at once rather than faded, so the photo doesn't dip to black
+        v.style.transition = 'none';
+        v.style.opacity = 1;
+        v.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+        v.onplaying = () => {
+            v.onplaying = null;
+            this.img.style.display = 'none';
+            v.style.display = '';
+        };
+        v.onended = v.onerror = () => this.stopVideo();
+        v.src = mediaUrl(browserPlayableVideoUrl(data.liveVideo));
+        v.play().catch(() => {
+            if (v.muted) return this.stopVideo();
+            v.muted = true;
+            v.play().catch(() => this.stopVideo());
+        });
+    }
+
+    // Takes down the video slide (or Live Photo clip), if one is up, and puts the photo back in its place
+    stopVideo() {
+        clearTimeout(this._videoTimer);
+        clearTimeout(this._videoMaxTimer);
+        if (!this.videoShowing) return;
+        this.videoShowing = false;
+        const v = this.video;
+        v.onplaying = v.onended = v.onerror = null;
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        v.style.display = 'none';
+        v.style.transition = '';
+        this.img.style.display = '';
     }
 
     updateInfoUI(data) {
@@ -645,7 +795,8 @@ class Slideshow {
 
     fetchMetadataFallback(data) {
         const rawUrl = this.currentPhoto;
-        if (!rawUrl) {
+        // Videos have no photo metadata to read
+        if (!rawUrl || data.isVideo) {
             this.hideMap();
             return;
         }
@@ -791,6 +942,7 @@ class Slideshow {
         this.rotation = (this.rotation + delta) % 360;
         if (this.rotation < 0) this.rotation += 360;
         this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
+        if (this.videoShowing) this.video.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
 
         const urlForSave = this.originalUrl || this.currentPhoto;
         try {
@@ -958,6 +1110,7 @@ class Slideshow {
         this._browserLastPicked = null;
         this.updateBrowserSelectionUI();
         if (this.interval) clearInterval(this.interval); // paused while browsing
+        if (this.videoShowing) this.video.pause();
 
         const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', custom: 'Custom' };
         document.getElementById('ss-browser-title').textContent = labels[this.mode] || 'Slideshow';
@@ -997,7 +1150,10 @@ class Slideshow {
         if (!this.isActive) return;
         // The photo that was on screen got hidden: move on to the one that took its place
         if (this._browserCurrentHidden) this.next();
-        else this.resetInterval();
+        else {
+            if (this.videoShowing && !this.video.ended) this.video.play().catch(() => { });
+            this.resetInterval();
+        }
     }
 
     // Carry on the slideshow from the chosen photo
@@ -1027,7 +1183,7 @@ class Slideshow {
                 ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot ? ` style="transform: rotate(${rot}deg)"` : ''} onerror="onPhotoGridThumbError(this)">`
                 : '<span class="photo-tile-missing">Unavailable</span>';
             const selected = this.browserSelection.has(item);
-            html += `<div class="photo-tile${i === this.index ? ' current' : ''}${selected ? ' selected' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
+            html += `<div class="photo-tile${i === this.index ? ' current' : ''}${selected ? ' selected' : ''}${item.isVideo ? ' video' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
                 <button class="photo-tile-view" onclick="slideshow.onBrowserTileClick(+this.parentElement.dataset.index, event)">${img}</button>
                 <button class="photo-tile-select" onclick="slideshow.toggleBrowserSelection(+this.parentElement.dataset.index, event.shiftKey)" title="Select (shift-click for a range)">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>

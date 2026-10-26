@@ -2196,14 +2196,85 @@ function browserSortTitle(item) {
     return currentBrowserMode === 'music' ? title.replace(/^the\s+(?=\S)/i, '') : title;
 }
 
+// iPhone Live Photos: a photo with a video of the same name beside it gets that video as its
+// `liveVideo`, shown by a LIVE badge and played when the photo is opened (see playLive in slideshow.js)
+function livePhotoStem(item) {
+    try {
+        const name = decodeURIComponent(new URL(item.uri, window.location.href).pathname.split('/').pop()).toLowerCase();
+        const dot = name.lastIndexOf('.');
+        return dot > 0 ? name.slice(0, dot) : name;
+    } catch (e) {
+        return null;
+    }
+}
+
+function markLivePhotos(items) {
+    const videos = new Map(items.filter(isVideoItem).map(v => [livePhotoStem(v), v.uri]));
+    if (!videos.size) return;
+    for (const item of items) {
+        if (isImageItem(item) && videos.has(livePhotoStem(item))) item.liveVideo = videos.get(livePhotoStem(item));
+    }
+}
+
+// Resting the mouse on a Live Photo's tile in the grid plays its clip once over the thumbnail,
+// muted; moving off stops it. Touchscreens have no hover, so they're left out.
+let liveHover = null; // { tile, timer, video }
+
+function stopLiveHover() {
+    if (!liveHover) return;
+    clearTimeout(liveHover.timer);
+    if (liveHover.video) {
+        liveHover.video.pause();
+        liveHover.video.removeAttribute('src');
+        liveHover.video.load();
+        liveHover.video.remove();
+    }
+    liveHover = null;
+}
+
+function playLiveHover(tile) {
+    const item = currentBrowserItems[+tile.dataset.itemIndex];
+    const icon = tile.querySelector('.item-icon');
+    if (!item?.liveVideo || !icon || !browserItems.classList.contains('grid-view')) return;
+    const state = liveHover = { tile, video: null, timer: null };
+    // A short wait, so sweeping the mouse across the grid doesn't start every clip it passes
+    state.timer = setTimeout(() => {
+        if (liveHover !== state) return;
+        const v = state.video = document.createElement('video');
+        v.className = 'live-hover-video';
+        v.muted = true;
+        v.playsInline = true;
+        const thumb = icon.querySelector('img');
+        if (thumb?.style.transform) v.style.transform = thumb.style.transform;
+        v.onplaying = () => v.classList.add('playing');
+        v.onended = v.onerror = () => { if (liveHover === state) stopLiveHover(); };
+        v.src = mediaUrl(browserPlayableVideoUrl(item.liveVideo));
+        icon.appendChild(v);
+        v.play().catch(() => { if (liveHover === state) stopLiveHover(); });
+    }, 250);
+}
+
+browserItems.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const tile = e.target.closest('.browser-item');
+    if (tile === liveHover?.tile) return;
+    stopLiveHover();
+    if (tile) playLiveHover(tile);
+});
+browserItems.addEventListener('pointerout', (e) => {
+    if (liveHover && !liveHover.tile.contains(e.relatedTarget)) stopLiveHover();
+});
+
 function renderBrowser(items) {
     const renderSeq = ++browserRenderSeq;
+    stopLiveHover();
     selectedPhotos.clear();
     updatePhotoSelectionUI();
 
     // Each library category shows only its own media type (plus folders for navigation).
     // Music: audio only · Photos: images only · Videos: videos only.
     if (currentBrowserMode === 'photo') {
+        markLivePhotos(items);
         items = items.filter(i => i.type === 'container' || isImageItem(i));
     } else if (currentBrowserMode === 'video') {
         items = items.filter(i => i.type === 'container' || isVideoItem(i));
@@ -2371,6 +2442,7 @@ function renderBrowser(items) {
             icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}${onLoad}>`;
             if (isContainer) icon += '<svg class="folder-art-fallback" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
             if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
+            if (isImage && item.liveVideo) icon += '<span class="live-badge" title="Live Photo"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" fill="currentColor"></circle><circle cx="12" cy="12" r="6.5"></circle><circle cx="12" cy="12" r="10" stroke-dasharray="2 2.2"></circle></svg>LIVE</span>';
             if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg><span class="pano-badge-label">PANO</span></span>';
         }
 
@@ -9647,6 +9719,17 @@ async function handleUpload(event) {
     let uploaded = 0, skipped = 0, failed = 0;
     const MAX_LOG_ENTRIES = 500;
 
+    // iPhone Live Photos: a video with a photo of the same name in the same folder is filed beside
+    // the photo instead of with the videos. Each goes up after its photo, so it can be put in the
+    // same month folder (its own date can fall either side of a month end, or be missing).
+    const pathOf = f => (f.webkitRelativePath || f.name).toLowerCase();
+    const extOf = p => p.slice(p.lastIndexOf('.'));
+    const stemOf = p => p.slice(0, p.lastIndexOf('.'));
+    const photoStems = new Set(eligible.map(pathOf).filter(p => imageExts.has(extOf(p))).map(stemOf));
+    const isLiveVideo = f => videoExts.has(extOf(pathOf(f))) && photoStems.has(stemOf(pathOf(f)));
+    const photoDirs = new Map(); // stem -> month folder the server put the photo in
+    eligible.sort((a, b) => isLiveVideo(a) - isLiveVideo(b));
+
     for (const file of eligible) {
         // Everything for this file — including DOM lookups and building the request — lives in
         // one try/catch. A single bad file (stale File handle, transient DOM hiccup) must not be
@@ -9659,10 +9742,16 @@ async function handleUpload(event) {
             const formData = new FormData();
             formData.append('file', file);
             formData.append('relativePath', file.webkitRelativePath || file.name);
+            if (isLiveVideo(file)) {
+                formData.append('livePhoto', '1');
+                const photoDir = photoDirs.get(stemOf(pathOf(file)));
+                if (photoDir) formData.append('photoDir', photoDir);
+            }
 
             const res = await fetch('/api/upload-local-file', { method: 'POST', body: formData });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Upload failed');
+            if (data.dateDir && imageExts.has(extOf(pathOf(file)))) photoDirs.set(stemOf(pathOf(file)), data.dateDir);
 
             if (data.skipped) {
                 skipped++;
@@ -11964,21 +12053,35 @@ async function saveShoppingEmail() {
     }
 }
 
-function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds }) {
+function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos }) {
     document.getElementById('slideshow-idle-input').value = slideshowIdleSeconds;
     document.getElementById('slideshow-photo-input').value = slideshowPhotoSeconds;
+    if (slideshowVideos) {
+        document.getElementById('slideshow-videos-input').checked = slideshowVideos.enabled;
+        document.getElementById('slideshow-video-seconds-input').value = slideshowVideos.maxSeconds;
+        document.getElementById('slideshow-video-sound-input').checked = slideshowVideos.sound;
+        if (slideshow) slideshow.setVideoOptions(slideshowVideos);
+    }
     if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
 }
 
 async function saveSlideshowSettings() {
     const idle = Number(document.getElementById('slideshow-idle-input').value);
     const photo = Number(document.getElementById('slideshow-photo-input').value);
-    if (!(idle >= 0) || !(photo >= 0)) return;
+    const videoSeconds = Number(document.getElementById('slideshow-video-seconds-input').value);
+    if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0)) return;
     try {
         const response = await fetch('/api/settings/general', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ slideshowIdleSeconds: idle, slideshowPhotoSeconds: photo })
+            body: JSON.stringify({
+                slideshowIdleSeconds: idle, slideshowPhotoSeconds: photo,
+                slideshowVideos: {
+                    enabled: document.getElementById('slideshow-videos-input').checked,
+                    maxSeconds: videoSeconds,
+                    sound: document.getElementById('slideshow-video-sound-input').checked
+                }
+            })
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         // Show the values the server kept (it clamps them to a sensible range)

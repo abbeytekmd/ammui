@@ -11,7 +11,7 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
-import { getImageDate, extractDateFromString, isPhotoItem, monthDay } from './lib/photo-date.js';
+import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay } from './lib/photo-date.js';
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
@@ -204,6 +204,13 @@ let settings = {
     deviceName: 'AMMUI',
     slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
     slideshowPhotoSeconds: 60, // how long each photo shows
+    // Videos in the slideshow's photo folder (iPhone Live Photos, filed beside their photo when
+    // imported) shown in the slideshow, each in place of its photo
+    slideshowVideos: {
+        enabled: false,
+        maxSeconds: 60, // a longer video is cut short here (0 = plays to its end)
+        sound: false
+    },
     supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
     shoppingEmail: '', // where the Email button on the shopping list sends it
     // Outgoing mail server, for emailing the shopping list
@@ -257,6 +264,12 @@ function loadSettings() {
     settings.deviceName = getSetting('deviceName', '');
     settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
     settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
+    const savedVideos = getSetting('slideshowVideos', {}) || {};
+    settings.slideshowVideos = {
+        enabled: savedVideos.enabled ?? settings.slideshowVideos.enabled,
+        maxSeconds: savedVideos.maxSeconds ?? settings.slideshowVideos.maxSeconds,
+        sound: savedVideos.sound ?? settings.slideshowVideos.sound
+    };
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
     settings.email = { ...settings.email, ...(getSetting('email', {}) || {}) };
@@ -292,6 +305,7 @@ function saveSettings() {
     setSetting('deviceName', settings.deviceName);
     setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
     setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
+    setSetting('slideshowVideos', settings.slideshowVideos);
     setSetting('supermarket', settings.supermarket);
     setSetting('shoppingEmail', settings.shoppingEmail);
     setSetting('email', settings.email);
@@ -2905,6 +2919,7 @@ app.get('/api/settings/general', (req, res) => {
         deviceName: settings.deviceName,
         slideshowIdleSeconds: settings.slideshowIdleSeconds,
         slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
+        slideshowVideos: settings.slideshowVideos,
         supermarket: settings.supermarket,
         supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
         shoppingEmail: settings.shoppingEmail
@@ -2923,6 +2938,15 @@ app.post('/api/settings/general', express.json(), (req, res) => {
     if (idle !== null || photo !== null) {
         if (idle !== null) settings.slideshowIdleSeconds = idle;
         if (photo !== null) settings.slideshowPhotoSeconds = photo;
+        saveSettings();
+    }
+    // Slideshow videos: on/off, sound, and how long each plays (5s–1h, 0 = to its end)
+    const videos = req.body.slideshowVideos;
+    if (videos && typeof videos === 'object') {
+        if (typeof videos.enabled === 'boolean') settings.slideshowVideos.enabled = videos.enabled;
+        if (typeof videos.sound === 'boolean') settings.slideshowVideos.sound = videos.sound;
+        const max = seconds(videos.maxSeconds, 5, 3600);
+        if (max !== null) settings.slideshowVideos.maxSeconds = max;
         saveSettings();
     }
     if (typeof req.body.supermarket === 'string') {
@@ -3784,30 +3808,29 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
         if (isImage || isVideo) {
             // Images go in the date-based picture tree; videos get the same
             // date foldering but under their own local/videos root so they stay a
-            // separate library category. detectPictureDate falls back to filename /
-            // folder-name dates when there's no readable EXIF, which is what we want
-            // for phone/WhatsApp names.
-            const rootSub = isVideo ? 'videos' : 'pictures';
+            // separate library category, except a Live Photo's video, which goes beside its
+            // photo (the browser says when its photo is in the same upload, and which month folder
+            // the photo went to). detectPictureDate falls back to filename / folder-name dates when
+            // there's no readable EXIF, which is what we want for phone/WhatsApp names.
             const hintSegments = relativePath.split(/[/\\]/).reverse();
             const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments, useBirthtime: false });
+            const photoDir = /^(\d{4}\/\d{2}|unknown-date)$/.test(req.body.photoDir || '') ? req.body.photoDir : null;
+            const dateDir = isVideo && photoDir ? photoDir : dateFolder(detected);
+            const live = isVideo && (req.body.livePhoto === '1' || hasPhotoBeside(path.join(localDir, 'pictures', dateDir), filename));
+            const rootSub = isVideo && !live ? 'videos' : 'pictures';
 
-            let finalDir;
-            if (!detected) {
-                finalDir = path.join(localDir, rootSub, 'unknown-date');
-            } else {
-                const { year, month } = detected;
-                finalDir = path.join(localDir, rootSub, year, month ?? '01');
-            }
+            const finalDir = path.join(localDir, rootSub, dateDir);
             if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
             const finalPath = path.join(finalDir, filename);
             if (fs.existsSync(finalPath)) {
                 fs.unlinkSync(req.file.path);
-                return res.json({ success: true, filename, skipped: true });
+                return res.json({ success: true, filename, skipped: true, dateDir });
             }
 
             fs.renameSync(req.file.path, finalPath);
-            return res.json({ success: true, filename, type: isVideo ? 'video' : 'image', year: detected?.year, month: detected?.month });
+            if (live) console.log(`[UPLOAD] Live Photo video ${filename} filed beside its photo`);
+            return res.json({ success: true, filename, type: live ? 'live' : isVideo ? 'video' : 'image', year: detected?.year, month: detected?.month, dateDir });
 
         } else {
             let artist = 'Unknown Artist';
@@ -3886,6 +3909,50 @@ function getRecentCutoff() {
     return new Date(now.getFullYear(), now.getMonth() - 1, 1);
 }
 
+// iPhone Live Photos come as a photo and a short video of the same name side by side. The
+// video is filed beside its photo in the pictures tree (where the slideshow finds it) rather
+// than in the videos library: either because it came in the same batch as its photo, or
+// because the photo is already in the folder it's going to.
+const fileStem = name => path.basename(name, path.extname(name)).toLowerCase();
+
+function hasPhotoBeside(dir, filename) {
+    const stem = fileStem(filename);
+    try {
+        return fs.readdirSync(dir).some(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()) && fileStem(f) === stem);
+    } catch (e) {
+        return false;
+    }
+}
+
+const livePathKey = p => `${path.posix.dirname(p).toLowerCase()}|${fileStem(p)}`;
+
+// The paths in a batch that are videos with a photo of the same name in the same folder
+function liveVideoPaths(paths) {
+    const photos = new Set(paths.filter(p => IMAGE_EXTS.has(path.extname(p).toLowerCase())).map(livePathKey));
+    return new Set(paths.filter(p => VIDEO_EXTS.has(path.extname(p).toLowerCase()) && photos.has(livePathKey(p))));
+}
+
+// "YYYY/MM" (or "unknown-date") folder under pictures/videos for a detected date
+const dateFolder = detected => detected ? `${detected.year}/${detected.month ?? '01'}` : 'unknown-date';
+
+// Copying a folder from a server: each Live Photo's video is copied after its photo, so it can
+// follow the photo into whichever month folder the photo's date put it in.
+function livePhotoBatch(tracks) {
+    const live = liveVideoPaths(tracks.map(t => uriPath(t.uri)));
+    const isLive = t => live.has(uriPath(t.uri));
+    const photoDirs = new Map(); // livePathKey -> date folder its photo went to
+    return {
+        tracks: [...tracks.filter(t => !isLive(t)), ...tracks.filter(isLive)],
+        options: t => isLive(t) ? { livePhoto: true, photoDir: photoDirs.get(livePathKey(uriPath(t.uri))) } : {},
+        done: (t, result) => { if (result?.dateDir) photoDirs.set(livePathKey(uriPath(t.uri)), result.dateDir); },
+    };
+}
+
+// The path part of a media URL, for pairing Live Photos when copying a folder from a server
+function uriPath(uri) {
+    try { return decodeURIComponent(new URL(uri).pathname); } catch (e) { return ''; }
+}
+
 // An imported "albumart~Artist~Album" image (see albumArtName) goes back into
 // local/music/<Artist>/<Album> as that album's cover rather than into the pictures tree.
 // An album that already has a cover keeps it. srcPath is a temp file, removed either way.
@@ -3908,7 +3975,9 @@ function importAlbumArt(srcPath, artInfo, ext) {
     }
 }
 
-async function downloadFileHelper(uri, title, artist, album) {
+// `livePhoto`: a video whose photo is being copied with it, and `photoDir` the month folder the
+// photo went to (see livePhotoBatch). Pictures answer with the `dateDir` they went to.
+async function downloadFileHelper(uri, title, artist, album, { livePhoto = false, photoDir = null } = {}) {
     const localDir = path.join(__dirname, 'local');
 
     // Get extension from URI or default to .mp3
@@ -3982,8 +4051,8 @@ async function downloadFileHelper(uri, title, artist, album) {
         }
 
         // Post-process: determine Year/Month via shared detectPictureDate. Videos get the
-        // same date foldering under local/videos, as uploads do.
-        const rootSub = isVideo ? 'videos' : 'pictures';
+        // same date foldering under local/videos, as uploads do, and Live Photo videos go
+        // beside their photo.
         let hintSegments;
         try {
             const uriPath = new URL(uri).pathname;
@@ -3994,25 +4063,22 @@ async function downloadFileHelper(uri, title, artist, album) {
         if (detected) console.log(`[DOWNLOAD] Date detected: ${detected.year}-${detected.month ?? '??'} for ${filename}`);
 
         // Final fallback: unknown date folder
-        let finalDir;
-        if (!detected) {
-            console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
-            finalDir = path.join(localDir, rootSub, 'unknown-date');
-        } else {
-            const { year, month } = detected;
-            finalDir = path.join(localDir, rootSub, year, month ?? '01');
-        }
+        if (!detected) console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
+        const dateDir = isVideo && livePhoto && photoDir ? photoDir : dateFolder(detected);
+        const live = isVideo && (livePhoto || hasPhotoBeside(path.join(localDir, 'pictures', dateDir), filename));
+        if (live) console.log(`[DOWNLOAD] Live Photo video ${filename} filed beside its photo`);
+        const finalDir = path.join(localDir, isVideo && !live ? 'videos' : 'pictures', dateDir);
         if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
         const finalPath = path.join(finalDir, filename);
         if (fs.existsSync(finalPath)) {
             fs.unlinkSync(downloadPath);
-            return { success: true, filename: filename, skipped: true };
+            return { success: true, filename: filename, skipped: true, dateDir };
         }
 
         fs.renameSync(downloadPath, finalPath);
         console.log(`Picture saved to ${finalPath}`);
-        return { success: true, filename };
+        return { success: true, filename, dateDir };
     }
 }
 
@@ -4044,10 +4110,11 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         let downloadCount = 0;
         let failCount = 0;
 
-        const tracks = await server.browseRecursive(objectId);
-        for (const track of tracks) {
+        const batch = livePhotoBatch(await server.browseRecursive(objectId));
+        for (const track of batch.tracks) {
             try {
-                await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
+                batch.done(track, await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album,
+                    batch.options(track)));
                 downloadCount++;
             } catch (err) {
                 console.error(`Failed to download ${track.title}:`, err.message);
@@ -4099,7 +4166,8 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
             const server = new MediaServer(device);
             job.current = 'Scanning folder...';
             pushDownloadJobUpdate(job);
-            const tracks = await server.browseRecursive(objectId);
+            const batch = livePhotoBatch(await server.browseRecursive(objectId));
+            const tracks = batch.tracks;
             job.total = tracks.length;
             pushDownloadJobUpdate(job);
 
@@ -4107,7 +4175,9 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
                 const track = tracks[i];
                 job.current = track.title;
                 try {
-                    const result = await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
+                    const result = await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album,
+                        batch.options(track));
+                    batch.done(track, result);
                     if (result.skipped) {
                         job.skippedCount++;
                         job.log.push({ status: 'skipped', title: track.title });
@@ -4247,10 +4317,51 @@ function removeFromScreensaverCache(url) {
     }
 }
 
-// Fills the cache with the photos under its folder from the server's library index.
+// ─── Slideshow videos ────────────────────────────────────────────────────────
+// With videos turned on, the videos in the slideshow's photo folder join its photos: mostly
+// iPhone Live Photos, whose short video is filed beside its photo when imported. A video stands
+// in for the photo of the same name beside it, so the moment shows once, moving.
+
+// Folder and file name without extension, to pair a Live Photo's video with its photo
+const livePhotoKey = i => {
+    const p = uriPath(i.uri || i.res);
+    return p ? `${path.posix.dirname(p).toLowerCase()}|${fileStem(p)}` : null;
+};
+
+// Photos and (with videos on) videos from a library index listing, as the slideshow shows them
+function withLiveVideos(photos, videos) {
+    return settings.slideshowVideos.enabled && videos.length ? livePairs(photos, videos) : photos;
+}
+
+// The slideshow cache's photos and videos, worked out again only when either changes
+let slideshowPool = { images: null, videos: null, enabled: null, items: [] };
+function screensaverPool() {
+    const c = screensaverCache, enabled = settings.slideshowVideos.enabled;
+    const p = slideshowPool;
+    if (p.images !== c.images || p.videos !== c.videos || p.enabled !== enabled) {
+        slideshowPool = { images: c.images, videos: c.videos, enabled, items: withLiveVideos(c.images, c.videos || []) };
+    }
+    return slideshowPool.items;
+}
+
+// A video as /api/slideshow/random answers with a photo
+function slideshowVideoSlide(v) {
+    const url = v.uri || v.res;
+    const key = mediaKey(url);
+    return {
+        url, title: v.title, date: v.year || v.date || v['dc:date'] || '', key, isVideo: true,
+        manualRotation: settings.manualRotations?.[key] || 0, tags: settings.fileTags?.[key] || [],
+        location: v._path || '', folderId: v.folderId, folderTitle: v.folderTitle,
+    };
+}
+
+// Fills the cache with the photos (and videos, see "Slideshow videos") under its folder from the
+// server's library index.
 function loadScreensaverCacheFromIndex(cache, meta) {
-    const images = getLibraryIndexItemsUnder(cache.udn, cache.objectId).filter(isPhotoItem);
+    const items = getLibraryIndexItemsUnder(cache.udn, cache.objectId);
+    const images = items.filter(isPhotoItem);
     cache.images = images;
+    cache.videos = items.filter(isVideoItem);
     cache.indexBuiltAt = meta.built_at;
     cache.status = 'ready';
     cache.timestamp = Date.now();
@@ -4344,14 +4455,14 @@ app.get('/api/slideshow/random', async (req, res) => {
         // CHECK CACHE STRATEGY
         reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-        const peerImages = peerObjectId ? ownPhotosUnder(peerObjectId) : null;
+        const peerImages = peerObjectId ? ownPhotosUnder(peerObjectId, req.query.videos === '1') : null;
         if (peerObjectId && !peerImages?.length) {
             return res.status(peerImages ? 404 : 503).json({ error: peerImages ? 'No images found' : 'Library not indexed yet' });
         }
         // If cache is ready and has images, use it!
         if (peerImages || (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0)) {
             // Another AMMUI's slideshow skips what's hidden there, not here
-            let imagesToUse = peerImages || screensaverCache.images.filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
+            let imagesToUse = peerImages || screensaverPool().filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
 
             if (mode === 'onThisDay') {
                 const today = new Date();
@@ -4393,6 +4504,7 @@ app.get('/api/slideshow/random', async (req, res) => {
 
             const index = Math.floor(Math.random() * imagesToUse.length);
             foundImage = imagesToUse[index];
+            if (foundImage.isVideo) return res.json(slideshowVideoSlide(foundImage));
 
             // HACK: If we just updated the code but the cache is old, trigger refresh
             const isLegacyPath = typeof foundImage._path === 'string' && foundImage._path && !foundImage._path.startsWith('[');
@@ -4555,24 +4667,35 @@ function slideshowSourceAmmui() {
 
 // Photos under a folder of our own library, for another AMMUI's slideshow. Kept apart from our
 // own slideshow's cache so the two don't keep replacing each other. Null until the library is indexed.
-const peerPhotoCache = new Map(); // objectId -> { builtAt, images }
-function ownPhotosUnder(objectId) {
+// `withVideos` when that AMMUI shows videos: they stand in for their photos as in withLiveVideos.
+const peerPhotoCache = new Map(); // objectId -> { builtAt, images, videos }
+function ownPhotosUnder(objectId, withVideos = false) {
     const meta = getLibraryIndexMeta(SERVER_UDN);
     if (!meta) return null;
     let cached = peerPhotoCache.get(objectId);
     if (!cached || cached.builtAt !== meta.built_at) {
         if (peerPhotoCache.size >= 4) peerPhotoCache.clear();
-        cached = { builtAt: meta.built_at, images: getLibraryIndexItemsUnder(SERVER_UDN, objectId).filter(isPhotoItem) };
+        const items = getLibraryIndexItemsUnder(SERVER_UDN, objectId);
+        cached = { builtAt: meta.built_at, images: items.filter(isPhotoItem), videos: items.filter(isVideoItem) };
         peerPhotoCache.set(objectId, cached);
     }
-    return cached.images;
+    if (!withVideos || !cached.videos.length) return cached.images;
+    cached.withVideos ||= livePairs(cached.images, cached.videos);
+    return cached.withVideos;
+}
+
+// withLiveVideos without looking at this server's own setting
+function livePairs(photos, videos) {
+    const paired = new Set(videos.map(livePhotoKey).filter(Boolean));
+    return [...photos.filter(i => !paired.has(livePhotoKey(i))), ...videos.map(v => ({ ...v, isVideo: true }))];
 }
 
 // Passes a slideshow request on to the source AMMUI, which picks the photos from its library, then
 // applies our own hidden photos, favourites, rotations and tags (those are saved here, not there).
 async function forwardSlideshowRequest(res, device, apiPath, mode) {
     const isList = apiPath === '/api/slideshow/list';
-    const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}`, device.location);
+    const videos = settings.slideshowVideos.enabled ? '&videos=1' : '';
+    const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}${videos}`, device.location);
     const isHidden = img => !!settings.deletedPhotos[mediaKey(img.url || img.uri || img.res)];
     const withOurMarks = img => {
         const key = mediaKey(img.url || img.uri || img.res);
@@ -4620,12 +4743,13 @@ function favouritesOnAmmui(device, objectId) {
         if (!rel.startsWith(folder) || !uri) continue;
         const title = rel.split('/').pop();
         const item = getLibraryIndexItem(device.udn, rel) || { type: 'item', title };
-        if (!isPhotoItem(item)) continue;
+        const isVideo = settings.slideshowVideos.enabled && isVideoItem(item);
+        if (!isPhotoItem(item) && !isVideo) continue;
         const folderId = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '0';
         const rot = settings.manualRotations?.[key] || 0;
         images.push({
             folderId, folderTitle: folderId === '0' ? device.friendlyName : folderId.split('/').pop(),
-            ...item, uri, key, tags, ...(rot ? { manualRotation: rot } : {}),
+            ...item, uri, key, tags, ...(rot ? { manualRotation: rot } : {}), ...(isVideo ? { isVideo } : {}),
         });
     }
     return images;
@@ -4660,11 +4784,13 @@ async function slideshowList(req, res) {
     let partial = false;
     if (indexMeta) {
         const cutoff = getRecentCutoff();
-        source = mode === 'onThisDay'
+        const dated = mode === 'onThisDay'
             ? getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()))
             : getLibraryIndexPhotosSince(serverUdn, objectId, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
+        const photos = dated.filter(isPhotoItem), videos = dated.filter(isVideoItem);
+        source = peerObjectId ? (req.query.videos === '1' ? livePairs(photos, videos) : photos) : withLiveVideos(photos, videos);
     } else if (peerObjectId) {
-        source = ownPhotosUnder(objectId);
+        source = ownPhotosUnder(objectId, req.query.videos === '1');
         if (!source) return res.status(503).json({ error: 'Library not indexed yet' });
     } else {
         reloadScreensaverCacheIfReindexed();
@@ -4685,7 +4811,7 @@ async function slideshowList(req, res) {
         }
         source = partial
             ? (cacheValid && screensaverCache.status === 'loading' ? screensaverCache.partialImages || [] : [])
-            : screensaverCache.images;
+            : screensaverPool();
     }
     // Another AMMUI's slideshow leaves out what's hidden there, not here
     let images = peerObjectId ? source : source.filter(img => {
@@ -7596,6 +7722,18 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments, useBir
             if (result) return result;
         }
     } catch (e) { /* ignore */ }
+
+    // 1b. A video's own creation time (EXIF doesn't cover QuickTime/MP4, and iPhone names like
+    // IMG_1234.MOV carry no date)
+    if (VIDEO_EXTS.has(path.extname(filename).toLowerCase())) {
+        try {
+            const { format } = await mm.parseFile(localPath, { duration: false, skipCovers: true });
+            if (format.creationTime?.getFullYear() >= 1990) {
+                const result = dateToYearMonth(format.creationTime);
+                if (result) return result;
+            }
+        } catch (e) { /* ignore */ }
+    }
 
     // 2. Date in filename
     const d = extractDateFromString(filename);
