@@ -2342,10 +2342,6 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.1);
 }
 
-.meal-item-result.unconfirmed .meal-item-result-name {
-    color: var(--text-muted);
-}
-
 .meal-item-result-name {
     flex: 1;
     min-width: 0;
@@ -2360,6 +2356,13 @@ p.subtitle {
 .meal-item-result-new {
     color: var(--primary);
     font-weight: 600;
+}
+
+.meal-item-result-note,
+.meal-item-result-note:hover {
+    color: var(--text-muted);
+    cursor: default;
+    background: none;
 }
 
 /* A meal's parts, in order */
@@ -2384,10 +2387,6 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--card-border);
     border-radius: 0.5rem;
-}
-
-.calendar-entry-part.unconfirmed {
-    background: rgba(0, 0, 0, 0.3);
 }
 
 .calendar-entry-part-handle {
@@ -2520,10 +2519,6 @@ p.subtitle {
 
 .meal-day-table tbody tr:hover td {
     background: rgba(255, 255, 255, 0.03);
-}
-
-.meal-day-table tr.unconfirmed td {
-    background: rgba(0, 0, 0, 0.3);
 }
 
 .meal-day-pic-cell {
@@ -3133,7 +3128,7 @@ p.subtitle {
     min-width: 0;
 }
 
-.recipe-unconfirmed {
+.recipe-confirmed {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -3143,7 +3138,7 @@ p.subtitle {
     cursor: pointer;
 }
 
-.recipe-unconfirmed input {
+.recipe-confirmed input {
     margin: 0;
     accent-color: var(--primary);
     cursor: pointer;
@@ -3503,15 +3498,12 @@ p.subtitle {
     background: rgba(255, 255, 255, 0.05);
 }
 
-/* An item ticked as unconfirmed, or made of one, wherever it shows */
-.item-row.unconfirmed,
-.item-builder-part.unconfirmed,
-.item-builder-result.unconfirmed {
-    background: rgba(0, 0, 0, 0.3);
-}
-
-.item-row.unconfirmed:hover {
-    background: rgba(0, 0, 0, 0.4);
+/* After the name of an item that's confirmed, along with everything it's made of */
+.item-confirmed {
+    margin-left: 0.3em;
+    font-size: 0.7em;
+    color: #f5c518;
+    vertical-align: 0.15em;
 }
 
 .item-row-text {

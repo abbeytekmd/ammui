@@ -3493,18 +3493,20 @@ function cleanIngredient(body, id) {
     if (!name) return 'An item name is required';
     if (name.length > 300) return 'The item name is too long';
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
-    const sameName = findIngredientIdByName(name);
-    if (sameName && sameName !== id) return `"${name}" is already in the list`;
-    // Left out, unconfirmed and parts stay as they are
-    const unconfirmed = 'unconfirmed' in body ? !!body.unconfirmed : undefined;
+    // Nor one the shopping list counts as the same item ("Egg" when there's "Eggs")
+    const key = shoppingItemKey(name);
+    const sameId = findIngredientIdByName(name) || (key && listIngredients().find(i => shoppingItemKey(i.name) === key)?.id);
+    if (sameId && sameId !== id) return `"${getIngredient(sameId).name}" is already in the list`;
+    // Left out, confirmed and parts stay as they are
+    const confirmed = 'confirmed' in body ? !!body.confirmed : undefined;
     let parts;
     if ('parts' in body) {
         parts = cleanItemParts(body.parts, id);
         if (typeof parts === 'string') return parts;
     }
-    if (!('nutrition' in body)) return { name, amount, unit, unconfirmed, parts };
+    if (!('nutrition' in body)) return { name, amount, unit, confirmed, parts };
     const nutrition = cleanNutrition(body.nutrition);
-    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, unconfirmed, parts, nutrition };
+    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, confirmed, parts, nutrition };
 }
 
 // The items an item is made of: [{ id, amount, unit }] in order (an item can be in it more than
@@ -5046,13 +5048,13 @@ app.get('/api/library-data/counts', (req, res) => {
 // items made of other items as "meals" (the format item groups had)
 app.get('/api/ingredients/export', (req, res) => {
     const ingredients = listIngredients().filter(i => !i.parts)
-        .map(({ name, amount, unit, unconfirmed, nutrition }) => ({ name, amount, unit, unconfirmed, nutrition }));
+        .map(({ name, amount, unit, confirmed, nutrition }) => ({ name, amount, unit, confirmed, nutrition }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
 });
 
 app.get('/api/meals/export', (req, res) => {
     const meals = listIngredients().filter(i => i.parts)
-        .map(m => ({ name: m.name, unconfirmed: m.unconfirmed, ingredients: m.parts.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
+        .map(m => ({ name: m.name, confirmed: m.confirmed, ingredients: m.parts.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
     res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
 });
 
@@ -5089,7 +5091,7 @@ app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) =
     res.json({ success: true, added, updated, existing, invalid, total: ingredients.length });
 });
 
-// Items made of other items ({ name, unconfirmed, ingredients: [{ name, amount, unit }] }, as item
+// Items made of other items ({ name, confirmed, ingredients: [{ name, amount, unit }] }, as item
 // groups were exported). One whose name is already here is skipped rather than overwritten. What
 // they're made of is matched by name, including each other; names not seen before become single items.
 app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
@@ -5102,7 +5104,7 @@ app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
             .map(i => i && typeof i === 'object' ? i : { name: i })
             .map(i => ({ name: String(i.name ?? '').trim(), amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim() }))
             .filter(i => i.name && i.name.length <= 300 && i.amount.length <= 20 && i.unit.length <= 40);
-        return name && name.length <= 300 && parts.length && parts.length <= 200 ? { name, unconfirmed: !!m.unconfirmed, parts } : null;
+        return name && name.length <= 300 && parts.length && parts.length <= 200 ? { name, confirmed: !!m.confirmed, parts } : null;
     });
     // Made first, so they can be made of each other
     const made = [];
@@ -5110,7 +5112,7 @@ app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
         if (!m) { invalid++; continue; }
         if (findIngredientIdByName(m.name)) { existing++; continue; }
         const id = crypto.randomUUID();
-        saveIngredient({ id, name: m.name, amount: '', unit: '', unconfirmed: m.unconfirmed });
+        saveIngredient({ id, name: m.name, amount: '', unit: '', confirmed: m.confirmed });
         made.push({ id, ...m });
         added++;
     }

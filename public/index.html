@@ -615,7 +615,7 @@
                 </div>
                 <div class="ingredients-panel">
                     <p class="ingredients-hint">An item is a single thing, with its quantity for one person, or made of
-                        other items. Click one to change it. Unconfirmed items, and anything made of one, are shaded.</p>
+                        other items. Click one to change it. A ★ marks an item that's confirmed, along with everything it's made of.</p>
                     <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search items..."
                         autocomplete="off" oninput="renderIngredientList()">
                     <div id="ingredients-list" class="ingredients-list"></div>
@@ -2636,8 +2636,8 @@
                         <input type="text" id="item-builder-name" class="recipe-name-input" maxlength="300" autocomplete="off"
                             placeholder="e.g. Peas, or Sunday roast" oninput="onItemBuilderNameInput(); scheduleItemBuilderLookup()"
                             onkeydown="if(event.key==='Enter') { event.preventDefault(); saveItemBuilder(); }">
-                        <label class="recipe-unconfirmed">
-                            <input type="checkbox" id="item-builder-unconfirmed"> Unconfirmed
+                        <label class="recipe-confirmed">
+                            <input type="checkbox" id="item-builder-confirmed"> Confirmed
                         </label>
                     </div>
                     <p id="item-builder-name-note" class="settings-hint" hidden></p>

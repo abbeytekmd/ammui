@@ -6362,10 +6362,10 @@ function renderCalendarEntryParts() {
             <input type="text" class="calendar-entry-part-unit" data-field="unit" value="${escapeAttr(p.unit || '')}" maxlength="40"
                 placeholder="${escapeAttr(item.unit || 'Unit')}" list="recipe-units" aria-label="Unit" title="Unit (empty: the item's own)">`;
         return `
-        <li class="calendar-entry-part${itemUnconfirmed(item) ? ' unconfirmed' : ''}" data-i="${i}">
+        <li class="calendar-entry-part" data-i="${i}">
             <span class="calendar-entry-part-handle" title="Drag to reorder" aria-hidden="true">⠿</span>
             ${quantity}
-            <span class="calendar-entry-part-name">${!item?.parts && (p.times || 1) !== 1 ? `<span class="meal-day-times" title="How many (change it in the day view)">${formatTimes(p.times)}</span> ` : ''}${escapeHtml(item?.name || p.name)}</span>
+            <span class="calendar-entry-part-name">${!item?.parts && (p.times || 1) !== 1 ? `<span class="meal-day-times" title="How many (change it in the day view)">${formatTimes(p.times)}</span> ` : ''}${escapeHtml(item?.name || p.name)}${confirmedStar(item)}</span>
             ${item ? '<button type="button" class="btn-control ghost btn-small" data-act="open" title="Edit this item">Edit</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
         </li>`;
@@ -6414,16 +6414,21 @@ function renderMealItemPicker(open = false, fromTyping = false) {
     const found = ingredientList
         .filter(i => !editing.parts.some(p => p.id === i.id) && words.every(w => text(i).includes(w)))
         .sort((a, b) => b.name.toLowerCase().startsWith(query) - a.name.toLowerCase().startsWith(query));
-    mealItemPickerRows = [...found.map(i => i.id), 'new'];
-    mealItemPickerIndex = Math.min(mealItemPickerIndex, mealItemPickerRows.length - 1);
+    // An item already called what's typed is offered (or noted as on the meal) instead of a new one
+    const same = typed ? findIngredientByName(typed) : undefined;
+    const sameOnMeal = same && editing.parts.some(p => p.id === same.id);
+    if (same && !sameOnMeal && !found.includes(same)) found.unshift(same);
+    mealItemPickerRows = [...found.map(i => i.id), ...(same ? [] : ['new'])];
+    mealItemPickerIndex = Math.max(0, Math.min(mealItemPickerIndex, mealItemPickerRows.length - 1));
     results.innerHTML = found.map((i, n) => `
-        <li role="option" class="meal-item-result${itemUnconfirmed(i) ? ' unconfirmed' : ''}${n === mealItemPickerIndex ? ' active' : ''}" data-n="${n}">
-            <span class="meal-item-result-name">${escapeHtml(i.name)}</span>
+        <li role="option" class="meal-item-result${n === mealItemPickerIndex ? ' active' : ''}" data-n="${n}">
+            <span class="meal-item-result-name">${escapeHtml(i.name)}${confirmedStar(i)}</span>
             ${i.parts ? '<span class="meal-item-result-kind">made of others</span>' : ''}
-        </li>`).join('') + `
+        </li>`).join('') + (sameOnMeal ? `
+        <li class="meal-item-result meal-item-result-note">${escapeHtml(same.name)} is already on this meal</li>` : same ? '' : `
         <li role="option" class="meal-item-result meal-item-result-new${found.length === mealItemPickerIndex ? ' active' : ''}" data-n="${found.length}">
             ${typed ? `+ New item “${escapeHtml(typed)}”` : '+ New item…'}
-        </li>`;
+        </li>`);
     input.setAttribute('aria-expanded', 'true');
     results.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
 }
@@ -6440,7 +6445,7 @@ function mealItemPickerKeydown(event) {
         if (results.hidden) renderMealItemPicker(true, true);
         else {
             const n = mealItemPickerRows.length;
-            mealItemPickerIndex = (mealItemPickerIndex + (event.key === 'ArrowDown' ? 1 : n - 1)) % n;
+            if (n) mealItemPickerIndex = (mealItemPickerIndex + (event.key === 'ArrowDown' ? 1 : n - 1)) % n;
             renderMealItemPicker();
         }
     } else if (event.key === 'Enter') {
@@ -7048,9 +7053,9 @@ function renderMealItemsView() {
         const times = mealPartTimes(part, item);
         const count = times !== 1 ? `<span class="meal-day-times">${formatTimes(times)}</span>` : '';
         const row = `
-            <tr class="${itemUnconfirmed(item) ? 'unconfirmed' : ''}">
+            <tr>
                 <td class="meal-day-pic-cell">${mealDayPicture(item)}</td>
-                <td><span class="meal-day-item">${escapeHtml(item?.name || part.name)}</span></td>
+                <td><span class="meal-day-item">${escapeHtml(item?.name || part.name)}${confirmedStar(item)}</span></td>
                 <td class="meal-day-qty"><span class="meal-day-qty-row">${count}<span class="${qty.own ? 'meal-day-own' : ''}"
                     title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</span></span></td>
                 ${mealDayCells(sumNutrition(mealPartRows(part)))}
@@ -7063,9 +7068,9 @@ function renderMealItemsView() {
             const child = itemById(p.itemId);
             const childQty = child?.parts ? '' : [p.amount, p.unit].filter(Boolean).join(' ');
             return `
-            <tr class="meal-day-sub${itemUnconfirmed(child) ? ' unconfirmed' : ''}">
+            <tr class="meal-day-sub">
                 <td class="meal-day-pic-cell">${mealDayPicture(child)}</td>
-                <td><span class="meal-day-item">${escapeHtml(child?.name || p.name)}</span></td>
+                <td><span class="meal-day-item">${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span></td>
                 <td>${escapeHtml(childQty)}</td>
                 <td colspan="5"></td>
                 <td></td>
@@ -8079,25 +8084,32 @@ async function runShoppingVoice(transcripts, quiet = false) {
 
 // --- Meals tab: items. Each is a single item (a quantity for one person, calories, a picture) or
 // made of other items, each at the amount it uses. Meals are made of items. ---
-let ingredientList = []; // [{ id, name, amount, unit, unconfirmed, nutrition, parts: null | [{ itemId, name, amount, unit }] }] sorted by name
+let ingredientList = []; // [{ id, name, amount, unit, confirmed, nutrition, parts: null | [{ itemId, name, amount, unit }] }] sorted by name
 
 // Safe inside a double-quoted attribute (escapeHtml leaves quotes alone)
 const escapeAttr = s => escapeHtml(s).replace(/"/g, '&quot;');
 
 const itemById = id => ingredientList.find(i => i.id === id);
 
+// The item with this name, or one the shopping list counts as the same ("Eggs" and "egg")
 const findIngredientByName = name => {
-    const key = (name || '').trim().toLowerCase();
-    return key ? ingredientList.find(i => i.name.toLowerCase() === key) : undefined;
+    const lower = (name || '').trim().toLowerCase();
+    if (!lower) return undefined;
+    const key = shoppingItemKey(lower);
+    return ingredientList.find(i => i.name.toLowerCase() === lower) || (key ? ingredientList.find(i => shoppingItemKey(i.name) === key) : undefined);
 };
 
-// Whether an item, or anything it's made of, is ticked as unconfirmed
-function itemUnconfirmed(item, seen = new Set()) {
-    if (!item || seen.has(item.id)) return false;
-    if (item.unconfirmed) return true;
+// Whether an item, and everything it's made of, is ticked as confirmed
+function itemConfirmed(item, seen = new Set()) {
+    if (!item) return false;
+    if (seen.has(item.id)) return true;
+    if (!item.confirmed) return false;
     seen.add(item.id);
-    return (item.parts || []).some(p => itemUnconfirmed(itemById(p.itemId), seen));
+    return (item.parts || []).every(p => itemConfirmed(itemById(p.itemId), seen));
 }
+
+// A small star after a fully confirmed item's name, wherever it shows
+const confirmedStar = item => itemConfirmed(item) ? '<span class="item-confirmed" title="Confirmed">★</span>' : '';
 
 // Whether item is made of the item with this id, directly or further down
 function itemContains(item, id, seen = new Set()) {
@@ -8149,12 +8161,11 @@ function renderIngredientList() {
         const kcal = ingredientCaloriesButton(i);
         const summary = itemSummary(i);
         return `
-        <div class="item-row${itemUnconfirmed(i) ? ' unconfirmed' : ''}" data-id="${escapeAttr(i.id)}" role="button" tabindex="0"
-            title="${i.unconfirmed ? 'Unconfirmed. ' : itemUnconfirmed(i) ? 'Has unconfirmed items. ' : ''}Click to change">
+        <div class="item-row" data-id="${escapeAttr(i.id)}" role="button" tabindex="0" title="Click to change">
             ${i.parts ? `<span class="ingredient-pic item-group-pic" title="Made of other items">${ITEM_GROUP_ICON}</span>`
                 : '<button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>'}
             <span class="item-row-text">
-                <span class="item-row-name">${escapeHtml(i.name)}</span>
+                <span class="item-row-name">${escapeHtml(i.name)}${confirmedStar(i)}</span>
                 ${summary ? `<span class="item-row-meta">${escapeHtml(summary)}</span>` : ''}
             </span>
             <button type="button" class="recipe-kcal ${kcal.cls}" data-act="kcal" title="${escapeAttr(kcal.title)}">${escapeHtml(kcal.text)}</button>
@@ -8216,7 +8227,7 @@ const itemBuilderField = name => document.getElementById(`item-builder-${name}`)
 function itemBuilderSnapshot() {
     const b = itemBuilder;
     return JSON.stringify({
-        name: itemBuilderField('name').value.trim(), kind: b.kind, unconfirmed: itemBuilderField('unconfirmed').checked,
+        name: itemBuilderField('name').value.trim(), kind: b.kind, confirmed: itemBuilderField('confirmed').checked,
         amount: itemBuilderField('amount').value.trim(), unit: itemBuilderField('unit').value.trim(),
         nutrition: b.nutrition, parts: b.parts, product: b.product,
     });
@@ -8237,7 +8248,7 @@ function openItemBuilder(item = null, options = {}) {
     };
     document.getElementById('item-builder-heading').textContent = item ? 'Edit Item' : 'New Item';
     itemBuilderField('name').value = item?.name || options.name || '';
-    itemBuilderField('unconfirmed').checked = !!item?.unconfirmed;
+    itemBuilderField('confirmed').checked = !!item?.confirmed;
     itemBuilderField('amount').value = item?.amount || '';
     itemBuilderField('unit').value = item ? item.unit || '' : 'g';
     itemBuilderField('products').innerHTML = '';
@@ -8292,6 +8303,7 @@ function onItemBuilderNameInput() {
     const same = findIngredientByName(name);
     const note = itemBuilderField('name-note');
     note.hidden = !same || same.id === b.id;
+    itemBuilderField('save-btn').disabled = !note.hidden; // never a second item with the same name
     if (!note.hidden) {
         note.innerHTML = `There's already an item called <b>${escapeHtml(same.name)}</b>. <button type="button" class="link-button">Edit it</button>`;
         note.querySelector('button').onclick = () => {
@@ -8470,12 +8482,12 @@ function renderItemBuilderParts() {
         const child = itemById(p.itemId);
         const group = !!child?.parts;
         return `
-        <li class="item-builder-part${itemUnconfirmed(child) ? ' unconfirmed' : ''}" data-i="${i}">
+        <li class="item-builder-part" data-i="${i}">
             ${group ? `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="1" aria-label="How many" title="How many">
                 <span class="item-builder-times">×</span>`
                 : `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount">
                 <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(p.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">`}
-            <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}</span>
+            <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
             <span class="recipe-kcal" data-kcal></span>
             <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === b.parts.length - 1 ? 'disabled' : ''}>▼</button>
@@ -8553,11 +8565,14 @@ function renderItemBuilderPartResults() {
         .sort((x, y) => y.name.toLowerCase().startsWith(q) - x.name.toLowerCase().startsWith(q))
         .slice(0, 8);
     itemBuilderPartMatches = [...found];
-    if (q && !ingredientList.some(i => i.name.toLowerCase() === q)) itemBuilderPartMatches.push({ create: query });
+    // An item that's already there is offered instead of making it again
+    const same = findIngredientByName(query);
+    if (same && allowed(same) && !found.includes(same)) itemBuilderPartMatches.unshift(same);
+    else if (q && !same) itemBuilderPartMatches.push({ create: query });
     el.innerHTML = itemBuilderPartMatches.map((m, i) => m.create
         ? `<button type="button" class="item-builder-result item-builder-create" data-i="${i}">+ New single item “${escapeHtml(m.create)}”</button>`
-        : `<button type="button" class="item-builder-result${itemUnconfirmed(m) ? ' unconfirmed' : ''}" data-i="${i}">
-            <span class="item-builder-result-name">${m.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(m.name)}</span>
+        : `<button type="button" class="item-builder-result" data-i="${i}">
+            <span class="item-builder-result-name">${m.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(m.name)}${confirmedStar(m)}</span>
             <span class="item-builder-result-meta">${escapeHtml(itemSummary(m))}</span>
         </button>`).join('');
     el.querySelectorAll('[data-i]').forEach(btn => {
@@ -8603,10 +8618,12 @@ async function saveItemBuilder() {
     const setStatus = (text, isError) => setCalendarSettingsStatus('item-builder-status', text, isError);
     const name = itemBuilderField('name').value.trim();
     if (!name) { setStatus('Enter a name.', true); itemBuilderField('name').focus(); return; }
+    const same = findIngredientByName(name);
+    if (same && same.id !== b.id) { setStatus(`There's already an item called ${same.name}.`, true); itemBuilderField('name').focus(); return; }
     const group = b.kind === 'group';
     if (group && !b.parts.length) { setStatus('Add at least one item, or make it a single item.', true); itemBuilderField('part-search').focus(); return; }
     const body = {
-        name, unconfirmed: itemBuilderField('unconfirmed').checked,
+        name, confirmed: itemBuilderField('confirmed').checked,
         amount: group ? '' : itemBuilderField('amount').value.trim(),
         unit: group ? '' : itemBuilderField('unit').value.trim(),
         parts: group ? b.parts.map(p => ({ id: p.itemId, amount: p.amount.trim(), unit: p.unit.trim() })) : [],
