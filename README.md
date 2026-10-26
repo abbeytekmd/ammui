@@ -31,7 +31,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
-* Meal planning with **items**. An item is either a single thing (e.g. Peas), with its quantity for one person, a picture and calories, or made of other items (e.g. Mash, Roast chicken), each at the amount it uses; those can be made of others in turn. Items are made and changed in the **item builder**, which searches Open Food Facts for a single item's name and picture, and your items for what one is made of. Plan a meal on the Meals tab's own Calendar by adding one or more items (or making a new one there and then), an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan and Items tabs down the left, with the shopping list alongside. Items can be exported and imported.
+* Meal planning with **items**. An item is either a single thing (e.g. Peas), with its quantity for one person, a picture and calories, or made of other items (e.g. Mash, Roast chicken), each at the amount it uses; those can be made of others in turn. Items are made and changed in the **item builder**, which searches Open Food Facts for a single item's name and picture, and your items for what one is made of. Plan a meal on the Meals tab's own Calendar by adding one or more items (or making a new one there and then), an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan and Items tabs down the left, with the shopping list alongside. Items are included in the backup (see [Backup and restore](#backup-and-restore)).
 * A shopping list, opened from the Meals tab or by tapping it on the slideshow, typed or by voice ("add milk"). It shares the items list with the meals: saved single items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
 * Calories, protein, carbs, fat and alcohol units for each item and meal per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
@@ -219,7 +219,7 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 ## Local DLNA Server
 * Upload button to add music, photos and videos from the device you're using: pick individual files or a whole folder.
 * Download buttons on music and photos from other servers to add a copy to the local server.
-* Back up all local music, photo and video files to S3 compatible storage (I use Wasabi), and restore them from it (see [Backup and restore](#backup-and-restore)).
+* Back up all local music, photo and video files, and everything else (meals, tags, settings...), to S3 compatible storage (I use Wasabi), and restore any of it from there, such as onto a new machine (see [Backup and restore](#backup-and-restore)).
 * Several AMMUI servers can run on the same network and see each other's libraries. Give each one a different name (Server Settings → General).
 
 ## Music Videos
@@ -385,7 +385,6 @@ Items given calories before AMMUI kept protein, carbs, fat and alcohol get them 
 
 * Figures are estimates. Food tables give averages, products change their recipes, and the weight of "one onion" or "a cup of rice" varies, so treat totals as a rough guide.
 * Open Food Facts figures are typed in from labels by its users. AMMUI catches the common slip of entering kJ where kcal should be, but check a figure against the packet if it looks odd.
-* Calories are included when items are exported. Importing fills them in for any item here that doesn't have them yet, and never overwrites ones already set.
 * The USDA key is copied along with the other keys by **Settings → Integrations → Copy Keys From Another Device**.
 * The UK food tables are © Crown copyright: Public Health England (2021), *McCance and Widdowson's The Composition of Foods Integrated Dataset*. They contain public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). The copy built into AMMUI is made from the published spreadsheet by `scripts/build-cofid.py`, which can be re-run when a new edition comes out. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
 
@@ -479,7 +478,7 @@ The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagr
 4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
 5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
 6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
-7. **Export Tags** and **Back Up Now** to keep a backup.
+7. **Back Up Now** to keep a backup (tags are included).
 
 
 ### Album art
@@ -492,7 +491,6 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 * **Logs** (logo menu): see what a command did and why it failed, filtered by type (for example `IDENTIFY`, `TAGS`, `UPLOAD`).
 * **Playback Stats** (logo menu): your 100 most played tracks, and the 100 albums with the most track plays (every play of a track counts towards its album). The lists scroll.
 * **Server Settings → General → Local Library**: file counts and sizes for what is stored on the server.
-* **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
 * **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key.
 * **Server Settings → Backup**: back up to, and restore from, an S3 bucket. See [Backup and restore](#backup-and-restore).
 * **Server Settings → Updates**: AMMUI checks GitHub for a new version shortly after it starts and then once a day, and shows a badge in the menu when one is available.
@@ -507,9 +505,15 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
    * red: what's wrong, such as an unknown access key, wrong secret key, missing bucket, wrong region or unreachable endpoint.
 
    The Backup and Restore sections appear once the test passes. Changing any connection detail hides them again until it's re-tested.
-2. **Backup**: **Back Up Now** copies the local music, photos and videos into a folder in the bucket named after this server. Tick **Back up automatically every day** to run it daily. Deleted photos and .DS_Store-type housekeeping files are left out, and a file whose size has changed is uploaded again.
+2. **Backup**: **Back Up Now** copies the local music, photos and videos into a folder in the bucket named after this server, along with a copy of the app's data (in `_ammui/ammui.db` there), which is sent every time. Tick **Back up automatically every day** to run it daily. Deleted photos and .DS_Store-type housekeeping files are left out, and a file whose size has changed is uploaded again.
    * **Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each backup also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
-3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one and press **Restore** to download everything in it into this server's library. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced. This is how to move a library to a new machine: set up the connection there, then restore the old server's folder.
+3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one to see what's in it, all ticked, and untick anything you don't want:
+   * **Files**: each library folder (Music, Photos, Videos), with how many files and how big. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced.
+   * **Data**: **Calendar, meals and items** (with the meal plan, shopping list, family and their word games), **Tags and photos** (tags, favourites, photo rotations, deleted photos), **Settings**, **Play history** and **Saved lookups** (album art, lyrics and YouTube matches already found). Each one ticked replaces what's here. This server keeps its own name and S3 connection, and the device list and library index are rebuilt rather than restored. A folder backed up before data was included has no Data section.
+
+   * **Carry on as that server** (off by default): this server takes the old one's name, so from then on it backs up into the same folder, carrying on from the backup it was restored from rather than starting a new one.
+
+   The files come first, then the data, and the app restarts to load the data (the page reloads by itself). This is how to move everything to a new machine: stop the old one backing up, install the new one, set up the connection, then restore the old server's folder with everything ticked, including **Carry on as that server**. Leave that unticked to copy a server instead, giving the copy its own name and folder (two servers with one name would back up over each other). If **Delete files from the bucket that are no longer on this server** is on, restore all the files before the next backup, or ones left behind are deleted from the bucket. The HTTPS certificate isn't restored: the new machine makes its own, so phones and tablets need to trust it again (see [Secure Access (HTTPS)](#secure-access-https)).
 
 The status box underneath shows progress for both. **View Log** shows the result of the last backup or restore, with counts for each folder.
 

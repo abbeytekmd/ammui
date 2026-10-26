@@ -4551,11 +4551,6 @@ p.subtitle {
     animation: fadeIn 0.3s ease;
 }
 
-/* Opened from inside Server Settings, which comes later in the DOM at the same z-index */
-#import-library-data-modal {
-    z-index: 20001;
-}
-
 .modal-content {
     background: var(--card-bg);
     border: 1px solid var(--card-border);
@@ -7332,6 +7327,25 @@ input:checked+.slider:before {
     align-items: center;
     gap: 0.75rem;
     flex-wrap: wrap;
+}
+
+/* What to restore from a backup: a tick per library folder and per group of data */
+.s3-restore-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.75rem 0;
+}
+
+.s3-restore-options h4 {
+    margin: 0.5rem 0 0.1rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.s3-restore-options .settings-hint {
+    margin: 0;
 }
 
 .s3-test-result {

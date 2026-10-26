@@ -939,57 +939,6 @@
         </div>
     </div>
 
-    <div id="import-library-data-modal" class="modal-overlay" style="display: none;"
-        onclick="if(event.target===this)closeLibraryDataImport()">
-        <div class="modal-content" style="max-width: 440px;">
-            <div class="modal-header">
-                <div class="modal-title-group">
-                    <h2>Import</h2>
-                    <p class="modal-subtitle" id="import-library-data-file"></p>
-                </div>
-                <button class="btn-close" onclick="closeLibraryDataImport()">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="modal-body">
-            <div class="settings-group">
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-favourites" onchange="updateLibraryDataImportButton()">
-                    <span>Favourites <span class="settings-hint" id="import-count-favourites"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-deleted" onchange="updateLibraryDataImportButton()">
-                    <span>Deleted photos <span class="settings-hint" id="import-count-deleted"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-tags" onchange="updateLibraryDataImportButton()">
-                    <span>Tags <span class="settings-hint" id="import-count-tags"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-ingredients" onchange="updateLibraryDataImportButton()">
-                    <span>Single items <span class="settings-hint" id="import-count-ingredients"></span>
-                        <span class="settings-hint">New ones are added; existing ones are kept, with any missing
-                            quantity filled in.</span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-meals" onchange="updateLibraryDataImportButton()">
-                    <span>Items made of others <span class="settings-hint" id="import-count-meals"></span>
-                        <span class="settings-hint">Ones with a name already here are skipped, not
-                            overwritten.</span></span>
-                </label>
-                <div id="import-library-data-status" class="calendar-status"></div>
-                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top: 0.5rem;">
-                    <button class="btn-control ghost" onclick="closeLibraryDataImport()">Cancel</button>
-                    <button class="btn-control primary" id="import-library-data-btn" onclick="runLibraryDataImport()">Import</button>
-                </div>
-            </div>
-            </div>
-        </div>
-    </div>
-
     <div id="name-server-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content">
             <div class="modal-header">
@@ -1048,7 +997,6 @@
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
-                <button class="settings-tab" data-tab="export" onclick="switchSettingsTab('export', this)">Export &amp; Import</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
@@ -1157,26 +1105,6 @@
                         <h3>Local Library</h3>
                         <div id="local-stats-content" class="local-stats-grid">
                             <span class="settings-hint">Loading...</span>
-                        </div>
-                    </div>
-                </div>
-                <div id="settings-export" class="settings-panel">
-                    <div class="manage-section">
-                        <h3>Export &amp; Import</h3>
-                        <div class="settings-group">
-                            <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos,
-                                file tags and items to one file, or import a file exported from another
-                                instance of this app. On import you can choose which of them to bring in.</p>
-                            <div id="library-data-counts" class="local-stats-grid">
-                                <span class="settings-hint">Loading...</span>
-                            </div>
-                            <div style="display:flex; gap:0.75rem;">
-                                <button class="btn-control btn-seek" onclick="exportLibraryData()">Export</button>
-                                <button class="btn-control btn-seek"
-                                    onclick="document.getElementById('import-library-data-input').click()">Import</button>
-                            </div>
-                            <input type="file" id="import-library-data-input" accept="application/json"
-                                style="display:none" onchange="openLibraryDataImport(event)">
                         </div>
                     </div>
                 </div>
@@ -1384,9 +1312,9 @@
                     <div class="manage-section">
                         <h3>S3 Connection</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Back up the local music, photos and videos to an S3 compatible
-                                bucket (AWS, Wasabi, Backblaze, Cloudflare R2...), or restore them from one. Enter the
-                                bucket details and test them first.</p>
+                            <p class="settings-hint">Back up the local music, photos and videos, and everything else
+                                (meals, tags, settings...), to an S3 compatible bucket (AWS, Wasabi, Backblaze,
+                                Cloudflare R2...), or restore them from one. Enter the bucket details and test them first.</p>
                             <div class="s3-settings-grid">
                                 <div class="input-group">
                                     <label for="s3-endpoint">Endpoint</label>
@@ -1426,8 +1354,8 @@
                         <div class="manage-section" style="margin-top: 1.5rem;">
                             <h3>Backup</h3>
                             <div class="settings-group">
-                                <p class="settings-hint">Uploads this server's library into a folder named after the
-                                    server. Files already backed up are skipped.</p>
+                                <p class="settings-hint">Uploads this server's library, and a copy of its data, into a
+                                    folder named after the server. Files already backed up are skipped.</p>
                                 <label class="settings-check">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
                                     <span>Back up automatically every day</span>
@@ -1457,12 +1385,16 @@
                         <div class="manage-section" style="margin-top: 1.5rem;">
                             <h3>Restore</h3>
                             <div class="settings-group">
-                                <p class="settings-hint">Downloads every file in a bucket folder into this server's
-                                    library. Files already here with the same size are skipped.</p>
+                                <p class="settings-hint">Brings back what you tick from a server's backup. Files already
+                                    here with the same size are skipped; the data ticked replaces what's here, and the
+                                    app restarts to load it. This server keeps its own name and S3 connection.</p>
                                 <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                                    <select id="s3-restore-folder" style="min-width:12em;"></select>
+                                    <select id="s3-restore-folder" style="min-width:12em;" onchange="loadS3RestoreOptions()"></select>
                                     <button id="btn-s3-restore-refresh" onclick="loadS3RestoreFolders()"
                                         class="btn-control ghost btn-small" title="Reload folder list">Refresh</button>
+                                </div>
+                                <div id="s3-restore-options" class="s3-restore-options"></div>
+                                <div>
                                     <button id="btn-s3-restore-start" onclick="startS3Restore()"
                                         class="btn-control btn-small primary">Restore</button>
                                 </div>

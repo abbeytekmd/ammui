@@ -35,9 +35,9 @@ import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
-    getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
+    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, isPhotoDeleted, migrateMediaKeys, renameMediaKeyServer,
+    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, migrateMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -50,6 +50,7 @@ import {
     itemsUsingIngredient, itemPartsLoop,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
+    RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
@@ -248,7 +249,8 @@ let s3SyncStatus = {
     lastError: null,
     currentFile: '',
     syncedCount: 0,
-    totalCount: 0
+    totalCount: 0,
+    restarting: false // after restoring data, while the server restarts to load it
 };
 
 function loadSettings() {
@@ -469,6 +471,10 @@ const S3_CONTENT_TYPES = {
 };
 // macOS/Windows housekeeping files (.DS_Store, ._foo, Thumbs.db, desktop.ini) aren't backed up
 const S3_SKIP_NAMES = /^(\.|thumbs\.db$|desktop\.ini$)/i;
+// Beside the library in each server's bucket folder: a snapshot of the database
+const S3_SYSTEM_FOLDER = '_ammui';
+const S3_DB_SNAPSHOT = `${S3_SYSTEM_FOLDER}/ammui.db`;
+const backupSnapshotPath = path.join(baseDataDir, 'cache', 'backup-snapshot.db');
 
 function createS3Client(config = settings.s3) {
     return new S3Client({
@@ -575,6 +581,7 @@ async function syncToS3({ manual = false } = {}) {
         const tally = {};
         const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
         const localKeys = new Set();
+        await backupDatabaseToS3(s3, devicePrefix, localKeys);
         for (const filePath of allFiles) {
             const localRel = path.relative(localDir, filePath).replace(/\\/g, '/');
             const relativePath = `${devicePrefix}/${localRel}`;
@@ -661,6 +668,31 @@ async function syncToS3({ manual = false } = {}) {
     }
 }
 
+// The app's own data, sent with every backup: a snapshot of the database (always sent, since its
+// size says nothing about whether it changed)
+async function backupDatabaseToS3(s3, devicePrefix, localKeys) {
+    const key = `${devicePrefix}/${S3_DB_SNAPSHOT}`;
+    localKeys.add(key);
+    try {
+        s3SyncStatus.currentFile = 'Database snapshot';
+        await fsp.mkdir(path.dirname(backupSnapshotPath), { recursive: true });
+        snapshotDatabase(backupSnapshotPath);
+        await new Upload({
+            client: s3,
+            params: { Bucket: settings.s3.bucket, Key: key, Body: fs.createReadStream(backupSnapshotPath), ContentType: 'application/vnd.sqlite3' },
+            queueSize: 4,
+            partSize: 5 * 1024 * 1024,
+            leavePartsOnError: false,
+        }).done();
+        s3Log('[S3] Backed up the database (meals, tags, settings and the rest)');
+    } catch (err) {
+        s3Log(`[S3] Failed to back up the database: ${err.message}`, true);
+        s3SyncStatus.lastError = `Database backup failed: ${err.message}`;
+    } finally {
+        await fsp.unlink(backupSnapshotPath).catch(() => {});
+    }
+}
+
 // Mirror mode: remove objects under this server's folder in the bucket that are no longer in
 // the local library (deleted, moved or renamed files). Refuses to run if it would remove more
 // than the configured share of the backup, so an unmounted or emptied library can't wipe it.
@@ -732,10 +764,55 @@ async function listS3Folders() {
     return folders.sort((a, b) => a.localeCompare(b));
 }
 
-// Download everything under one bucket folder into the local library. Files already present
-// with the same size are left alone, so a restore can be re-run after an interruption.
-async function restoreFromS3(folder) {
+// Every object under prefix, without "folder" placeholder objects
+async function listS3Objects(s3, prefix) {
+    const objects = [];
+    let token;
+    do {
+        const page = await s3.send(new ListObjectsV2Command({
+            Bucket: settings.s3.bucket,
+            Prefix: prefix,
+            ContinuationToken: token
+        }));
+        for (const obj of page.Contents || []) {
+            if (!obj.Key.endsWith('/')) objects.push(obj);
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return objects;
+}
+
+// The library folder (music, pictures, videos...) a file in a backup is in: '' for one at the top
+const s3MediaSection = rel => rel.includes('/') ? rel.split('/')[0] : '';
+
+// What a bucket folder holds, for choosing what to restore: { media: [{ section, files, bytes }],
+// data: { backedUpAt, bytes, groups } or null if it was backed up before the database was }
+async function describeS3Backup(folder) {
+    const prefix = `${folder}/`;
+    const media = new Map();
+    let data = null;
+    for (const obj of await listS3Objects(createS3Client(), prefix)) {
+        const rel = obj.Key.slice(prefix.length);
+        if (rel === S3_DB_SNAPSHOT) data = { backedUpAt: obj.LastModified, bytes: obj.Size, groups: Object.keys(RESTORE_GROUPS) };
+        if (rel.startsWith(`${S3_SYSTEM_FOLDER}/`)) continue;
+        const section = s3MediaSection(rel);
+        const m = media.get(section) || { section, files: 0, bytes: 0 };
+        m.files++;
+        m.bytes += obj.Size || 0;
+        media.set(section, m);
+    }
+    return { media: [...media.values()].sort((a, b) => a.section.localeCompare(b.section)), data };
+}
+
+// Downloads the chosen library folders (media: sections from describeS3Backup) under one bucket
+// folder into the local library, then puts back the chosen groups of data (data: keys of
+// RESTORE_GROUPS) from its database snapshot and restarts, so everything is loaded from it.
+// takeOver: this server carries on as the one backed up, under its name, so its backups go on
+// into the same folder. Files already present with the same size are left alone, so a restore
+// can be re-run after an interruption.
+async function restoreFromS3(folder, { media = [], data = [], takeOver = false } = {}) {
     if (s3SyncStatus.running) return;
+    let restart = false;
     try {
         try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
         s3Log(`[S3] Starting restore from ${folder}/ ...`);
@@ -747,20 +824,12 @@ async function restoreFromS3(folder) {
 
         const s3 = createS3Client();
         const prefix = `${folder}/`;
-        const objects = [];
-        let token;
-        do {
-            const page = await s3.send(new ListObjectsV2Command({
-                Bucket: settings.s3.bucket,
-                Prefix: prefix,
-                ContinuationToken: token
-            }));
-            for (const obj of page.Contents || []) {
-                if (!obj.Key.endsWith('/')) objects.push(obj); // skip "folder" placeholder objects
-            }
-            token = page.IsTruncated ? page.NextContinuationToken : undefined;
-        } while (token);
-        s3SyncStatus.totalCount = objects.length;
+        const objects = (await listS3Objects(s3, prefix)).filter(obj => {
+            const rel = obj.Key.slice(prefix.length);
+            return !rel.startsWith(`${S3_SYSTEM_FOLDER}/`) && media.includes(s3MediaSection(rel));
+        });
+        const useSnapshot = data.length > 0 || takeOver;
+        s3SyncStatus.totalCount = objects.length + (useSnapshot ? 1 : 0);
 
         const localDir = path.join(__dirname, 'local');
         let downloaded = 0, skipped = 0, failed = 0;
@@ -798,16 +867,52 @@ async function restoreFromS3(folder) {
             }
             s3SyncStatus.syncedCount++;
         }
-
         if (downloaded > 0) markDirty(SERVER_UDN, findDeviceByUdn);
+        if (media.length) s3Log(`[S3] Files: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
+
+        if (useSnapshot) {
+            s3SyncStatus.currentFile = 'Database snapshot';
+            try {
+                s3Log('[S3] Downloading the database snapshot...');
+                await fsp.mkdir(path.dirname(backupSnapshotPath), { recursive: true });
+                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: `${prefix}${S3_DB_SNAPSHOT}` }));
+                await pipeline(Body, fs.createWriteStream(backupSnapshotPath));
+                const { counts, deviceName } = restoreFromSnapshot(backupSnapshotPath, data);
+                // Tags, favourites and photo changes are saved against the server's name: the
+                // restored ones under the old server's, any kept here under this one's
+                if (takeOver && deviceName) {
+                    renameMediaKeyServer(localLibraryName(), localLibraryName(deviceName));
+                    setSetting('deviceName', deviceName);
+                    s3Log(`[S3] This server is now "${deviceName}", and backs up into ${folder}/`);
+                } else {
+                    if (takeOver) s3Log("[S3] The backup doesn't say which server it came from, so this server keeps its own name", true);
+                    if (data.includes('tags')) renameMediaKeyServer(localLibraryName(deviceName), localLibraryName());
+                }
+                const restored = Object.entries(counts).filter(([, n]) => n).map(([table, n]) => `${table} ${n}`).join(', ');
+                if (data.length) s3Log(`[S3] Restored ${data.join(', ')}${restored ? ` (${restored})` : ''}`);
+                restart = true;
+            } catch (err) {
+                s3Log(`[S3] Failed to restore the database: ${err.message}`, true);
+                s3SyncStatus.lastError = `Database restore failed: ${err.message}`;
+            } finally {
+                await fsp.unlink(backupSnapshotPath).catch(() => {});
+            }
+            s3SyncStatus.syncedCount++;
+        }
+
         s3SyncStatus.lastRestore = new Date().toISOString();
-        s3Log(`[S3] Restore complete: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
+        s3Log(`[S3] Restore complete${restart ? '. Restarting to load the restored data...' : '.'}`);
     } catch (err) {
         s3Log(`[S3] Global Restore Error: ${err.message}`, true);
         s3SyncStatus.lastError = err.message;
     } finally {
         s3SyncStatus.running = false;
         s3SyncStatus.currentFile = '';
+    }
+    if (restart) {
+        // Long enough for the page to see it's restarting
+        s3SyncStatus.restarting = true;
+        setTimeout(restartServer, 3000);
     }
 }
 
@@ -3637,7 +3742,7 @@ app.delete('/api/ingredients/:id', (req, res) => {
 });
 
 app.get('/api/sync/s3/status', (req, res) => {
-    res.json(s3SyncStatus);
+    res.json({ ...s3SyncStatus, bootId });
 });
 
 app.post('/api/sync/s3/start', (req, res) => {
@@ -3657,6 +3762,20 @@ app.get('/api/sync/s3/folders', async (req, res) => {
     }
 });
 
+app.get('/api/sync/s3/backup', async (req, res) => {
+    const folder = String(req.query.folder || '').replace(/\/+$/, '');
+    if (!folder) return res.status(400).json({ error: 'No folder chosen' });
+    if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+        return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+    }
+    try {
+        res.json(await describeS3Backup(folder));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// media: library folders to download; data: groups of RESTORE_GROUPS to put back from the snapshot
 app.post('/api/sync/s3/restore', express.json(), (req, res) => {
     const folder = String(req.body.folder || '').replace(/\/+$/, '');
     if (!folder) return res.status(400).json({ error: 'No folder chosen' });
@@ -3664,7 +3783,11 @@ app.post('/api/sync/s3/restore', express.json(), (req, res) => {
         return res.status(400).json({ error: 'Enter the bucket and access keys first' });
     }
     if (s3SyncStatus.running) return res.status(400).json({ error: 'A sync or restore is already running' });
-    restoreFromS3(folder); // Trigger async
+    const media = Array.isArray(req.body.media) ? req.body.media.map(String) : [];
+    const data = Array.isArray(req.body.data) ? req.body.data.filter(g => Object.hasOwn(RESTORE_GROUPS, g)) : [];
+    const takeOver = req.body.takeOver === true;
+    if (!media.length && !data.length && !takeOver) return res.status(400).json({ error: 'Choose something to restore' });
+    restoreFromS3(folder, { media, data, takeOver }); // Trigger async
     res.json({ success: true });
 });
 
@@ -5019,373 +5142,6 @@ app.post('/api/slideshow/favourite', (req, res) => {
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
-});
-
-// Export entry for a saved key: files under /local-files/ become a path relative to the library
-// (so another instance can import them); anything else keeps a URL, as older exports did.
-function portableEntry(key) {
-    const parts = splitMediaKey(key);
-    if (parts && parts.path.startsWith('/local-files/')) {
-        return { type: 'local', path: decodeURIComponent(parts.path.slice('/local-files/'.length).split('?')[0]) };
-    }
-    return { type: 'remote', uri: mediaUrlFromKey(key) || key };
-}
-
-// How much the combined favourites/deleted/tags export would contain (shown in Settings)
-app.get('/api/library-data/counts', (req, res) => {
-    const fileTags = Object.values(getAllFileTags());
-    res.json({
-        favourites: getKeysByTag('fav').length,
-        deleted: Object.keys(getAllDeletedPhotos()).length,
-        tags: fileTags.reduce((n, tags) => n + tags.length, 0),
-        taggedFiles: fileTags.length,
-        ingredients: listIngredients().filter(i => !i.parts).length,
-        meals: listIngredients().filter(i => i.parts).length,
-    });
-});
-
-// Items export by name (ids mean nothing on another instance): single items as "ingredients",
-// items made of other items as "meals" (the format item groups had)
-app.get('/api/ingredients/export', (req, res) => {
-    const ingredients = listIngredients().filter(i => !i.parts)
-        .map(({ name, amount, unit, confirmed, nutrition }) => ({ name, amount, unit, confirmed, nutrition }));
-    res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
-});
-
-app.get('/api/meals/export', (req, res) => {
-    const meals = listIngredients().filter(i => i.parts)
-        .map(m => ({ name: m.name, confirmed: m.confirmed, ingredients: m.parts.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
-    res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
-});
-
-// New names are added; an existing ingredient is left as it is, except that an empty
-// one-person quantity, or missing calories, are filled in from the file.
-app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) => {
-    const { ingredients } = req.body;
-    if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'ingredients array required' });
-    let added = 0, updated = 0, existing = 0, invalid = 0;
-    for (const item of ingredients) {
-        const id = item && typeof item === 'object' && findIngredientIdByName(String(item.name ?? '').trim());
-        const clean = item && typeof item === 'object' ? cleanIngredient(item, id || null) : 'invalid';
-        if (typeof clean === 'string') { invalid++; continue; }
-        if (!id) {
-            saveIngredient({ id: crypto.randomUUID(), ...clean });
-            added++;
-            continue;
-        }
-        const current = getIngredient(id);
-        if (current.parts) { existing++; continue; }
-        const fillQuantity = !current.amount && !current.unit && (clean.amount || clean.unit);
-        const fillNutrition = !current.nutrition && clean.nutrition;
-        if (fillQuantity || fillNutrition) {
-            saveIngredient({
-                id, name: current.name,
-                amount: fillQuantity ? clean.amount : current.amount,
-                unit: fillQuantity ? clean.unit : current.unit,
-                nutrition: fillNutrition ? clean.nutrition : undefined,
-            });
-            updated++;
-        } else existing++;
-    }
-    console.log(`[Ingredients Import] added=${added} updated=${updated} existing=${existing} invalid=${invalid}`);
-    res.json({ success: true, added, updated, existing, invalid, total: ingredients.length });
-});
-
-// Items made of other items ({ name, confirmed, ingredients: [{ name, amount, unit }] }, as item
-// groups were exported). One whose name is already here is skipped rather than overwritten. What
-// they're made of is matched by name, including each other; names not seen before become single items.
-app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
-    const { meals } = req.body;
-    if (!Array.isArray(meals)) return res.status(400).json({ error: 'meals array required' });
-    let added = 0, existing = 0, invalid = 0;
-    const clean = meals.map(m => {
-        const name = String(m?.name ?? '').trim();
-        const parts = (Array.isArray(m?.ingredients) ? m.ingredients : [])
-            .map(i => i && typeof i === 'object' ? i : { name: i })
-            .map(i => ({ name: String(i.name ?? '').trim(), amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim() }))
-            .filter(i => i.name && i.name.length <= 300 && i.amount.length <= 20 && i.unit.length <= 40);
-        return name && name.length <= 300 && parts.length && parts.length <= 200 ? { name, confirmed: !!m.confirmed, parts } : null;
-    });
-    // Made first, so they can be made of each other
-    const made = [];
-    for (const m of clean) {
-        if (!m) { invalid++; continue; }
-        if (findIngredientIdByName(m.name)) { existing++; continue; }
-        const id = crypto.randomUUID();
-        saveIngredient({ id, name: m.name, amount: '', unit: '', confirmed: m.confirmed });
-        made.push({ id, ...m });
-        added++;
-    }
-    const idFor = name => findIngredientIdByName(name)
-        || saveIngredient({ id: crypto.randomUUID(), name: name.charAt(0).toUpperCase() + name.slice(1), amount: '', unit: '' }).id;
-    for (const m of made) {
-        const parts = m.parts.map(p => ({ id: idFor(p.name), amount: p.amount, unit: p.unit }))
-            .filter(p => p.id !== m.id && !itemPartsLoop(m.id, [p.id]));
-        saveIngredient({ id: m.id, name: m.name, amount: '', unit: '', parts });
-    }
-    console.log(`[Meals Import] added=${added} existing=${existing} invalid=${invalid}`);
-    res.json({ success: true, added, existing, invalid, total: meals.length });
-});
-
-// Portable export: local-files favourites are stored as host/port-free relative paths so the
-// file can be imported into a different instance of this app; favourites pointing at another
-// DLNA server are kept as full URIs since the host there is part of their identity.
-app.get('/api/favourites/export', (req, res) => {
-    const favourites = getKeysByTag('fav').map(portableEntry);
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), favourites });
-});
-
-app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { favourites } = req.body;
-    if (!Array.isArray(favourites)) return res.status(400).json({ error: 'favourites array required' });
-
-    // Rehome local-files favourites onto this instance's own address, same logic the DLNA
-    // browse handler uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const fav of favourites) {
-        let uri = null, relPath = null;
-        if (typeof fav === 'string') {
-            relPath = fav.replace(/^\/local-files\//, '').replace(/^\//, '');
-        } else if (fav && fav.type === 'remote' && fav.uri) {
-            uri = fav.uri;
-        } else if (fav && fav.type === 'local' && fav.path) {
-            relPath = fav.path.replace(/^\//, '');
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists });
-    }
-
-    // A photo can easily have moved (re-sorted into a different year/month, deduped, etc.)
-    // between when favourites were exported and imported. Only pay for indexing the whole
-    // pictures library if something actually failed the exact-path check.
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
-        filenameIndex = new Map();
-        for await (const filePath of walkImages(picturesRoot)) {
-            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
-            if (relFromPictures.startsWith('_deleted/')) continue; // don't resurrect deleted photos
-            const key = path.basename(filePath).toLowerCase();
-            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
-            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-            filenameIndex.get(key).push(relPath);
-        }
-    }
-
-    let added = 0, alreadyFav = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Favourites Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        if (getFileTags(uri).includes('fav')) { alreadyFav++; continue; }
-        addFileTag(uri, 'fav');
-        added++;
-    }
-
-    settings.fileTags = getAllFileTags();
-    console.log(`[Favourites Import] added=${added} alreadyFav=${alreadyFav} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, added, alreadyFav, fixed, ambiguous, missing, invalid, total: favourites.length });
-});
-
-// Portable export: same local-files-as-relative-path convention as favourites export, so
-// deleted (hidden-from-slideshow) markers can be copied to another instance of this app.
-app.get('/api/deleted/export', (req, res) => {
-    const deleted = Object.keys(getAllDeletedPhotos()).map(portableEntry);
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), deleted });
-});
-
-app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { deleted } = req.body;
-    if (!Array.isArray(deleted)) return res.status(400).json({ error: 'deleted array required' });
-
-    // Rehome local-files entries onto this instance's own address, same logic favourites import
-    // uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const item of deleted) {
-        let uri = null, relPath = null;
-        if (typeof item === 'string') {
-            relPath = item.replace(/^\/local-files\//, '').replace(/^\//, '');
-        } else if (item && item.type === 'remote' && item.uri) {
-            uri = item.uri;
-        } else if (item && item.type === 'local' && item.path) {
-            relPath = item.path.replace(/^\//, '');
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists });
-    }
-
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
-        filenameIndex = new Map();
-        for await (const filePath of walkImages(picturesRoot)) {
-            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
-            if (relFromPictures.startsWith('_deleted/')) continue;
-            const key = path.basename(filePath).toLowerCase();
-            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
-            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-            filenameIndex.get(key).push(relPath);
-        }
-    }
-
-    let added = 0, alreadyDeleted = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Deleted Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        if (isPhotoDeleted(uri)) { alreadyDeleted++; continue; }
-        markPhotoDeleted(uri);
-        added++;
-    }
-
-    settings.deletedPhotos = getAllDeletedPhotos();
-    console.log(`[Deleted Import] added=${added} alreadyDeleted=${alreadyDeleted} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, added, alreadyDeleted, fixed, ambiguous, missing, invalid, total: deleted.length });
-});
-
-// Portable export: same local-files-as-relative-path convention as favourites/deleted export.
-// Exports every tag on every file (favourites included, since 'fav' is just a reserved tag) so
-// the whole file_tags table can be copied to another instance of this app.
-app.get('/api/tags/export', (req, res) => {
-    const tags = Object.entries(getAllFileTags()).map(([key, keyTags]) => ({ ...portableEntry(key), tags: keyTags }));
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), tags });
-});
-
-app.post('/api/tags/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { tags } = req.body;
-    if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags array required' });
-
-    // Rehome local-files entries onto this instance's own address, same logic favourites/deleted
-    // import uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-    const musicRoot = path.join(localDir, 'music');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const item of tags) {
-        let uri = null, relPath = null, itemTags = null;
-        if (item && item.type === 'remote' && item.uri && Array.isArray(item.tags)) {
-            uri = item.uri;
-            itemTags = item.tags;
-        } else if (item && item.type === 'local' && item.path && Array.isArray(item.tags)) {
-            relPath = item.path.replace(/^\//, '');
-            itemTags = item.tags;
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists, itemTags });
-    }
-
-    // Files can move (re-sorted into a different folder, deduped, etc.) between when tags were
-    // exported and imported. Only pay for indexing the library if something failed the exact-path
-    // check, and cover both pictures and music since tags apply to either.
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists)) {
-        filenameIndex = new Map();
-        const addToIndex = async (root, extSet, subdir) => {
-            if (!fs.existsSync(root)) return;
-            for await (const filePath of walkByExt(root, extSet)) {
-                const relFromRoot = path.relative(root, filePath).split(path.sep).join('/');
-                if (relFromRoot.startsWith('_deleted/')) continue; // don't resurrect deleted photos
-                const key = path.basename(filePath).toLowerCase();
-                const indexedPath = path.join(subdir, relFromRoot).split(path.sep).join('/');
-                if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-                filenameIndex.get(key).push(indexedPath);
-            }
-        };
-        await addToIndex(picturesRoot, IMAGE_EXTS, 'pictures');
-        await addToIndex(musicRoot, AUDIO_EXTS, 'music');
-    }
-
-    let filesProcessed = 0, tagsAdded = 0, alreadyPresent = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists, itemTags } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Tags Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        const existingTags = getFileTags(uri);
-        for (const tag of itemTags) {
-            if (existingTags.includes(tag)) { alreadyPresent++; continue; }
-            addFileTag(uri, tag);
-            tagsAdded++;
-        }
-        filesProcessed++;
-    }
-
-    settings.fileTags = getAllFileTags();
-    console.log(`[Tags Import] filesProcessed=${filesProcessed} tagsAdded=${tagsAdded} alreadyPresent=${alreadyPresent} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, filesProcessed, tagsAdded, alreadyPresent, fixed, ambiguous, missing, invalid, total: tags.length });
 });
 
 app.post('/api/slideshow/set-date', async (req, res) => {

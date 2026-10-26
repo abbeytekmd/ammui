@@ -4528,7 +4528,6 @@ function openServerSettingsModal() {
         loadGamePlayerSettings();
         startS3StatusPolling();
         loadLocalStats();
-        loadLibraryDataCounts();
         checkForUpdates();
     }
 }
@@ -11809,169 +11808,6 @@ async function saveGeneralSettings() {
     }
 }
 
-// --- Favourites, deleted photos, tags, ingredients and meals: exported together in one file; on
-// import each can be ticked or not. Each part goes through its own server route (which, for the
-// media parts, rehomes paths). ---
-const LIBRARY_DATA_PARTS = [
-    { key: 'favourites', label: 'favourite', exportUrl: '/api/favourites/export', importUrl: '/api/favourites/import' },
-    { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
-    { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
-    // Ingredients before meals, so their one-person quantities are in place first
-    { key: 'ingredients', label: 'single item', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
-    { key: 'meals', label: 'item made of others', many: 'items made of others', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
-];
-let pendingLibraryData = null; // parsed import file, while the import dialog is open
-
-const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
-
-// Shows how many of each the export would hold, so you can tell whether it's worth exporting
-async function loadLibraryDataCounts() {
-    const el = document.getElementById('library-data-counts');
-    if (!el) return;
-    try {
-        const res = await fetch('/api/library-data/counts');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const c = await res.json();
-        const row = (label, value) => `
-            <span class="local-stats-label">${label}</span>
-            <span class="local-stats-value">${value}</span>`;
-        el.innerHTML = row('Favourites', c.favourites)
-            + row('Deleted photos', c.deleted)
-            + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0)
-            + row('Single items', c.ingredients)
-            + row('Items made of others', c.meals);
-    } catch (e) {
-        el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
-    }
-}
-
-async function exportLibraryData() {
-    try {
-        const parts = await Promise.all(LIBRARY_DATA_PARTS.map(async part => {
-            const response = await fetch(part.exportUrl);
-            if (!response.ok) throw new Error('Export failed');
-            return (await response.json())[part.key] || [];
-        }));
-        if (parts.every(p => !p.length)) {
-            showToast('Nothing to export', 'warning', 3000);
-            return;
-        }
-        const data = { version: 2, exportedAt: new Date().toISOString() };
-        LIBRARY_DATA_PARTS.forEach((part, i) => { data[part.key] = parts[i]; });
-
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ammui-data-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-
-        showToast(`Exported ${LIBRARY_DATA_PARTS.map((part, i) => plural(parts[i].length, part.label, part.many)).join(', ')}`, 'success', 3000);
-    } catch (err) {
-        console.error('Failed to export:', err);
-        showToast('Failed to export');
-    }
-}
-
-// Reads the chosen file and offers a tickbox for each part it contains. Files exported by older
-// versions (one part each, or a bare favourites array) work too.
-async function openLibraryDataImport(event) {
-    const file = event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-    let data;
-    try {
-        data = JSON.parse(await file.text());
-    } catch (err) {
-        showToast("That file isn't valid JSON");
-        return;
-    }
-    if (Array.isArray(data)) {
-        // Bare arrays came from the oldest exports; tags entries always carry a tags list
-        data = data.some(item => item && Array.isArray(item.tags)) ? { tags: data } : { favourites: data };
-    }
-    if (!data || !LIBRARY_DATA_PARTS.some(part => Array.isArray(data[part.key]))) {
-        showToast('Nothing to import found in that file');
-        return;
-    }
-    pendingLibraryData = data;
-    document.getElementById('import-library-data-file').textContent = file.name;
-    for (const part of LIBRARY_DATA_PARTS) {
-        const items = data[part.key];
-        const box = document.getElementById(`import-include-${part.key}`);
-        box.disabled = !Array.isArray(items) || !items.length;
-        box.checked = !box.disabled;
-        document.getElementById(`import-count-${part.key}`).textContent =
-            Array.isArray(items) ? `(${items.length} in file)` : '(not in file)';
-    }
-    setCalendarSettingsStatus('import-library-data-status', '', false);
-    updateLibraryDataImportButton();
-    document.getElementById('import-library-data-modal').style.display = 'flex';
-}
-
-function closeLibraryDataImport() {
-    document.getElementById('import-library-data-modal').style.display = 'none';
-    pendingLibraryData = null;
-}
-
-function updateLibraryDataImportButton() {
-    document.getElementById('import-library-data-btn').disabled =
-        !LIBRARY_DATA_PARTS.some(part => document.getElementById(`import-include-${part.key}`).checked);
-}
-
-// One line per imported part, e.g. "12 favourites (3 already favourited, 1 not found locally)"
-function describeImportResult(part, result) {
-    const extras = [];
-    if (result.fixed) extras.push(`${plural(result.fixed, 'path')} fixed up`);
-    if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
-    if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
-    if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
-    if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
-    if (result.updated) extras.push(`${plural(result.updated, 'quantity', 'quantities')} filled in`);
-    if (result.existing) extras.push(`${result.existing} already here`);
-    if (result.missing) extras.push(`${result.missing} not found locally`);
-    if (result.invalid) extras.push(`${result.invalid} invalid`);
-    const main = part.key === 'tags'
-        ? `${plural(result.tagsAdded, 'tag')} on ${plural(result.filesProcessed, 'file')}`
-        : plural(result.added, part.label, part.many);
-    return main + (extras.length ? ` (${extras.join(', ')})` : '');
-}
-
-async function runLibraryDataImport() {
-    const data = pendingLibraryData;
-    if (!data) return;
-    const chosen = LIBRARY_DATA_PARTS.filter(part => document.getElementById(`import-include-${part.key}`).checked);
-    if (!chosen.length) return;
-    const btn = document.getElementById('import-library-data-btn');
-    btn.disabled = true;
-    const done = [];
-    try {
-        // One at a time: each may scan the library to find files that have moved
-        for (const part of chosen) {
-            setCalendarSettingsStatus('import-library-data-status', `Importing ${part.many || `${part.label}s`}...`, false);
-            const response = await fetch(part.importUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ [part.key]: data[part.key] })
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error || `Importing ${part.many || `${part.label}s`} failed`);
-            done.push(describeImportResult(part, result));
-        }
-        closeLibraryDataImport();
-        showToast(`Imported ${done.join('; ')}`, 'success', 6000);
-        loadLibraryDataCounts();
-    } catch (err) {
-        console.error('Failed to import:', err);
-        const sofar = done.length ? ` (already imported: ${done.join('; ')})` : '';
-        setCalendarSettingsStatus('import-library-data-status', `${err.message}${sofar}`, true);
-        updateLibraryDataImportButton();
-    }
-}
-
 // The server also listens on HTTPS (needed for the microphone); Settings lists its addresses.
 let httpsInfo = null;
 
@@ -12281,8 +12117,19 @@ async function updateS3Status() {
         const lastSyncEl = document.getElementById('s3-last-sync');
         const buttons = ['btn-s3-sync-now', 'btn-s3-restore-start', 'btn-s3-test']
             .map(id => document.getElementById(id)).filter(Boolean);
+        // Restarted after restoring data: reload, so the page shows what was restored
+        if (s3RestartBootId && status.bootId !== s3RestartBootId) {
+            location.reload();
+            return;
+        }
+        if (status.restarting) s3RestartBootId = status.bootId;
         if (stateEl) {
-            if (status.running) {
+            if (status.restarting) {
+                stateEl.textContent = 'Restarting...';
+                stateEl.style.color = 'var(--primary)';
+                if (progressRow) progressRow.style.display = 'none';
+                buttons.forEach(b => b.classList.add('disabled'));
+            } else if (status.running) {
                 stateEl.textContent = status.mode === 'restore' ? 'Restoring...' : 'Backing up...';
                 stateEl.style.color = 'var(--primary)';
                 if (progressRow) progressRow.style.display = 'block';
@@ -12292,11 +12139,13 @@ async function updateS3Status() {
                 stateEl.style.color = 'var(--accent)';
                 if (progressRow) progressRow.style.display = 'none';
                 buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             } else {
                 stateEl.textContent = 'Idle';
                 stateEl.style.color = 'var(--text-muted)';
                 if (progressRow) progressRow.style.display = 'none';
                 buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             }
         }
         if (status.running && status.totalCount > 0) {
@@ -12389,7 +12238,7 @@ async function loadS3RestoreFolders() {
             select.appendChild(opt);
         }
         select.disabled = false;
-        startBtn?.classList.remove('disabled');
+        loadS3RestoreOptions();
     } catch (err) {
         console.error('S3 folder list error:', err);
         select.innerHTML = '<option value="">Couldn\'t read the bucket</option>';
@@ -12398,15 +12247,86 @@ async function loadS3RestoreFolders() {
     }
 }
 
+// What a backup can bring back, ticked by default. Library folders are named as they are here.
+const S3_MEDIA_LABELS = { music: 'Music', pictures: 'Photos', videos: 'Videos', '': 'Other files' };
+const S3_DATA_GROUPS = [
+    { id: 'meals', label: 'Calendar, meals and items', hint: 'Meals on the calendar, the meal plan, items, the shopping list, family and their word games' },
+    { id: 'tags', label: 'Tags and photos', hint: 'Tags, favourites, photo rotations and deleted photos' },
+    { id: 'settings', label: 'Settings', hint: 'Integrations, smart home, mail, slideshow and the rest' },
+    { id: 'history', label: 'Play history', hint: '' },
+    { id: 'lookups', label: 'Saved lookups', hint: "Album art, lyrics and YouTube matches already found, so they aren't looked up again" },
+];
+
+async function loadS3RestoreOptions() {
+    const folder = document.getElementById('s3-restore-folder')?.value;
+    const el = document.getElementById('s3-restore-options');
+    const startBtn = document.getElementById('btn-s3-restore-start');
+    if (!el) return;
+    startBtn?.classList.add('disabled');
+    el.innerHTML = folder ? '<p class="settings-hint">Reading the backup...</p>' : '';
+    if (!folder) return;
+    try {
+        const response = await fetch(`/api/sync/s3/backup?folder=${encodeURIComponent(folder)}`);
+        const backup = await response.json();
+        if (!response.ok) throw new Error(backup.error || 'Failed to read the backup');
+        if (document.getElementById('s3-restore-folder')?.value !== folder) return; // another folder was picked since
+        const tick = (kind, value, label, hint) => `
+            <label class="settings-check">
+                <input type="checkbox" data-kind="${kind}" value="${escapeAttr(value)}" checked onchange="updateS3RestoreButton()">
+                <span>${escapeHtml(label)}${hint ? ` <span class="settings-hint">${escapeHtml(hint)}</span>` : ''}</span>
+            </label>`;
+        const media = backup.media.map(m => tick('media', m.section, S3_MEDIA_LABELS[m.section] ?? m.section,
+            `${m.files.toLocaleString()} file${m.files === 1 ? '' : 's'}, ${fmtBytes(m.bytes)}`)).join('');
+        const data = backup.data
+            ? S3_DATA_GROUPS.filter(g => backup.data.groups.includes(g.id)).map(g => tick('data', g.id, g.label, g.hint)).join('')
+            : '<p class="settings-hint">This backup has no data, only files. Back up that server again to include it.</p>';
+        // Off by default: it changes this server's name, and two servers backing up into one folder clash
+        const takeOver = !backup.data ? '' : `
+            <h4>Afterwards</h4>
+            <label class="settings-check">
+                <input type="checkbox" id="s3-restore-take-over" onchange="updateS3RestoreButton()">
+                <span>Carry on as that server, backing up into "${escapeHtml(folder)}"
+                    <span class="settings-hint">For moving to a new machine: this server takes the old one's name.
+                        Stop the old one backing up first, or the two will back up over each other.</span></span>
+            </label>`;
+        el.innerHTML = `
+            <h4>Files</h4>${media || '<p class="settings-hint">No files in this backup.</p>'}
+            <h4>Data${backup.data ? ` <span class="settings-hint">backed up ${escapeHtml(new Date(backup.data.backedUpAt).toLocaleString())}</span>` : ''}</h4>${data}${takeOver}`;
+        updateS3RestoreButton();
+    } catch (err) {
+        console.error('S3 backup read error:', err);
+        el.innerHTML = `<p class="settings-hint">Couldn't read the backup: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+const s3RestoreChoices = kind => [...document.querySelectorAll(`#s3-restore-options input[data-kind="${kind}"]:checked`)].map(i => i.value);
+
+const s3RestoreTakeOver = () => !!document.getElementById('s3-restore-take-over')?.checked;
+
+function updateS3RestoreButton() {
+    const any = s3RestoreChoices('media').length || s3RestoreChoices('data').length || s3RestoreTakeOver();
+    document.getElementById('btn-s3-restore-start')?.classList.toggle('disabled', !any);
+}
+
+let s3RestartBootId = null; // the server's bootId while it restarts after a restore, to reload once it's back
+
 async function startS3Restore() {
     const folder = document.getElementById('s3-restore-folder')?.value;
-    if (!folder) return;
-    if (!confirm(`Download all files from "${folder}" in the bucket into this server's library? Files that already exist with a different size will be overwritten.`)) return;
+    const media = s3RestoreChoices('media');
+    const data = s3RestoreChoices('data');
+    const takeOver = s3RestoreTakeOver();
+    if (!folder || (!media.length && !data.length && !takeOver)) return;
+    const steps = [];
+    if (media.length) steps.push(`download the files ticked from "${folder}" (files here with a different size are overwritten)`);
+    if (data.length) steps.push(`replace this server's ${S3_DATA_GROUPS.filter(g => data.includes(g.id)).map(g => g.label.toLowerCase()).join(', ')} with the backup's`);
+    if (takeOver) steps.push(`give this server the old one's name, so it carries on backing up into "${folder}"`);
+    if (data.length || takeOver) steps.push('restart');
+    if (!confirm(`This will ${steps.join(', and ')}. Go ahead?`)) return;
     try {
         const response = await fetch('/api/sync/s3/restore', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder })
+            body: JSON.stringify({ folder, media, data, takeOver })
         });
         if (!response.ok) {
             const data = await response.json();
