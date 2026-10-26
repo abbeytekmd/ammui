@@ -179,25 +179,29 @@ function setRendererOffline(state, caller = 'unknown') {
 async function handleRetry() {
     if (!selectedRendererUdn) return;
     console.log(`[OFFLINE-SYNC] Manual retry initiated for ${selectedRendererUdn}`);
+    if (!await tryRendererOnline('HandleRetrySuccess')) showToast('Device still unreachable', 'error', 2000);
+}
 
-    // Clear failure count
+// Instead of immediately turning green, we try to fetch status first; if it succeeds, THEN we turn
+// green. Used by the Retry button and, quietly, by the status poll while the renderer is offline
+// (a player can drop out briefly, e.g. while the server its music came from goes away).
+async function tryRendererOnline(caller) {
+    const udn = selectedRendererUdn;
     rendererFailureCount = 0;
-
-    // Instead of immediately turning green, we try to fetch status first.
-    // If it succeeds, THEN we turn green.
     try {
-        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
-        if (response.ok) {
-            setRendererOffline(false, 'HandleRetrySuccess');
-            fetchPlaylist(selectedRendererUdn);
-            fetchVolume();
-        } else {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
+        if (!response.ok) {
             console.warn(`[OFFLINE-SYNC] Retry failed: Status endpoint returned ${response.status}`);
-            showToast('Device still unreachable', 'error', 2000);
+            return false;
         }
+        if (udn !== selectedRendererUdn || !isRendererOffline) return true;
+        setRendererOffline(false, caller);
+        fetchPlaylist(udn);
+        fetchVolume();
+        return true;
     } catch (err) {
         console.error(`[OFFLINE-SYNC] Retry failed: ${err.message}`);
-        showToast('Device still unreachable', 'error', 2000);
+        return false;
     }
 }
 let stopAfterTrack = false; // When true, stop playback after current track ends
@@ -8006,10 +8010,22 @@ function toggleShoppingVoice() {
     toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"', transcripts => runShoppingVoice(transcripts));
 }
 
-// A tap on the slideshow's shopping list: leaves the slideshow for the one on the Meals tab.
-function slideshowShopping() {
-    stopSlideshow();
-    showRecipes().catch(() => { });
+// The shopping list modal, from the Meals tab and the slideshow (which carries on underneath). The
+// pictures are laid out against the list's rows, so they're placed again once it's showing.
+async function openShoppingModal() {
+    bringModalToFront('shopping-modal');
+    document.getElementById('shopping-modal').style.display = 'flex';
+    renderShoppingThumbs();
+    await Promise.all([loadIngredients(), loadShoppingList()]).catch(() => { });
+    renderShoppingThumbs();
+}
+
+async function closeShoppingModal() {
+    hideShoppingSuggestions();
+    document.getElementById('shopping-modal').style.display = 'none';
+    await saveShoppingListNow();
+    // The slideshow's copy shows what was just changed
+    if (slideshow?.isActive) slideshow.loadShopping();
 }
 
 // Acts on "add <item>" or "remove <item>" (optionally "... to/from the shopping list"). Returns
@@ -9548,13 +9564,17 @@ function adjustVolume(delta) {
 }
 
 let pollCounter = 0;
-// Poll status every 5s always (keeps tab title current in background); playlist only when visible
+// Poll status every 5s always (keeps tab title current in background); playlist only when visible.
+// While the renderer is offline, check every 15s whether it's back.
 setInterval(() => {
-    if (selectedRendererUdn && !isRendererOffline) {
-        pollCounter++;
-        const includePlaylist = isPageVisible && (pollCounter % 3 === 0);
-        fetchStatus(includePlaylist);
+    if (!selectedRendererUdn) return;
+    pollCounter++;
+    if (isRendererOffline) {
+        if (pollCounter % 3 === 0) tryRendererOnline('StatusPoll');
+        return;
     }
+    const includePlaylist = isPageVisible && (pollCounter % 3 === 0);
+    fetchStatus(includePlaylist);
 }, 5000);
 
 function togglePlaylist() {
