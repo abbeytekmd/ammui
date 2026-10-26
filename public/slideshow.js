@@ -71,14 +71,25 @@ class Slideshow {
         this.resetIdleTimer();
         this.updateModeUI();
 
-        // Holding a Live Photo plays its clip again, with sound, as on an iPhone
-        let holdTimer = null;
+        // Holding a Live Photo plays its clip again, with sound, as on an iPhone; tapping it (or its
+        // clip while it plays) runs the clip again from the start. Tapping any other photo zooms in on
+        // the tapped spot, and tapping again zooms back out.
+        let holdTimer = null, held = false;
         this.img.addEventListener('pointerdown', () => {
             clearTimeout(holdTimer);
-            holdTimer = setTimeout(() => this.playLive(this.currentPhotoData, true), 400);
+            held = false;
+            holdTimer = setTimeout(() => { held = true; this.playLive(this.currentPhotoData, true); }, 400);
         });
         ['pointerup', 'pointerleave', 'pointercancel'].forEach(name => this.img.addEventListener(name, () => clearTimeout(holdTimer)));
         this.img.addEventListener('contextmenu', (e) => { if (this.currentPhotoData?.liveVideo) e.preventDefault(); });
+        this.img.addEventListener('click', (e) => {
+            if (held) return;
+            if (this.currentPhotoData?.liveVideo) this.playLive(this.currentPhotoData);
+            else this.toggleZoom(e.clientX, e.clientY);
+        });
+        this.video.addEventListener('click', () => {
+            if (this.videoShowing && !this.slideIsVideo) this.playLive(this.currentPhotoData, !this.video.muted);
+        });
     }
 
     resetIdleTimer(e) {
@@ -168,6 +179,7 @@ class Slideshow {
         this._browserCurrentHidden = false;
         this.closeBrowser();
         this.isActive = false;
+        this.clearZoom();
         this.stopVideo();
         this.slideIsVideo = false;
         if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
@@ -269,7 +281,8 @@ class Slideshow {
         if (this.interval) clearInterval(this.interval);
         // A playing video moves the slideshow on itself, when it ends or runs out of time
         const videoPlaying = this.slideIsVideo && this.videoShowing && !this.video.ended;
-        if (this.isActive && this.duration > 0 && !videoPlaying) {
+        // A zoomed-in photo stays up until it's tapped back out
+        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }
@@ -514,7 +527,36 @@ class Slideshow {
         });
     }
 
+    // Zooms the photo in on a screen point (kept under the finger), or back out if it's zoomed.
+    // Uses the scale/translate properties, which sit outside the transform that the rotation,
+    // transitions and panorama pan own; a uniform scale about the centre commutes with the rotation.
+    toggleZoom(x, y) {
+        if (this.zoomed) {
+            this.clearZoom();
+            this.resetInterval();
+            return;
+        }
+        if (this.slideIsVideo || this.img.classList.contains('panorama')) return;
+        const r = this.img.getBoundingClientRect();
+        const s = 2.5;
+        // Clamped to the photo's box, so a tap in the margin doesn't zoom into black
+        const dx = Math.min(Math.max(x, r.left), r.right) - (r.left + r.width / 2);
+        const dy = Math.min(Math.max(y, r.top), r.bottom) - (r.top + r.height / 2);
+        this.zoomed = true;
+        this.img.style.scale = s;
+        this.img.style.translate = `${(1 - s) * dx}px ${(1 - s) * dy}px`;
+        this.resetInterval();
+    }
+
+    clearZoom() {
+        this.zoomed = false;
+        this.img.style.scale = '';
+        this.img.style.translate = '';
+    }
+
     renderPhoto(data) {
+        // Moving on (or off) a photo zooms it back out first
+        if (data.url !== this.currentPhoto) this.clearZoom();
         if (data.isVideo) return this.renderVideo(data);
         if (data.url === this.currentPhoto && this.img.style.opacity == 1) {
             if (this.mode === 'nowPlaying') this.updateInfoUI(data);

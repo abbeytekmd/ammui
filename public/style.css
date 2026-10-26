@@ -7521,6 +7521,8 @@ input:checked+.slider:before {
     z-index: 10001;
     position: relative;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+    /* Tap-to-zoom sets scale/translate (see toggleZoom in slideshow.js) */
+    transition: scale 0.4s ease, translate 0.4s ease;
 }
 
 /* A video slide: placed like a photo, fading in once it starts playing (see renderVideo in slideshow.js) */
