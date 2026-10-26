@@ -1861,6 +1861,13 @@ function toggleVoiceCommand() {
         runVoiceCommand);
 }
 
+// The slideshow's mic, which is for the music: the same commands, but only music ones suggested
+function slideshowMusicVoice() {
+    toggleListening(['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'],
+        'Listening for music... e.g. "play <song> by <artist>", "queue <album>", "next", "pause", "volume 30"',
+        runVoiceCommand);
+}
+
 // Listens once (or stops listening if already) and passes the recogniser's guesses to onResult.
 // buttonIds show the listening state while it lasts.
 let listeningChimeAudio = null;
@@ -12807,6 +12814,11 @@ function plugCard(p) {
             </div>
             ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
                 ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
+                ${p.hasScenes ? `
+                <button type="button" class="plug-scene" onclick="openPlugScenes(${i})" ${p.online === false ? 'disabled' : ''}
+                    aria-label="Scenes for ${escapeHtml(p.name)}">
+                    ${SCENE_ICON}<span class="plug-scene-name">${anyOn && p.scene ? escapeHtml(p.scene) : 'Choose a scene'}</span><span aria-hidden="true">›</span>
+                </button>` : ''}
             </div>` : ''}
             ${p.needsLogin ? '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Set TP-Link Login</button>' : ''}
         </div>`;
@@ -12859,6 +12871,117 @@ async function setPlugBrightness(input) {
         showToast(`Couldn't dim ${p.name}: ${err.message}`, 'error', 5000);
     }
     renderSmartHome();
+}
+
+// Scenes dialog for Twinkly lights: pick one of the movies uploaded from the Twinkly app, the
+// playlist, a built-in effect or a plain colour (see "Scenes" in lib/smart-home/twinkly.js).
+// Choosing one also turns the lights on.
+const SCENE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-2a2 2 0 0 0-1.5 3.3A1.6 1.6 0 0 1 12 22Z"></path>
+    <circle cx="7.5" cy="11" r="1.2"></circle><circle cx="10.5" cy="7" r="1.2"></circle><circle cx="15.5" cy="7.5" r="1.2"></circle></svg>`;
+const SCENE_COLOURS = ['#ff0000', '#ff6a00', '#ffc800', '#00ff3c', '#00c8ff', '#0040ff', '#a000ff', '#ff0090', '#ffffff', '#ffb46b'];
+let plugScenes = null; // { plug, scenes, busy, error }
+
+const hexToRgb = hex => ({ red: parseInt(hex.slice(1, 3), 16), green: parseInt(hex.slice(3, 5), 16), blue: parseInt(hex.slice(5, 7), 16) });
+const rgbToHex = c => `#${[c.red, c.green, c.blue].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+
+async function openPlugScenes(i) {
+    const plug = smartHomePlugs[i];
+    if (!plug) return;
+    const state = plugScenes = { plug, scenes: null, busy: false, error: null };
+    document.getElementById('plug-scenes-name').textContent = plug.name;
+    document.getElementById('plug-scenes-modal').style.display = 'flex';
+    renderPlugScenes();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(plug.id)}/scenes`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        state.scenes = data.scenes;
+    } catch (err) {
+        state.error = err.message;
+    }
+    if (plugScenes === state) renderPlugScenes();
+}
+
+function closePlugScenes() {
+    document.getElementById('plug-scenes-modal').style.display = 'none';
+    plugScenes = null;
+}
+
+// { kind: 'movie' | 'playlist' | 'effect', id } or { kind: 'color', color }
+async function choosePlugScene(choice) {
+    const state = plugScenes;
+    if (!state || state.busy) return;
+    state.busy = true;
+    renderPlugScenes();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(state.plug.id)}/scene`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(choice)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (data.scenes) state.scenes = data.scenes;
+        const i = smartHomePlugs.findIndex(x => x.id === state.plug.id);
+        if (i >= 0) { smartHomePlugs[i] = data.plug; renderSmartHome(); }
+    } catch (err) {
+        showToast(`Couldn't change the scene: ${err.message}`, 'error', 5000);
+    } finally {
+        state.busy = false;
+        if (plugScenes === state) renderPlugScenes();
+    }
+}
+
+function choosePlugSceneColour(hex) {
+    choosePlugScene({ kind: 'color', color: hexToRgb(hex) });
+}
+
+function renderPlugScenes() {
+    const body = document.getElementById('plug-scenes-body');
+    const state = plugScenes;
+    if (!body || !state) return;
+    const s = state.scenes;
+    if (!s) {
+        body.innerHTML = `<div class="smarthome-status">${state.error ? `Couldn't read the scenes: ${escapeHtml(state.error)}` : 'Reading the scenes...'}</div>`;
+        return;
+    }
+    const disabled = state.busy ? 'disabled' : '';
+    const option = (kind, item, current) => `
+        <button type="button" class="scene-option ${current ? 'current' : ''}" ${disabled} aria-pressed="${current}"
+            onclick='choosePlugScene(${JSON.stringify({ kind, id: item.id })})'>${escapeHtml(item.name)}</button>`;
+    const section = (title, content) => `<div class="plug-timers-section"><h4>${title}</h4>${content}</div>`;
+    let html = s.mode === 'off' ? '<div class="settings-hint">The lights are off. Choosing a scene turns them on.</div>' : '';
+
+    html += section('Movies', `<div class="scene-options">${s.movies.map(m =>
+        option('movie', m, s.mode === 'movie' && (m.id === null || m.id === s.movie))).join('')}</div>`);
+
+    if (s.playlist.length) {
+        html += section('Playlist', `
+            <button type="button" class="btn-control btn-small ${s.mode === 'playlist' ? 'primary' : ''}" ${disabled}
+                onclick='choosePlugScene({"kind":"playlist"})'>${s.mode === 'playlist' ? 'Playing playlist' : 'Play Playlist'}</button>
+            <div class="scene-options">${s.playlist.map(m =>
+                option('playlist', m, s.mode === 'playlist' && m.id === s.playlistEntry)).join('')}</div>`);
+    }
+
+    if (s.effects.length) {
+        html += section('Effects', `<div class="scene-options">${s.effects.map(m =>
+            option('effect', m, s.mode === 'effect' && m.id === s.effect)).join('')}</div>`);
+    }
+
+    const colour = s.color ? rgbToHex(s.color) : '#ffb46b';
+    html += section('Colour', `
+        <div class="scene-colours">
+            ${SCENE_COLOURS.map(c => `<button type="button" class="scene-swatch ${s.mode === 'color' && c === colour ? 'current' : ''}"
+                style="background:${c}" ${disabled} onclick="choosePlugSceneColour('${c}')" aria-label="Colour ${c}"></button>`).join('')}
+            <label class="scene-swatch scene-custom ${s.mode === 'color' && !SCENE_COLOURS.includes(colour) ? 'current' : ''}" title="Any colour"
+                style="background:${colour}"><input type="color" value="${colour}" ${disabled}
+                onchange="choosePlugSceneColour(this.value)" aria-label="Any colour"></label>
+        </div>`);
+
+    html += `<div class="settings-hint">Scenes sent to the lights from the ${escapeHtml(state.plug.brand)} app appear under Movies.${
+        state.plug.members?.length ? ' Paired units change too, where they have the same scene.' : ''}</div>`;
+    body.innerHTML = html;
 }
 
 // Timers dialog: the countdown and schedules kept on the device itself (see "Timers" in

@@ -10154,6 +10154,135 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
+/* Scenes: a button on Twinkly cards naming what's showing, opening the scenes dialog */
+.plug-scene {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.9rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.plug-scene:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+.plug-scene:disabled {
+    cursor: default;
+}
+
+.plug-scene svg {
+    flex: none;
+}
+
+.plug-scene-name {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.scene-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.scene-option {
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.scene-option:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.scene-option.current {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.scene-option:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.scene-colours {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.scene-swatch {
+    position: relative;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    border: 2px solid var(--card-border);
+    padding: 0;
+    cursor: pointer;
+}
+
+.scene-swatch.current {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.scene-swatch:disabled {
+    cursor: default;
+}
+
+/* The "any colour" swatch is a colour picker under a rainbow ring */
+.scene-custom {
+    border-color: transparent;
+}
+
+.scene-custom::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    padding: 2px;
+    background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+.scene-custom input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
 /* Timers: a clock button on each card opening the countdown/schedule dialog */
 .plug-card-timers {
     flex: none;

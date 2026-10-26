@@ -251,6 +251,7 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 | "turn on the curtain", "switch the kettle off", "Christmas tree on" | Switches a plug, an outlet of a power strip, or a set of Twinkly lights |
 | "turn off all the lights", "turn everything off" | Switches all the Twinkly lights, or every device |
 | "set the Christmas tree to 40 percent", "dim the curtain to 20" | Sets the brightness of Twinkly lights (and turns them on) |
+| "set the matrix to Snowstorm", "show Orbs in Orbit on the matrix", "make the tree red", "set the curtain to effect 3", "set all the lights to green" | Changes what Twinkly lights show: a scene from the Twinkly app by name, a colour, a built-in effect, or "the playlist" |
 
 * A control word on its own is a command, but with "play" in front it's a search: "stop" stops the music, while "play Stop" finds a song called Stop.
 * If a song and an album have the same name, the song is played unless you say "album".
@@ -273,6 +274,7 @@ The **Plugs and Lights** tab shows a card for each smart plug and set of Twinkly
 * **TP-Link Tapo** plugs (P100, P110, P115 and similar) on current firmware, which uses TP-Link's newest login (TPAP). Only single plugs for now, not Tapo power strips.
 * **TP-Link Kasa** plugs and power strips on the original Kasa firmware.
 * **Twinkly** lights (strings, curtains, trees and so on). They need no login. Turning them on brings back whatever they were last showing (a movie, playlist, colour or effect) since the server started, or the current movie otherwise.
+  The **scene** button on a Twinkly card shows what the lights are playing and opens a list to change it: the movies sent to the lights from the Twinkly app (under their names in the app), the playlist if there is one, the five built-in effects, or a plain colour. Choosing one turns the lights on.
   Units paired in the Twinkly app (to show one picture across several sets) appear as a single card, under the main unit's name, and switch and dim together. Voice commands answer to any of the paired units' names.
 
 Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Other plugs (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.

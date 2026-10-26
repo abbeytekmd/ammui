@@ -12,7 +12,7 @@ import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
 import { getImageDate, extractDateFromString, isPhotoItem, monthDay } from './lib/photo-date.js';
-import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand } from './lib/voice-command.js';
+import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
@@ -6192,6 +6192,23 @@ app.post('/api/smart-home/plugs/:id/brightness', async (req, res) => {
     }
 });
 
+// Twinkly scenes: the movies, playlist, effects and colour the lights can show (see lib/smart-home/twinkly.js)
+app.get('/api/smart-home/plugs/:id/scenes', async (req, res) => {
+    try {
+        res.json({ scenes: await smartHome.getScenes(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/smart-home/plugs/:id/scene', async (req, res) => {
+    try {
+        res.json(await smartHome.setScene(req.params.id, req.body || {}));
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
 // Timers kept on the device itself: a countdown and daily/weekly schedules (see lib/smart-home/index.js)
 app.get('/api/smart-home/plugs/:id/timers', async (req, res) => {
     try {
@@ -6225,7 +6242,8 @@ app.delete('/api/smart-home/plugs/:id/schedules/:rule', async (req, res) => {
     }
 });
 
-// Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent".
+// Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent",
+// "set the matrix to snowstorm", "make the tree red".
 // `transcripts` are the recogniser's guesses. Replies { handled: true, message }, or
 // { handled: false, error? } so the browser can try the words as a music request instead.
 app.post('/api/smart-home/voice', async (req, res) => {
@@ -6238,7 +6256,16 @@ app.post('/api/smart-home/voice', async (req, res) => {
         if (cmd) console.log(`[VOICE] "${transcripts[0]}" -> ${cmd.error}`);
         return res.json({ handled: false, error: cmd?.error });
     }
+    // Each light keeps its own scenes, so the one asked for is looked up on each
+    const sceneLabels = new Set();
     const results = await Promise.allSettled(cmd.targets.map(async ({ device, outlet }) => {
+        if (cmd.action === 'scene') {
+            const scene = matchScene(cmd.scene, await smartHome.getScenes(device.id));
+            if (!scene) throw new Error(`${device.name} has no scene called "${cmd.scene}"`);
+            sceneLabels.add(scene.label);
+            await smartHome.setScene(device.id, scene);
+            return;
+        }
         if (cmd.action === 'brightness') {
             const updated = await smartHome.setBrightness(device.id, cmd.value);
             // Asking for a brightness means wanting to see it
@@ -6250,7 +6277,8 @@ app.post('/api/smart-home/voice', async (req, res) => {
         for (const id of outlets) await smartHome.setOutlet(device.id, id, on);
     }));
     const failed = results.filter(r => r.status === 'rejected');
-    const did = cmd.action === 'brightness' ? `Set ${cmd.label} to ${cmd.value}%` : `Turned ${cmd.label} ${cmd.action}`;
+    const did = cmd.action === 'scene' ? `Set ${cmd.label} to ${[...sceneLabels].join(' / ') || cmd.scene}`
+        : cmd.action === 'brightness' ? `Set ${cmd.label} to ${cmd.value}%` : `Turned ${cmd.label} ${cmd.action}`;
     console.log(`[VOICE] "${transcripts[0]}" -> ${did}${failed.length ? ` (${failed.length} failed: ${failed[0].reason.message})` : ''}`);
     if (failed.length === results.length) return res.json({ handled: true, ok: false, message: `Couldn't reach ${cmd.label}: ${failed[0].reason.message}` });
     res.json({ handled: true, ok: true, message: failed.length ? `${did} (${failed.length} didn't answer)` : did });

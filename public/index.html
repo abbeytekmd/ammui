@@ -855,6 +855,27 @@
         </div>
     </div>
 
+    <div id="plug-scenes-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closePlugScenes()">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Scenes</h2>
+                    <p class="modal-subtitle" id="plug-scenes-name"></p>
+                </div>
+                <button class="btn-close" onclick="closePlugScenes()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="plug-scenes-body" class="plug-timers"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Recipes tab: calories, protein, carbs and fat for one ingredient, looked up from the UK food
          tables, Open Food Facts or USDA FoodData Central, or typed in -->
     <div id="nutrition-modal" class="modal-overlay" style="display: none;"
@@ -2318,13 +2339,18 @@
                 </div>
                 <!-- Always shown, as it can start music when none is queued. Fired on touchend: browsers
                      only count touchend as the user gesture that's allowed to start the microphone. -->
-                <button id="btn-ss-voice" class="btn-ss-music btn-ss-voice" onclick="toggleVoiceCommand()"
-                    ontouchend="toggleVoiceCommand(); event.preventDefault();" title="Voice command">
+                <button id="btn-ss-voice" class="btn-ss-music btn-ss-voice" onclick="slideshowMusicVoice()"
+                    ontouchend="slideshowMusicVoice(); event.preventDefault();"
+                    title="Music by voice: &quot;play &lt;song&gt; by &lt;artist&gt;&quot;, &quot;next&quot;, &quot;volume 30&quot;"
+                    aria-label="Music by voice">
+                    <!-- A microphone with a music note, as it's for the music -->
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round">
-                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
-                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="2" width="6" height="11" rx="3"></rect>
+                        <path d="M1 10v1a6 6 0 0 0 12 0v-1"></path>
+                        <line x1="7" y1="17" x2="7" y2="21"></line>
+                        <path d="M20 15V4l3 1.5"></path>
+                        <circle cx="17.5" cy="15.5" r="2.5" fill="currentColor" stroke="none"></circle>
                     </svg>
                 </button>
                 <!-- Straight to the shopping list, listening for "add ..." / "remove ..." -->
