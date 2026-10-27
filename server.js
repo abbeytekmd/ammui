@@ -3205,21 +3205,21 @@ function cleanCalendarEntry(body) {
         repeat = { unit, interval, until };
     }
 
-    // A meal (on the Meals tab's calendar): { parts: [{ id, amount, unit, times }] (items), family: [family member ids],
-    // times (how many of the meal, 1 if left out) }
+    // A meal (on the Meals tab's calendar): { parts: [{ id, amount, unit, times }] (its one item), family: [family member ids],
+    // times (how many of the meal, 1 if left out) }. It has no name of its own: it's its item's.
     let meal = null;
     if (body.meal) {
         const ids = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(Boolean))];
         const parts = cleanMealParts(body.meal.parts);
         if (typeof parts === 'string') return parts;
         meal = { parts, family: ids(body.meal.family), times: body.meal.times == null ? 1 : Number(body.meal.times) };
-        if (!meal.parts.length) return 'Add at least one item';
+        if (meal.parts.length !== 1) return 'Choose one item';
         if (!Number.isFinite(meal.times) || meal.times <= 0 || meal.times > 99) return 'How many must be more than 0 and at most 99';
         if (meal.family.some(id => !getGamePlayer(id))) return 'A family member no longer exists';
     }
     // Meals don't need tags; other entries do
     if (!meal && !tags.length) return 'Add at least one tag';
-    return { date, title, description: meal ? '' : description, repeat, meal, tags: meal ? [] : tags };
+    return { date, title: meal ? '' : title, description: meal ? '' : description, repeat, meal, tags: meal ? [] : tags };
 }
 
 app.put('/api/calendar-entries/tag-color', express.json(), (req, res) => {
@@ -3346,15 +3346,14 @@ function cleanMealParts(list) {
     return parts;
 }
 
-// One day of the plan (0-based): { name, parts: [{ id, amount, unit, times }], repeat?: { unit: day|week, interval } },
+// One day of the plan (0-based): { parts: [{ id, amount, unit, times }] (its one item), repeat?: { unit: day|week, interval } },
 // or { skipped: true } to leave it empty where another day's repeat would fill it. No parts clears it.
 app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
     const day = Number(req.params.day);
     if (!Number.isInteger(day) || day < 0 || day >= MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Not a day of the plan' });
-    const name = String(req.body.name || '').trim();
     const parts = cleanMealParts(req.body.parts);
-    if (name.length > 200) return res.status(400).json({ error: 'The name is too long' });
     if (typeof parts === 'string') return res.status(400).json({ error: parts });
+    if (parts.length > 1) return res.status(400).json({ error: 'Choose one item' });
     const skipped = !!req.body.skipped;
     let repeat = null;
     if (req.body.repeat && !skipped) {
@@ -3364,7 +3363,7 @@ app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
         if (!Number.isInteger(interval) || interval < 1 || interval > MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Repeat every must be a whole number from 1 to 56' });
         repeat = { unit, interval };
     }
-    saveMealPlanDay(day, { name, parts: skipped ? [] : parts, repeat, skipped });
+    saveMealPlanDay(day, { name: '', parts: skipped ? [] : parts, repeat, skipped });
     res.json(getMealPlan());
 });
 

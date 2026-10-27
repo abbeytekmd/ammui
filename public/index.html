@@ -582,7 +582,7 @@
                         <button type="button" role="tab" data-days="30" onclick="setMealStatsDays(30)">Month</button>
                     </div>
                 </div>
-                <div id="meal-stats-family" class="nutrition-sources meal-stats-family" role="tablist" aria-label="Whose food" hidden></div>
+                <div id="meal-stats-family" class="nutrition-sources meal-stats-family" role="group" aria-label="Whose food" hidden></div>
                 <div id="meal-stats-body" class="meal-stats-body"></div>
             </div>
             <!-- A meal for each day of a block of weeks; it repeats on the Calendar from its start date -->
@@ -737,6 +737,8 @@
                         <option value="weeks">3 weeks</option>
                     </select>
                 </div>
+                <!-- Meals calendar only: whose meals are showing -->
+                <div id="calendar-meals-family" class="nutrition-sources meal-stats-family" role="group" aria-label="Whose food" hidden></div>
                 <div id="calendar-status" class="calendar-status"></div>
                 <div class="calendar-body">
                     <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
@@ -1797,27 +1799,8 @@
                 </div>
             </div>
             <!-- Whose food to show: everyone's, or one family member's -->
-            <div id="meal-day-family" class="nutrition-sources meal-day-family" role="tablist" aria-label="Whose food" hidden></div>
+            <div id="meal-day-family" class="nutrition-sources meal-day-family" role="group" aria-label="Whose food" hidden></div>
             <div id="meal-day-body" class="modal-body meal-day-body"></div>
-        </div>
-    </div>
-    <!-- Meals calendar: one meal's items, each with its quantity and figures per person -->
-    <div id="meal-items-modal" class="modal-overlay" style="display: none;"
-        onclick="if(event.target===this)closeMealItemsView()">
-        <div class="modal-content meal-day-content meal-items-content">
-            <div class="modal-header">
-                <div class="modal-title-group">
-                    <h2 id="meal-items-heading"></h2>
-                    <div id="meal-items-about" class="settings-hint" style="margin: 0;"></div>
-                </div>
-                <button class="btn-close" onclick="closeMealItemsView()" title="Close">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div id="meal-items-body" class="modal-body meal-day-body"></div>
         </div>
     </div>
 
@@ -1847,10 +1830,10 @@
                     <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="all" role="tab"
                         onclick="setCalendarEntryScope('all')">Every occurrence</button>
                 </div>
-                <!-- A meal: one or more items, the family it's for and an optional name -->
+                <!-- A meal: its one item (made or changed in the item dialog) and the family it's for -->
                 <div id="calendar-entry-meal-fields" class="calendar-entry-normal-fields">
                     <div class="settings-group">
-                        <label for="calendar-entry-part-search">Items <span class="calendar-entry-tags-hint">— one or more</span></label>
+                        <label for="calendar-entry-part-search">Item <span class="calendar-entry-tags-hint">— for a meal of several things, an item made of others</span></label>
                         <ol id="calendar-entry-parts" class="calendar-entry-parts"></ol>
                         <!-- Type to find an item to add; the matches list under the box -->
                         <input type="text" id="calendar-entry-part-search" autocomplete="off" role="combobox"
@@ -1863,11 +1846,6 @@
                     <div id="calendar-entry-family-group" class="settings-group">
                         <label>For <span class="calendar-entry-tags-hint">— who's eating</span></label>
                         <div id="calendar-entry-family" class="calendar-entry-tag-choices"></div>
-                    </div>
-                    <div class="settings-group">
-                        <label for="calendar-entry-meal-name">Name <span class="calendar-entry-tags-hint">— optional, e.g. Sunday roast</span></label>
-                        <input type="text" id="calendar-entry-meal-name" maxlength="200" autocomplete="off"
-                            onkeydown="if(event.key==='Enter') saveCalendarEntry()">
                     </div>
                 </div>
                 <div id="calendar-entry-normal-fields" class="calendar-entry-normal-fields">

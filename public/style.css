@@ -2389,33 +2389,6 @@ p.subtitle {
     border-radius: 0.5rem;
 }
 
-.calendar-entry-part-handle {
-    cursor: grab;
-    touch-action: none;
-    user-select: none;
-    padding: 0.2rem 0.3rem;
-    margin-left: -0.4rem;
-    opacity: 0.6;
-}
-
-.calendar-entry-part-handle:hover {
-    opacity: 1;
-}
-
-/* Nothing to reorder with only one part */
-.calendar-entry-part:only-child .calendar-entry-part-handle {
-    display: none;
-}
-
-.calendar-entry-part.dragging {
-    background: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 0.25rem 0.75rem rgba(0, 0, 0, 0.3);
-}
-
-.calendar-entry-part.dragging .calendar-entry-part-handle {
-    cursor: grabbing;
-}
-
 /* Meals calendar day view: a big table of the day's meals */
 .modal-content.meal-day-content {
     max-width: min(1100px, 96vw);
@@ -2478,16 +2451,58 @@ p.subtitle {
     font-size: 0.85rem;
 }
 
-/* One meal's items, over the day view */
-.modal-content.meal-day-content.meal-items-content {
-    max-width: min(950px, 96vw);
+/* A meal per row, divided by a line; an open one has the line under its items instead */
+.meal-day-table tbody .meal-day-meal td,
+.meal-day-table tbody .meal-day-item-row.last td {
+    border-bottom: 1px solid var(--card-border);
 }
 
-/* A meal per row, divided by a line */
 .meal-day-table tbody .meal-day-meal td {
     padding-top: 0.75rem;
     padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--card-border);
+}
+
+.meal-day-table tbody .meal-day-meal.open td {
+    border-bottom-color: transparent;
+}
+
+/* A meal's arrow, turned down while its items show */
+.meal-day-chevron {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 0.35rem;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+}
+
+.meal-day-meal.open .meal-day-chevron {
+    transform: rotate(90deg);
+}
+
+/* An open meal's items, under it: compact, and in from the meal's name */
+.meal-day-table tbody .meal-day-item-row td {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+    font-size: 0.88rem;
+}
+
+.meal-day-item-row .meal-day-meal-cell {
+    padding-left: 1.6rem;
+}
+
+.meal-day-item-row .meal-day-qty-row {
+    margin-left: 0.6rem;
+    color: var(--text-muted);
+}
+
+.meal-day-item-row .ingredient-pic.meal-day-pic {
+    width: 1.9rem;
+    height: 1.9rem;
+    flex-basis: 1.9rem;
+}
+
+.meal-day-item-row .meal-day-pic-cell {
+    text-align: right;
 }
 
 .meal-day-count-cell {
@@ -2617,8 +2632,42 @@ p.subtitle {
     white-space: nowrap;
 }
 
-.meal-day-actions .btn-control + .btn-control {
-    margin-left: 0.4rem;
+/* Items, Edit and Delete side by side as icons */
+.meal-day-actions-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.meal-day-actions .meal-day-icon-btn {
+    padding: 0.3rem;
+}
+
+/* A click on a meal's row shows its items */
+.meal-day-table tr.meal-day-meal {
+    cursor: pointer;
+}
+
+/* A meal on one line: its name, then who it's for and how it repeats, cut short if need be */
+.meal-day-meal-cell {
+    white-space: nowrap;
+}
+
+.meal-day-meal-cell .meal-day-meal-name,
+.meal-day-meal-cell .meal-day-meal-about {
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+}
+
+.meal-day-meal-cell .meal-day-meal-name {
+    max-width: 16rem;
+}
+
+.meal-day-meal-cell .meal-day-meal-about {
+    max-width: 20rem;
 }
 
 .meal-day-empty {
@@ -2626,41 +2675,7 @@ p.subtitle {
     text-align: center;
 }
 
-/* A meal's own quantity for an item; empty shows the item's own, faded */
-.calendar-entry-parts .calendar-entry-part input {
-    width: auto;
-    min-width: 0;
-    padding: 0.25rem 0.4rem;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 0.4rem;
-    color: var(--text);
-    font: inherit;
-    font-size: 0.85rem;
-}
-
-.calendar-entry-parts .calendar-entry-part input:hover,
-.calendar-entry-parts .calendar-entry-part input:focus {
-    outline: none;
-    border-color: var(--card-border);
-    background: rgba(255, 255, 255, 0.05);
-}
-
-.calendar-entry-parts .calendar-entry-part input.calendar-entry-part-amount {
-    flex: 0 0 3.75rem;
-    width: 3.75rem;
-}
-
-.calendar-entry-parts .calendar-entry-part input.calendar-entry-part-unit {
-    flex: 0 0 4.5rem;
-    width: 4.5rem;
-}
-
-.calendar-entry-part-times {
-    flex: 0 0 4.5rem;
-    color: var(--text-muted);
-}
-
+/* A meal's item: its name, then what it is, cut short if need be */
 .calendar-entry-part-name {
     flex: 1;
     min-width: 0;
@@ -2669,8 +2684,13 @@ p.subtitle {
     white-space: nowrap;
 }
 
-.calendar-entry-part .recipe-ingredient-btn {
-    opacity: 1;
+.calendar-entry-part-name .meal-item-result-kind {
+    margin-left: 0.5rem;
+}
+
+.calendar-entry-part .meal-day-count {
+    flex-shrink: 0;
+    margin-right: 0;
 }
 
 .recipe-per-person {
@@ -2826,6 +2846,23 @@ p.subtitle {
 .meal-stats-family button {
     flex: 1 0 auto;
     white-space: nowrap;
+}
+
+/* The Everyone icon at the start of a family bar: as small as it can be, the names share the rest */
+.nutrition-sources.meal-stats-family button.family-everyone,
+.nutrition-sources.meal-day-family button.family-everyone {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+}
+
+/* Some picked but not everyone: outlined in the colour it's filled with when everyone is */
+.nutrition-sources button.family-everyone.partial {
+    color: var(--primary);
+    box-shadow: inset 0 0 0 1.5px var(--primary);
 }
 
 .meal-stats-body {
