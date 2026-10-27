@@ -325,9 +325,12 @@ function saveSettings() {
 // Names used on disk can't hold characters Windows forbids (the library is shared with a
 // Windows machine). Those are swapped for the fullwidth lookalike (? -> ？) so
 // "What Is Love?" still reads correctly; / and \ have no lookalike and become _.
+// Control characters aren't allowed either (Windows fails the save with ENOENT). Some taggers
+// (Amazon MP3s among them) store ’ as \u0019, so that one is put back; the rest are dropped.
 const FILENAME_LOOKALIKES = { '<': '＜', '>': '＞', ':': '：', '"': '＂', '|': '｜', '?': '？', '*': '＊' };
 function safeName(s) {
-    return String(s).replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
+    return String(s).replace(/\u0019/g, '’').replace(/[\u0000-\u001f\u007f]/g, '')
+        .replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
 }
 // What earlier versions saved: every forbidden character replaced by _
 function legacySafeName(s) {
