@@ -36,3 +36,7 @@ logs/
 /ffplay.exe
 /yt-dlp.exe
 /fpcalc.exe
+/ffmpeg
+/ffprobe
+/yt-dlp
+/fpcalc

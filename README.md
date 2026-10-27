@@ -106,6 +106,51 @@ Run the installer from a command prompt to change what it does:
 * `set AMMUI_NO_RUN=1` first to set everything up without starting the server.
 * Or run it straight from a PowerShell window without saving the file: `irm https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.cmd | iex`
 
+### Linux
+
+Open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | bash
+```
+
+Or download [ammui-setup.sh](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.sh) and run `bash ammui-setup.sh`. Run it as your normal user, not with `sudo`: it asks for your password only when it needs to install system packages or trust the certificate. It works on Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch, openSUSE and most other distributions (apt, dnf, pacman or zypper).
+
+Like the Windows installer it's a one-off, and running it again updates AMMUI and repairs anything missing.
+
+#### What it installs
+
+| What | Why | Where it goes |
+|---|---|---|
+| **Node.js** (current LTS, v22.13 or newer needed) | Runs AMMUI | Only if the installed one is missing or too old: the official build from nodejs.org, in `~/.local/share/ammui/node` (no root needed) |
+| **Git** | Downloads the AMMUI code from GitHub | Your package manager. If that isn't possible, the code is downloaded as a tar file instead |
+| **AMMUI** and its packages | The app itself | `~/ammui`. Your database, settings, certificates and local library are kept here too |
+| **ffmpeg** (optional) | AirPlay, photo and video thumbnails, local playback of YouTube videos | Your package manager, or a static build in the AMMUI folder |
+| **yt-dlp** (optional) | Plays YouTube videos that have embedding disabled | `yt-dlp` in the AMMUI folder (distribution packages are usually too old) |
+| **fpcalc** (Chromaprint, optional) | "Identify with AcoustID" | Your package manager, or the Chromaprint build in the AMMUI folder (x86-64 only) |
+
+It also adds:
+
+* An **`ammui` systemd service** that runs AMMUI in the background and starts it with the computer, even before anyone logs in (so it suits a headless box). Update & Restart in the app restarts it through systemd. View its log with `journalctl --user -u ammui -f`; stop and start it with `systemctl --user stop ammui` / `systemctl --user start ammui`.
+* **AMMUI Server** in the applications menu and on the desktop: starts the service if it isn't running and shows its log. Without systemd it runs the server in a terminal window instead (close the window to stop AMMUI).
+* **AMMUI Kiosk** in the applications menu and on the desktop, if Chrome, Chromium or Edge is installed: opens AMMUI full screen, for a dedicated display such as a Raspberry Pi with a touchscreen. Press Alt+F4 to close it.
+* **Uninstall AMMUI** in the applications menu (see [Uninstalling](#uninstalling)).
+
+It offers to trust the AMMUI certificate for Chrome/Chromium (this user's NSS database, using `certutil`) and for the system. Firefox keeps its own certificate list, so import `~/ammui/certs/ca.crt` in Firefox's settings if you use it (see [Getting rid of the browser warning](#getting-rid-of-the-browser-warning)).
+
+If a firewall (ufw or firewalld) is running, allow TCP ports 3000 and 3443 and UPnP/mDNS discovery (UDP 1900 and 5353), otherwise your players and other devices can't connect.
+
+#### Options
+
+* Install somewhere other than `~/ammui`: `bash ammui-setup.sh /srv/ammui` (or `curl ... | bash -s -- /srv/ammui`).
+* `AMMUI_NO_EXTRAS=1` skips ffmpeg, yt-dlp and fpcalc.
+* `AMMUI_NO_STARTUP=1` doesn't set up the service (and removes it if an earlier run added it); the installer then runs AMMUI in the terminal until you press Ctrl+C.
+* `AMMUI_NO_RUN=1` sets everything up without starting the server.
+
+Set them before the command, e.g. `curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | AMMUI_NO_EXTRAS=1 bash`.
+
+Run as root (for example in a container), it installs for root with a system-wide service instead: use `journalctl -u ammui` and `systemctl stop ammui`.
+
 ### Other platforms (manual install)
 
 AMMUI can be installed by hand on any system that runs Node.js.
@@ -191,6 +236,10 @@ If the AMMUI entry is missing from *Settings → Apps*, run the uninstaller by h
 ```
 powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
 ```
+
+### Linux
+
+Choose **Uninstall AMMUI** in the applications menu, or run `bash ~/.local/share/ammui/uninstall.sh`. As on Windows it asks whether to delete the AMMUI folder (default: keep it), then stops and removes the service, the menu and desktop entries, the certificate trust, and `~/.local/share/ammui` (including the copy of Node.js the installer added, if any). Git and system packages such as ffmpeg are left installed.
 
 ### Other platforms
 
