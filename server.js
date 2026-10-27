@@ -198,6 +198,7 @@ let settings = {
         secretAccessKey: '',
         bucket: '',
         enabled: false, // daily automatic sync
+        time: '03:00', // when the daily sync runs (local time, HH:MM)
         verified: false, // the connection test passed with the current details
         mirror: false,
         mirrorMaxDeletePercent: 10
@@ -916,11 +917,23 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
     }
 }
 
+// The automatic backup runs once a day at settings.s3.time. If the server wasn't running then
+// (the machine was off), it runs once the server has been up for a few minutes later that day.
+const S3_STARTUP_GRACE = 5 * 60 * 1000;
+const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 function scheduleS3Sync() {
-    // Daily Sync (every 24 hours)
-    setInterval(syncToS3, 86400000);
-    // Run first sync after 24 hours
-    setTimeout(syncToS3, 86400000);
+    const startedAt = Date.now();
+    setInterval(async () => {
+        if (!settings.s3.enabled || s3SyncStatus.running || Date.now() - startedAt < S3_STARTUP_GRACE) return;
+        const now = new Date();
+        const today = localDate(now);
+        if (getSetting('s3LastAutoSyncDate') === today) return;
+        const [h, m] = (settings.s3.time || '03:00').split(':').map(Number);
+        if (now.getHours() * 60 + now.getMinutes() < h * 60 + m) return;
+        setSetting('s3LastAutoSyncDate', today);
+        await syncToS3();
+    }, 60 * 1000);
 }
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
@@ -2912,6 +2925,7 @@ function unmaskS3Secret(body) {
 app.post('/api/settings/s3', express.json(), (req, res) => {
     const newS3 = unmaskS3Secret(req.body);
     delete newS3.verified; // only a passing connection test sets this
+    if ('time' in newS3 && !/^([01]\d|2[0-3]):[0-5]\d$/.test(newS3.time)) delete newS3.time;
     const connectionChanged = S3_CONNECTION_FIELDS.some(f => f in newS3 && (newS3[f] || '') !== (settings.s3[f] || ''));
     settings.s3 = { ...settings.s3, ...newS3 };
     if (connectionChanged) settings.s3.verified = false;
@@ -3801,7 +3815,9 @@ app.get('/api/sync/s3/log', (req, res) => {
     }
 });
 
-const upload = multer({ dest: 'uploads/' });
+// Browsers send file names as UTF-8; multer would otherwise read them as Latin-1, turning
+// "You’re" into "Youâ\u0080\u0099re".
+const upload = multer({ dest: 'uploads/', defParamCharset: 'utf8' });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });

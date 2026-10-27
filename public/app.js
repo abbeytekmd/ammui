@@ -11989,6 +11989,8 @@ async function fetchS3Settings() {
         const accessKey = document.getElementById('s3-access-key');
         const secretKey = document.getElementById('s3-secret-key');
         if (enabled) enabled.checked = !!data.enabled;
+        const time = document.getElementById('s3-time');
+        if (time) time.value = data.time || '03:00';
         if (endpoint) endpoint.value = data.endpoint || '';
         if (region) region.value = data.region || 'auto';
         if (bucket) bucket.value = data.bucket || '';
@@ -12016,7 +12018,8 @@ async function saveS3Settings() {
     const mirror = !!document.getElementById('s3-mirror')?.checked;
     const mirrorPercent = parseInt(document.getElementById('s3-mirror-max')?.value, 10);
     const mirrorMaxDeletePercent = mirrorPercent >= 1 && mirrorPercent <= 100 ? mirrorPercent : 10;
-    const settings = { enabled, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
+    const time = document.getElementById('s3-time')?.value || '03:00';
+    const settings = { enabled, time, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
     // Clicking Test right after editing a field fires this first (on blur); the test waits for it
     s3SavePromise = (async () => {
         try {
