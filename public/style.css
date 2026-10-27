@@ -7531,6 +7531,17 @@ input:checked+.slider:before {
     transition: scale 0.4s ease, translate 0.4s ease;
 }
 
+/* Zoomed in, a drag pans the photo rather than scrolling or zooming the page */
+.screensaver-img.zoomed {
+    touch-action: none;
+    cursor: grab;
+}
+
+.screensaver-img.dragging {
+    cursor: grabbing;
+    transition: none;
+}
+
 /* A video slide: placed like a photo, fading in once it starts playing (see renderVideo in slideshow.js) */
 .screensaver-video {
     width: 100%;
@@ -8097,6 +8108,12 @@ input:checked+.slider:before {
 .btn-ss-stop:active {
     background: rgba(239, 68, 68, 0.6) !important;
     transform: scale(0.95) !important;
+}
+
+/* Rotate while a photo is zoomed in (see toggleZoom in slideshow.js) */
+.ss-control-item.disabled {
+    opacity: 0.35;
+    pointer-events: none;
 }
 
 /* Buttons inside ss-control-item are visual-only; parent div handles all interaction */

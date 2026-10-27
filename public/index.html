@@ -2321,7 +2321,7 @@
             <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
                 ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
                 onmouseup="event.stopPropagation()">
-                <div class="ss-control-item" onclick="rotateSlideshow(-90)"
+                <div class="ss-control-item" id="ss-rotate-item" onclick="rotateSlideshow(-90)"
                     ontouchstart="rotateSlideshow(-90); event.preventDefault();"
                     ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                     <button class="btn-ss-rotate" title="Rotate Left">

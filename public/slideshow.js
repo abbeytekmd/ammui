@@ -82,8 +82,33 @@ class Slideshow {
         });
         ['pointerup', 'pointerleave', 'pointercancel'].forEach(name => this.img.addEventListener(name, () => clearTimeout(holdTimer)));
         this.img.addEventListener('contextmenu', (e) => { if (this.currentPhotoData?.liveVideo) e.preventDefault(); });
+        // A zoomed-in photo can be dragged around; only a tap that didn't drag zooms back out
+        let drag = null, dragged = false;
+        this.img.addEventListener('dragstart', (e) => e.preventDefault());
+        this.img.addEventListener('pointerdown', (e) => {
+            dragged = false;
+            if (!this.zoomed) return;
+            drag = { id: e.pointerId, x: e.clientX, y: e.clientY, tx: this.zoomPan.x, ty: this.zoomPan.y };
+        });
+        this.img.addEventListener('pointermove', (e) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+            if (!dragged) {
+                if (Math.hypot(dx, dy) < 8) return;
+                dragged = true;
+                clearTimeout(holdTimer);
+                this.img.setPointerCapture(e.pointerId);
+                this.img.classList.add('dragging');
+            }
+            this.setZoomPan(drag.tx + dx, drag.ty + dy);
+        });
+        ['pointerup', 'pointercancel'].forEach(name => this.img.addEventListener(name, (e) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            drag = null;
+            this.img.classList.remove('dragging');
+        }));
         this.img.addEventListener('click', (e) => {
-            if (held) return;
+            if (held || dragged) return;
             if (this.currentPhotoData?.liveVideo) this.playLive(this.currentPhotoData);
             else this.toggleZoom(e.clientX, e.clientY);
         });
@@ -559,13 +584,31 @@ class Slideshow {
         const dx = Math.min(Math.max(x, r.left), r.right) - (r.left + r.width / 2);
         const dy = Math.min(Math.max(y, r.top), r.bottom) - (r.top + r.height / 2);
         this.zoomed = true;
+        // Dragging stops at the photo's edges, so it always fills the space it had before zooming.
+        // The element is the whole screen (object-fit: contain), so work out the photo's own size in it.
+        const bw = this.img.offsetWidth, bh = this.img.offsetHeight;
+        const fit = Math.min(bw / (this.img.naturalWidth || bw), bh / (this.img.naturalHeight || bh));
+        let pw = (this.img.naturalWidth || bw) * fit, ph = (this.img.naturalHeight || bh) * fit;
+        if (this.rotation % 180) [pw, ph] = [ph, pw];
+        this.zoomLimit = { x: (s - 1) * pw / 2, y: (s - 1) * ph / 2 };
+        this.img.classList.add('zoomed');
+        // Rotating would leave the zoom and its drag limits the wrong way round
+        document.getElementById('ss-rotate-item')?.classList.add('disabled');
         this.img.style.scale = s;
-        this.img.style.translate = `${(1 - s) * dx}px ${(1 - s) * dy}px`;
+        this.setZoomPan((1 - s) * dx, (1 - s) * dy);
         this.resetInterval();
+    }
+
+    setZoomPan(x, y) {
+        const clamp = (v, max) => Math.min(Math.max(v, -max), max);
+        this.zoomPan = { x: clamp(x, this.zoomLimit.x), y: clamp(y, this.zoomLimit.y) };
+        this.img.style.translate = `${this.zoomPan.x}px ${this.zoomPan.y}px`;
     }
 
     clearZoom() {
         this.zoomed = false;
+        this.img.classList.remove('zoomed', 'dragging');
+        document.getElementById('ss-rotate-item')?.classList.remove('disabled');
         this.img.style.scale = '';
         this.img.style.translate = '';
     }
@@ -996,7 +1039,7 @@ class Slideshow {
     }
 
     async rotate(delta) {
-        if (!this.currentPhoto) return;
+        if (!this.currentPhoto || this.zoomed) return;
         this.rotation = (this.rotation + delta) % 360;
         if (this.rotation < 0) this.rotation += 360;
         this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
