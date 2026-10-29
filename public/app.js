@@ -8232,10 +8232,49 @@ function itemBuilderSnapshot() {
     });
 }
 
+// Builders set aside while a new item is made from inside one (to be one of its parts), each with
+// what its fields held: [{ builder, fields, heading, productResults }]
+const itemBuilderStack = [];
+
+const ITEM_BUILDER_SAVED_FIELDS = ['name', 'confirmed', 'amount', 'unit', 'part-search', 'products', 'foods'];
+
+function pushItemBuilder() {
+    const fields = {};
+    for (const f of ITEM_BUILDER_SAVED_FIELDS) {
+        const el = itemBuilderField(f);
+        fields[f] = el.type === 'checkbox' ? el.checked : el.tagName === 'INPUT' ? el.value : el.innerHTML;
+    }
+    itemBuilderStack.push({ builder: itemBuilder, fields, heading: document.getElementById('item-builder-heading').textContent,
+        productResults: itemBuilderProductResults });
+    itemBuilder = null;
+}
+
+// Back to the builder set aside last, as it was
+function popItemBuilder() {
+    const { builder, fields, heading, productResults } = itemBuilderStack.pop();
+    itemBuilder = builder;
+    itemBuilderProductResults = productResults;
+    for (const f of ITEM_BUILDER_SAVED_FIELDS) {
+        const el = itemBuilderField(f);
+        if (el.type === 'checkbox') el.checked = fields[f];
+        else if (el.tagName === 'INPUT') el.value = fields[f];
+        else el.innerHTML = fields[f];
+    }
+    document.getElementById('item-builder-heading').textContent = heading;
+    itemBuilderField('delete-btn').style.display = builder.id ? '' : 'none';
+    setCalendarSettingsStatus('item-builder-status', '', false);
+    clearTimeout(itemBuilderLookupTimer);
+    setItemBuilderKind(builder.kind);
+    onItemBuilderNameInput();
+    document.getElementById('item-builder-modal').style.display = 'flex';
+}
+
 // item: the item to change, or null for a new one. options.name starts a new one with that name;
-// options.onSaved(saved) is called with the saved item, or null once it's deleted.
+// options.onSaved(saved) is called with the saved item, or null once it's deleted. options.nested
+// sets the open builder aside (kept as it is) until this one is closed.
 function openItemBuilder(item = null, options = {}) {
-    if (itemBuilder && !confirmDiscardItemBuilder()) return;
+    if (itemBuilder && options.nested) pushItemBuilder();
+    else if (itemBuilder && !confirmDiscardItemBuilder()) return;
     itemBuilder = {
         id: item?.id || null,
         kind: item?.parts ? 'group' : 'single',
@@ -8245,7 +8284,8 @@ function openItemBuilder(item = null, options = {}) {
         originalName: item?.name || '',
         onSaved: options.onSaved || null,
     };
-    document.getElementById('item-builder-heading').textContent = item ? 'Edit Item' : 'New Item';
+    const parent = itemBuilderStack.length ? itemBuilderStack[itemBuilderStack.length - 1].fields.name : '';
+    document.getElementById('item-builder-heading').textContent = (item ? 'Edit Item' : 'New Item') + (parent ? ` (in ${parent})` : '');
     itemBuilderField('name').value = item?.name || options.name || '';
     itemBuilderField('confirmed').checked = !!item?.confirmed;
     itemBuilderField('amount').value = item?.amount || '';
@@ -8274,6 +8314,7 @@ function closeItemBuilder(force = false) {
     if (!itemBuilder || (!force && !confirmDiscardItemBuilder())) return;
     document.getElementById('item-builder-modal').style.display = 'none';
     itemBuilder = null;
+    if (itemBuilderStack.length) popItemBuilder();
 }
 
 function setItemBuilderKind(kind) {
@@ -8552,14 +8593,16 @@ function refreshItemBuilderCalories() {
 
 let itemBuilderPartMatches = []; // what the part search found, in order: items, or { create: name }
 
-// Items to add, matching the search box. Leaves out this item and any it's part of (an item can't
-// be made of itself); offers to make a new single item when no name matches exactly.
+// Items to add, matching the search box. Leaves out this item and any it's part of, and the same
+// for the items set aside to make this one in (an item can't be made of itself); offers to make a
+// new item when no name matches exactly.
 function renderItemBuilderPartResults() {
     const b = itemBuilder;
     const query = itemBuilderField('part-search').value.trim();
     const el = itemBuilderField('part-results');
     const q = query.toLowerCase();
-    const allowed = i => i.id !== b.id && !(b.id && itemContains(i, b.id));
+    const ids = [b.id, ...itemBuilderStack.map(s => s.builder.id)].filter(Boolean);
+    const allowed = i => !ids.some(id => i.id === id || itemContains(i, id));
     const found = !q ? [] : ingredientList.filter(i => allowed(i) && i.name.toLowerCase().includes(q))
         .sort((x, y) => y.name.toLowerCase().startsWith(q) - x.name.toLowerCase().startsWith(q))
         .slice(0, 8);
@@ -8569,7 +8612,7 @@ function renderItemBuilderPartResults() {
     if (same && allowed(same) && !found.includes(same)) itemBuilderPartMatches.unshift(same);
     else if (q && !same) itemBuilderPartMatches.push({ create: query });
     el.innerHTML = itemBuilderPartMatches.map((m, i) => m.create
-        ? `<button type="button" class="item-builder-result item-builder-create" data-i="${i}">+ New single item “${escapeHtml(m.create)}”</button>`
+        ? `<button type="button" class="item-builder-result item-builder-create" data-i="${i}">+ New item “${escapeHtml(m.create)}”...</button>`
         : `<button type="button" class="item-builder-result" data-i="${i}">
             <span class="item-builder-result-name">${m.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(m.name)}${confirmedStar(m)}</span>
             <span class="item-builder-result-meta">${escapeHtml(itemSummary(m))}</span>
@@ -8580,23 +8623,17 @@ function renderItemBuilderPartResults() {
 }
 
 // match: an item (added at its one-person quantity, or one of it), or { create: name } to make a
-// new single item first
-async function addItemBuilderPart(match) {
+// new item in the item builder first, added once it's saved
+function addItemBuilderPart(match) {
     const b = itemBuilder;
     if (!b || !match) return;
-    let item = match;
     if (match.create) {
-        try {
-            item = await sendIngredient('/api/ingredients', 'POST', { name: match.create, amount: '', unit: '' });
-            ingredientList.push(item);
-            ingredientList.sort((x, y) => x.name.localeCompare(y.name, undefined, { sensitivity: 'base' }));
-            renderIngredientList();
-        } catch (err) {
-            setCalendarSettingsStatus('item-builder-status', err.message, true);
-            return;
-        }
-        if (itemBuilder !== b) return;
+        openItemBuilder(null, { name: match.create, nested: true, onSaved: saved => {
+            if (saved && itemBuilder === b) addItemBuilderPart(saved);
+        } });
+        return;
     }
+    const item = match;
     b.parts.push({ itemId: item.id, name: item.name, amount: item.parts ? '' : item.amount, unit: item.parts ? '' : item.unit });
     const search = itemBuilderField('part-search');
     search.value = '';
