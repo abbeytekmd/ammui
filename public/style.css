@@ -1719,6 +1719,14 @@ p.subtitle {
     }
 }
 
+/* Touchscreens can't hover, so keep the queue button visible at any width
+   (any-pointer catches touch laptops whose primary pointer is a mouse). */
+@media (hover: none), (any-pointer: coarse) {
+    .queue-btn {
+        opacity: 0.9;
+    }
+}
+
 .delete-btn {
     opacity: 0;
     transition: all 0.2s ease;
