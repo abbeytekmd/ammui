@@ -12794,22 +12794,36 @@ function energyDailyPlot(f, days, ariaLabel, label, dense = false) {
             </div>`;
 }
 
-// Small bars of each period's total, the latest highlighted
-// Small bars of each period's total, the latest highlighted. A period with a lastYear total also gets a
-// line across its bar at that height, so it can be compared with the same period a year earlier.
-function energyTotalsBars(f, periods, title, label, dense = false) {
-    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
-    const peak = Math.max(...periods.flatMap(p => [p.kwh, p.lastYear?.kwh || 0]), 0.001);
+const costText = (f, pence) => f.hasCost ? ` · ${pounds(pence)}` : '';
+
+// "▼ 12% less than usual by this time: the 7-day average was 4.20 kWh", comparing what's been used so far with
+// how much the earlier periods (those with readings) had used by the same point, their byNow
+function energySoFarComparison(kwh, earlier, unit, when) {
+    const used = earlier.filter(p => p.kwh > 0);
+    const average = used.length ? used.reduce((sum, p) => sum + p.byNow, 0) / used.length : 0;
+    const change = average ? Math.round((kwh / average - 1) * 100) : null;
+    const text = !used.length ? 'Not enough history to compare yet'
+        : change === null ? `Nothing to compare ${when} yet`
+            : `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} usual ${when}: the ${used.length}-${unit} average was ${kwhText(average)}`;
+    return `<div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+}
+
+// Small bars of each period's total, the latest highlighted. mark(p) can give a { kwh, text } to draw a line
+// across a bar at that height: where the same month came to a year earlier, or where a day was by this time.
+function energyTotalsBars(f, periods, title, label, { dense = false, mark = () => null } = {}) {
+    const marks = periods.map(mark);
+    const peak = Math.max(...periods.map(p => p.kwh), ...marks.map(m => m?.kwh || 0), 0.001);
     return `<div class="energy-week ${dense ? 'dense' : ''}">${periods.map((p, i) => {
         const latest = i === periods.length - 1;
-        const change = yearChange(p);
-        const year = change === null ? '' : `&#10;A year earlier: ${kwhText(p.lastYear.kwh)}${cost(p.lastYear.pence)} (${change > 0 ? '+' : ''}${change}%)`;
-        return `<div class="energy-day ${latest ? 'today' : ''}" title="${title(p)}: ${kwhText(p.kwh)}${cost(p.pence)}${year}">
-            <div class="energy-day-bar ${p.lastYear !== undefined ? 'tall' : ''}"><span style="height:${Math.max(2, (p.kwh / peak) * 100)}%"></span>${
-                p.lastYear ? `<i class="energy-last-year" style="bottom:${(p.lastYear.kwh / peak) * 100}%"></i>` : ''}</div>
+        const m = marks[i];
+        return `<div class="energy-day ${latest ? 'today' : ''}" title="${title(p)}: ${kwhText(p.kwh)}${costText(f, p.pence)}${m ? `&#10;${m.text}` : ''}">
+            <div class="energy-day-bar tall"><span style="height:${Math.max(2, (p.kwh / peak) * 100)}%"></span>${
+                m ? `<i class="energy-last-year" style="bottom:${(m.kwh / peak) * 100}%"></i>` : ''}</div>
             <div class="energy-day-label">${label(p, latest)}</div></div>`;
     }).join('')}</div>`;
 }
+
+const energyMarkLegend = text => `<span><i class="energy-last-year"></i>${text}</span>`;
 
 const monthName = (month, style = 'long') => new Date(`${month}-15T12:00:00`).toLocaleDateString([], { month: style });
 
@@ -12821,36 +12835,67 @@ function energyFigures(f, total) {
                 </div>`;
 }
 
-// One card per fuel: the last 7 days beside last month, each with its totals for the periods before it
+// One card per fuel: today against the last 7 days and this week against the last 7 weeks, then last month
 function energyCard(f) {
     const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
-    const today = `Today${f.today.dataTo ? ` (to ${clockTime(f.today.dataTo)})` : ''}: ${kwhText(f.today.kwh)}${f.hasCost ? ` · ${pounds(f.today.pence)}` : ''}`;
+    const status = f.today.dataTo ? `Readings up to ${clockTime(f.today.dataTo)} today` : 'No readings for today yet';
     return `
         <div class="plug-card energy-card energy-${f.fuel}">
             <div class="plug-card-head">
                 <div class="plug-card-icon">${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}</div>
                 <div class="plug-card-title">
                     <div class="plug-card-name">${name}</div>
-                    <div class="plug-card-status">${today}</div>
+                    <div class="plug-card-status">${status}</div>
                 </div>
             </div>
-            <div class="energy-panes">${energyWeekPane(f, name)}${energyMonthPane(f, name)}</div>
+            <div class="energy-panes">${energyTodayPane(f)}${energyThisWeekPane(f)}${energyMonthPane(f, name)}</div>
         </div>`;
 }
 
-function energyWeekPane(f, name) {
-    const lastWeek = f.weeks[f.weeks.length - 1];
+const periodAverage = periods => {
+    const used = periods.filter(p => p.kwh > 0);
+    return used.length ? { kwh: used.reduce((s, p) => s + p.kwh, 0) / used.length, pence: used.reduce((s, p) => s + p.pence, 0) / used.length } : { kwh: 0, pence: 0 };
+};
+
+// Today so far beside each of the 7 days before it; the line on each day's bar is where it had got to by this time
+function energyTodayPane(f) {
     const weekday = d => new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' }).slice(0, 2);
+    const days = [...f.recentDays, { date: '', ...f.today }];
+    const by = f.today.dataTo ? `by ${clockTime(f.today.dataTo)}` : 'by this time';
+    const average = periodAverage(f.recentDays);
+    const yesterday = f.recentDays[f.recentDays.length - 1];
     return `
             <div class="energy-pane">
-                <div class="energy-pane-title">Last 7 days, ${shortDate(lastWeek.from)} – ${shortDate(lastWeek.to)}</div>
-                ${energyFigures(f, lastWeek)}
-                ${energyComparison(f.weeks, 'week')}
-                ${energyDailyPlot(f, f.lastWeek, `${name} use per day over the last 7 days`, weekday)}
-                <div class="energy-section-label">Weekly totals, last ${f.weeks.length} weeks</div>
-                ${energyTotalsBars(f, f.weeks, w => `${shortDate(w.from)} – ${shortDate(w.to)}`, (w, latest) => latest ? 'Last' : shortDate(w.from))}
+                <div class="energy-pane-title">Today vs the last ${f.recentDays.length} days</div>
+                ${energyFigures(f, f.today)}
+                ${f.today.dataTo ? energySoFarComparison(f.today.kwh, f.recentDays, 'day', 'by this time') : '<div class="energy-compare">No readings for today yet</div>'}
+                <div class="energy-section-label energy-legend">Daily totals${f.today.dataTo ? energyMarkLegend(by) : ''}</div>
+                ${energyTotalsBars(f, days, d => d.date ? `${weekday(d)} ${shortDate(d.date)}` : 'Today so far', (d, latest) => latest ? 'Today' : weekday(d),
+                    { mark: d => d.date && f.today.dataTo && d.kwh ? { kwh: d.byNow, text: `${by[0].toUpperCase()}${by.slice(1)}: ${kwhText(d.byNow)}` } : null })}
                 <div class="energy-totals">
-                    <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
+                    <div><span>Daily average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
+                    <div><span>Yesterday</span><b>${kwhText(yesterday.kwh)}</b>${f.hasCost ? pounds(yesterday.pence) : ''}</div>
+                </div>
+            </div>`;
+}
+
+// This week so far (from Monday) beside each of the 7 weeks before it, marked where they'd got to by the same point
+function energyThisWeekPane(f) {
+    const weeks = [...f.weeks, { ...f.thisWeek, to: '' }];
+    const average = periodAverage(f.weeks);
+    const lastWeek = f.weeks[f.weeks.length - 1];
+    return `
+            <div class="energy-pane">
+                <div class="energy-pane-title">This week vs the last ${f.weeks.length} weeks</div>
+                ${energyFigures(f, f.thisWeek)}
+                ${energySoFarComparison(f.thisWeek.kwh, f.weeks, 'week', 'by this point in the week')}
+                <div class="energy-section-label energy-legend">Weekly totals, from Monday${energyMarkLegend('by the same point')}</div>
+                ${energyTotalsBars(f, weeks, w => w.to ? `${shortDate(w.from)} – ${shortDate(w.to)}` : `This week so far, from ${shortDate(w.from)}`,
+                    (w, latest) => latest ? 'This' : shortDate(w.from),
+                    { mark: w => w.to && w.kwh ? { kwh: w.byNow, text: `By the same point: ${kwhText(w.byNow)}` } : null })}
+                <div class="energy-totals">
+                    <div><span>Weekly average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
+                    <div><span>Last week</span><b>${kwhText(lastWeek.kwh)}</b>${f.hasCost ? pounds(lastWeek.pence) : ''}</div>
                 </div>
             </div>`;
 }
@@ -12864,18 +12909,25 @@ function energyMonthPane(f, name) {
     const busiest = days.reduce((top, d) => d.kwh > top.kwh ? d : top, { kwh: 0 });
     const dayOfMonth = d => { const n = +d.date.slice(8); return n % 7 === 1 ? n : ''; };
     return `
-            <div class="energy-pane">
+            <div class="energy-pane wide">
                 <div class="energy-pane-title">Last month, ${monthName(lastMonth.month)} ${lastMonth.month.slice(0, 4)}</div>
                 ${energyFigures(f, lastMonth)}
                 ${energyComparison(f.months.slice(-7), 'month')}
                 ${energyYearComparison(lastMonth)}
                 ${energyDailyPlot(f, f.lastMonth, `${name} use per day through ${monthName(lastMonth.month)}`, dayOfMonth, true)}
                 <div class="energy-section-label energy-legend">Monthly totals, last ${f.months.length} months
-                    ${f.months.some(m => m.lastYear) ? '<span><i class="energy-last-year"></i>a year earlier</span>' : ''}</div>
-                ${energyTotalsBars(f, f.months, m => `${monthName(m.month)} ${m.month.slice(0, 4)}`, m => monthName(m.month, 'short').slice(0, 3), true)}
+                    ${f.months.some(m => m.lastYear) ? energyMarkLegend('a year earlier') : ''}</div>
+                ${energyTotalsBars(f, f.months, m => `${monthName(m.month)} ${m.month.slice(0, 4)}`, m => monthName(m.month, 'short').slice(0, 3), {
+                    dense: true,
+                    mark: m => {
+                        const change = yearChange(m);
+                        return change === null ? null : { kwh: m.lastYear.kwh, text: `A year earlier: ${kwhText(m.lastYear.kwh)}${costText(f, m.lastYear.pence)} (${change > 0 ? '+' : ''}${change}%)` };
+                    },
+                })}
                 <div class="energy-totals">
                     <div><span>Daily average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
                     <div><span>Busiest day</span><b>${kwhText(busiest.kwh)}</b>${busiest.date ? shortDate(busiest.date) : ''}</div>
+                    <div><span>This month so far</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
                 </div>
             </div>`;
 }

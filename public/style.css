@@ -9794,7 +9794,7 @@ input:checked+.slider:before {
     align-items: start;
 }
 
-/* Each fuel's card holds the week and the month side by side, stacking when there isn't room */
+/* Each fuel's card holds today and this week side by side, stacking when there isn't room */
 .energy-panes {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -9806,6 +9806,11 @@ input:checked+.slider:before {
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+}
+
+/* Last month runs across the bottom of the card, under today and this week */
+.energy-pane.wide {
+    grid-column: 1 / -1;
 }
 
 .energy-pane-title {
@@ -10021,7 +10026,7 @@ input:checked+.slider:before {
 
 .energy-totals {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 0.75rem;
     font-size: 0.85rem;
     color: var(--text-muted);
