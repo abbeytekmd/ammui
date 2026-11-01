@@ -1320,7 +1320,14 @@ class Slideshow {
         do this.renderBrowserBatch(); while (this.browserRendered <= this.index && this.browserRendered < this.items.length);
 
         document.getElementById('ss-browser').style.display = 'flex';
-        this.browserGrid.querySelector('.photo-tile.current')?.scrollIntoView({ block: 'center' });
+        // Scroll only the grid's own body: scrollIntoView would also scroll the slideshow overlay and page
+        // (even overflow:hidden ones), pushing the header with the close/quit controls off the top
+        const body = document.getElementById('ss-browser-body');
+        const tile = this.browserGrid.querySelector('.photo-tile.current');
+        if (tile) {
+            const offset = tile.getBoundingClientRect().top - body.getBoundingClientRect().top;
+            body.scrollTop += offset - (body.clientHeight - tile.offsetHeight) / 2;
+        }
 
         // Add the next batch of tiles as the bottom of the grid scrolls into view
         this._browserObserver = new IntersectionObserver(entries => {

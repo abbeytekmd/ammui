@@ -8501,6 +8501,9 @@ input:checked+.slider:before {
         position: static;
         order: -1;
         max-width: calc(100% - 32px);   /* the panel's width, less its side margins */
+        /* Wrap onto more lines rather than cutting the title and artist off at the panel's edge */
+        white-space: normal;
+        overflow-wrap: anywhere;
         margin: 12px 16px 0;
         align-self: flex-start;
         font-size: clamp(16px, 1.3vw, 22px);
