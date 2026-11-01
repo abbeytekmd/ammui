@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=66">
+    <link rel="stylesheet" href="style.css?v=69">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -94,6 +94,14 @@
                         <rect x="16" y="8" width="6" height="8" rx="1"></rect>
                     </svg>
                     <span>Games</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="sky" onclick="showSky()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"></path>
+                        <path d="M17 3v4M15 5h4"></path>
+                    </svg>
+                    <span>Sky</span>
                 </button>
             </nav>
 
@@ -710,6 +718,56 @@
             <div id="word-message" class="word-message" role="status" aria-live="polite"></div>
             <div class="word-board-area"><div id="word-board" class="word-board"></div></div>
             <div id="word-keyboard" class="word-keyboard"></div>
+        </section>
+
+        <!-- Sky tab: a chart of the sky from a saved location and what's on tonight (built by sky.js) -->
+        <section id="sky-view" class="smarthome-view sky-view" hidden>
+            <div class="smarthome-header">
+                <h2>Sky <span id="sky-place" class="sky-place"></span></h2>
+                <div class="smarthome-actions">
+                    <button type="button" class="btn-control btn-small" onclick="openSkyLocation()"
+                        title="Where the sky is seen from">Location</button>
+                </div>
+            </div>
+            <form id="sky-location-form" class="sky-location-form" hidden onsubmit="event.preventDefault(); saveSkyLocation()">
+                <div class="sky-location-intro">Where are you watching from? Latitude and longitude in degrees: north and east are positive.</div>
+                <div class="sky-location-fields">
+                    <input type="number" id="sky-lat" class="alarms-input" step="any" min="-90" max="90" placeholder="Latitude" required>
+                    <input type="number" id="sky-lon" class="alarms-input" step="any" min="-180" max="180" placeholder="Longitude" required>
+                    <input type="text" id="sky-name" class="alarms-input sky-name-input" maxlength="60" placeholder="Name (optional)">
+                    <button type="button" class="btn-control" onclick="useDeviceSkyLocation()">Use this device's location</button>
+                    <button type="submit" class="btn-control primary">Save</button>
+                </div>
+            </form>
+            <div id="sky-body" class="sky-body" hidden>
+                <div class="sky-chart-col">
+                    <div class="sky-modes">
+                        <button type="button" class="btn-control btn-small sky-mode-btn" data-mode="horizon" onclick="setSkyMode('horizon')">Looking out</button>
+                        <button type="button" class="btn-control btn-small sky-mode-btn" data-mode="dome" onclick="setSkyMode('dome')">Overhead</button>
+                        <span id="sky-facing-row" class="sky-facing">
+                            <span id="sky-facing-label"></span>
+                            <button type="button" class="btn-control btn-small" onclick="setSkyFacing(0)">Face north</button>
+                        </span>
+                    </div>
+                    <div id="sky-chart" class="sky-chart"></div>
+                    <div class="sky-time">
+                        <input type="range" id="sky-time" min="0" max="720" step="15" value="0"
+                            oninput="setSkyOffset(this.value)" aria-label="Time ahead">
+                        <span id="sky-time-label" class="sky-time-label"></span>
+                        <button type="button" class="btn-control btn-small" onclick="setSkyOffset(0)">Now</button>
+                    </div>
+                    <div id="sky-info" class="sky-info" role="status" aria-live="polite"></div>
+                </div>
+                <div class="sky-side">
+                    <div id="sky-summary" class="sky-summary"></div>
+                    <h3>Tonight</h3>
+                    <div id="sky-highlights" class="sky-list"></div>
+                    <h3>Aurora (Kp index)</h3>
+                    <div id="sky-kp" class="sky-kp"></div>
+                    <h3>Eclipses</h3>
+                    <div id="sky-eclipses" class="sky-list"></div>
+                </div>
+            </div>
         </section>
 
         <section id="calendar-view" class="calendar-view" hidden>
@@ -2674,9 +2732,10 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=62"></script>
+    <script src="app.js?v=63"></script>
     <script src="slideshow.js?v=9"></script>
     <script src="timers.js?v=2"></script>
+    <script src="sky.js?v=3"></script>
 </body>
 
 </html>

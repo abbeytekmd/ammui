@@ -5819,7 +5819,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view', sky: 'sky-view' };
 
 function setAppView(view) {
     appView = view;

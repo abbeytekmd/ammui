@@ -2745,6 +2745,44 @@ app.post('/api/settings/usda', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+// --- Sky tab: where the sky is seen from, and NOAA's geomagnetic (aurora) forecast ---
+app.get('/api/sky/location', (req, res) => {
+    res.json(getSetting('skyLocation', null));
+});
+
+app.post('/api/sky/location', express.json(), (req, res) => {
+    const lat = Number(req.body?.lat), lon = Number(req.body?.lon);
+    if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return res.status(400).json({ error: 'Latitude must be -90 to 90 and longitude -180 to 180' });
+    const location = { lat, lon, name: String(req.body?.name || '').trim().slice(0, 60) };
+    setSetting('skyLocation', location);
+    res.json(location);
+});
+
+// Kp index, observed and forecast, three-hourly. NOAA updates it every few hours, so it's kept a while.
+const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
+const KP_CACHE_MS = 30 * 60 * 1000;
+let kpCache = null;
+
+app.get('/api/sky/kp', async (req, res) => {
+    if (kpCache && Date.now() - kpCache.at < KP_CACHE_MS) return res.json(kpCache.data);
+    try {
+        const { data } = await axios.get(KP_URL, { timeout: 10000 });
+        // Rows are objects now; older versions of the feed were arrays under a header row
+        const rows = Array.isArray(data?.[0]) ? data.slice(1).map(([time_tag, kp, observed]) => ({ time_tag, kp, observed })) : data;
+        const kp = rows.map(r => ({
+            time: `${r.time_tag}Z`.replace(/ /, 'T').replace(/ZZ$/, 'Z'),
+            kp: Number(r.kp ?? r.Kp),
+            observed: r.observed === 'observed' || r.observed === 'estimated' ? r.observed : 'predicted',
+        })).filter(r => Number.isFinite(r.kp));
+        kpCache = { at: Date.now(), data: kp };
+        res.json(kp);
+    } catch (err) {
+        console.error('Failed to fetch the Kp forecast:', err.message);
+        if (kpCache) return res.json(kpCache.data);
+        res.status(502).json({ error: 'Could not reach NOAA' });
+    }
+});
+
 // --- Outgoing email (the mail server the shopping list is sent through) ---
 const isEmailAddress = s => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s);
 const EMAIL_SECURITY = ['starttls', 'ssl', 'none'];
