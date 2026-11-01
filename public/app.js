@@ -11847,11 +11847,14 @@ async function saveGeneralSettings() {
             body: JSON.stringify({ deviceName })
         });
         if (response.ok) {
+            const renamed = deviceName !== currentDeviceName;
             currentDeviceName = deviceName;
             updateUIWithDeviceName();
             // The server button shows the media library's name, which follows the device name
             await fetchDevices();
-            showToast('Settings saved', 'success', 2000);
+            // The HTTPS certificate carries the name, so a new one was made
+            if (renamed) showToast('Saved. The certificate now has the new name: install it again on each phone and PC (Settings > Secure Access) to stop the browser warning.', 'success', 10000);
+            else showToast('Settings saved', 'success', 2000);
         }
     } catch (err) {
         console.error('Failed to save general settings:', err);

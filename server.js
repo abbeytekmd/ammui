@@ -3178,6 +3178,7 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         settings.deviceName = deviceName;
         saveSettings();
         renameMediaKeyServer(oldLibraryName, localLibraryName());
+        renewHttpsCertificate(); // named after the server, so devices trust it again under the new name
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
@@ -6515,8 +6516,19 @@ http.createServer(app)
         else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
     });
 
+// Kept to give it a new certificate when the server is renamed (the certificate carries its name)
+let httpsServer = null;
+function renewHttpsCertificate() {
+    if (!httpsServer) return;
+    try {
+        httpsServer.setSecureContext(ensureHttpsCertificate(certsDir, settings.deviceName));
+    } catch (err) {
+        console.error('[HTTPS] Could not make a certificate for the new name:', err.message);
+    }
+}
+
 try {
-    https.createServer(ensureHttpsCertificate(certsDir), app)
+    httpsServer = https.createServer(ensureHttpsCertificate(certsDir, settings.deviceName), app)
         .on('error', err => {
             httpsListenError = listenProblem(err, httpsPort);
             console.error(`[HTTPS] Could not listen on port ${httpsPort}: ${httpsListenError}. Choose another port in Settings (over HTTP, port ${port}).`);
