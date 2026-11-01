@@ -277,19 +277,72 @@ function skyLensProject(facing, w) {
     const raw = (alt, az) => {
         const dA = skyNorm(az - facing + 180) - 180;
         const cosC = skySin(h0) * skySin(alt) + skyCos(h0) * skyCos(alt) * skyCos(dA);
-        if (cosC < 0.05) return null;
+        if (cosC < -0.6) return null; // well behind you (the lens takes in more than half the sky)
         const k = 2 / (1 + cosC);
         return [k * skyCos(alt) * skySin(dA), k * (skyCos(h0) * skySin(alt) - skySin(h0) * skyCos(alt) * skyCos(dA))];
     };
     const horizon = raw(0, facing)[1], zenith = raw(90, facing)[1];
     const scale = (SKY_HORIZON_AT - SKY_ZENITH_AT) * SKY_H / (zenith - horizon);
     const cy = SKY_HORIZON_AT * SKY_H + horizon * scale;
-    return (alt, az) => {
+    const place = p => [w / 2 + p[0] * scale, cy - p[1] * scale];
+    const project = (alt, az) => {
         const p = raw(alt, az);
         if (!p) return null;
-        const x = w / 2 + p[0] * scale, y = cy - p[1] * scale;
+        const [x, y] = place(p);
         return x < -200 || x > w + 200 || y < -200 || y > SKY_H + 200 ? null : [x, y];
     };
+    // The same, however far out of the picture it is (for the horizon, which runs off the sides)
+    project.unbounded = (alt, az) => { const p = raw(alt, az); return p && place(p); };
+    return project;
+}
+
+// The sky's colours by the Sun's altitude, blended between these: [altitude, overhead, horizon].
+// Deep blue night, purple then pink and orange twilight, golden low sun, blue day.
+const SKY_COLOURS = [
+    [-90, '#02040b', '#060a1a'],
+    [-18, '#02040b', '#0a1030'],
+    [-12, '#080e2c', '#1d2150'],
+    [-8, '#111940', '#3b3066'],
+    [-4, '#1b2858', '#93587a'],
+    [-1, '#273f78', '#de7f5a'],
+    [3, '#3760a6', '#f0ae78'],
+    [10, '#3c76c6', '#b6d2ee'],
+    [90, '#2867cc', '#a4cbf2'],
+];
+const skyRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+const skyMix = (a, b, k) => a.map((v, i) => Math.round(v + (b[i] - v) * k));
+const skyCss = rgb => `rgb(${rgb.join(',')})`;
+// Linear between the points of a table of [x, value] pairs (x ascending), held at the ends
+const skyRamp = (table, x) => {
+    if (x <= table[0][0]) return table[0][1];
+    for (let i = 1; i < table.length; i++) {
+        if (x <= table[i][0]) {
+            const [x0, y0] = table[i - 1], [x1, y1] = table[i];
+            return y0 + (y1 - y0) * (x - x0) / (x1 - x0);
+        }
+    }
+    return table[table.length - 1][1];
+};
+
+function skyColoursAt(sunAlt) {
+    let i = SKY_COLOURS.findIndex(c => c[0] >= sunAlt);
+    if (i < 0) i = SKY_COLOURS.length - 1;
+    if (i === 0) i = 1;
+    const [a0, top0, hor0] = SKY_COLOURS[i - 1], [a1, top1, hor1] = SKY_COLOURS[i];
+    const k = Math.min(1, Math.max(0, (sunAlt - a0) / (a1 - a0)));
+    return { top: skyMix(skyRgb(top0), skyRgb(top1), k), horizon: skyMix(skyRgb(hor0), skyRgb(hor1), k) };
+}
+
+// The faintest star that shows, by the Sun's altitude: about magnitude 6 in a dark sky, fewer
+// and fewer through twilight. By day they all show anyway (it's a picture to read, not a photo).
+const skyLimitingMag = sunAlt => skyRamp([[-18, 6], [-12, 4.3], [-6, 2.6], [-1, 1.2], [5, -0.5]], sunAlt);
+
+// How strongly a star or planet of this magnitude shows: 0 to 1
+function skyStarShow(mag, scene) {
+    const seen = Math.min(1, Math.max(0, (scene.limitMag - mag + 0.8) / 1.6));
+    const bright = 0.5 + 0.5 * Math.min(1, Math.max(0, (3.5 - mag) / 4)); // brighter stars brighter
+    const day = skyRamp([[-8, 0], [-3, 0.75]], scene.sunAlt);
+    return Math.max(seen, day) * bright;
 }
 
 // Where everything is in the sky at a moment, seen from loc. This is the slow part, so it's
@@ -309,11 +362,18 @@ function skyScene(t, loc) {
     const dot = m[0] * sv[0] + m[1] * sv[1] + m[2] * sv[2];
     return {
         sunAlt,
-        starFade: sunAlt > -0.833 ? 0.25 : sunAlt > -6 ? 0.45 : sunAlt > -12 ? 0.75 : 1,
-        sky: sunAlt > -0.833 ? ['#2f5f99', '#1e3a66'] : sunAlt > -6 ? ['#233e6b', '#121e3d'] : sunAlt > -12 ? ['#121c3a', '#0a1028'] : ['#0a0f24', '#03050f'],
+        limitMag: skyLimitingMag(sunAlt),
+        light: sunAlt > -4, // a pale sky: stars get a dark edge and the lines a darker colour to stand out
+        figureFade: Math.min(1, Math.max(0.7, (-sunAlt - 2) / 10)), // constellation lines
+        labelFade: Math.min(1, Math.max(0.8, (-sunAlt - 2) / 10)),  // and their names, kept readable by day
+        colours: skyColoursAt(sunAlt),
+        // The warm glow on the horizon where the Sun is setting or rising (strongest just after sunset),
+        // and the brightness round the Sun when it's up
+        glow: Math.max(0, 1 - Math.abs(sunAlt + 1) / 11),
+        halo: Math.min(1, Math.max(0, (sunAlt + 1) / 4)),
         ecliptic,
         stars: new Map(SKY_STARS.map(s => [s[0], { ...pos(s[1], s[2]), mag: s[3], colour: s[4] }])),
-        deep: SKY_DEEP.map(([name, ra, dec]) => ({ name, ...pos(ra, dec) })),
+        deep: SKY_DEEP.map(([name, ra, dec, mag]) => ({ name, mag, ...pos(ra, dec) })),
         planets: b.planets,
         sun: b.sun,
         moon:{ ...b.moon, towards: skyFromVec(m.map((v, i) => v + 0.02 * (sv[i] - v * dot))) },
@@ -368,21 +428,30 @@ function skyLensSvg(scene, facing, w) {
         }
     }
 
-    // Galaxies, clusters and nebulae
+    // Galaxies, clusters and nebulae, once it's dark enough for them (they're faint and spread out)
     for (const d of scene.deep) {
         const xy = at(d.alt, d.az);
-        if (!xy) continue;
-        parts.push(`<ellipse cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" rx="7" ry="4.5" class="sky-deep"/>`);
+        const show = Math.min(1, Math.max(0, (scene.limitMag - d.mag - 0.5) / 1.5));
+        if (!xy || show < 0.3) continue;
+        parts.push(`<ellipse cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" rx="7" ry="4.5" class="sky-deep" opacity="${show.toFixed(2)}"/>`);
         labels.push({ x: xy[0], y: xy[1], r: 8, text: d.name, cls: 'sky-deep-name', size: 13, priority: 3 });
     }
 
-    // Stars, bigger for brighter
+    // Stars: white, bigger and brighter for brighter ones, the brightest in a nimbus of light, and
+    // at night the faint ones only once it's dark enough for them
+    const starEdge = scene.light ? ' stroke="rgba(10,22,50,0.55)" stroke-width="1"' : '';
     for (const [name, s] of scene.stars) {
         const xy = starXY.get(name);
         if (!xy) continue;
-        const r = Math.max(1.3, 6.2 - 1.25 * s.mag);
-        if (s.mag < 1.0) labels.push({ x: xy[0], y: xy[1], r, text: name, cls: 'sky-star-name', size: 16, priority: 2 });
-        parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r)}" fill="${s.colour || '#f4f7ff'}" class="sky-star"/>`);
+        const show = skyStarShow(s.mag, scene);
+        if (show < 0.03) continue;
+        const r = Math.max(1, 5.4 - 1.15 * s.mag);
+        if (s.mag < 1.8) {
+            const nimbus = show * Math.min(1, (1.8 - s.mag) / 2.2);
+            parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r * 4.5)}" fill="url(#sky-star-glow)" opacity="${nimbus.toFixed(2)}"/>`);
+        }
+        if (s.mag < 1.0 && show > 0.3) labels.push({ x: xy[0], y: xy[1], r, text: name, cls: 'sky-star-name', size: 16, priority: 2 });
+        parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r)}" fill="#ffffff" opacity="${show.toFixed(2)}"${starEdge}/>`);
     }
 
     // Planets, labelled
@@ -390,7 +459,9 @@ function skyLensSvg(scene, facing, w) {
         const xy = at(p.alt, p.az);
         if (!xy) continue;
         const r = Math.max(3, Math.min(9, 6.5 - 1.1 * p.mag));
-        parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r)}" fill="${p.colour}" class="sky-planet"/>`);
+        const show = Math.max(0.35, skyStarShow(p.mag, scene));
+        if (p.mag < 0) parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r * 3.2)}" fill="url(#sky-star-glow)" opacity="${(show * 0.8).toFixed(2)}"/>`);
+        parts.push(`<circle cx="${fmt(xy[0])}" cy="${fmt(xy[1])}" r="${fmt(r)}" fill="${p.colour}" opacity="${show.toFixed(2)}" class="sky-planet"/>`);
         // In twilight the ones beside the Sun can't be seen anyway
         if (!(scene.sunAlt > -6 && p.elongation < 12)) labels.push({ x: xy[0], y: xy[1], r, text: p.name, cls: 'sky-planet-name', size: 19, priority: 1 });
     }
@@ -403,26 +474,34 @@ function skyLensSvg(scene, facing, w) {
         const [sx, sy] = project(moon.towards.alt, moon.towards.az) || [x + 1, y];
         const angle = Math.atan2(sy - y, sx - x) / SKY_DEG;
         const r = 15, k = moon.illumination, tr = r * Math.abs(1 - 2 * k);
-        parts.push(`<circle cx="${fmt(x)}" cy="${fmt(y)}" r="${r + 3}" class="sky-moon-glow"/>
+        // Moonlight: a wide glow, stronger the fuller it is and the darker the sky
+        const moonGlow = k * (scene.sunAlt < -6 ? 0.5 : 0.2);
+        parts.push(`<circle cx="${fmt(x)}" cy="${fmt(y)}" r="${r * 5}" fill="url(#sky-moon-glow)" opacity="${moonGlow.toFixed(2)}"/>
             <circle cx="${fmt(x)}" cy="${fmt(y)}" r="${r}" fill="#3b4459"/>
             <path d="M0,${-r} A${r},${r} 0 0 1 0,${r} A${fmt(tr)},${r} 0 0 ${k > 0.5 ? 1 : 0} 0,${-r}Z" fill="#f1f5f9"
                 transform="translate(${fmt(x)},${fmt(y)}) rotate(${fmt(angle)})"/>`);
         labels.push({ x, y, r, text: 'Moon', cls: 'sky-planet-name', size: 19, priority: 0 });
     }
 
-    // The Sun, when it's up
+    // The Sun, when it's up, in a bright halo
     const sunXY = scene.sun.alt > -1 && project(scene.sun.alt, scene.sun.az);
-    if (sunXY) parts.push(`<circle cx="${fmt(sunXY[0])}" cy="${fmt(sunXY[1])}" r="16" fill="#fde68a" class="sky-sun"/>`);
-
-    parts.push(...skyPlaceLabels(labels));
-
-    // The ground covers everything below the horizon, with the compass points marked along its edge
-    const edge = [];
-    for (let dA = -110; dA <= 110; dA += 2) {
-        const xy = project(0, facing + dA);
-        if (xy) edge.push(`${fmt(xy[0])},${fmt(xy[1])}`);
+    if (sunXY) {
+        parts.push(`<circle cx="${fmt(sunXY[0])}" cy="${fmt(sunXY[1])}" r="150" fill="url(#sky-sun-halo)" opacity="${scene.halo.toFixed(2)}"/>
+            <circle cx="${fmt(sunXY[0])}" cy="${fmt(sunXY[1])}" r="16" fill="#fff3c4"/>`);
     }
-    frame.push(`<path d="M${edge.join('L')}L${w + 200},${SKY_H + 200}L-200,${SKY_H + 200}Z" class="sky-ground"/>`);
+
+    // The ground covers everything below the horizon, with the compass points marked along its edge.
+    // The horizon is followed round until it's well out of the picture at both sides, then closed
+    // far below, so the ground's outline never cuts across the picture.
+    const edge = [];
+    for (let dA = -178; dA <= 178; dA += 2) {
+        const xy = project.unbounded(0, facing + dA);
+        if (xy) edge.push(xy);
+    }
+    const far = 20 * SKY_H;
+    const groundPath = `M${edge.map(([x, y]) => `${fmt(x)},${fmt(y)}`).join('L')}`
+        + `L${fmt(edge[edge.length - 1][0] + far)},${far}L${fmt(edge[0][0] - far)},${far}Z`;
+    frame.push(`<path d="${groundPath}" fill="url(#sky-ground)" class="sky-ground"/>`);
     for (let i = 0; i < 16; i++) {
         const xy = project(0, i * 22.5);
         if (!xy || xy[0] < -40 || xy[0] > w + 40) continue;
@@ -430,10 +509,36 @@ function skyLensSvg(scene, facing, w) {
         frame.push(`<line x1="${fmt(xy[0])}" y1="${fmt(xy[1])}" x2="${fmt(xy[0])}" y2="${fmt(xy[1] + (main ? 14 : 8))}" class="sky-tick"/>
             <text x="${fmt(xy[0])}" y="${fmt(xy[1] + (main ? 42 : 34))}" class="sky-compass${main ? '' : ' minor'}">${SKY_COMPASS[i]}</text>`);
     }
-    return `<defs><linearGradient id="sky-dome" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${scene.sky[1]}"/><stop offset="100%" stop-color="${scene.sky[0]}"/></linearGradient></defs>
+    // The warm glow on the horizon below the Sun, when it's near enough to be in view
+    let glow = '';
+    const glowXY = scene.glow > 0.02 && project(Math.max(scene.sun.alt, 1), scene.sun.az);
+    if (glowXY) {
+        glow = `<ellipse cx="${fmt(glowXY[0])}" cy="${fmt(Math.max(glowXY[1], SKY_HORIZON_AT * SKY_H - 40))}" rx="${fmt(w * 0.55)}" ry="${fmt(SKY_H * 0.55)}"
+            fill="url(#sky-sunset-glow)" opacity="${scene.glow.toFixed(2)}"/>`;
+    }
+    const { top, horizon } = scene.colours;
+    const groundTop = skyMix(horizon, [8, 10, 14], 0.82), groundBottom = skyMix(horizon, [2, 3, 5], 0.95);
+    return `<defs>
+            <linearGradient id="sky-dome" gradientUnits="userSpaceOnUse" x1="0" y1="${SKY_ZENITH_AT * SKY_H}" x2="0" y2="${SKY_HORIZON_AT * SKY_H}">
+                <stop offset="0" stop-color="${skyCss(top)}"/><stop offset="0.6" stop-color="${skyCss(skyMix(top, horizon, 0.35))}"/>
+                <stop offset="1" stop-color="${skyCss(horizon)}"/></linearGradient>
+            <linearGradient id="sky-ground" gradientUnits="userSpaceOnUse" x1="0" y1="${SKY_H * 0.5}" x2="0" y2="${SKY_H}">
+                <stop offset="0" stop-color="${skyCss(groundTop)}"/><stop offset="0.8" stop-color="${skyCss(groundBottom)}"/></linearGradient>
+            <radialGradient id="sky-sunset-glow"><stop offset="0" stop-color="#ffb070" stop-opacity="0.75"/>
+                <stop offset="0.45" stop-color="#ff8a5c" stop-opacity="0.25"/><stop offset="1" stop-color="#ff8a5c" stop-opacity="0"/></radialGradient>
+            <radialGradient id="sky-sun-halo"><stop offset="0" stop-color="#fffbe8" stop-opacity="0.9"/>
+                <stop offset="0.25" stop-color="#fff1c2" stop-opacity="0.35"/><stop offset="1" stop-color="#fff1c2" stop-opacity="0"/></radialGradient>
+            <radialGradient id="sky-star-glow"><stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+                <stop offset="0.2" stop-color="#ffffff" stop-opacity="0.35"/><stop offset="0.5" stop-color="#e6eeff" stop-opacity="0.1"/>
+                <stop offset="1" stop-color="#e6eeff" stop-opacity="0"/></radialGradient>
+            <radialGradient id="sky-moon-glow"><stop offset="0" stop-color="#f1f5f9" stop-opacity="0.55"/>
+                <stop offset="0.4" stop-color="#cbd5e1" stop-opacity="0.15"/><stop offset="1" stop-color="#cbd5e1" stop-opacity="0"/></radialGradient>
+        </defs>
         <rect x="-200" y="-200" width="${w + 400}" height="${SKY_H + 400}" fill="url(#sky-dome)"/>
-        <g style="--sky-fade:${scene.starFade}">${parts.join('')}</g>
-        ${frame.join('')}`;
+        ${glow}
+        <g class="${scene.light ? 'sky-light' : ''}" style="--sky-fade:${scene.figureFade.toFixed(2)};--sky-label-fade:${scene.labelFade.toFixed(2)}">${parts.join('')}</g>
+        ${frame.join('')}
+        <g style="--sky-label-fade:${scene.labelFade.toFixed(2)}">${skyPlaceLabels(labels).join('')}</g>`; // over the ground, so none are hidden by it
 }
 
 // Labels in order of importance, each beside its mark wherever it first fits; any that can't fit are left off
@@ -459,7 +564,7 @@ function skyPlaceLabels(labels) {
 // --- The slideshow's sky slide. Looking one way it's drawn once a minute; turning, the picture is
 // drawn afresh a few times a second from the scene worked out each minute.
 
-const SKY_TURN_MS = 3 * 60000; // once round the horizon
+const SKY_TURN_MS = 3 * 60000; // once round the horizon, when it's turning (the sky's Turn button)
 const SKY_FRAME_MS = 50;       // turning: at most 20 pictures a second (gentle on a Raspberry Pi)
 
 let skySlide = null; // { el, timer, frame }
@@ -478,38 +583,85 @@ function showSkySlide(sky) {
     const w = SKY_H * (el.clientWidth / el.clientHeight || 16 / 9);
     el.innerHTML = `<svg viewBox="0 0 ${w.toFixed(1)} ${SKY_H}" class="sky-svg" role="img" aria-label="The sky"></svg>`;
     const svg = el.firstElementChild;
-    const slide = skySlide = { el, timer: null, frame: 0 };
+    const slide = skySlide = { el, timer: null, frame: 0, listening: new AbortController() };
     let scene = skyScene(Date.now(), sky);
-    slide.timer = setInterval(() => { scene = skyScene(Date.now(), sky); if (sky.mode !== 'turning') draw(sky.facing); }, 60000);
-    const draw = facing => { svg.innerHTML = skyLensSvg(scene, facing, w); };
+    let facing = sky.facing; // where it's looking now
+    const draw = () => { svg.innerHTML = skyLensSvg(scene, facing, w); };
+    slide.timer = setInterval(() => { scene = skyScene(Date.now(), sky); draw(); }, 60000);
 
-    if (sky.mode === 'turning') {
-        const started = performance.now();
-        let last = -Infinity;
-        const tick = now => {
-            if (skySlide !== slide) return;
-            if (now - last >= SKY_FRAME_MS) {
-                last = now;
-                draw(skyNorm(sky.facing + (now - started) / SKY_TURN_MS * 360));
-            }
-            slide.frame = requestAnimationFrame(tick);
-        };
-        draw(sky.facing);
+    // Turning slowly: from where it's looking, carrying on round from wherever a drag leaves it.
+    // Started and stopped with the sky's Turn button, which is remembered for next time.
+    let turnFrom = facing, turnStart = 0, dragging = null; // { x, facing, degPerPx }
+    let last = -Infinity;
+    const tick = now => {
+        if (skySlide !== slide || !slide.turning) return;
+        if (!dragging && now - last >= SKY_FRAME_MS) {
+            last = now;
+            facing = skyNorm(turnFrom + (now - turnStart) / SKY_TURN_MS * 360);
+            draw();
+        }
         slide.frame = requestAnimationFrame(tick);
-    } else {
-        draw(sky.facing);
-    }
+    };
+    slide.setTurning = on => {
+        slide.turning = on;
+        cancelAnimationFrame(slide.frame);
+        if (on) {
+            turnFrom = facing;
+            turnStart = performance.now();
+            slide.frame = requestAnimationFrame(tick);
+        }
+        document.getElementById('ss-sky-turn')?.classList.toggle('is-on', on);
+    };
+    let turning = sky.mode === 'turning'; // as the settings once chose, until the button is used
+    try { const saved = localStorage.getItem('skyTurning'); if (saved !== null) turning = saved === '1'; } catch { }
+    slide.setTurning(turning);
+    draw();
+
+    // Dragging left or right turns the view, the sky following the finger
+    const { signal } = slide.listening;
+    let pending = 0;
+    el.addEventListener('pointerdown', e => {
+        // How many degrees one screen pixel is, near the middle of the view
+        const project = skyLensProject(facing, w);
+        const unitsPerDeg = (project(0, facing + 10)?.[0] - w / 2) / 10 || 1;
+        dragging = { x: e.clientX, facing, degPerPx: w / el.clientWidth / unitsPerDeg };
+        el.setPointerCapture(e.pointerId);
+        el.classList.add('dragging');
+    }, { signal });
+    el.addEventListener('pointermove', e => {
+        if (!dragging) return;
+        facing = skyNorm(dragging.facing - (e.clientX - dragging.x) * dragging.degPerPx);
+        if (!pending) pending = requestAnimationFrame(() => { pending = 0; draw(); });
+    }, { signal });
+    const endDrag = () => {
+        if (!dragging) return;
+        dragging = null;
+        el.classList.remove('dragging');
+        turnFrom = facing;
+        turnStart = performance.now();
+    };
+    el.addEventListener('pointerup', endDrag, { signal });
+    el.addEventListener('pointercancel', endDrag, { signal });
     void el.offsetWidth; // so it fades in
     el.classList.add('showing');
+}
+
+// The sky's Turn button: starts or stops it turning, and remembers which for next time
+function toggleSkyTurning() {
+    if (!skySlide) return;
+    skySlide.setTurning(!skySlide.turning);
+    try { localStorage.setItem('skyTurning', skySlide.turning ? '1' : '0'); } catch { }
 }
 
 // Fades the sky slide out (at once with `now`)
 function hideSkySlide(now = false) {
     if (!skySlide) return;
-    const { el, timer, frame } = skySlide;
+    const { el, timer, frame, listening } = skySlide;
     skySlide = null;
     clearInterval(timer);
     cancelAnimationFrame(frame);
+    listening.abort();
+    el.classList.remove('dragging');
     el.classList.remove('showing');
     const done = () => {
         if (skySlide) return; // shown again meanwhile

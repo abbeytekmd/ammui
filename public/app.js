@@ -12052,13 +12052,11 @@ function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, s
         if (slideshow) slideshow.setVideoOptions(slideshowVideos);
     }
     if (slideshowSky) {
-        document.getElementById('slideshow-sky-mode-input').value = slideshowSky.mode;
+        document.getElementById('slideshow-sky-mode-input').checked = slideshowSky.mode !== 'off';
         document.getElementById('slideshow-sky-facing-input').value = Math.round(slideshowSky.facing / 45) % 8 * 45;
-        document.getElementById('slideshow-sky-every-input').value = slideshowSky.every;
         document.getElementById('slideshow-sky-lat-input').value = slideshowSky.lat ?? '';
         document.getElementById('slideshow-sky-lon-input').value = slideshowSky.lon ?? '';
         document.getElementById('slideshow-sky-options').hidden = slideshowSky.mode === 'off';
-        document.getElementById('slideshow-sky-facing-group').hidden = slideshowSky.mode !== 'fixed';
         if (slideshow) slideshow.setSkyOptions(slideshowSky);
     }
     if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
@@ -12070,9 +12068,9 @@ async function saveSlideshowSettings() {
     const videoSeconds = Number(document.getElementById('slideshow-video-seconds-input').value);
     if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0)) return;
     const sky = {
-        mode: document.getElementById('slideshow-sky-mode-input').value,
-        facing: Number(document.getElementById('slideshow-sky-facing-input').value),
-        every: Number(document.getElementById('slideshow-sky-every-input').value) || 10
+        // Whether it turns is the sky's own Turn button now; 'fixed' is simply on
+        mode: document.getElementById('slideshow-sky-mode-input').checked ? 'fixed' : 'off',
+        facing: Number(document.getElementById('slideshow-sky-facing-input').value)
     };
     // The location is saved once both halves of it are filled in (or both cleared)
     const lat = document.getElementById('slideshow-sky-lat-input').value.trim();

@@ -46,9 +46,8 @@ class Slideshow {
         this.video = document.getElementById('screensaver-video');
         this.videoMaxSeconds = 60; // longest a video slide plays (0 = to its end)
         this.videoSound = false;
-        this.sky = null; // the night sky slide's settings (slideshowSky), shown between photos
+        this.sky = null; // the sky's settings (slideshowSky): the Sky button switches between it and the photos
         this.skyShowing = false;
-        this.photosSinceSky = 0;
         this.videoShowing = false; // the video element is up instead of the photo
         this.slideIsVideo = false; // the slide being shown (or faded to) is a video
         this.bg = document.getElementById('screensaver-bg');
@@ -147,29 +146,52 @@ class Slideshow {
         if (this.videoShowing) this.video.muted = !this.videoSound;
     }
 
-    // From the General settings: the night sky slide (slideshowSky)
+    // From the General settings: the sky (slideshowSky)
     setSkyOptions(sky) {
         this.sky = sky;
         if (this.skyShowing && !skySlideAvailable(sky)) this.hideSky(false, true);
+        else if (this.skyShowing) showSkySlide(sky); // looking another way, or turning now
+        this.updateSkyButton();
         if (this.isActive) this.loadSun();
     }
 
-    // The night sky in place of a photo, until the slideshow moves on
+    // The Sky button: switches between the sky and the photos. The choice is remembered, so the
+    // next slideshow starts the same way.
+    toggleSky() {
+        if (this.skyShowing) this.hideSky(false, true);
+        else if (skySlideAvailable(this.sky)) this.showSky();
+        try { localStorage.setItem('slideshowSkyOn', this.skyShowing ? '1' : ''); } catch { }
+        this.resetInterval();
+    }
+
+    // Shown when the sky is on in the settings, lit while the sky is up
+    updateSkyButton() {
+        const item = document.getElementById('ss-sky-item');
+        if (!item) return;
+        item.style.display = skySlideAvailable(this.sky) ? '' : 'none';
+        item.querySelector('button')?.classList.toggle('is-on', this.skyShowing); // not 'active', which resetButtonStates clears
+    }
+
+    // The sky in place of the photos, which wait under it until it's switched off. It fills the
+    // screen, with the side panel and the other controls put away and just a button back to the photos.
     showSky() {
         this.skyShowing = true;
-        this.photosSinceSky = 0;
+        this.overlay?.classList.add('sky-mode'); // first, so the sky is drawn the size of the whole screen
         this.clearZoom();
         this.stopVideo();
         if (this.info) this.info.style.opacity = 0;
         this.hideMap();
         showSkySlide(this.sky);
+        this.updateSkyButton();
     }
 
     // Takes the sky down; `uncover` brings back the details of the photo under it, when that's what shows next
     hideSky(now = false, uncover = false) {
         if (!this.skyShowing) return;
         this.skyShowing = false;
+        this.overlay?.classList.remove('sky-mode');
         hideSkySlide(now);
+        this.updateSkyButton();
         if (!uncover || !this.currentPhotoData) return;
         if (this.info) this.info.style.opacity = 1;
         this.updateMapUI(this.currentPhotoData);
@@ -202,7 +224,6 @@ class Slideshow {
         console.log('[SLIDESHOW] Starting...');
         this.isActive = true;
         this.lastStartTime = Date.now();
-        this.photosSinceSky = 0;
         this.listVersion = null;
         this.items = items || [];
         this.index = index;
@@ -230,6 +251,14 @@ class Slideshow {
         }
 
         await this.next();
+        // Left on the sky last time: back to it (photos picked from the library are shown instead)
+        let skyOn = false;
+        try { skyOn = localStorage.getItem('slideshowSkyOn') === '1'; } catch { }
+        if (skyOn && !items && this.isActive && !this.skyShowing && skySlideAvailable(this.sky)) {
+            this.showSky();
+            this.resetInterval();
+        }
+        this.updateSkyButton();
     }
 
     stop() {
@@ -349,13 +378,12 @@ class Slideshow {
         const now = Date.now();
         const { rise, set } = skyNextSunriseSunset(now, loc);
         // A sun on the horizon with an arrow: up for sunrise, down for sunset
-        const icon = up => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        const icon = up => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 18a5 5 0 0 0-10 0"/>
             <line x1="2" y1="22" x2="22" y2="22"/><path d="${up ? 'M12 2v7M9 5l3-3 3 3' : 'M12 9V2M9 6l3 3 3-3'}"/></svg>`;
-        const today = new Date(now).toDateString();
-        const event = (t, up) => `<span class="ss-sun-event">${icon(up)}${up ? 'Sunrise' : 'Sunset'}
-            <b>${new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b>${
-            new Date(t).toDateString() === today ? '' : '<span class="ss-sun-day">tomorrow</span>'}</span>`;
+        const time = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const event = (t, up) => `<span class="ss-sun-event">${icon(up)}<span class="ss-sun-label">${up ? 'Sunrise' : 'Sunset'}</span>
+            <b>${time(t)}</b></span>`;
         el.innerHTML = [[rise, true], [set, false]].filter(([t]) => t !== null).sort((a, b) => a[0] - b[0])
             .map(([t, up]) => event(t, up)).join('');
     }
@@ -380,8 +408,8 @@ class Slideshow {
         if (this.interval) clearInterval(this.interval);
         // A playing video moves the slideshow on itself, when it ends or runs out of time
         const videoPlaying = this.slideIsVideo && this.videoShowing && !this.video.ended;
-        // A zoomed-in photo stays up until it's tapped back out
-        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed) {
+        // A zoomed-in photo stays up until it's tapped back out, and the photos wait while the sky is up
+        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed && !this.skyShowing) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }
@@ -393,15 +421,11 @@ class Slideshow {
             return;
         }
 
-        // Every so many photos, the night sky (photos picked from the library are left as they are)
+        // Moving on from the sky goes back to the photos
         if (this.skyShowing) {
             this.hideSky();
-        } else if (this.mode !== 'custom' && this.photosSinceSky >= (this.sky?.every || 10) && skySlideAvailable(this.sky)) {
-            this.showSky();
-            this.resetInterval();
-            return;
+            try { localStorage.setItem('slideshowSkyOn', ''); } catch { }
         }
-        this.photosSinceSky++;
 
         try {
             let data;
@@ -563,8 +587,7 @@ class Slideshow {
     async previous() {
         // Back from the sky is the photo still under it
         if (this.skyShowing) {
-            this.hideSky(false, true);
-            this.resetInterval();
+            this.toggleSky();
             return;
         }
         if (this.items.length > 0) {
@@ -1530,5 +1553,6 @@ function rotateSlideshow(delta) { if (slideshow) slideshow.rotate(delta); }
 function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
 function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
 function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
+function toggleSlideshowSky() { if (slideshow) slideshow.toggleSky(); }
 function openSlideshowBrowser() { if (slideshow) slideshow.openBrowser(); }
 function closeSlideshowBrowser() { if (slideshow) slideshow.closeBrowser(); }

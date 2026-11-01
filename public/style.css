@@ -8279,6 +8279,12 @@ input:checked+.slider:before {
     height: 24px;
 }
 
+.screensaver-controls .ss-control-item .btn-ss-sky.is-on {
+    background: linear-gradient(180deg, rgba(252, 211, 77, 0.32), rgba(252, 211, 77, 0.16));
+    border-color: rgba(252, 211, 77, 0.4);
+    color: #fcd34d;
+}
+
 .screensaver-controls .ss-control-item .btn-ss-favourite.is-favourite {
     background: linear-gradient(180deg, rgba(244, 63, 94, 0.32), rgba(244, 63, 94, 0.16));
     border-color: rgba(251, 113, 133, 0.35);
@@ -8322,11 +8328,14 @@ input:checked+.slider:before {
 .ss-sun-event {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 0.4em;
     white-space: nowrap;
 }
 
+/* Sized with the text, so it shrinks with it */
 .ss-sun-event svg {
+    width: 1.25em;
+    height: 1.25em;
     color: #fcd34d;
     flex: none;
 }
@@ -8335,8 +8344,11 @@ input:checked+.slider:before {
     font-variant-numeric: tabular-nums;
 }
 
-.ss-sun-day {
-    color: rgba(255, 255, 255, 0.6);
+/* Short of room, the arrows on the icons say which is which */
+@container ss-sun (max-width: 300px) {
+    .ss-sun-label {
+        display: none;
+    }
 }
 
 @media (orientation: landscape) and (min-height: 480px) {
@@ -8438,13 +8450,16 @@ input:checked+.slider:before {
     /* The next sunrise and sunset, a line of its own above the calendar */
     .ss-sun:not(:empty) {
         display: flex;
+        flex-wrap: wrap;   /* the two side by side, or one above the other when even that's too wide */
         justify-content: center;
-        gap: 24px;
+        gap: 4px clamp(10px, 1.5vw, 24px);
         flex-shrink: 0;
         margin: 16px 8px 0;
+        min-width: 0;
         color: #fff;
-        font-size: clamp(14px, 1.1vw, 20px);
+        font-size: clamp(13px, 1.1vw, 20px);
         z-index: 10003;
+        container: ss-sun / inline-size;
     }
 
     .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
@@ -11257,6 +11272,17 @@ input:checked+.slider:before {
     opacity: 1;
 }
 
+/* Dragged left and right to look round (see showSkySlide) */
+.screensaver-sky {
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+}
+
+.screensaver-sky.dragging {
+    cursor: grabbing;
+}
+
 /* Landscape screens: just the photo's column, left of the side panel, laid out like the photo */
 @media (orientation: landscape) and (min-height: 480px) {
     .screensaver-sky {
@@ -11274,6 +11300,57 @@ input:checked+.slider:before {
 .screensaver-sky .sky-svg {
     width: 100%;
     height: 100%;
+}
+
+/* Showing the sky: it fills the screen, with everything else put away but its own buttons */
+.ss-sky-buttons {
+    display: none;
+}
+
+.screensaver-overlay.sky-mode .ss-sky-buttons {
+    position: absolute;
+    top: calc(20px + env(safe-area-inset-top));
+    right: calc(20px + env(safe-area-inset-right));
+    z-index: 10005;
+    display: flex;
+    gap: 10px;
+}
+
+.ss-sky-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    color: #fff;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Lit while it's turning */
+.ss-sky-button.is-on {
+    background: rgba(252, 211, 77, 0.25);
+    border-color: rgba(252, 211, 77, 0.6);
+    color: #fcd34d;
+}
+
+.screensaver-overlay.sky-mode .ss-side-panel,
+.screensaver-overlay.sky-mode .ss-nav-prev,
+.screensaver-overlay.sky-mode .ss-nav-next,
+.screensaver-overlay.sky-mode .screensaver-info {
+    display: none !important;
+}
+
+/* Landscape: one column instead of the photo and the panel */
+@media (orientation: landscape) and (min-height: 480px) {
+    .screensaver-overlay.active.sky-mode {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .slideshow-sky-location {
@@ -11317,10 +11394,10 @@ input:checked+.slider:before {
     stroke-width: 1;
 }
 
+/* Filled from sky.js, tinted with the sky */
 .sky-ground {
-    fill: #0b1510;
-    stroke: rgba(148, 163, 184, 0.45);
-    stroke-width: 2;
+    stroke: rgba(148, 163, 184, 0.35);
+    stroke-width: 1.5;
 }
 
 .sky-tick {
@@ -11356,15 +11433,28 @@ input:checked+.slider:before {
     opacity: var(--sky-fade);
 }
 
-.sky-con-name {
-    fill: rgba(148, 170, 210, 0.55);
-    font-size: 15px;
-    letter-spacing: 0.04em;
-    opacity: var(--sky-fade);
+/* Against a pale sky the lines need to be darker than it, not lighter */
+.sky-light .sky-figure {
+    stroke: rgba(15, 30, 70, 0.35);
 }
 
-.sky-star {
-    opacity: var(--sky-fade);
+.sky-con-name {
+    fill: rgba(190, 206, 235, 0.9);
+    font-size: 15px;
+    letter-spacing: 0.04em;
+    opacity: var(--sky-label-fade, 1);
+}
+
+/* Every label has a soft dark edge behind it, so it reads against a pale daytime sky as well as
+   a dark one */
+.sky-con-name,
+.sky-star-name,
+.sky-deep-name,
+.sky-planet-name {
+    paint-order: stroke;
+    stroke: rgba(6, 12, 30, 0.55);
+    stroke-width: 3.5px;
+    stroke-linejoin: round;
 }
 
 .sky-star-name,
@@ -11377,7 +11467,6 @@ input:checked+.slider:before {
     fill: rgba(196, 181, 253, 0.25);
     stroke: rgba(196, 181, 253, 0.7);
     stroke-width: 1.2;
-    opacity: var(--sky-fade);
 }
 
 .sky-deep-name {
@@ -11396,10 +11485,4 @@ input:checked+.slider:before {
     font-weight: 600;
 }
 
-.sky-moon-glow {
-    fill: rgba(241, 245, 249, 0.12);
-}
 
-.sky-sun {
-    filter: drop-shadow(0 0 12px rgba(253, 230, 138, 0.9));
-}

@@ -232,11 +232,10 @@ let settings = {
         maxSeconds: 60, // a longer video is cut short here (0 = plays to its end)
         sound: false
     },
-    // The night sky from where the slideshow is, shown after dark between photos
+    // The sky from where the slideshow is, which the slideshow's Sky button switches to
     slideshowSky: {
         mode: 'off', // 'off', 'fixed' (looking one way) or 'turning' (slowly round the horizon)
         facing: 180, // compass direction looked at when fixed, degrees from north
-        every: 10, // shown after this many photos
         lat: null,
         lon: null
     },
@@ -3146,14 +3145,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         if (max !== null) settings.slideshowVideos.maxSeconds = max;
         saveSettings();
     }
-    // Slideshow sky: how it's shown, how often (every 1–100 photos), and where from
+    // Slideshow sky: how it's shown (or 'off', for no Sky button), and where from
     const sky = req.body.slideshowSky;
     if (sky && typeof sky === 'object') {
         if (['off', 'fixed', 'turning'].includes(sky.mode)) settings.slideshowSky.mode = sky.mode;
         const facing = Number(sky.facing);
         if (Number.isFinite(facing)) settings.slideshowSky.facing = ((Math.round(facing) % 360) + 360) % 360;
-        const every = Math.round(Number(sky.every));
-        if (Number.isFinite(every)) settings.slideshowSky.every = Math.min(Math.max(every, 1), 100);
         if ('lat' in sky || 'lon' in sky) {
             const blank = v => v === null || v === '';
             const lat = Number(sky.lat), lon = Number(sky.lon);
