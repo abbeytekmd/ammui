@@ -11606,15 +11606,6 @@ input:checked+.slider:before {
     text-decoration: underline;
 }
 
-/* Notes keep to one line in the table; the whole of them shows on hover and in the form */
-.passwords-table .pw-notes {
-    max-width: 18rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-}
-
 .pw-secret-cell {
     white-space: nowrap;
 }

@@ -1,5 +1,5 @@
-// Passwords tab: a table of name, username, password, website and notes, added to, changed and
-// deleted here. The list from the server never carries the passwords themselves (they're kept
+// Passwords tab: a table of name, username, password and website (the notes are in the form, and
+// searched), added to, changed and deleted here. The list from the server never carries the passwords themselves (they're kept
 // encrypted, see lib/secret-box.js); each is fetched on its own to show, copy or change it, so
 // the table shows them as asterisks. Each row's Email button sends that entry to the address below.
 
@@ -57,7 +57,6 @@ function renderPasswords() {
                 <button type="button" class="pw-icon-btn" title="Copy the password" onclick="copyPassword(${e.id})">${ICONS.copy}</button>` : ''}
             </td>
             <td>${e.url ? `<a href="${escapeAttr(passwordLink(e.url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(e.url)}</a>` : ''}</td>
-            <td class="pw-notes" title="${escapeAttr(e.notes)}">${escapeHtml(e.notes)}</td>
             <td class="pw-actions">
                 <button type="button" class="pw-icon-btn" title="Change" onclick="editPassword(${e.id})">${ICONS.edit}</button>
                 <button type="button" class="pw-icon-btn pw-delete" title="Delete" onclick="deletePasswordEntry(${e.id})">${ICONS.delete}</button>
