@@ -15,6 +15,7 @@ import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/li
 import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay } from './lib/photo-date.js';
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
+import { advertiseLocalName, localNameFor } from './lib/local-name.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
@@ -1553,8 +1554,10 @@ app.post('/api/settings/port', express.json(), async (req, res) => {
 
 // Addresses for the Settings page, and the CA certificate a device installs to trust them.
 app.get('/api/https/info', (req, res) => {
-    const { dns, ips } = localHostNames();
-    const hosts = [...ips.filter(ip => ip !== '127.0.0.1'), ...dns.filter(h => h !== 'localhost')];
+    const { dns, ips } = localHostNames(settings.deviceName);
+    // The server's own .local name first: the one to use
+    const local = localNameFor(settings.deviceName);
+    const hosts = [...new Set([...(local ? [local] : []), ...ips.filter(ip => ip !== '127.0.0.1'), ...dns.filter(h => h !== 'localhost')])];
     res.json({
         httpsPort,
         available: fs.existsSync(caCertificatePath(certsDir)),
@@ -6515,6 +6518,9 @@ http.createServer(app)
         if (settings.deviceName) startServices();
         else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
     });
+
+// The server's name from Settings is also its address on the network: <name>.local
+advertiseLocalName(() => settings.deviceName);
 
 // Kept to give it a new certificate when the server is renamed (the certificate carries its name)
 let httpsServer = null;

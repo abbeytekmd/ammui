@@ -11853,6 +11853,7 @@ async function saveGeneralSettings() {
             // The server button shows the media library's name, which follows the device name
             await fetchDevices();
             // The HTTPS certificate carries the name, so a new one was made
+            if (renamed) loadHttpsInfo(); // the .local address and the certificate's name follow it
             if (renamed) showToast('Saved. The certificate now has the new name: install it again on each phone and PC (Settings > Secure Access) to stop the browser warning.', 'success', 10000);
             else showToast('Settings saved', 'success', 2000);
         }
@@ -11964,6 +11965,10 @@ function renderHttpsSettings() {
     }
     const safariNote = document.getElementById('https-trust-ios-safari');
     if (safariNote) safariNote.style.display = isSafari ? 'none' : '';
+    // The certificate's name, as devices list it (server.js names it after the server)
+    if (currentDeviceName) {
+        document.querySelectorAll('.https-ca-name').forEach(node => { node.textContent = `AMMUI Local CA (${currentDeviceName})`; });
+    }
     if (!httpsInfo?.available) {
         el.textContent = "HTTPS isn't running - check the server log.";
         return;

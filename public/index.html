@@ -1104,13 +1104,15 @@
                     <div class="manage-section">
                         <h3>Secure Access (HTTPS)</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Voice commands only work when the app is opened over HTTPS.
-                                Use one of these addresses:</p>
+                            <p class="settings-hint">Open the app over HTTPS: voice commands and the microphone only
+                                work there. The first address is this server's name with <b>.local</b> on the end,
+                                which phones and computers on this network find by themselves, and it follows the name
+                                when you change it. The others work too.</p>
                             <div id="https-urls" class="settings-hint">Loading...</div>
-                            <p class="settings-hint">The certificate is made by this app, so browsers warn that
-                                the connection isn't private until you trust it. To remove the warning for good,
-                                download the certificate below on each phone or PC and install it as a trusted
-                                root certificate.</p>
+                            <p class="settings-hint">The certificate is made by this app and named after this server
+                                (<b class="https-ca-name">AMMUI Local CA</b>), so browsers warn that the connection isn't
+                                private until you trust it. Install it once on each phone or PC below to remove the warning
+                                for good. Renaming the server makes a new certificate, which needs installing again.</p>
                             <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
                                 <a id="https-trust-windows" class="btn-control btn-seek" href="/api/https/trust-ammui.cmd"
                                     download="trust-ammui.cmd" style="text-decoration:none; display:none;">Install on this PC</a>
@@ -1137,7 +1139,7 @@
                                     <li>Open the Settings app, tap <b>Profile Downloaded</b> near the top, then
                                         <b>Install</b> (it says "Not Verified": that's expected).</li>
                                     <li>Go to Settings &rarr; General &rarr; About &rarr; <b>Certificate Trust Settings</b>
-                                        and turn on the <b>AMMUI Local CA</b>. Without this step the warning stays.</li>
+                                        and turn on <b class="https-ca-name">AMMUI Local CA</b>. Without this step the warning stays.</li>
                                 </ol>
                             </div>
                             <p id="https-trust-windows-hint" class="settings-hint" style="display:none;">
@@ -1155,10 +1157,11 @@
                                 <button type="button" class="btn-control btn-seek" onclick="savePorts()">Save &amp; Restart</button>
                             </div>
                             <p id="port-error" class="settings-hint" style="display:none; color:#f87171;"></p>
-                            <p class="settings-hint">HTTPS (usually 443) is the address browsers use. Plain HTTP (usually
-                                80) is what players (DLNA, Sonos, AirPlay) fetch music and photos from; a browser opening
-                                it is sent on to HTTPS. Players may need finding again after a change, and bookmarks
-                                and the kiosk shortcut need the new address.</p>
+                            <p class="settings-hint">HTTPS (usually 443) is what browsers use; on 443 the addresses above
+                                need no port number. Plain HTTP (usually 80) is what players (DLNA, Sonos, AirPlay) fetch
+                                music and photos from, and a browser opening it is sent on to HTTPS. After a change,
+                                players may need finding again, and bookmarks and the kiosk shortcut need the new
+                                address. The certificate stays trusted.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -2736,7 +2739,7 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=66"></script>
+    <script src="app.js?v=67"></script>
     <script src="slideshow.js?v=12"></script>
     <script src="timers.js?v=2"></script>
     <script src="sky.js?v=6"></script>
