@@ -1,3 +1,4 @@
+import './lib/supervisor.js'; // first: run directly, this process only supervises the real server
 import { serverLogs, terminalLog, clearServerLogs } from './lib/logger-init.js';
 global.serverLogs = serverLogs; // Expose for internal debugging log tracking
 
@@ -57,7 +58,9 @@ import {
 } from './lib/db.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
+import http from 'http';
 import https from 'https';
+import net from 'net';
 import crypto from 'crypto';
 import { xmlEscape } from './lib/upnp.js';
 import { splitShoppingLine } from './public/shopping-items.js';
@@ -110,10 +113,22 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const app = express();
-const port = 3000;
-// Same app over HTTPS, for browsers (the microphone needs a secure page). Renderers keep using
-// plain HTTP on `port`, since DLNA/Sonos/AirPlay devices can't fetch from a self-signed server.
-const httpsPort = 3443;
+// The ports: 80 and 443 unless Settings (or the installer, when one was taken) chose others.
+// Plain HTTP on `port` is for players: DLNA/Sonos/AirPlay devices can't fetch from a self-signed
+// server. Browsers use the same app over HTTPS on `httpsPort` (the microphone needs a secure page).
+const DEFAULT_PORTS = { httpPort: 80, httpsPort: 443 };
+// A server set up before the ports could be changed, and updated from the app (not the installer),
+// stays on the 3000 and 3443 it always used: players and bookmarks know it there, and Linux keeps
+// ports below 1024 for root
+if (getSetting('deviceName', '')) {
+    if (getSetting('httpPort', null) === null) setSetting('httpPort', 3000);
+    if (getSetting('httpsPort', null) === null) setSetting('httpsPort', 3443);
+}
+const savedPort = key => Number(getSetting(key, null)) || DEFAULT_PORTS[key];
+const port = savedPort('httpPort');
+const httpsPort = savedPort('httpsPort');
+// An address on this server over HTTPS, leaving out the port when it's the usual 443
+const httpsOrigin = host => `https://${host}${httpsPort === 443 ? '' : `:${httpsPort}`}`;
 const certsDir = path.join(baseDataDir, 'certs');
 
 // Ensure directories exist
@@ -134,7 +149,7 @@ let httpsReady = false;
 app.use((req, res, next) => {
     if (!httpsReady || req.secure || req.method !== 'GET' || (req.path !== '/' && req.path !== '/index.html')) return next();
     const host = (req.headers.host || 'localhost').replace(/:\d+$/, '');
-    res.redirect(302, `https://${host}:${httpsPort}${req.originalUrl}`);
+    res.redirect(302, `${httpsOrigin(host)}${req.originalUrl}`);
 });
 
 const logsDir = path.join(baseDataDir, 'logs');
@@ -216,6 +231,14 @@ let settings = {
         maxSeconds: 60, // a longer video is cut short here (0 = plays to its end)
         sound: false
     },
+    // The night sky from where the slideshow is, shown after dark between photos
+    slideshowSky: {
+        mode: 'off', // 'off', 'fixed' (looking one way) or 'turning' (slowly round the horizon)
+        facing: 180, // compass direction looked at when fixed, degrees from north
+        every: 10, // shown after this many photos
+        lat: null,
+        lon: null
+    },
     supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
     shoppingEmail: '', // where the Email button on the shopping list sends it
     // Outgoing mail server, for emailing the shopping list
@@ -276,6 +299,10 @@ function loadSettings() {
         maxSeconds: savedVideos.maxSeconds ?? settings.slideshowVideos.maxSeconds,
         sound: savedVideos.sound ?? settings.slideshowVideos.sound
     };
+    // The location once saved for the Sky tab carries over
+    const oldSkyLocation = getSetting('skyLocation', null);
+    settings.slideshowSky = { ...settings.slideshowSky, lat: oldSkyLocation?.lat ?? null, lon: oldSkyLocation?.lon ?? null,
+        ...(getSetting('slideshowSky', {}) || {}) };
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
     settings.email = { ...settings.email, ...(getSetting('email', {}) || {}) };
@@ -312,6 +339,7 @@ function saveSettings() {
     setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
     setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
     setSetting('slideshowVideos', settings.slideshowVideos);
+    setSetting('slideshowSky', settings.slideshowSky);
     setSetting('supermarket', settings.supermarket);
     setSetting('shoppingEmail', settings.shoppingEmail);
     setSetting('email', settings.email);
@@ -374,7 +402,7 @@ const localLibraryName = (name = settings.deviceName) => `${name || 'AMMUI'} Med
 setLocalMediaServer({
     name: () => localLibraryName(),
     origin: () => `http://${getLocalIp()}:${port}`,
-    ports: [port, httpsPort],
+    ports: [...new Set([port, httpsPort, 3000, 3443])], // 3000 and 3443: the ports before they could be changed
 });
 loadDevices();
 for (const d of devices.values()) {
@@ -1483,6 +1511,46 @@ app.get('/api/media-proxy', async (req, res) => {
     }
 });
 
+// Why a port can't be listened on, in words
+const listenProblem = (err, p) => err.code === 'EADDRINUSE' ? `Port ${p} is in use by another program`
+    : err.code === 'EACCES' ? `This computer doesn't let AMMUI use port ${p}` : err.message;
+
+// The HTTP and HTTPS ports (Settings). New ones are checked by opening them briefly, then take effect on restart.
+app.get('/api/settings/port', (req, res) => {
+    res.json({
+        httpPort: savedPort('httpPort'), httpsPort: savedPort('httpsPort'),
+        httpError: httpListenError, httpsError: httpsListenError,
+    });
+});
+
+app.post('/api/settings/port', express.json(), async (req, res) => {
+    const wanted = { httpPort: Number(req.body?.httpPort), httpsPort: Number(req.body?.httpsPort) };
+    const running = { httpPort: port, httpsPort };
+    for (const p of Object.values(wanted)) {
+        if (!Number.isInteger(p) || p < 1 || p > 65535) return res.status(400).json({ error: 'A port must be a whole number from 1 to 65535' });
+    }
+    if (wanted.httpPort === wanted.httpsPort) return res.status(400).json({ error: 'HTTP and HTTPS need different ports' });
+    for (const key of ['httpPort', 'httpsPort']) {
+        // A port this server already has open is fine for either of them
+        if (Object.values(running).includes(wanted[key])) continue;
+        const problem = await new Promise(resolve => {
+            const probe = net.createServer()
+                .once('error', err => resolve(listenProblem(err, wanted[key])))
+                .once('listening', () => probe.close(() => resolve(null)))
+                .listen(wanted[key]);
+        });
+        if (problem) return res.status(400).json({ error: problem });
+    }
+    setSetting('httpPort', wanted.httpPort);
+    setSetting('httpsPort', wanted.httpsPort);
+    const restart = wanted.httpPort !== port || wanted.httpsPort !== httpsPort;
+    res.json({ ...wanted, restart });
+    if (restart) {
+        console.log(`[PORTS] Changed to HTTP ${wanted.httpPort}, HTTPS ${wanted.httpsPort}; restarting.`);
+        setTimeout(restartServer, 500);
+    }
+});
+
 // Addresses for the Settings page, and the CA certificate a device installs to trust them.
 app.get('/api/https/info', (req, res) => {
     const { dns, ips } = localHostNames();
@@ -1490,7 +1558,7 @@ app.get('/api/https/info', (req, res) => {
     res.json({
         httpsPort,
         available: fs.existsSync(caCertificatePath(certsDir)),
-        urls: hosts.map(h => `https://${h}:${httpsPort}/`),
+        urls: hosts.map(h => `${httpsOrigin(h)}/`),
     });
 });
 
@@ -2745,44 +2813,6 @@ app.post('/api/settings/usda', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
-// --- Sky tab: where the sky is seen from, and NOAA's geomagnetic (aurora) forecast ---
-app.get('/api/sky/location', (req, res) => {
-    res.json(getSetting('skyLocation', null));
-});
-
-app.post('/api/sky/location', express.json(), (req, res) => {
-    const lat = Number(req.body?.lat), lon = Number(req.body?.lon);
-    if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return res.status(400).json({ error: 'Latitude must be -90 to 90 and longitude -180 to 180' });
-    const location = { lat, lon, name: String(req.body?.name || '').trim().slice(0, 60) };
-    setSetting('skyLocation', location);
-    res.json(location);
-});
-
-// Kp index, observed and forecast, three-hourly. NOAA updates it every few hours, so it's kept a while.
-const KP_URL = 'https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json';
-const KP_CACHE_MS = 30 * 60 * 1000;
-let kpCache = null;
-
-app.get('/api/sky/kp', async (req, res) => {
-    if (kpCache && Date.now() - kpCache.at < KP_CACHE_MS) return res.json(kpCache.data);
-    try {
-        const { data } = await axios.get(KP_URL, { timeout: 10000 });
-        // Rows are objects now; older versions of the feed were arrays under a header row
-        const rows = Array.isArray(data?.[0]) ? data.slice(1).map(([time_tag, kp, observed]) => ({ time_tag, kp, observed })) : data;
-        const kp = rows.map(r => ({
-            time: `${r.time_tag}Z`.replace(/ /, 'T').replace(/ZZ$/, 'Z'),
-            kp: Number(r.kp ?? r.Kp),
-            observed: r.observed === 'observed' || r.observed === 'estimated' ? r.observed : 'predicted',
-        })).filter(r => Number.isFinite(r.kp));
-        kpCache = { at: Date.now(), data: kp };
-        res.json(kp);
-    } catch (err) {
-        console.error('Failed to fetch the Kp forecast:', err.message);
-        if (kpCache) return res.json(kpCache.data);
-        res.status(502).json({ error: 'Could not reach NOAA' });
-    }
-});
-
 // --- Outgoing email (the mail server the shopping list is sent through) ---
 const isEmailAddress = s => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s);
 const EMAIL_SECURITY = ['starttls', 'ssl', 'none'];
@@ -3083,6 +3113,7 @@ app.get('/api/settings/general', (req, res) => {
         slideshowIdleSeconds: settings.slideshowIdleSeconds,
         slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
         slideshowVideos: settings.slideshowVideos,
+        slideshowSky: settings.slideshowSky,
         supermarket: settings.supermarket,
         supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
         shoppingEmail: settings.shoppingEmail
@@ -3110,6 +3141,23 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         if (typeof videos.sound === 'boolean') settings.slideshowVideos.sound = videos.sound;
         const max = seconds(videos.maxSeconds, 5, 3600);
         if (max !== null) settings.slideshowVideos.maxSeconds = max;
+        saveSettings();
+    }
+    // Slideshow sky: how it's shown, how often (every 1–100 photos), and where from
+    const sky = req.body.slideshowSky;
+    if (sky && typeof sky === 'object') {
+        if (['off', 'fixed', 'turning'].includes(sky.mode)) settings.slideshowSky.mode = sky.mode;
+        const facing = Number(sky.facing);
+        if (Number.isFinite(facing)) settings.slideshowSky.facing = ((Math.round(facing) % 360) + 360) % 360;
+        const every = Math.round(Number(sky.every));
+        if (Number.isFinite(every)) settings.slideshowSky.every = Math.min(Math.max(every, 1), 100);
+        if ('lat' in sky || 'lon' in sky) {
+            const blank = v => v === null || v === '';
+            const lat = Number(sky.lat), lon = Number(sky.lon);
+            if (blank(sky.lat) && blank(sky.lon)) Object.assign(settings.slideshowSky, { lat: null, lon: null });
+            else if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) Object.assign(settings.slideshowSky, { lat, lon });
+            else return res.status(400).json({ error: 'Latitude must be -90 to 90 and longitude -180 to 180' });
+        }
         saveSettings();
     }
     if (typeof req.body.supermarket === 'string') {
@@ -6276,8 +6324,8 @@ app.post('/api/energy/account', async (req, res) => {
 // Each install follows a channel: Stable is the main branch, Dev is the dev branch (pushed to for
 // testing, then published by fast-forwarding main to it). Switching channel checks out that branch.
 // Applying an update fast-forwards the checkout, reinstalls packages only if package files
-// changed, then restarts: either by exiting for an external supervisor (AMMUI_SUPERVISED=1),
-// or by handing off to a small relauncher that starts a fresh server once this one has exited.
+// changed, then restarts by exiting for its supervisor to start it again: a service, or the
+// process it was started from (lib/supervisor.js).
 const bootId = Date.now().toString(36); // lets the UI spot that a restart has happened
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 const UPDATE_CHANNELS = { stable: 'main', dev: 'dev' };
@@ -6340,29 +6388,12 @@ app.post('/api/updates/channel', async (req, res) => {
     res.json({ ...updateState, channel: updateChannel, applying: updateApplying, bootId });
 });
 
-// Starts a replacement server after this process exits (so ports are free), then exits.
+// Exits for the supervisor to start a fresh server: lib/supervisor.js waits for its restart exit
+// code; a service (systemd) starts it again whatever the code.
 function restartServer() {
     try { fs.writeFileSync(restartMarkerPath, String(Date.now())); } catch { /* the browser may open again */ }
-    if (process.env.AMMUI_SUPERVISED === '1') {
-        console.log('[UPDATE] Exiting for supervisor restart...');
-        process.exit(0);
-    }
-    const logPath = path.join(logsDir, 'server.log');
-    const relauncher = `
-        const { spawn } = require('child_process');
-        const fs = require('fs');
-        const [pid, exe, args, cwd, logPath] = JSON.parse(process.argv[1]);
-        const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-        const started = Date.now();
-        (function wait() {
-            if (alive() && Date.now() - started < 30000) return setTimeout(wait, 250);
-            const out = fs.openSync(logPath, 'a');
-            spawn(exe, args, { cwd, detached: true, windowsHide: true, stdio: ['ignore', out, out] }).unref();
-        })();`;
-    const payload = JSON.stringify([process.pid, process.execPath, [...process.execArgv, ...process.argv.slice(1)], __dirname, logPath]);
-    spawn(process.execPath, ['-e', relauncher, payload], { cwd: __dirname, detached: true, windowsHide: true, stdio: 'ignore' }).unref();
-    console.log(`[UPDATE] Restarting (new server output goes to ${logPath})...`);
-    setTimeout(() => process.exit(0), 200);
+    console.log('[SYSTEM] Restarting...');
+    setTimeout(() => process.exit(Number(process.env.AMMUI_RESTART_EXIT) || 0), 200);
 }
 
 app.post('/api/updates/apply', async (req, res) => {
@@ -6458,21 +6489,45 @@ function startServices() {
     }, 10000);
 }
 
-app.listen(port, () => {
-    console.log(`AMMUI server listening at http://localhost:${port}`);
-    runStartupOnBoot();
-    if (settings.deviceName) startServices();
-    else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
-});
+// Why each port couldn't be opened, for the Settings page (reachable over whichever one did open).
+// (Plain http/https servers rather than app.listen, whose callback runs on failure too in Express 5.)
+let httpListenError = null;
+let httpsListenError = null;
+let httpsEnabled = true;
+// Neither port opened because something already has them: almost always another AMMUI server,
+// such as one restarted from Settings, which carries on in the background. This one is no use.
+const quitIfNoPorts = () => {
+    if (!httpListenError || (httpsEnabled && !httpsListenError)) return;
+    console.error(`[SYSTEM] Ports ${port} and ${httpsPort} are both taken - is AMMUI already running (perhaps in the background after a restart)? Stop it first. Exiting.`);
+    process.exit(1);
+};
+
+http.createServer(app)
+    .on('error', err => {
+        httpListenError = listenProblem(err, port);
+        console.error(`[HTTP] Could not listen on port ${port}: ${httpListenError}. Choose another port in Settings (over HTTPS, port ${httpsPort}).`);
+        quitIfNoPorts();
+    })
+    .listen(port, () => {
+        console.log(`AMMUI server listening at http://localhost:${port}`);
+        runStartupOnBoot();
+        if (settings.deviceName) startServices();
+        else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
+    });
 
 try {
     https.createServer(ensureHttpsCertificate(certsDir), app)
-        .on('error', err => console.error(`[HTTPS] Could not listen on port ${httpsPort}:`, err.message))
+        .on('error', err => {
+            httpsListenError = listenProblem(err, httpsPort);
+            console.error(`[HTTPS] Could not listen on port ${httpsPort}: ${httpsListenError}. Choose another port in Settings (over HTTP, port ${port}).`);
+            quitIfNoPorts();
+        })
         .listen(httpsPort, () => {
             httpsReady = true;
             console.log(`AMMUI server listening at https://localhost:${httpsPort}`);
         });
 } catch (err) {
+    httpsEnabled = false;
     console.error('[HTTPS] Disabled - could not set up a certificate:', err.message);
 }
 

@@ -8313,9 +8313,30 @@ input:checked+.slider:before {
     display: contents;
 }
 
+.ss-sun,
 .ss-agenda,
 .ss-shopping {
     display: none;
+}
+
+.ss-sun-event {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+.ss-sun-event svg {
+    color: #fcd34d;
+    flex: none;
+}
+
+.ss-sun-event b {
+    font-variant-numeric: tabular-nums;
+}
+
+.ss-sun-day {
+    color: rgba(255, 255, 255, 0.6);
 }
 
 @media (orientation: landscape) and (min-height: 480px) {
@@ -8409,8 +8430,21 @@ input:checked+.slider:before {
     }
 
     .screensaver-music-bar,
+    .ss-sun,
     .ss-agenda {
         order: -1;
+    }
+
+    /* The next sunrise and sunset, a line of its own above the calendar */
+    .ss-sun:not(:empty) {
+        display: flex;
+        justify-content: center;
+        gap: 24px;
+        flex-shrink: 0;
+        margin: 16px 8px 0;
+        color: #fff;
+        font-size: clamp(14px, 1.1vw, 20px);
+        z-index: 10003;
     }
 
     .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
@@ -11204,119 +11238,83 @@ input:checked+.slider:before {
     }
 }
 
-/* --- Sky tab --- */
-.sky-place {
-    font-size: 0.9rem;
-    font-weight: 400;
-    color: var(--text-muted);
-    margin-left: 0.4rem;
+/* --- Slideshow night sky (sky.js): in place of the photo, fading in and out --- */
+.screensaver-sky {
+    position: absolute;
+    inset: 0;
+    z-index: 10001;
+    overflow: hidden;
+    background: #03050f;
+    opacity: 0;
+    transition: opacity 1s ease-in-out;
 }
 
-.sky-location-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    padding: 1rem;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 1rem;
-}
-
-.sky-location-form[hidden] {
+.screensaver-sky[hidden] {
     display: none;
 }
 
-.sky-location-intro {
-    color: var(--text-muted);
-    font-size: 0.9rem;
+.screensaver-sky.showing {
+    opacity: 1;
 }
 
-.sky-location-fields {
+/* Landscape screens: just the photo's column, left of the side panel, laid out like the photo */
+@media (orientation: landscape) and (min-height: 480px) {
+    .screensaver-sky {
+        position: relative;
+        inset: auto;
+        grid-column: 1;
+        grid-row: 1;
+        align-self: stretch;
+        justify-self: stretch;
+        min-width: 0;
+        min-height: 0;
+    }
+}
+
+.screensaver-sky .sky-svg {
+    width: 100%;
+    height: 100%;
+}
+
+.slideshow-sky-location {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
     align-items: center;
 }
 
-.sky-location-fields .alarms-input {
+.settings-group .slideshow-sky-location input {
     width: 9rem;
-    font-size: 1rem;
 }
 
-.sky-location-fields .sky-name-input {
-    width: 12rem;
-}
-
-.sky-body {
-    display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(280px, 1fr);
-    gap: 1.25rem;
-    align-items: start;
-}
-
-.sky-body[hidden] {
-    display: none;
-}
-
-@media (max-width: 900px) {
-    .sky-body {
-        grid-template-columns: 1fr;
-    }
-}
-
-.sky-chart-col {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    min-width: 0;
-}
-
-.sky-chart {
-    width: 100%;
-    max-width: min(100%, calc(100vh - 14rem));
-    min-width: 260px;
-    aspect-ratio: 1;
-    margin: 0 auto;
-}
-
-.sky-chart.horizon {
-    aspect-ratio: 16 / 9;
-    max-width: 100%;
-    border-radius: 1rem;
-    overflow: hidden;
-    touch-action: pan-y;
-    cursor: grab;
-    user-select: none;
-}
-
-.sky-chart.horizon:active {
-    cursor: grabbing;
-}
-
-.sky-modes {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-}
-
-.sky-mode-btn.active {
-    background: var(--primary);
-    border-color: var(--primary);
-    color: white;
-}
-
-.sky-facing {
-    margin-left: auto;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
+.settings-group select.slideshow-sky-select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
     color: var(--text);
+    font-family: inherit;
     font-size: 0.9rem;
-    font-variant-numeric: tabular-nums;
 }
 
-.sky-facing[hidden] {
+.settings-group select.slideshow-sky-select option {
+    background: var(--bg);
+}
+
+.settings-group[hidden],
+#slideshow-sky-options[hidden] {
     display: none;
+}
+
+.sky-svg {
+    display: block;
+    font-family: inherit;
+}
+
+.sky-grid {
+    fill: none;
+    stroke: rgba(148, 163, 184, 0.14);
+    stroke-width: 1;
 }
 
 .sky-ground {
@@ -11330,43 +11328,18 @@ input:checked+.slider:before {
     stroke-width: 2;
 }
 
-.sky-compass.minor {
-    font-size: 17px;
-    font-weight: 600;
-    opacity: 0.75;
-}
-
-.sky-grid-label {
-    fill: rgba(148, 163, 184, 0.45);
-    font-size: 14px;
-    text-anchor: middle;
-}
-
-.sky-svg {
-    width: 100%;
-    height: 100%;
-    display: block;
-    font-family: inherit;
-}
-
-.sky-grid {
-    fill: none;
-    stroke: rgba(148, 163, 184, 0.14);
-    stroke-width: 1;
-}
-
-.sky-horizon {
-    fill: none;
-    stroke: rgba(148, 163, 184, 0.45);
-    stroke-width: 2;
-}
-
 .sky-compass {
-    fill: var(--text-muted);
+    fill: #94a3b8;
     font-size: 26px;
     font-weight: 800;
     text-anchor: middle;
     dominant-baseline: middle;
+}
+
+.sky-compass.minor {
+    font-size: 17px;
+    font-weight: 600;
+    opacity: 0.75;
 }
 
 .sky-ecliptic {
@@ -11388,7 +11361,6 @@ input:checked+.slider:before {
     font-size: 15px;
     letter-spacing: 0.04em;
     opacity: var(--sky-fade);
-    pointer-events: none;
 }
 
 .sky-star {
@@ -11399,7 +11371,6 @@ input:checked+.slider:before {
 .sky-deep-name {
     fill: rgba(226, 232, 240, 0.8);
     font-size: 16px;
-    pointer-events: none;
 }
 
 .sky-deep {
@@ -11423,7 +11394,6 @@ input:checked+.slider:before {
     fill: #fef3c7;
     font-size: 19px;
     font-weight: 600;
-    pointer-events: none;
 }
 
 .sky-moon-glow {
@@ -11432,241 +11402,4 @@ input:checked+.slider:before {
 
 .sky-sun {
     filter: drop-shadow(0 0 12px rgba(253, 230, 138, 0.9));
-}
-
-.sky-target {
-    fill: transparent;
-}
-
-.sky-hit {
-    cursor: pointer;
-}
-
-.sky-hit:hover .sky-star,
-.sky-hit:hover .sky-planet {
-    stroke: white;
-    stroke-width: 2;
-}
-
-.sky-time {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-}
-
-.sky-time input[type="range"] {
-    flex: 1;
-    accent-color: var(--primary);
-}
-
-.sky-time-label {
-    min-width: 9rem;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-}
-
-.sky-info {
-    min-height: 1.4em;
-    color: var(--text-muted);
-    font-size: 0.9rem;
-    text-align: center;
-}
-
-.sky-side {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-width: 0;
-}
-
-.sky-side h3 {
-    margin: 0.5rem 0 0;
-    font-size: 0.75rem;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-}
-
-.sky-summary {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 0.75rem;
-}
-
-.sky-card {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 1rem;
-    padding: 0.9rem 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.sky-card-title {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-weight: 700;
-}
-
-.sky-card-rows {
-    display: flex;
-    gap: 1.25rem;
-}
-
-.sky-card-rows div {
-    display: flex;
-    flex-direction: column;
-}
-
-.sky-card-rows span,
-.sky-card-note {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-}
-
-.sky-card-rows b {
-    font-size: 1.15rem;
-    font-variant-numeric: tabular-nums;
-}
-
-.sky-moon-icon {
-    flex: none;
-}
-
-.sky-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.sky-item {
-    display: flex;
-    gap: 0.75rem;
-    align-items: flex-start;
-    padding: 0.65rem 0.85rem;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 0.85rem;
-}
-
-.sky-item.sky-aurora {
-    border-color: rgba(52, 211, 153, 0.6);
-    box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.25);
-}
-
-.sky-item.sky-event,
-.sky-item.sky-pair {
-    border-color: rgba(253, 224, 71, 0.35);
-}
-
-.sky-item-icon {
-    font-size: 1.25rem;
-    line-height: 1.4rem;
-}
-
-.sky-item-title {
-    font-weight: 600;
-}
-
-.sky-item-detail,
-.sky-empty {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-}
-
-.sky-kp {
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 1rem;
-    padding: 0.9rem 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.sky-kp-bars {
-    display: flex;
-    align-items: stretch;
-    gap: 2px;
-    height: 90px;
-}
-
-.sky-kp-col {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-end;
-    cursor: pointer;
-    position: relative;
-    border-radius: 4px 4px 0 0;
-}
-
-.sky-kp-col.dark {
-    background: rgba(148, 163, 184, 0.07);
-}
-
-.sky-kp-col.now::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 0;
-    bottom: 1rem;
-    border-left: 1px dashed rgba(248, 250, 252, 0.5);
-}
-
-.sky-kp-bar {
-    border-radius: 4px 4px 0 0;
-    margin-bottom: 1rem;
-}
-
-.sky-kp-bar.predicted {
-    opacity: 0.55;
-}
-
-.sky-kp-day {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    font-size: 0.7rem;
-    color: var(--text-muted);
-    white-space: nowrap;
-}
-
-.sky-kp-bar.quiet, .sky-kp-key i.quiet { background: #64748b; }
-.sky-kp-bar.active, .sky-kp-key i.active { background: #eab308; }
-.sky-kp-bar.storm, .sky-kp-key i.storm { background: #f97316; }
-.sky-kp-bar.high, .sky-kp-key i.high { background: #22c55e; }
-
-.sky-kp-detail {
-    font-size: 0.85rem;
-    color: var(--text);
-    min-height: 1.2em;
-}
-
-.sky-kp-key {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.35rem 0.9rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.sky-kp-key span {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.3rem;
-}
-
-.sky-kp-key i {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    display: inline-block;
-}
-
-.sky-kp-faded {
-    font-style: italic;
 }

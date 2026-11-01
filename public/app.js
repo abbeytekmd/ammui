@@ -5819,7 +5819,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view', sky: 'sky-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view' };
 
 function setAppView(view) {
     appView = view;
@@ -8062,6 +8062,7 @@ async function runShoppingVoice(transcripts, quiet = false) {
             const line = saved ? before + saved.name + after : item;
             lines.push(line.charAt(0).toUpperCase() + line.slice(1));
             showToast(`Added ${item}`, 'success', 2500);
+            speak(`Added ${item}`);
         } else {
             // An exact match first, then a line that mentions it ("2 pints of milk" for "milk")
             let index = lines.findIndex(l => shoppingKey(l) === key);
@@ -8074,11 +8075,23 @@ async function runShoppingVoice(transcripts, quiet = false) {
             lines.splice(index, 1);
         }
         box.value = lines.join('\n');
+        if (add) {
+            // Show the new line at the bottom
+            box.scrollTop = box.scrollHeight;
+            scrollShoppingThumbs();
+        }
         await saveShoppingListNow();
         return true;
     }
     if (!quiet) showToast(`"${transcripts[0]}": say "add <item>" or "remove <item>".`, 'error', 4000);
     return false;
+}
+
+// Reads a short confirmation aloud, where the browser can
+function speak(text) {
+    if (!window.speechSynthesis) return;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
 }
 
 // --- Meals tab: items. Each is a single item (a quantity for one person, calories, a picture) or
@@ -11856,12 +11869,71 @@ async function loadHttpsInfo() {
         console.error('Failed to fetch HTTPS info:', err);
     }
     renderHttpsSettings();
+    loadHttpPort();
+}
+
+// The HTTP and HTTPS ports, and why either couldn't be opened if it couldn't
+async function loadHttpPort() {
+    try {
+        const info = await (await fetch('/api/settings/port')).json();
+        document.getElementById('http-port-input').value = info.httpPort;
+        document.getElementById('https-port-input').value = info.httpsPort;
+        const problems = [info.httpError, info.httpsError].filter(Boolean);
+        const error = document.getElementById('port-error');
+        error.textContent = problems.length ? `${problems.join('. ')}. Choose another port.` : '';
+        error.style.display = problems.length ? '' : 'none';
+    } catch (err) {
+        console.error('Failed to fetch the ports:', err);
+    }
+}
+
+// Saves new ports; the server checks they're free, then restarts on them. The page reloads, or
+// moves to its new address when its own port is the one that changed.
+async function savePorts() {
+    const httpPort = Number(document.getElementById('http-port-input').value);
+    const httpsPort = Number(document.getElementById('https-port-input').value);
+    try {
+        const before = await (await fetch('/api/updates/check', { cache: 'no-store' })).json().catch(() => ({}));
+        const res = await fetch('/api/settings/port', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ httpPort, httpsPort })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.restart) return showToast('Ports saved', 'success', 2000);
+        showToast(`Restarting on ports ${httpPort} and ${httpsPort}...`, 'info', 10000);
+
+        const secure = window.location.protocol === 'https:';
+        const newPort = secure ? httpsPort : httpPort;
+        const url = new URL(window.location.href);
+        url.port = newPort === (secure ? 443 : 80) ? '' : String(newPort);
+        const moving = url.origin !== window.location.origin;
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 1500));
+            try {
+                if (moving) {
+                    // Another origin can't be read, but an answer at all means it's up
+                    await fetch(`${url.origin}/api/updates/check`, { mode: 'no-cors', cache: 'no-store' });
+                    window.location.href = url.href;
+                    return;
+                }
+                const info = await (await fetch('/api/updates/check', { cache: 'no-store' })).json();
+                if (info.bootId && info.bootId !== before.bootId) return window.location.reload();
+            } catch { /* still restarting */ }
+        }
+        showToast('The server did not come back after restarting: check logs/server.log', 'error', 8000);
+    } catch (err) {
+        showToast(`Couldn't change the ports: ${err.message}`, 'error', 6000);
+    }
 }
 
 // This page's address over HTTPS, or null if the server isn't running HTTPS.
 function secureAppUrl() {
     if (!httpsInfo?.available) return null;
-    return `https://${window.location.hostname}:${httpsInfo.httpsPort}${window.location.pathname}`;
+    const port = httpsInfo.httpsPort === 443 ? '' : `:${httpsInfo.httpsPort}`;
+    return `https://${window.location.hostname}${port}${window.location.pathname}`;
 }
 
 function renderHttpsSettings() {
@@ -11962,7 +12034,7 @@ async function saveShoppingEmail() {
     }
 }
 
-function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos }) {
+function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos, slideshowSky }) {
     document.getElementById('slideshow-idle-input').value = slideshowIdleSeconds;
     document.getElementById('slideshow-photo-input').value = slideshowPhotoSeconds;
     if (slideshowVideos) {
@@ -11970,6 +12042,16 @@ function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, s
         document.getElementById('slideshow-video-seconds-input').value = slideshowVideos.maxSeconds;
         document.getElementById('slideshow-video-sound-input').checked = slideshowVideos.sound;
         if (slideshow) slideshow.setVideoOptions(slideshowVideos);
+    }
+    if (slideshowSky) {
+        document.getElementById('slideshow-sky-mode-input').value = slideshowSky.mode;
+        document.getElementById('slideshow-sky-facing-input').value = Math.round(slideshowSky.facing / 45) % 8 * 45;
+        document.getElementById('slideshow-sky-every-input').value = slideshowSky.every;
+        document.getElementById('slideshow-sky-lat-input').value = slideshowSky.lat ?? '';
+        document.getElementById('slideshow-sky-lon-input').value = slideshowSky.lon ?? '';
+        document.getElementById('slideshow-sky-options').hidden = slideshowSky.mode === 'off';
+        document.getElementById('slideshow-sky-facing-group').hidden = slideshowSky.mode !== 'fixed';
+        if (slideshow) slideshow.setSkyOptions(slideshowSky);
     }
     if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
 }
@@ -11979,6 +12061,15 @@ async function saveSlideshowSettings() {
     const photo = Number(document.getElementById('slideshow-photo-input').value);
     const videoSeconds = Number(document.getElementById('slideshow-video-seconds-input').value);
     if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0)) return;
+    const sky = {
+        mode: document.getElementById('slideshow-sky-mode-input').value,
+        facing: Number(document.getElementById('slideshow-sky-facing-input').value),
+        every: Number(document.getElementById('slideshow-sky-every-input').value) || 10
+    };
+    // The location is saved once both halves of it are filled in (or both cleared)
+    const lat = document.getElementById('slideshow-sky-lat-input').value.trim();
+    const lon = document.getElementById('slideshow-sky-lon-input').value.trim();
+    if (!lat === !lon) Object.assign(sky, { lat: lat ? Number(lat) : null, lon: lon ? Number(lon) : null });
     try {
         const response = await fetch('/api/settings/general', {
             method: 'POST',
@@ -11989,16 +12080,18 @@ async function saveSlideshowSettings() {
                     enabled: document.getElementById('slideshow-videos-input').checked,
                     maxSeconds: videoSeconds,
                     sound: document.getElementById('slideshow-video-sound-input').checked
-                }
+                },
+                slideshowSky: sky
             })
         });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
         // Show the values the server kept (it clamps them to a sensible range)
         applySlideshowSettings(await (await fetch('/api/settings/general')).json());
         showToast('Settings saved', 'success', 2000);
     } catch (err) {
         console.error('Failed to save slideshow settings:', err);
-        showToast('Failed to save settings');
+        showToast(`Failed to save settings: ${err.message}`);
     }
 }
 

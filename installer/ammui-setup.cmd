@@ -30,8 +30,8 @@ $RepoUrl     = 'https://github.com/abbeytekmd/ammui.git'
 $RepoZip     = 'https://codeload.github.com/abbeytekmd/ammui/zip/refs/heads/main'
 $Branch      = 'main'
 $MinNode     = [version]'22.13.0'   # node:sqlite without a flag
-$HttpPort    = 3000
-$HttpsPort   = 3443
+$HttpPort    = 80     # the ports wanted for plain HTTP (players) and HTTPS (browsers);
+$HttpsPort   = 443    # Select-Ports settles on free ones
 
 $InstallDir = if ($env:AMMUI_INSTALL_DIR) { $env:AMMUI_INSTALL_DIR } else { Join-Path $env:USERPROFILE 'ammui' }
 $InstallDir = [IO.Path]::GetFullPath($InstallDir.Trim('"'))
@@ -377,6 +377,8 @@ $UninstallScript = @'
 # AMMUI uninstaller, written by ammui-setup.cmd. Run it from Settings > Apps, or with:
 #   powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
 $InstallDir = '__INSTALL_DIR__'
+$HttpPort = __HTTP_PORT__
+$HttpsPort = __HTTPS_PORT__
 $AppDataDir = Join-Path $env:LOCALAPPDATA 'AMMUI'
 $UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\AMMUI'
 
@@ -401,7 +403,7 @@ if (Test-Path -LiteralPath $InstallDir) {
 Write-Host 'Uninstalling AMMUI' -ForegroundColor Green
 
 # Stop the server and the kiosk browser, which hold files in the folders being removed.
-foreach ($port in 3000, 3443) {
+foreach ($port in $HttpPort, $HttpsPort, 3000, 3443) {
     $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     $proc = if ($conn) { Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue }
     if ($proc -and $proc.ProcessName -eq 'node') { Info 'Stopping the AMMUI server.'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -452,7 +454,7 @@ function Register-Uninstaller {
     try {
         New-Item -ItemType Directory -Path $AppDataDir -Force | Out-Null
         $script = Join-Path $AppDataDir 'uninstall.ps1'
-        $text = $UninstallScript.Replace('__INSTALL_DIR__', $InstallDir.Replace("'", "''"))
+        $text = $UninstallScript.Replace('__INSTALL_DIR__', $InstallDir.Replace("'", "''")).Replace('__HTTP_PORT__', "$HttpPort").Replace('__HTTPS_PORT__', "$HttpsPort")
         [IO.File]::WriteAllText($script, $text, [Text.Encoding]::ASCII)
 
         $version = try { (Get-Content (Join-Path $InstallDir 'package.json') -Raw | ConvertFrom-Json).version } catch { '' }
@@ -535,7 +537,7 @@ function New-KioskShortcut {
         $shell = New-Object -ComObject WScript.Shell
         $lnk = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'AMMUI Kiosk.lnk'))
         $lnk.TargetPath = $browser
-        $lnk.Arguments = "--kiosk$extra --user-data-dir=`"$profileDir`" --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required https://localhost:$HttpsPort/"
+        $lnk.Arguments = "--kiosk$extra --user-data-dir=`"$profileDir`" --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required $(Get-HttpsUrl 'localhost')"
         $lnk.IconLocation = "$browser,0"
         $lnk.Description = 'AMMUI full screen (Alt+F4 to close). The AMMUI server must be running.'
         $lnk.Save()
@@ -559,9 +561,19 @@ function Grant-CertificateTrust {
     } catch { Warn "The AMMUI certificate was not trusted, so browsers will show a warning ($($_.Exception.Message))." }
 }
 
+# The saved HTTP and HTTPS ports (80 and 443 when none are saved yet), or $null before the code is there
+function Get-SavedPorts {
+    if (-not (Test-Path (Join-Path $InstallDir 'scripts\ports.js'))) { return $null }
+    Push-Location $InstallDir
+    try { $out = cmd /c 'node scripts/ports.js 2>nul'; if ($LASTEXITCODE -eq 0 -and "$out" -match '^(\d+) (\d+)$') { return @([int]$Matches[1], [int]$Matches[2]) } } catch { } finally { Pop-Location }
+    return $null
+}
+
 function Stop-RunningServer {
-    # The server has to be stopped to update it, and a second copy could not open the ports.
-    foreach ($port in $HttpPort, $HttpsPort) {
+    # The server has to be stopped to update it, and a second copy could not open the ports. They
+    # are the saved ones, or 3000 and 3443 from before they could be changed. Another program on
+    # one isn't a problem: Select-Ports picks free ones later.
+    foreach ($port in (@(Get-SavedPorts) + 3000, 3443 | Where-Object { $_ })) {
         $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $conn) { continue }
         $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
@@ -569,20 +581,60 @@ function Stop-RunningServer {
             Info "Stopping the AMMUI server that is already running (process $($proc.Id))."
             Stop-Process -Id $proc.Id -Force
             Start-Sleep -Seconds 1
-        } else {
-            $name = if ($proc) { $proc.ProcessName } else { 'another program' }
-            Fail "Port $port is in use by $name, so AMMUI cannot start. Close it and run the installer again."
         }
     }
 }
 
+# Why a port can't be used ($null when it can): something listening on it (on port 80 often IIS
+# or another web server, shown as 'System'), or Windows keeping it back
+function Test-PortProblem($port) {
+    $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($conn) {
+        $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        return "it is in use by $(if ($proc) { $proc.ProcessName } else { 'another program' })"
+    }
+    try {
+        $listener = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Any, $port)
+        $listener.Start(); $listener.Stop()
+        return $null
+    } catch { return 'Windows does not let programs use it' }
+}
+
+# The wanted port if it's free, or else the first of the others that is (never $skip)
+function Select-Port($label, $wanted, $others, $skip) {
+    $reason = if ($wanted -eq $skip) { 'it is the other port' } else { Test-PortProblem $wanted }
+    if (-not $reason) { return $wanted }
+    $port = $others | Where-Object { $_ -ne $wanted -and $_ -ne $skip -and -not (Test-PortProblem $_) } | Select-Object -First 1
+    if (-not $port) { Fail "No free port was found for $label. Close the program using port $wanted and run the installer again." }
+    Warn "Port $wanted is not available for $label ($reason), so AMMUI will use port $port. Change it in Settings > Secure Access."
+    return $port
+}
+
+# Settles the ports: the saved ones (80 and 443 at first) if they're free, or else the first of a
+# few others that are, and saves them. They can be changed later in Settings > Secure Access.
+function Select-Ports {
+    $saved = Get-SavedPorts
+    if ($saved) { $script:HttpPort, $script:HttpsPort = $saved }
+    $script:HttpPort = Select-Port 'HTTP' $HttpPort @(80, 8080, 8000, 3000, 8081, 8888) $null
+    $script:HttpsPort = Select-Port 'HTTPS' $HttpsPort @(443, 3443, 8443, 4443, 9443) $HttpPort
+    Push-Location $InstallDir
+    try { cmd /c "node scripts/ports.js $HttpPort $HttpsPort 2>nul" | Out-Null } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) { Fail 'Could not save the ports.' }
+    Info "AMMUI will use port $HttpPort for HTTP (players and other devices) and $HttpsPort for HTTPS (browsers)."
+}
+
+# This server's address over HTTPS on a host, leaving out the port when it's the usual 443
+function Get-HttpsUrl($hostName) {
+    if ($HttpsPort -eq 443) { "https://$hostName/" } else { "https://${hostName}:$HttpsPort/" }
+}
+
 function Start-Server {
     Step 'Starting AMMUI'
-    $url = "https://localhost:$HttpsPort/"
+    $url = Get-HttpsUrl 'localhost'
     Write-Host ''
     Write-Host "    AMMUI is starting: $url" -ForegroundColor Green
     Write-Host '    Open that address in a browser. To have a browser open whenever AMMUI starts, use Settings > Startup.'
-    Write-Host "    From other devices use https://$($env:COMPUTERNAME):$HttpsPort/ (or this PC's IP address)."
+    Write-Host "    From other devices use $(Get-HttpsUrl $env:COMPUTERNAME) (or this PC's IP address)."
     Write-Host '    If Windows Firewall asks about Node.js, allow it on private networks so players and other devices can connect.'
     Write-Host '    Close this window to stop AMMUI.' -ForegroundColor Green
     Write-Host ''
@@ -618,6 +670,7 @@ try {
     if ($haveGit) { Get-CodeWithGit } else { Get-CodeAsZip }
     if (-not (Test-Path (Join-Path $InstallDir 'server.js'))) { Fail "The AMMUI code was not found in $InstallDir." }
     Install-Packages
+    Select-Ports
     Install-Helpers
     New-AppIcon
     New-Shortcuts

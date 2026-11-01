@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=69">
+    <link rel="stylesheet" href="style.css?v=72">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -94,14 +94,6 @@
                         <rect x="16" y="8" width="6" height="8" rx="1"></rect>
                     </svg>
                     <span>Games</span>
-                </button>
-                <button type="button" class="lib-tab" data-mode="sky" onclick="showSky()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"></path>
-                        <path d="M17 3v4M15 5h4"></path>
-                    </svg>
-                    <span>Sky</span>
                 </button>
             </nav>
 
@@ -720,56 +712,6 @@
             <div id="word-keyboard" class="word-keyboard"></div>
         </section>
 
-        <!-- Sky tab: a chart of the sky from a saved location and what's on tonight (built by sky.js) -->
-        <section id="sky-view" class="smarthome-view sky-view" hidden>
-            <div class="smarthome-header">
-                <h2>Sky <span id="sky-place" class="sky-place"></span></h2>
-                <div class="smarthome-actions">
-                    <button type="button" class="btn-control btn-small" onclick="openSkyLocation()"
-                        title="Where the sky is seen from">Location</button>
-                </div>
-            </div>
-            <form id="sky-location-form" class="sky-location-form" hidden onsubmit="event.preventDefault(); saveSkyLocation()">
-                <div class="sky-location-intro">Where are you watching from? Latitude and longitude in degrees: north and east are positive.</div>
-                <div class="sky-location-fields">
-                    <input type="number" id="sky-lat" class="alarms-input" step="any" min="-90" max="90" placeholder="Latitude" required>
-                    <input type="number" id="sky-lon" class="alarms-input" step="any" min="-180" max="180" placeholder="Longitude" required>
-                    <input type="text" id="sky-name" class="alarms-input sky-name-input" maxlength="60" placeholder="Name (optional)">
-                    <button type="button" class="btn-control" onclick="useDeviceSkyLocation()">Use this device's location</button>
-                    <button type="submit" class="btn-control primary">Save</button>
-                </div>
-            </form>
-            <div id="sky-body" class="sky-body" hidden>
-                <div class="sky-chart-col">
-                    <div class="sky-modes">
-                        <button type="button" class="btn-control btn-small sky-mode-btn" data-mode="horizon" onclick="setSkyMode('horizon')">Looking out</button>
-                        <button type="button" class="btn-control btn-small sky-mode-btn" data-mode="dome" onclick="setSkyMode('dome')">Overhead</button>
-                        <span id="sky-facing-row" class="sky-facing">
-                            <span id="sky-facing-label"></span>
-                            <button type="button" class="btn-control btn-small" onclick="setSkyFacing(0)">Face north</button>
-                        </span>
-                    </div>
-                    <div id="sky-chart" class="sky-chart"></div>
-                    <div class="sky-time">
-                        <input type="range" id="sky-time" min="0" max="720" step="15" value="0"
-                            oninput="setSkyOffset(this.value)" aria-label="Time ahead">
-                        <span id="sky-time-label" class="sky-time-label"></span>
-                        <button type="button" class="btn-control btn-small" onclick="setSkyOffset(0)">Now</button>
-                    </div>
-                    <div id="sky-info" class="sky-info" role="status" aria-live="polite"></div>
-                </div>
-                <div class="sky-side">
-                    <div id="sky-summary" class="sky-summary"></div>
-                    <h3>Tonight</h3>
-                    <div id="sky-highlights" class="sky-list"></div>
-                    <h3>Aurora (Kp index)</h3>
-                    <div id="sky-kp" class="sky-kp"></div>
-                    <h3>Eclipses</h3>
-                    <div id="sky-eclipses" class="sky-list"></div>
-                </div>
-            </div>
-        </section>
-
         <section id="calendar-view" class="calendar-view" hidden>
             <!-- Shared with the Meals tab's Calendar, which moves this panel there and shows only meals -->
             <div id="calendar-panel" class="calendar-panel">
@@ -1115,6 +1057,49 @@
                                 </span>
                             </label>
                         </div>
+                        <div class="settings-group">
+                            <label for="slideshow-sky-mode-input">Night sky</label>
+                            <select id="slideshow-sky-mode-input" class="slideshow-sky-select" onchange="saveSlideshowSettings()">
+                                <option value="off">Off</option>
+                                <option value="fixed">Looking one way</option>
+                                <option value="turning">Turning slowly round the horizon</option>
+                            </select>
+                            <p class="settings-hint">The stars, planets and Moon as they are now, seen from the
+                                place below, shown between photos for as long as a photo. In daylight the
+                                stars show faintly against a blue sky, with the Sun where it is.</p>
+                        </div>
+                        <div id="slideshow-sky-options">
+                            <div class="settings-group" id="slideshow-sky-facing-group">
+                                <label for="slideshow-sky-facing-input">Looking</label>
+                                <select id="slideshow-sky-facing-input" class="slideshow-sky-select" onchange="saveSlideshowSettings()">
+                                    <option value="0">North</option>
+                                    <option value="45">North-east</option>
+                                    <option value="90">East</option>
+                                    <option value="135">South-east</option>
+                                    <option value="180">South</option>
+                                    <option value="225">South-west</option>
+                                    <option value="270">West</option>
+                                    <option value="315">North-west</option>
+                                </select>
+                            </div>
+                            <div class="settings-group">
+                                <label for="slideshow-sky-every-input">Show the sky after every (photos)</label>
+                                <input type="number" id="slideshow-sky-every-input" min="1" max="100" step="1"
+                                    onchange="saveSlideshowSettings()">
+                            </div>
+                            <div class="settings-group">
+                                <label for="slideshow-sky-lat-input">Seen from (latitude, longitude)</label>
+                                <div class="slideshow-sky-location">
+                                    <input type="number" id="slideshow-sky-lat-input" step="any" min="-90" max="90"
+                                        placeholder="Latitude" onchange="saveSlideshowSettings()">
+                                    <input type="number" id="slideshow-sky-lon-input" step="any" min="-180" max="180"
+                                        placeholder="Longitude" onchange="saveSlideshowSettings()">
+                                    <button type="button" class="btn-control btn-small"
+                                        onclick="useDeviceSkyLocation()">Use this device's location</button>
+                                </div>
+                                <p class="settings-hint">In degrees: north and east are positive.</p>
+                            </div>
+                        </div>
                     </div>
                     <div class="manage-section">
                         <h3>Secure Access (HTTPS)</h3>
@@ -1159,6 +1144,21 @@
                                 On Windows, press <b>Install on this PC</b>, open the downloaded file, and choose
                                 <b>Yes</b> when Windows asks to install the certificate. If Windows says it protected
                                 your PC, choose <b>More info</b> &rarr; <b>Run anyway</b>. Then restart the browser.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="http-port-input">Ports (HTTP, HTTPS)</label>
+                            <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                                <input type="number" id="http-port-input" min="1" max="65535" step="1" style="width:8rem;"
+                                    aria-label="HTTP port" title="HTTP port">
+                                <input type="number" id="https-port-input" min="1" max="65535" step="1" style="width:8rem;"
+                                    aria-label="HTTPS port" title="HTTPS port">
+                                <button type="button" class="btn-control btn-seek" onclick="savePorts()">Save &amp; Restart</button>
+                            </div>
+                            <p id="port-error" class="settings-hint" style="display:none; color:#f87171;"></p>
+                            <p class="settings-hint">HTTPS (usually 443) is the address browsers use. Plain HTTP (usually
+                                80) is what players (DLNA, Sonos, AirPlay) fetch music and photos from; a browser opening
+                                it is sent on to HTTPS. Players may need finding again after a change, and bookmarks
+                                and the kiosk shortcut need the new address.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -2261,6 +2261,8 @@
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <video id="screensaver-video" class="screensaver-video" playsinline muted preload="auto" style="display: none;"></video>
+        <!-- The night sky slide, shown between photos when it's on in the settings (drawn by sky.js) -->
+        <div id="screensaver-sky" class="screensaver-sky" hidden></div>
         <!-- Landscape screens: the column right of the photo, holding these from top to bottom (see style.css).
              Elsewhere it has no box of its own and they sit over the photo. -->
         <div id="ss-side-panel" class="ss-side-panel">
@@ -2343,6 +2345,8 @@
                 </button>
             </div>
             <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
+            <!-- The next sunrise and sunset, above the calendar (filled by slideshow.js from the night sky's location) -->
+            <div id="ss-sun" class="ss-sun"></div>
             <!-- Today's and tomorrow's calendar, in the side panel (filled by slideshow.js); a tap goes to the Calendar tab -->
             <div id="ss-agenda" class="ss-agenda" onclick="event.stopPropagation(); stopSlideshow(); showCalendar();"></div>
             <div class="screensaver-info" id="screensaver-info"></div>
@@ -2732,10 +2736,10 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=63"></script>
-    <script src="slideshow.js?v=9"></script>
+    <script src="app.js?v=65"></script>
+    <script src="slideshow.js?v=12"></script>
     <script src="timers.js?v=2"></script>
-    <script src="sky.js?v=3"></script>
+    <script src="sky.js?v=6"></script>
 </body>
 
 </html>

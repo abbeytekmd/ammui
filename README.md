@@ -60,7 +60,7 @@ I initially had this running on a headless linux box and accessed the UI from an
 1. **Download the installer**: [ammui-setup.cmd](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.cmd). If the link opens as text in your browser, go back, right-click it and choose *Save link as…*. If the browser says the file isn't commonly downloaded, choose *Keep*.
 2. **Run it**: double-click the downloaded file. If Windows SmartScreen says "Windows protected your PC", choose *More info* → *Run anyway*.
 3. **Answer the prompts** (see [What you may need to do](#what-you-may-need-to-do) below). Setup takes a few minutes, most of it downloading.
-4. **Name your server**: when setup finishes, AMMUI opens in your browser at `https://localhost:3443`. Give the server a name when asked, and you're ready to go.
+4. **Name your server**: when setup finishes, AMMUI opens in your browser at `https://localhost`. Give the server a name when asked, and you're ready to go.
 
 The installer is a one-off: once AMMUI is set up you never need it again. AMMUI keeps itself up to date.
 
@@ -91,7 +91,7 @@ AMMUI is also listed in *Settings → Apps* as **AMMUI Media Hub**, so it can be
 * **Approve installs**: if Node.js or Git need installing, Windows asks for permission (*Yes* in the User Account Control prompt). This needs an administrator account or password.
 * **Allow Node.js through the firewall**: the first time the server starts, Windows Defender Firewall asks about Node.js. Tick **Private networks** and choose *Allow*, otherwise your players (Sonos, DLNA, AirPlay) and other devices can't connect. This also needs an administrator.
 * **Trust the AMMUI certificate**: AMMUI runs over HTTPS with its own certificate (see [Secure Access (HTTPS)](#secure-access-https)). The installer offers to trust it on this PC. Choose *Yes* in the Windows security warning so the browser and the kiosk don't show a certificate warning. Choosing *No* is safe; the browser will just warn you each time.
-* **Set up your other devices**: open `https://<this PC's name or IP address>:3443/` on a tablet, phone or other computer. To stop the certificate warning there, install the certificate on each device as described in [Getting rid of the browser warning](#getting-rid-of-the-browser-warning).
+* **Set up your other devices**: open `https://<this PC's name or IP address>/` on a tablet, phone or other computer. To stop the certificate warning there, install the certificate on each device as described in [Getting rid of the browser warning](#getting-rid-of-the-browser-warning).
 * **Add API keys** (optional) under **Server Settings → Integrations**: a Discogs token (album art), an AcoustID key (identify tracks by their audio) and a YouTube key (music videos).
 
 If something goes wrong the installer stops with a message in red and waits for a key press so you can read it. Fix the problem it describes and run the installer again; it carries on from where it got to.
@@ -138,7 +138,7 @@ It also adds:
 
 It offers to trust the AMMUI certificate for Chrome/Chromium (this user's NSS database, using `certutil`) and for the system. Firefox keeps its own certificate list, so import `~/ammui/certs/ca.crt` in Firefox's settings if you use it (see [Getting rid of the browser warning](#getting-rid-of-the-browser-warning)).
 
-If a firewall (ufw or firewalld) is running, allow TCP ports 3000 and 3443 and UPnP/mDNS discovery (UDP 1900 and 5353), otherwise your players and other devices can't connect.
+If a firewall (ufw or firewalld) is running, allow TCP ports 80 and 443 (or the ports the installer chose instead) and UPnP/mDNS discovery (UDP 1900 and 5353), otherwise your players and other devices can't connect.
 
 #### Options
 
@@ -200,9 +200,9 @@ AMMUI can be installed by hand on any system that runs Node.js.
 
 2.  Open your browser and navigate to:
     ```
-    https://localhost:3443
+    https://localhost
     ```
-    From another device use the server's address instead, e.g. `https://192.168.0.2:3443`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost:3000` also works and redirects to the HTTPS address.
+    From another device use the server's address instead, e.g. `https://192.168.0.2`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost` also works and redirects to the HTTPS address.
 
 ## Uninstalling
 
@@ -450,9 +450,9 @@ Removing a family member also deletes their games and stats, and takes them off 
 
 ## Secure Access (HTTPS)
 
-AMMUI serves the app over HTTPS on port **3443**, e.g. `https://192.168.0.2:3443/`. Opening the page over plain HTTP (port 3000) redirects there automatically.
+AMMUI serves the app over HTTPS on port **443**, e.g. `https://192.168.0.2/`. Opening the page over plain HTTP (port 80) redirects there automatically. If another program had either port, the installer chose another and said so (such as `https://192.168.0.2:3443/`); servers set up before the ports could be changed stay on 3443 and 3000. Change them in Settings > Secure Access.
 
-Port 3000 still runs plain HTTP in the background and must stay open. Players (DLNA, Sonos, AirPlay) and AMMUI's own DLNA server fetch music, album art and device descriptions from it, and they can't use HTTPS with a self-made certificate. If the server machine has a firewall, allow both ports 3000 and 3443.
+The HTTP port still runs plain HTTP in the background and must stay open. Players (DLNA, Sonos, AirPlay) and AMMUI's own DLNA server fetch music, album art and device descriptions from it, and they can't use HTTPS with a self-made certificate. If the server machine has a firewall, allow both ports.
 
 ### The certificate
 

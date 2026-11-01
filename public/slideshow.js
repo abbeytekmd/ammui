@@ -46,6 +46,9 @@ class Slideshow {
         this.video = document.getElementById('screensaver-video');
         this.videoMaxSeconds = 60; // longest a video slide plays (0 = to its end)
         this.videoSound = false;
+        this.sky = null; // the night sky slide's settings (slideshowSky), shown between photos
+        this.skyShowing = false;
+        this.photosSinceSky = 0;
         this.videoShowing = false; // the video element is up instead of the photo
         this.slideIsVideo = false; // the slide being shown (or faded to) is a video
         this.bg = document.getElementById('screensaver-bg');
@@ -144,6 +147,34 @@ class Slideshow {
         if (this.videoShowing) this.video.muted = !this.videoSound;
     }
 
+    // From the General settings: the night sky slide (slideshowSky)
+    setSkyOptions(sky) {
+        this.sky = sky;
+        if (this.skyShowing && !skySlideAvailable(sky)) this.hideSky(false, true);
+        if (this.isActive) this.loadSun();
+    }
+
+    // The night sky in place of a photo, until the slideshow moves on
+    showSky() {
+        this.skyShowing = true;
+        this.photosSinceSky = 0;
+        this.clearZoom();
+        this.stopVideo();
+        if (this.info) this.info.style.opacity = 0;
+        this.hideMap();
+        showSkySlide(this.sky);
+    }
+
+    // Takes the sky down; `uncover` brings back the details of the photo under it, when that's what shows next
+    hideSky(now = false, uncover = false) {
+        if (!this.skyShowing) return;
+        this.skyShowing = false;
+        hideSkySlide(now);
+        if (!uncover || !this.currentPhotoData) return;
+        if (this.info) this.info.style.opacity = 1;
+        this.updateMapUI(this.currentPhotoData);
+    }
+
     async start(items = null, index = -1) {
         // Photos picked from the library (a folder, a selection) show as Custom until the mode is
         // changed or the slideshow stops; the saved mode is left alone.
@@ -171,6 +202,7 @@ class Slideshow {
         console.log('[SLIDESHOW] Starting...');
         this.isActive = true;
         this.lastStartTime = Date.now();
+        this.photosSinceSky = 0;
         this.listVersion = null;
         this.items = items || [];
         this.index = index;
@@ -185,6 +217,9 @@ class Slideshow {
         this.loadShopping();
         clearInterval(this._agendaTimer);
         this._agendaTimer = setInterval(() => { this.loadAgenda(); this.loadShopping(); }, 15 * 60 * 1000);
+        this.loadSun();
+        clearInterval(this._sunTimer);
+        this._sunTimer = setInterval(() => this.loadSun(), 60 * 1000);
 
         if (this.info) {
             this.info.style.cursor = 'pointer';
@@ -201,10 +236,12 @@ class Slideshow {
         if (!this.isActive) return;
         clearTimeout(this._modeRetryTimer);
         clearInterval(this._agendaTimer);
+        clearInterval(this._sunTimer);
         console.log('[SLIDESHOW] Stopping...');
         this._browserCurrentHidden = false;
         this.closeBrowser();
         this.isActive = false;
+        this.hideSky(true);
         this.clearZoom();
         this.stopVideo();
         this.slideIsVideo = false;
@@ -302,6 +339,27 @@ class Slideshow {
         }
     }
 
+    // The next sunrise and sunset above the calendar, soonest first, from the night sky's location
+    // (whether or not the sky itself is on); left empty, and so hidden, without a location
+    loadSun() {
+        const el = document.getElementById('ss-sun');
+        if (!el) return;
+        const loc = this.sky;
+        if (loc?.lat == null || loc?.lon == null) { el.innerHTML = ''; return; }
+        const now = Date.now();
+        const { rise, set } = skyNextSunriseSunset(now, loc);
+        // A sun on the horizon with an arrow: up for sunrise, down for sunset
+        const icon = up => `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 18a5 5 0 0 0-10 0"/>
+            <line x1="2" y1="22" x2="22" y2="22"/><path d="${up ? 'M12 2v7M9 5l3-3 3 3' : 'M12 9V2M9 6l3 3 3-3'}"/></svg>`;
+        const today = new Date(now).toDateString();
+        const event = (t, up) => `<span class="ss-sun-event">${icon(up)}${up ? 'Sunrise' : 'Sunset'}
+            <b>${new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</b>${
+            new Date(t).toDateString() === today ? '' : '<span class="ss-sun-day">tomorrow</span>'}</span>`;
+        el.innerHTML = [[rise, true], [set, false]].filter(([t]) => t !== null).sort((a, b) => a[0] - b[0])
+            .map(([t, up]) => event(t, up)).join('');
+    }
+
     // The shopping list in the side panel, one item per line, left empty (and so hidden) when there's nothing on it
     async loadShopping() {
         const el = document.getElementById('ss-shopping');
@@ -334,6 +392,16 @@ class Slideshow {
             this.resetInterval();
             return;
         }
+
+        // Every so many photos, the night sky (photos picked from the library are left as they are)
+        if (this.skyShowing) {
+            this.hideSky();
+        } else if (this.mode !== 'custom' && this.photosSinceSky >= (this.sky?.every || 10) && skySlideAvailable(this.sky)) {
+            this.showSky();
+            this.resetInterval();
+            return;
+        }
+        this.photosSinceSky++;
 
         try {
             let data;
@@ -493,6 +561,12 @@ class Slideshow {
     }
 
     async previous() {
+        // Back from the sky is the photo still under it
+        if (this.skyShowing) {
+            this.hideSky(false, true);
+            this.resetInterval();
+            return;
+        }
         if (this.items.length > 0) {
             this.index = (this.index - 1 + this.items.length) % this.items.length;
             const item = this.items[this.index];

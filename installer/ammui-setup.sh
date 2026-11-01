@@ -24,8 +24,8 @@ REPO_URL='https://github.com/abbeytekmd/ammui.git'
 REPO_TGZ='https://codeload.github.com/abbeytekmd/ammui/tar.gz/refs/heads/main'
 BRANCH='main'
 MIN_NODE='22.13.0'   # node:sqlite without a flag
-HTTP_PORT=3000
-HTTPS_PORT=3443
+HTTP_PORT=80        # the ports wanted for plain HTTP (players) and HTTPS (browsers);
+HTTPS_PORT=443      # choose_ports settles on free ones
 
 INSTALL_DIR="${1:-${AMMUI_INSTALL_DIR:-$HOME/ammui}}"
 case "$INSTALL_DIR" in /*) ;; *) INSTALL_DIR="$PWD/$INSTALL_DIR" ;; esac
@@ -420,7 +420,7 @@ write_launcher() {
         if [ -n "$SYSTEMCTL" ]; then cat <<EOF
 if [ -f '$UNIT_FILE' ] && $SYSTEMCTL is-enabled --quiet $SERVICE_NAME 2>/dev/null; then
     $SYSTEMCTL start $SERVICE_NAME
-    echo 'AMMUI is running in the background: https://localhost:$HTTPS_PORT/'
+    echo 'AMMUI is running in the background: $(https_url localhost)'
     echo 'Showing its log. Closing this window does not stop AMMUI; to stop it run: $SYSTEMCTL stop $SERVICE_NAME'
     exec $JOURNAL_CMD
 fi
@@ -488,7 +488,7 @@ new_kiosk_entry() {
 Type=Application
 Name=AMMUI Kiosk
 Comment=AMMUI full screen (Alt+F4 to close). The AMMUI server must be running.
-Exec="$browser" --kiosk --user-data-dir="$APP_DATA_DIR/kiosk-browser" --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required https://localhost:$HTTPS_PORT/
+Exec="$browser" --kiosk --user-data-dir="$APP_DATA_DIR/kiosk-browser" --no-first-run --no-default-browser-check --autoplay-policy=no-user-gesture-required $(https_url localhost)
 Icon=$APP_ICON
 Terminal=false
 Categories=AudioVideo;
@@ -512,6 +512,8 @@ write_uninstaller() {
         printf 'APPS_DIR=%q\n' "$APPS_DIR"
         printf 'UNIT_FILE=%q\n' "$UNIT_FILE"
         printf 'SYSTEMCTL=%q\n' "$SYSTEMCTL"
+        printf 'HTTP_PORT=%q\n' "$HTTP_PORT"
+        printf 'HTTPS_PORT=%q\n' "$HTTPS_PORT"
         cat <<'EOF'
 
 ask_yes() {
@@ -547,12 +549,18 @@ if [ -n "$SYSTEMCTL" ] && [ -f "$UNIT_FILE" ]; then
     rm -f "$UNIT_FILE"
     $SYSTEMCTL daemon-reload
 fi
-for port in 3000 3443; do
+for port in "$HTTP_PORT" "$HTTPS_PORT" 3000 3443; do
     pid="$(ss -ltnpH "sport = :$port" 2>/dev/null | sed -n 's/.*"node",pid=\([0-9]*\).*/\1/p' | head -n1)"
     [ -n "$pid" ] && { info 'Stopping the AMMUI server.'; kill "$pid" 2>/dev/null; }
 done
 pkill -f -- "--user-data-dir=$APP_DATA_DIR/kiosk-browser" 2>/dev/null
 sleep 2
+
+# Take away Node.js's right to use ports below 1024, if setup gave it
+if [ -f "$APP_DATA_DIR/.node-port-capability" ]; then
+    node_bin="$(cat "$APP_DATA_DIR/.node-port-capability")"
+    [ -f "$node_bin" ] && as_root setcap -r "$node_bin" 2>/dev/null
+fi
 
 if [ -f "$APP_DATA_DIR/.linger-enabled" ]; then
     loginctl disable-linger "$USER" 2>/dev/null || as_root loginctl disable-linger "$USER" 2>/dev/null
@@ -662,18 +670,68 @@ stop_running_server() {
         info 'Stopping the AMMUI service that is already running.'
         $SYSTEMCTL stop "$SERVICE_NAME"
     fi
-    local port pid name
-    for port in "$HTTP_PORT" "$HTTPS_PORT"; do
+    # The ports it was using: the saved ones, or 3000 and 3443 from before they could be changed.
+    # Another program on one isn't a problem: choose_ports picks free ones later.
+    local port pid name saved=''
+    [ -f "$INSTALL_DIR/scripts/ports.js" ] && saved="$(cd "$INSTALL_DIR" && node scripts/ports.js 2>/dev/null)"
+    for port in $saved 3000 3443; do
         read -r pid name <<<"$(listening_pid "$port")"
-        [ -n "${pid:-}" ] || continue
-        if [ "$name" = node ]; then
-            info "Stopping the AMMUI server that is already running (process $pid)."
-            kill "$pid"; sleep 1
+        [ "${name:-}" = node ] || continue
+        info "Stopping the AMMUI server that is already running (process $pid)."
+        kill "$pid"; sleep 1
+    done
+}
+
+# Ports below 1024 (such as 80) are only for root, unless the system allows them for everyone or
+# Node.js has been given the right to use them. Gives Node.js that right if need be (asking for
+# the password); fails when it can't.
+allow_low_port() {   # allow_low_port PORT
+    { [ "$1" -ge 1024 ] || [ "$IS_ROOT" -eq 1 ]; } && return 0
+    [ "$(sysctl -n net.ipv4.ip_unprivileged_port_start 2>/dev/null || echo 1024)" -le "$1" ] && return 0
+    local node_bin; node_bin="$(readlink -f "$(command -v node)")"
+    have getcap && getcap "$node_bin" 2>/dev/null | grep -q cap_net_bind_service && return 0
+    have setcap || { pkg_install libcap2-bin libcap-progs libcap >/dev/null 2>&1; hash -r; }
+    { have setcap && can_be_root; } || return 1
+    info "Letting Node.js use port $1 (you may be asked for your password)..."
+    as_root setcap cap_net_bind_service=+ep "$node_bin" || return 1
+    printf '%s\n' "$node_bin" > "$APP_DATA_DIR/.node-port-capability"   # so the uninstaller takes it away again
+}
+
+# The first of the given ports that is free and allowed, skipping SKIP; warns when it isn't the first
+pick_port() {   # pick_port LABEL SKIP PORT... -> prints the port, or nothing
+    local label="$1" skip="$2" wanted="$3" port reason=''
+    shift 2
+    for port in "$@"; do
+        [ "$port" = "$skip" ] && { [ "$port" = "$wanted" ] && reason='it is the other port'; continue; }
+        if [ -n "$(listening_pid "$port")" ]; then
+            [ "$port" = "$wanted" ] && reason='it is in use by another program'
+        elif ! allow_low_port "$port" >&2; then
+            [ "$port" = "$wanted" ] && reason='this computer only lets root use it'
         else
-            [ "$name" = '?' ] && name='another program'
-            fail "Port $port is in use by $name, so AMMUI cannot start. Close it and run the installer again."
+            [ "$port" = "$wanted" ] || warn "Port $wanted is not available for $label ($reason), so AMMUI will use port $port. Change it in Settings > Secure Access." >&2
+            echo "$port"
+            return
         fi
     done
+}
+
+# Settles the ports: the saved ones (80 and 443 at first) if they're free and allowed, or else the
+# first of a few others that are, and saves them. They can be changed later in Settings > Secure Access.
+choose_ports() {
+    local saved
+    saved="$(cd "$INSTALL_DIR" && node scripts/ports.js 2>/dev/null)" || saved=''
+    [ -n "$saved" ] && read -r HTTP_PORT HTTPS_PORT <<<"$saved"
+    HTTP_PORT="$(pick_port HTTP '' "$HTTP_PORT" 80 8080 8000 3000 8081 8888)"
+    [ -n "$HTTP_PORT" ] || fail 'No free port was found for HTTP. Close the program using port 80 and run the installer again.'
+    HTTPS_PORT="$(pick_port HTTPS "$HTTP_PORT" "$HTTPS_PORT" 443 3443 8443 4443 9443)"
+    [ -n "$HTTPS_PORT" ] || fail 'No free port was found for HTTPS. Close the program using port 443 and run the installer again.'
+    (cd "$INSTALL_DIR" && node scripts/ports.js "$HTTP_PORT" "$HTTPS_PORT" 2>/dev/null) || fail 'Could not save the ports.'
+    info "AMMUI will use port $HTTP_PORT for HTTP (players and other devices) and $HTTPS_PORT for HTTPS (browsers)."
+}
+
+# This server's address over HTTPS on a host, leaving out the port when it's the usual 443
+https_url() {   # https_url HOST
+    if [ "$HTTPS_PORT" = 443 ]; then echo "https://$1/"; else echo "https://$1:$HTTPS_PORT/"; fi
 }
 
 wait_for_port() {   # wait_for_port PID-or-empty
@@ -689,9 +747,9 @@ wait_for_port() {   # wait_for_port PID-or-empty
 print_addresses() {
     local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     printf '\n'
-    green "AMMUI is starting: https://localhost:$HTTPS_PORT/"
+    green "AMMUI is starting: $(https_url localhost)"
     info 'Open that address in a browser. To have a browser open whenever AMMUI starts, use Settings > Startup.'
-    info "From other devices use https://$(hostname):$HTTPS_PORT/${ip:+ (or https://$ip:$HTTPS_PORT/)}."
+    info "From other devices use $(https_url "$(hostname)")${ip:+ (or $(https_url "$ip"))}."
     if { have systemctl && { systemctl is-active --quiet ufw 2>/dev/null || systemctl is-active --quiet firewalld 2>/dev/null; }; }; then
         warn "A firewall is running. Allow TCP ports $HTTP_PORT and $HTTPS_PORT, and UPnP/mDNS discovery (UDP 1900 and 5353), so players and other devices can connect."
     fi
@@ -754,6 +812,7 @@ main() {
     if [ "$have_git" = 1 ]; then get_code_with_git; else get_code_as_tarball; fi
     [ -f "$INSTALL_DIR/server.js" ] || fail "The AMMUI code was not found in $INSTALL_DIR."
     install_packages
+    choose_ports
     install_helpers
     install_service
     new_menu_entries
