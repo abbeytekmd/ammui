@@ -21,6 +21,9 @@ import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirFo
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
+// node-id3 throws on malformed COMR (commercial) frames when reading existing tags; skip them
+// (on update they're dropped from the rewritten tag, which is harmless)
+const ID3_OPTS = { exclude: ['COMR'] };
 
 import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -7802,7 +7805,7 @@ app.post('/api/local/move-va', async (req, res) => {
 
                 if (path.extname(targetPath).toLowerCase() === '.mp3') {
                     try {
-                        NodeID3.update({ performerInfo: effectiveArtist }, targetPath); // TPE2
+                        NodeID3.update({ performerInfo: effectiveArtist }, targetPath, ID3_OPTS); // TPE2
                     } catch (e) {
                         console.error(`[Move to VA] Failed to tag ${path.basename(targetPath)}:`, e.message);
                     }
@@ -8378,7 +8381,7 @@ function newIdentifySummary() {
 
 async function identifySingleFileFromFilename(filePath) {
     const fileName = path.basename(filePath);
-    const existing = NodeID3.read(filePath) || {};
+    const existing = NodeID3.read(filePath, ID3_OPTS) || {};
     const needsArtist = isBlankTag(existing.artist);
     const needsTitle = isBlankTag(existing.title);
     const needsAlbum = isBlankTag(existing.album);
@@ -8421,7 +8424,7 @@ async function identifySingleFileFromFilename(filePath) {
     if (needsAlbum && confirmed.album) update.album = confirmed.album;
     if (Object.keys(update).length === 0) return { status: 'no-track-match' };
 
-    const success = NodeID3.update(update, filePath);
+    const success = NodeID3.update(update, filePath, ID3_OPTS);
     if (success !== true) throw new Error('NodeID3 failed to write tags');
     return {
         status: 'tagged',
@@ -8443,7 +8446,7 @@ async function identifyTracksInDirectory(dirPath, mp3Files) {
 
     for (const file of mp3Files) {
         const fullPath = path.join(dirPath, file.name);
-        const existing = NodeID3.read(fullPath) || {};
+        const existing = NodeID3.read(fullPath, ID3_OPTS) || {};
         const needsArtist = isBlankTag(existing.artist);
         const needsTitle = isBlankTag(existing.title);
         const needsAlbum = isBlankTag(existing.album);
@@ -8569,7 +8572,7 @@ async function identifyTracksInDirectory(dirPath, mp3Files) {
         }
 
         try {
-            const success = NodeID3.update(update, p.fullPath);
+            const success = NodeID3.update(update, p.fullPath, ID3_OPTS);
             if (success !== true) throw new Error('NodeID3 failed to write tags');
             summary.tagged++;
             summary.details.push({
@@ -8680,7 +8683,7 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
         if (year !== undefined) tags.year = year === null ? '' : String(year);
         if (trackno !== undefined || trackof !== undefined) {
             // Both live in one TRCK frame ("3/12"), so change one and keep the other as it is
-            const [curNo = '', curOf = ''] = String((NodeID3.read(filePath) || {}).trackNumber || '').split('/');
+            const [curNo = '', curOf = ''] = String((NodeID3.read(filePath, ID3_OPTS) || {}).trackNumber || '').split('/');
             const no = trackno !== undefined ? String(trackno).trim() : curNo.trim();
             const of = trackof !== undefined ? String(trackof).trim() : curOf.trim();
             tags.trackNumber = !no && !of ? '' : !of ? no : `${no || 0}/${of}`;
@@ -8688,7 +8691,7 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
 
         if (Object.keys(tags).length === 0) return res.status(400).json({ error: 'No editable field was supplied' });
 
-        const success = NodeID3.update(tags, filePath);
+        const success = NodeID3.update(tags, filePath, ID3_OPTS);
         if (success !== true) throw new Error('NodeID3 failed to write tags');
         stripId3v1(filePath);
 
@@ -8810,22 +8813,30 @@ app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => 
         const tagKey = field === 'albumartist' ? 'performerInfo' : field;
         const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
         let updated = 0;
+        const failed = [];
         for (const entry of entries) {
             if (!entry.isFile()) continue;
             if (!audioExts.has(path.extname(entry.name).toLowerCase())) continue;
             const target = path.join(folderPath, entry.name);
-            let tags = { [tagKey]: value };
-            if (field === 'trackof') {
-                // Set the total on every track but keep each track's own number
-                const [curNo = ''] = String((NodeID3.read(target) || {}).trackNumber || '').split('/');
-                tags = { trackNumber: `${curNo.trim() || 0}/${String(value).trim()}` };
+            // One unreadable file shouldn't stop the rest of the folder being updated
+            try {
+                let tags = { [tagKey]: value };
+                if (field === 'trackof') {
+                    // Set the total on every track but keep each track's own number
+                    const [curNo = ''] = String((NodeID3.read(target, ID3_OPTS) || {}).trackNumber || '').split('/');
+                    tags = { trackNumber: `${curNo.trim() || 0}/${String(value).trim()}` };
+                }
+                const result = NodeID3.update(tags, target, ID3_OPTS);
+                if (result === true) { stripId3v1(target); updated++; }
+                else failed.push(entry.name);
+            } catch (e) {
+                console.error(`[WRITE-TAGS-FOLDER] ${entry.name}:`, e.message);
+                failed.push(entry.name);
             }
-            const result = NodeID3.update(tags, target);
-            if (result === true) { stripId3v1(target); updated++; }
         }
 
-        terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}`);
-        res.json({ success: true, updated });
+        terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}${failed.length ? ` (${failed.length} failed: ${failed.join(', ')})` : ''}`);
+        res.json({ success: true, updated, failed });
     } catch (err) {
         console.error('[WRITE-TAGS-FOLDER]', err.message);
         res.status(500).json({ error: err.message });
@@ -8845,7 +8856,7 @@ async function syncSingleFile(filePath, opts = {}) {
 
     const tags = { artist, album };
     if (opts.includeAlbumArtist) tags.performerInfo = artist; // TPE2
-    const success = NodeID3.update(tags, filePath);
+    const success = NodeID3.update(tags, filePath, ID3_OPTS);
     if (success !== true) throw new Error('Failed to update tags in file');
     return { artist, album };
 }

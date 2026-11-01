@@ -8885,7 +8885,7 @@ input:checked+.slider:before {
     bottom: 2rem;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 10000;
+    z-index: 30000; /* above .modal-overlay (20000) so errors show over dialogs */
     display: flex;
     flex-direction: column;
     gap: 0.75rem;

@@ -11498,10 +11498,11 @@ async function copyTagToFolderAll(field, btn) {
             body: JSON.stringify({ uri: currentInfoUri, field, value })
         });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-        const { updated } = await res.json();
+        const { updated, failed = [] } = await res.json();
         btn.textContent = 'Done!';
         btn.style.color = '#4ade80';
         showToast(`${field} copied to ${updated} track${updated !== 1 ? 's' : ''} in folder`, 'success', 3000);
+        if (failed.length) showToast(`Couldn't update ${failed.length} file${failed.length !== 1 ? 's' : ''}: ${failed.join(', ')}`);
         setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000);
     } catch (err) {
         btn.textContent = origText;
