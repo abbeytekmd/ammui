@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=79">
+    <link rel="stylesheet" href="style.css?v=80">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -94,6 +94,14 @@
                         <rect x="16" y="8" width="6" height="8" rx="1"></rect>
                     </svg>
                     <span>Games</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="passwords" onclick="showPasswords()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="11" width="16" height="10" rx="2"></rect>
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+                    </svg>
+                    <span>Passwords</span>
                 </button>
             </nav>
 
@@ -710,6 +718,57 @@
             <div id="word-message" class="word-message" role="status" aria-live="polite"></div>
             <div class="word-board-area"><div id="word-board" class="word-board"></div></div>
             <div id="word-keyboard" class="word-keyboard"></div>
+        </section>
+
+        <!-- Passwords tab: name, username, password, website and notes (built by passwords.js) -->
+        <section id="passwords-view" class="smarthome-view passwords-view" hidden>
+            <div class="smarthome-header">
+                <h2>Passwords</h2>
+                <div class="smarthome-actions">
+                    <input type="search" id="passwords-search" class="alarms-input passwords-search" placeholder="Search"
+                        oninput="renderPasswords()" aria-label="Search the passwords">
+                    <button type="button" class="btn-control primary" onclick="editPassword(null)">Add</button>
+                </div>
+            </div>
+            <form id="password-form" class="password-form" hidden onsubmit="event.preventDefault(); savePasswordForm()">
+                <div class="password-form-fields">
+                    <label>Name<input type="text" id="password-name" class="alarms-input" maxlength="200" required></label>
+                    <label>Username<input type="text" id="password-username" class="alarms-input" maxlength="200"
+                        autocomplete="off"></label>
+                    <label>Password
+                        <span class="password-input-row">
+                            <input type="password" id="password-password" class="alarms-input" maxlength="1000"
+                                autocomplete="new-password">
+                            <button type="button" class="btn-control btn-small" onclick="togglePasswordField()"
+                                id="password-show-btn">Show</button>
+                            <button type="button" class="btn-control btn-small" onclick="generatePassword()"
+                                title="Make a strong random password">Generate</button>
+                        </span>
+                    </label>
+                    <label>Website<input type="text" id="password-url" class="alarms-input" maxlength="2000"
+                        placeholder="example.com"></label>
+                    <label class="password-notes-field">Notes<textarea id="password-notes" class="alarms-input" rows="3"
+                        maxlength="10000"></textarea></label>
+                </div>
+                <div class="password-form-actions">
+                    <button type="submit" class="btn-control primary">Save</button>
+                    <button type="button" class="btn-control" onclick="closePasswordForm()">Cancel</button>
+                </div>
+            </form>
+            <div class="passwords-table-wrap">
+                <table class="passwords-table">
+                    <thead>
+                        <tr><th>Name</th><th>Username</th><th>Password</th><th>Website</th><th>Notes</th><th></th></tr>
+                    </thead>
+                    <tbody id="passwords-body"></tbody>
+                </table>
+                <div id="passwords-empty" class="passwords-empty" hidden></div>
+            </div>
+            <div class="passwords-email-to">
+                <label for="passwords-email-input">Email entries to</label>
+                <input type="email" id="passwords-email-input" class="alarms-input" placeholder="you@example.com"
+                    onchange="savePasswordsEmail()">
+            </div>
         </section>
 
         <section id="calendar-view" class="calendar-view" hidden>
@@ -2770,9 +2829,10 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=69"></script>
+    <script src="app.js?v=70"></script>
     <script src="slideshow.js?v=15"></script>
     <script src="timers.js?v=2"></script>
+    <script src="passwords.js?v=1"></script>
     <script src="sky.js?v=13"></script>
 </body>
 

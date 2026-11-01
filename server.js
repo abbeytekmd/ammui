@@ -56,7 +56,9 @@ import {
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
+    listPasswords, getPassword, savePassword, deletePassword,
 } from './lib/db.js';
+import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import http from 'http';
@@ -131,6 +133,7 @@ const httpsPort = savedPort('httpsPort');
 // An address on this server over HTTPS, leaving out the port when it's the usual 443
 const httpsOrigin = host => `https://${host}${httpsPort === 443 ? '' : `:${httpsPort}`}`;
 const certsDir = path.join(baseDataDir, 'certs');
+useSecretKeyIn(baseDataDir); // the Passwords tab's key, beside the database
 
 // Ensure directories exist
 if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
@@ -241,6 +244,7 @@ let settings = {
     },
     supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
     shoppingEmail: '', // where the Email button on the shopping list sends it
+    passwordsEmail: '', // where the Passwords tab's Email buttons send an entry ('' = the shopping list's address)
     // Outgoing mail server, for emailing the shopping list
     email: {
         host: '',
@@ -305,6 +309,7 @@ function loadSettings() {
         ...(getSetting('slideshowSky', {}) || {}) };
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
+    settings.passwordsEmail = getSetting('passwordsEmail', '') || '';
     settings.email = { ...settings.email, ...(getSetting('email', {}) || {}) };
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
@@ -342,6 +347,7 @@ function saveSettings() {
     setSetting('slideshowSky', settings.slideshowSky);
     setSetting('supermarket', settings.supermarket);
     setSetting('shoppingEmail', settings.shoppingEmail);
+    setSetting('passwordsEmail', settings.passwordsEmail);
     setSetting('email', settings.email);
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
@@ -3118,7 +3124,8 @@ app.get('/api/settings/general', (req, res) => {
         slideshowSky: settings.slideshowSky,
         supermarket: settings.supermarket,
         supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
-        shoppingEmail: settings.shoppingEmail
+        shoppingEmail: settings.shoppingEmail,
+        passwordsEmail: settings.passwordsEmail
     });
 });
 
@@ -3170,6 +3177,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         const address = req.body.shoppingEmail.trim();
         if (address && !isEmailAddress(address)) return res.status(400).json({ error: 'That isn\'t an email address' });
         settings.shoppingEmail = address;
+        saveSettings();
+    }
+    if (typeof req.body.passwordsEmail === 'string') {
+        const address = req.body.passwordsEmail.trim();
+        if (address && !isEmailAddress(address)) return res.status(400).json({ error: 'That isn\'t an email address' });
+        settings.passwordsEmail = address;
         saveSettings();
     }
     const deviceName = String(req.body.deviceName || '').trim();
@@ -3557,6 +3570,103 @@ app.post('/api/shopping-list/email', async (req, res) => {
         res.json({ ok: true, to: settings.shoppingEmail, items: lines.length });
     } catch (err) {
         console.error('Emailing the shopping list failed:', err.message);
+        res.status(502).json({ error: `Couldn't send the email: ${err.message}` });
+    }
+});
+
+// --- Passwords tab: name, username, password, website and notes, the passwords kept encrypted
+// (lib/secret-box.js). The list never carries the passwords themselves: each is fetched on its own,
+// to show, copy or change it.
+const PASSWORD_FIELD_LIMITS = { name: 200, username: 200, password: 1000, url: 2000, notes: 10000 };
+const passwordId = req => Number.parseInt(req.params.id, 10);
+const passwordSummary = r => ({ id: r.id, name: r.name, username: r.username, url: r.url, notes: r.notes, hasPassword: !!r.password, updatedAt: r.updated_at });
+const passwordsEmailTo = () => settings.passwordsEmail || settings.shoppingEmail;
+
+// The fields from a request, trimmed and limited; the password is left as typed
+function passwordFields(body) {
+    const out = {};
+    for (const [key, max] of Object.entries(PASSWORD_FIELD_LIMITS)) {
+        if (typeof body?.[key] !== 'string') continue;
+        const value = key === 'password' ? body[key] : body[key].trim();
+        if (value.length > max) throw new Error(`The ${key} is too long`);
+        out[key] = value;
+    }
+    return out;
+}
+
+app.get('/api/passwords', (req, res) => {
+    // The address set here, and the shopping list's, which is used when none is
+    res.json({ entries: listPasswords().map(passwordSummary), emailTo: settings.passwordsEmail, fallbackEmailTo: settings.shoppingEmail });
+});
+
+app.get('/api/passwords/:id/password', (req, res) => {
+    const row = getPassword(passwordId(req));
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    try {
+        res.json({ password: decryptSecret(row.password) });
+    } catch {
+        res.status(500).json({ error: 'This password was saved with another key (on another server?) and can\'t be read here' });
+    }
+});
+
+app.post('/api/passwords', express.json(), (req, res) => {
+    try {
+        const fields = passwordFields(req.body);
+        if (!fields.name) return res.status(400).json({ error: 'Give it a name' });
+        const id = savePassword({ username: '', url: '', notes: '', ...fields, password: encryptSecret(fields.password || '') });
+        res.json(passwordSummary(getPassword(id)));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Fields left out keep what they had (so leaving the password out leaves it as it is)
+app.put('/api/passwords/:id', express.json(), (req, res) => {
+    const id = passwordId(req);
+    const row = getPassword(id);
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    try {
+        const fields = passwordFields(req.body);
+        if ('name' in fields && !fields.name) return res.status(400).json({ error: 'Give it a name' });
+        const password = 'password' in fields ? encryptSecret(fields.password) : row.password;
+        savePassword({ ...row, ...fields, password }, id);
+        res.json(passwordSummary(getPassword(id)));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete('/api/passwords/:id', (req, res) => {
+    if (!deletePassword(passwordId(req))) return res.status(404).json({ error: 'No such entry' });
+    res.json({ ok: true });
+});
+
+// Emails one entry, password and all, to the Passwords tab's address
+app.post('/api/passwords/:id/email', async (req, res) => {
+    const row = getPassword(passwordId(req));
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
+    const to = passwordsEmailTo();
+    if (!to) return res.status(400).json({ error: 'Set the address to send to first' });
+    const sender = emailSender();
+    if (!isEmailAddress(sender)) return res.status(400).json({ error: 'Set a From address for the mail server first' });
+    let password;
+    try { password = decryptSecret(row.password); } catch { return res.status(500).json({ error: 'This password can\'t be read on this server' }); }
+    const escape = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const rows = [['Name', row.name], ['Username', row.username], ['Password', password], ['Website', row.url], ['Notes', row.notes]];
+    try {
+        await emailTransport().sendMail({
+            from: { name: settings.deviceName || 'AMMUI', address: sender },
+            to,
+            subject: `Password: ${row.name}`,
+            text: rows.map(([label, value]) => `${label}: ${value || '-'}`).join('\n'),
+            html: `<table cellpadding="4">${rows.map(([label, value]) =>
+                `<tr><th align="left" valign="top">${label}</th><td style="white-space:pre-wrap">${escape(value || '-')}</td></tr>`).join('')}</table>`,
+        });
+        console.log(`Password entry "${row.name}" emailed to ${to}.`);
+        res.json({ ok: true, to });
+    } catch (err) {
+        console.error('Emailing a password entry failed:', err.message);
         res.status(502).json({ error: `Couldn't send the email: ${err.message}` });
     }
 });

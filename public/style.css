@@ -11485,4 +11485,203 @@ input:checked+.slider:before {
     font-weight: 600;
 }
 
+/* --- Passwords tab --- */
+.passwords-view .smarthome-actions {
+    gap: 0.5rem;
+}
 
+.passwords-search {
+    width: 14rem;
+    font-size: 1rem;
+}
+
+.password-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+}
+
+.password-form[hidden] {
+    display: none;
+}
+
+.password-form-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem 1rem;
+}
+
+.password-form-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.password-form-fields .alarms-input {
+    width: 100%;
+    font-size: 1rem;
+}
+
+.password-form-fields .password-notes-field {
+    grid-column: 1 / -1;
+}
+
+.password-form-fields textarea {
+    resize: vertical;
+}
+
+.password-input-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.password-input-row .alarms-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.password-form-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* Scrolls sideways on a narrow screen rather than squashing the columns */
+.passwords-table-wrap {
+    overflow-x: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+}
+
+.passwords-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.passwords-table th {
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0.7rem 0.75rem;
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+
+.passwords-table td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    vertical-align: middle;
+}
+
+.passwords-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.passwords-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.passwords-table .pw-name {
+    font-weight: 600;
+}
+
+.passwords-table a {
+    color: var(--primary);
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.passwords-table a:hover {
+    text-decoration: underline;
+}
+
+/* Notes keep to one line in the table; the whole of them shows on hover and in the form */
+.passwords-table .pw-notes {
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+}
+
+.pw-secret-cell {
+    white-space: nowrap;
+}
+
+.pw-secret {
+    font-family: ui-monospace, Consolas, monospace;
+    letter-spacing: 0.08em;
+    margin-right: 0.3rem;
+}
+
+.pw-secret.shown {
+    letter-spacing: 0;
+    color: #fcd34d;
+}
+
+.pw-actions {
+    white-space: nowrap;
+    text-align: right;
+}
+
+.pw-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.pw-icon-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+}
+
+.pw-icon-btn.pw-delete:hover {
+    color: #f87171;
+}
+
+.pw-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.passwords-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.passwords-email-to {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.passwords-email-to .alarms-input {
+    width: 20rem;
+    max-width: 100%;
+    font-size: 1rem;
+}
