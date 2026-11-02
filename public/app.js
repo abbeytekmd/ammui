@@ -8602,6 +8602,7 @@ function renderItemBuilderParts() {
                 <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(p.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">`}
             <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
             <span class="recipe-kcal" data-kcal></span>
+            ${child ? '<button type="button" class="recipe-ingredient-btn" data-act="edit" title="Edit this item">✎</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
             <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === b.parts.length - 1 ? 'disabled' : ''}>▼</button>
             <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
@@ -8619,6 +8620,18 @@ function renderItemBuilderParts() {
         row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
             btn.onclick = () => {
                 const act = btn.dataset.act;
+                if (act === 'edit') {
+                    // Changed on top of this one, which is kept as it is; a deleted one comes out of it
+                    const itemId = b.parts[i].itemId;
+                    openItemBuilder(itemById(itemId), { nested: true, onSaved: saved => {
+                        if (itemBuilder !== b) return;
+                        if (saved) b.parts.forEach(p => { if (p.itemId === itemId) p.name = saved.name; });
+                        else b.parts = b.parts.filter(p => p.itemId !== itemId);
+                        renderItemBuilderParts();
+                        renderItemBuilderPartResults();
+                    } });
+                    return;
+                }
                 if (act === 'remove') b.parts.splice(i, 1);
                 else {
                     const j = act === 'up' ? i - 1 : i + 1;
