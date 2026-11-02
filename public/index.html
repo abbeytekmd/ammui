@@ -1486,8 +1486,14 @@
                         <div class="manage-section" style="margin-top: 1.5rem;">
                             <h3>Backup</h3>
                             <div class="settings-group">
-                                <p class="settings-hint">Uploads this server's library, and a copy of its data, into a
-                                    folder named after the server. Files already backed up are skipped.</p>
+                                <p class="settings-hint">Uploads this server's library, and a copy of its data, into the
+                                    folder below. Files already backed up are skipped.</p>
+                                <div style="margin-bottom: 0.75rem;">
+                                    <label for="s3-folder">Backup Folder</label>
+                                    <input type="text" id="s3-folder" style="max-width: 20em;" onchange="changeS3Folder()">
+                                    <p class="settings-hint">The folder in the bucket. It stays the same when the server is
+                                        renamed. Changed, the backup already there can be moved along with it.</p>
+                                </div>
                                 <label class="settings-check">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
                                     <span>Back up automatically every day</span>
@@ -1555,6 +1561,8 @@
                                 <div id="s3-sync-file" class="sync-current-file"></div>
                             </div>
                             <div class="sync-actions" style="margin-top: 0.5rem;">
+                                <button id="btn-s3-cancel" onclick="cancelS3Sync()"
+                                    class="btn-control btn-small" style="display: none;">Cancel</button>
                                 <button id="btn-s3-view-log" onclick="openS3SyncLogModal()"
                                     class="btn-control ghost btn-small">View Log</button>
                                 <span id="s3-last-sync" class="last-sync-time"></span>
@@ -2844,7 +2852,7 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=73"></script>
+    <script src="app.js?v=75"></script>
     <script src="slideshow.js?v=16"></script>
     <script src="timers.js?v=2"></script>
     <script src="passwords.js?v=2"></script>

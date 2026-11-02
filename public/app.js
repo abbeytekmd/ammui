@@ -12197,6 +12197,8 @@ async function fetchS3Settings() {
         const mirrorMax = document.getElementById('s3-mirror-max');
         if (mirror) mirror.checked = !!data.mirror;
         if (mirrorMax) mirrorMax.value = data.mirrorMaxDeletePercent || 10;
+        const folder = document.getElementById('s3-folder');
+        if (folder) folder.value = folder.dataset.saved = data.folder || '';
         applyS3VerifiedUi(!!data.verified);
         setS3TestResult(data.verified ? 'Connection tested.' : '', 'ok');
         updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
@@ -12317,6 +12319,13 @@ async function updateS3Status() {
         const lastSyncEl = document.getElementById('s3-last-sync');
         const buttons = ['btn-s3-sync-now', 'btn-s3-restore-start', 'btn-s3-test']
             .map(id => document.getElementById(id)).filter(Boolean);
+        // Cancel: there while a backup or restore runs, greyed once pressed
+        const cancelBtn = document.getElementById('btn-s3-cancel');
+        if (cancelBtn) {
+            cancelBtn.style.display = status.running && !status.restarting ? '' : 'none';
+            cancelBtn.classList.toggle('disabled', !!status.cancelling);
+            cancelBtn.textContent = status.cancelling ? 'Cancelling...' : 'Cancel';
+        }
         // Restarted after restoring data: reload, so the page shows what was restored
         if (s3RestartBootId && status.bootId !== s3RestartBootId) {
             location.reload();
@@ -12330,10 +12339,17 @@ async function updateS3Status() {
                 if (progressRow) progressRow.style.display = 'none';
                 buttons.forEach(b => b.classList.add('disabled'));
             } else if (status.running) {
-                stateEl.textContent = status.mode === 'restore' ? 'Restoring...' : 'Backing up...';
+                stateEl.textContent = status.cancelling ? 'Cancelling...'
+                    : { restore: 'Restoring...', move: 'Moving the backup...' }[status.mode] || 'Backing up...';
                 stateEl.style.color = 'var(--primary)';
                 if (progressRow) progressRow.style.display = 'block';
                 buttons.forEach(b => b.classList.add('disabled'));
+            } else if (status.cancelled) {
+                stateEl.textContent = { restore: 'Restore cancelled', move: 'Move cancelled' }[status.mode] || 'Backup cancelled';
+                stateEl.style.color = 'var(--text-muted)';
+                if (progressRow) progressRow.style.display = 'none';
+                buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             } else if (status.lastError) {
                 stateEl.textContent = 'Error';
                 stateEl.style.color = 'var(--accent)';
@@ -12410,6 +12426,77 @@ async function triggerS3Sync() {
     } catch (err) {
         console.error('S3 sync error:', err);
         showToast(`Sync Error: ${err.message}`);
+        if (btn) btn.classList.remove('disabled');
+    }
+}
+
+// Settings > Backup's folder. Changed, the backup already in the old folder can be moved along
+// (copied within the bucket, so nothing is uploaded again); otherwise the next backup starts
+// afresh in the new folder, uploading everything again.
+async function changeS3Folder() {
+    const input = document.getElementById('s3-folder');
+    if (!input) return;
+    const folder = input.value.trim();
+    const current = input.dataset.saved || '';
+    if (!folder || folder === current) {
+        input.value = current;
+        return;
+    }
+    // Which folders the bucket has, to know whether there's a backup to move and the new one is free
+    let folders = null;
+    try {
+        const response = await fetch('/api/sync/s3/folders');
+        if (response.ok) folders = (await response.json()).folders;
+    } catch { }
+    let move = false;
+    if (folders?.includes(folder)) {
+        if (!confirm(`"${folder}" already has a backup in it, perhaps another server's.\n\n` +
+            `Back up into it anyway? The two would mix, and the backup in "${current}" stays where it is.`)) {
+            input.value = current;
+            return;
+        }
+    } else if (!folders || folders.includes(current)) {
+        if (confirm(`Move the backup from "${current}" to "${folder}"?\n\nIt's copied within the bucket, so nothing ` +
+            `is uploaded again, then removed from "${current}".\n\nOK moves it. Cancel gives the choice of starting ` +
+            `afresh in "${folder}" instead.`)) {
+            move = true;
+        } else if (!confirm(`Back up into "${folder}" without moving the old backup?\n\nThe next backup uploads ` +
+            `everything again, and the old backup stays in "${current}" until you delete it.`)) {
+            input.value = current;
+            return;
+        }
+    }
+    try {
+        const response = await fetch('/api/sync/s3/folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder, move })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        input.value = input.dataset.saved = data.folder;
+        showToast(move ? 'Moving the backup...' : 'Backup folder changed', 'success', 2500);
+        await updateS3Status();
+    } catch (err) {
+        input.value = current;
+        showToast(`Couldn't change the folder: ${err.message}`);
+    }
+}
+
+// Stops the backup or restore going on; what's done so far stays done
+async function cancelS3Sync() {
+    const btn = document.getElementById('btn-s3-cancel');
+    if (btn) btn.classList.add('disabled');
+    try {
+        const response = await fetch('/api/sync/s3/cancel', { method: 'POST' });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        await updateS3Status();
+    } catch (err) {
+        console.error('S3 cancel error:', err);
+        showToast(`Couldn't cancel: ${err.message}`);
         if (btn) btn.classList.remove('disabled');
     }
 }

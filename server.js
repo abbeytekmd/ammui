@@ -223,7 +223,10 @@ let settings = {
         time: '03:00', // when the daily sync runs (local time, HH:MM)
         verified: false, // the connection test passed with the current details
         mirror: false,
-        mirrorMaxDeletePercent: 10
+        mirrorMaxDeletePercent: 10,
+        // The bucket folder backups go into. Set from the server's name at the first backup and
+        // kept after that, so renaming the server doesn't start a new backup ('' = not yet).
+        folder: ''
     },
     deviceName: 'AMMUI',
     slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
@@ -282,8 +285,35 @@ let s3SyncStatus = {
     currentFile: '',
     syncedCount: 0,
     totalCount: 0,
+    cancelling: false, // Cancel was pressed, and it's stopping
+    cancelled: false, // the last backup or restore was cancelled before it finished
     restarting: false // after restoring data, while the server restarts to load it
 };
+
+// The backup or restore going on, so Cancel can stop it: the upload in progress is aborted,
+// as are the requests and downloads given its signal, and the loops stop at the next file.
+let s3Run = null; // { cancelled, abort: AbortController, upload }
+
+function beginS3Run() {
+    s3Run = { cancelled: false, abort: new AbortController(), upload: null };
+    Object.assign(s3SyncStatus, { cancelling: false, cancelled: false });
+    return s3Run;
+}
+
+function cancelS3Run() {
+    if (!s3SyncStatus.running || !s3Run || s3Run.cancelled) return false;
+    s3Run.cancelled = true;
+    s3SyncStatus.cancelling = true;
+    s3Run.abort.abort();
+    s3Run.upload?.abort().catch(() => {});
+    return true;
+}
+
+// Runs an Upload so that Cancel can abort it
+async function runS3Upload(upload) {
+    if (s3Run) s3Run.upload = upload;
+    try { await upload.done(); } finally { if (s3Run) s3Run.upload = null; }
+}
 
 function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
@@ -296,6 +326,11 @@ function loadSettings() {
     // Installs from before the connection test existed: a configured bucket was already in use
     if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
+    // Installs from before the folder was its own setting backed up into one named after the server
+    if (!('folder' in savedS3) && savedS3.bucket && settings.deviceName) {
+        settings.s3.folder = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+        setSetting('s3', settings.s3);
+    }
     settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
     settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
     const savedVideos = getSetting('slideshowVideos', {}) || {};
@@ -533,6 +568,12 @@ function createS3Client(config = settings.s3) {
 
 const S3_CONNECTION_FIELDS = ['endpoint', 'region', 'bucket', 'accessKeyId', 'secretAccessKey'];
 
+// A folder name that's safe in the bucket (and on disk, when restored)
+const s3FolderName = name => String(name || '').trim().replace(/[<>:"/\\|?*]/g, '_');
+
+// The bucket folder this server backs up into: as set, or (before the first backup) its name
+const s3BackupFolder = () => settings.s3.folder || s3FolderName(settings.deviceName || 'AMMUI');
+
 // Plain-language reasons for the errors people actually hit while setting up a bucket
 function describeS3Error(err) {
     const code = err.name || err.Code || err.code || '';
@@ -586,9 +627,11 @@ async function syncToS3({ manual = false } = {}) {
         return;
     }
 
+    let run = null;
     try {
         try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
         s3Log('[S3] Starting sync...');
+        run = beginS3Run();
         s3SyncStatus.running = true;
         s3SyncStatus.syncedCount = 0;
         s3SyncStatus.totalCount = 0;
@@ -622,10 +665,16 @@ async function syncToS3({ manual = false } = {}) {
 
         // Per top-level folder (music / pictures / videos) tallies for the summary line
         const tally = {};
-        const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+        const devicePrefix = s3BackupFolder();
+        if (!settings.s3.folder) {
+            // From now on it stays this folder, whatever the server is called
+            settings.s3.folder = devicePrefix;
+            saveSettings();
+        }
         const localKeys = new Set();
         await backupDatabaseToS3(s3, devicePrefix, localKeys);
         for (const filePath of allFiles) {
+            if (run.cancelled) break;
             const localRel = path.relative(localDir, filePath).replace(/\\/g, '/');
             const relativePath = `${devicePrefix}/${localRel}`;
             localKeys.add(relativePath);
@@ -642,10 +691,11 @@ async function syncToS3({ manual = false } = {}) {
                     head = await s3.send(new HeadObjectCommand({
                         Bucket: settings.s3.bucket,
                         Key: relativePath
-                    }));
+                    }), { abortSignal: run.abort.signal });
                 } catch (e) {
                     // Not found, proceed with upload
                 }
+                if (run.cancelled) break;
                 if (head && head.ContentLength === size) {
                     // Older syncs stored everything as audio/mpeg; correct the type in place
                     // (a server-side copy, nothing is re-sent). Copies are limited to 5GB.
@@ -683,10 +733,11 @@ async function syncToS3({ manual = false } = {}) {
                     leavePartsOnError: false,
                 });
 
-                await parallelUploads3.done();
+                await runS3Upload(parallelUploads3);
                 s3SyncStatus.syncedCount++;
                 t.uploaded++;
             } catch (err) {
+                if (run.cancelled) break;
                 t.failed++;
                 s3Log(`[S3] Failed to upload ${relativePath}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Upload failed for ${relativePath}: ${err.message}`;
@@ -698,16 +749,31 @@ async function syncToS3({ manual = false } = {}) {
             s3Log(`[S3] ${section}: ${t.uploaded} uploaded, ${t.skipped} already backed up, ${t.failed} failed`);
         }
 
+        // Cancelled, the files not reached yet would look deleted: nothing is mirrored
+        if (run.cancelled) {
+            s3Log(`[S3] Backup cancelled after ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files. ` +
+                'What was uploaded stays, and the next backup carries on from there.');
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+
         if (settings.s3.mirror) await mirrorDeleteFromS3(s3, `${devicePrefix}/`, localKeys);
 
         s3SyncStatus.lastSync = new Date().toISOString();
         s3Log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
     } catch (err) {
-        s3Log(`[S3] Global Sync Error: ${err.message}`, true);
-        s3SyncStatus.lastError = err.message;
+        if (run?.cancelled) {
+            s3Log('[S3] Backup cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Global Sync Error: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
     } finally {
         s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
         s3SyncStatus.currentFile = '';
+        s3Run = null;
     }
 }
 
@@ -720,15 +786,16 @@ async function backupDatabaseToS3(s3, devicePrefix, localKeys) {
         s3SyncStatus.currentFile = 'Database snapshot';
         await fsp.mkdir(path.dirname(backupSnapshotPath), { recursive: true });
         snapshotDatabase(backupSnapshotPath);
-        await new Upload({
+        await runS3Upload(new Upload({
             client: s3,
             params: { Bucket: settings.s3.bucket, Key: key, Body: fs.createReadStream(backupSnapshotPath), ContentType: 'application/vnd.sqlite3' },
             queueSize: 4,
             partSize: 5 * 1024 * 1024,
             leavePartsOnError: false,
-        }).done();
+        }));
         s3Log('[S3] Backed up the database (meals, tags, settings and the rest)');
     } catch (err) {
+        if (s3Run?.cancelled) return;
         s3Log(`[S3] Failed to back up the database: ${err.message}`, true);
         s3SyncStatus.lastError = `Database backup failed: ${err.message}`;
     } finally {
@@ -856,9 +923,11 @@ async function describeS3Backup(folder) {
 async function restoreFromS3(folder, { media = [], data = [], takeOver = false } = {}) {
     if (s3SyncStatus.running) return;
     let restart = false;
+    let run = null;
     try {
         try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
         s3Log(`[S3] Starting restore from ${folder}/ ...`);
+        run = beginS3Run();
         s3SyncStatus.running = true;
         s3SyncStatus.mode = 'restore';
         s3SyncStatus.syncedCount = 0;
@@ -877,6 +946,7 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
         const localDir = path.join(__dirname, 'local');
         let downloaded = 0, skipped = 0, failed = 0;
         for (const obj of objects) {
+            if (run.cancelled) break;
             const rel = obj.Key.slice(prefix.length);
             s3SyncStatus.currentFile = rel;
             const target = path.resolve(localDir, rel);
@@ -896,13 +966,18 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
                 }
                 s3Log(`[S3] Downloading ${rel}...`);
                 await fsp.mkdir(path.dirname(target), { recursive: true });
-                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: obj.Key }));
+                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: obj.Key }),
+                    { abortSignal: run.abort.signal });
                 // Write to a temp file first so an interrupted download doesn't leave a truncated file
                 const tmp = `${target}.restoring`;
-                await pipeline(Body, fs.createWriteStream(tmp));
+                await pipeline(Body, fs.createWriteStream(tmp), { signal: run.abort.signal });
                 await fsp.rename(tmp, target);
                 downloaded++;
             } catch (err) {
+                if (run.cancelled) {
+                    await fsp.unlink(`${target}.restoring`).catch(() => {});
+                    break;
+                }
                 failed++;
                 s3Log(`[S3] Failed to download ${rel}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Download failed for ${rel}: ${err.message}`;
@@ -913,6 +988,13 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
         if (downloaded > 0) markDirty(SERVER_UDN, findDeviceByUdn);
         if (media.length) s3Log(`[S3] Files: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
 
+        // Cancelled: the data here is left as it is, and nothing restarts
+        if (run.cancelled) {
+            s3Log("[S3] Restore cancelled. The files downloaded stay; the data wasn't restored.");
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+
         if (useSnapshot) {
             s3SyncStatus.currentFile = 'Database snapshot';
             try {
@@ -921,6 +1003,10 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
                 const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: `${prefix}${S3_DB_SNAPSHOT}` }));
                 await pipeline(Body, fs.createWriteStream(backupSnapshotPath));
                 const { counts, deviceName } = restoreFromSnapshot(backupSnapshotPath, data);
+                if (takeOver) {
+                    settings.s3.folder = folder;
+                    setSetting('s3', settings.s3);
+                }
                 // Tags, favourites and photo changes are saved against the server's name: the
                 // restored ones under the old server's, any kept here under this one's
                 if (takeOver && deviceName) {
@@ -946,16 +1032,84 @@ async function restoreFromS3(folder, { media = [], data = [], takeOver = false }
         s3SyncStatus.lastRestore = new Date().toISOString();
         s3Log(`[S3] Restore complete${restart ? '. Restarting to load the restored data...' : '.'}`);
     } catch (err) {
-        s3Log(`[S3] Global Restore Error: ${err.message}`, true);
-        s3SyncStatus.lastError = err.message;
+        if (run?.cancelled) {
+            s3Log('[S3] Restore cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Global Restore Error: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
     } finally {
         s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
         s3SyncStatus.currentFile = '';
+        s3Run = null;
     }
     if (restart) {
         // Long enough for the page to see it's restarting
         s3SyncStatus.restarting = true;
         setTimeout(restartServer, 3000);
+    }
+}
+
+// Moves this server's backup to another folder in the bucket. S3 can't rename, so each file is
+// copied within the bucket (nothing is uploaded again) and the original deleted once it's copied.
+// A file over 5GB can't be copied in one go: it's left where it is, and the next backup uploads
+// it again. Cancelled part way, what's not moved yet stays in the old folder.
+async function moveS3Folder(from, to) {
+    if (s3SyncStatus.running) return;
+    let run = null;
+    try {
+        try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
+        s3Log(`[S3] Moving the backup from ${from}/ to ${to}/ ...`);
+        run = beginS3Run();
+        Object.assign(s3SyncStatus, { running: true, mode: 'move', syncedCount: 0, totalCount: 0, lastError: null });
+        const s3 = createS3Client();
+        const bucket = settings.s3.bucket;
+        const objects = await listS3Objects(s3, `${from}/`);
+        s3SyncStatus.totalCount = objects.length;
+        let moved = 0, failed = 0;
+        for (const obj of objects) {
+            if (run.cancelled) break;
+            const rel = obj.Key.slice(from.length + 1);
+            s3SyncStatus.currentFile = rel;
+            try {
+                if (obj.Size >= 5 * 1024 * 1024 * 1024) throw new Error('over 5GB, too big to copy (the next backup uploads it again)');
+                await s3.send(new CopyObjectCommand({
+                    Bucket: bucket,
+                    Key: `${to}/${rel}`,
+                    CopySource: `${bucket}/${obj.Key.split('/').map(encodeURIComponent).join('/')}`
+                }), { abortSignal: run.abort.signal });
+                await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }), { abortSignal: run.abort.signal });
+                moved++;
+            } catch (err) {
+                if (run.cancelled) break;
+                failed++;
+                s3Log(`[S3] Couldn't move ${rel}: ${err.message}`, true);
+                s3SyncStatus.lastError = `Move failed for ${rel}: ${err.message}`;
+            }
+            s3SyncStatus.syncedCount++;
+        }
+        if (run.cancelled) {
+            s3Log(`[S3] Move cancelled after ${moved} of ${objects.length} files. The rest stay in ${from}/; ` +
+                `backups go into ${to}/ from now on, and the next one uploads what isn't there.`);
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+        s3Log(`[S3] Moved ${moved} files${failed ? `; ${failed} couldn't be, and stay in ${from}/` : ''}. Backups now go into ${to}/.`);
+    } catch (err) {
+        if (run?.cancelled) {
+            s3Log('[S3] Move cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Move failed: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
+    } finally {
+        s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
+        s3SyncStatus.currentFile = '';
+        s3Run = null;
     }
 }
 
@@ -2991,7 +3145,7 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
 });
 
 app.get('/api/settings/s3', (req, res) => {
-    const s3 = { ...settings.s3 };
+    const s3 = { ...settings.s3, folder: s3BackupFolder() };
     // Mask secret
     if (s3.secretAccessKey) {
         s3.secretAccessKey = s3.secretAccessKey.substring(0, 4) + '****************';
@@ -3009,6 +3163,7 @@ function unmaskS3Secret(body) {
 app.post('/api/settings/s3', express.json(), (req, res) => {
     const newS3 = unmaskS3Secret(req.body);
     delete newS3.verified; // only a passing connection test sets this
+    delete newS3.folder; // changed on its own (POST /api/sync/s3/folder), as it may move the backup
     if ('time' in newS3 && !/^([01]\d|2[0-3]):[0-5]\d$/.test(newS3.time)) delete newS3.time;
     const connectionChanged = S3_CONNECTION_FIELDS.some(f => f in newS3 && (newS3[f] || '') !== (settings.s3[f] || ''));
     settings.s3 = { ...settings.s3, ...newS3 };
@@ -3968,6 +4123,42 @@ app.get('/api/sync/s3/status', (req, res) => {
 app.post('/api/sync/s3/start', (req, res) => {
     if (s3SyncStatus.running) return res.status(400).json({ error: 'Sync already running' });
     syncToS3({ manual: true }); // Trigger async
+    res.json({ success: true });
+});
+
+// Changes the bucket folder this server backs up into. move: takes the backup already in the
+// old folder along (moveS3Folder), only into a folder with nothing in it; otherwise the next
+// backup starts afresh in the new one.
+app.post('/api/sync/s3/folder', express.json(), async (req, res) => {
+    const folder = s3FolderName(req.body.folder);
+    if (!folder || folder.startsWith('.')) return res.status(400).json({ error: 'Enter a folder name' });
+    if (s3SyncStatus.running) return res.status(400).json({ error: 'Wait for the backup or restore to finish first' });
+    const from = s3BackupFolder();
+    if (folder === from) return res.json({ success: true, folder });
+    if (req.body.move) {
+        if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+            return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+        }
+        try {
+            const page = await createS3Client().send(new ListObjectsV2Command({ Bucket: settings.s3.bucket, Prefix: `${folder}/`, MaxKeys: 1 }));
+            if (page.KeyCount > 0 || page.Contents?.length) {
+                return res.status(409).json({ error: `"${folder}" already has a backup in it. Pick another name.` });
+            }
+        } catch (err) {
+            return res.status(500).json({ error: err.message });
+        }
+    }
+    settings.s3.folder = folder;
+    saveSettings();
+    console.log(`[S3] Backups now go into ${folder}/ (was ${from}/)${req.body.move ? ', moving the old backup there' : ''}`);
+    if (req.body.move) moveS3Folder(from, folder); // runs on; its progress shows in the status
+    res.json({ success: true, folder });
+});
+
+// Stops the backup or restore going on (see s3Run)
+app.post('/api/sync/s3/cancel', (req, res) => {
+    if (!cancelS3Run()) return res.status(400).json({ error: 'Nothing to cancel' });
+    s3Log('[S3] Cancelling...');
     res.json({ success: true });
 });
 
