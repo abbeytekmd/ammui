@@ -11381,8 +11381,7 @@ input:checked+.slider:before {
     background: var(--bg);
 }
 
-.settings-group[hidden],
-#slideshow-sky-options[hidden] {
+.settings-group[hidden] {
     display: none;
 }
 

@@ -1054,6 +1054,7 @@
             <div class="settings-side-layout">
             <div class="settings-tabs settings-tabs-side">
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
+                <button class="settings-tab" onclick="switchSettingsTab('slideshow', this)">Slideshow</button>
                 <button class="settings-tab" onclick="switchSettingsTab('shopping', this)">Shopping</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
@@ -1073,86 +1074,6 @@
                                 onchange="saveGeneralSettings()">
                             <p class="settings-hint">This name will appear in the UI and as the DLNA server name.
                             </p>
-                        </div>
-                    </div>
-                    <div class="manage-section">
-                        <h3>Slideshow</h3>
-                        <div class="settings-group">
-                            <label for="slideshow-idle-input">Start after idle (seconds)</label>
-                            <input type="number" id="slideshow-idle-input" min="0" max="86400" step="1"
-                                onchange="saveSlideshowSettings()">
-                            <p class="settings-hint">How long the app sits untouched before the slideshow starts.
-                                It doesn't start while a game is being played. 0 means it only starts when you
-                                start it.</p>
-                        </div>
-                        <div class="settings-group">
-                            <label for="slideshow-photo-input">Show each photo for (seconds)</label>
-                            <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
-                                onchange="saveSlideshowSettings()">
-                            <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
-                        </div>
-                        <div class="settings-group">
-                            <label class="settings-check">
-                                <input type="checkbox" id="slideshow-videos-input" onchange="saveSlideshowSettings()">
-                                <span>Include videos
-                                    <span class="settings-hint">Videos in the slideshow's photo folder, such as
-                                        iPhone Live Photos. Importing files puts a Live Photo's video beside its
-                                        photo, and the slideshow plays it in the photo's place.</span>
-                                </span>
-                            </label>
-                        </div>
-                        <div class="settings-group">
-                            <label for="slideshow-video-seconds-input">Play each video for up to (seconds)</label>
-                            <input type="number" id="slideshow-video-seconds-input" min="0" max="3600" step="1"
-                                onchange="saveSlideshowSettings()">
-                            <p class="settings-hint">A shorter video plays once and stays on its last frame for
-                                the rest of the photo time. 0 plays every video to its end.</p>
-                        </div>
-                        <div class="settings-group">
-                            <label class="settings-check">
-                                <input type="checkbox" id="slideshow-video-sound-input" onchange="saveSlideshowSettings()">
-                                <span>Play video sound
-                                    <span class="settings-hint">Off, videos play silently over any music.</span>
-                                </span>
-                            </label>
-                        </div>
-                        <div class="settings-group">
-                            <label class="settings-check">
-                                <input type="checkbox" id="slideshow-sky-mode-input" onchange="saveSlideshowSettings()">
-                                <span>Sky
-                                    <span class="settings-hint">Adds a <b>Sky</b> button to the slideshow, which switches
-                                        between the photos and the sky: the stars, planets and Moon as they are now, seen
-                                        from the place below, by day as well as night. Drag it to look round, or let it turn
-                                        slowly with its <b>Turn</b> button. Left on the sky, the next slideshow starts on it too.</span>
-                                </span>
-                            </label>
-                        </div>
-                        <div id="slideshow-sky-options">
-                            <div class="settings-group" id="slideshow-sky-facing-group">
-                                <label for="slideshow-sky-facing-input">Starts looking</label>
-                                <select id="slideshow-sky-facing-input" class="slideshow-sky-select" onchange="saveSlideshowSettings()">
-                                    <option value="0">North</option>
-                                    <option value="45">North-east</option>
-                                    <option value="90">East</option>
-                                    <option value="135">South-east</option>
-                                    <option value="180">South</option>
-                                    <option value="225">South-west</option>
-                                    <option value="270">West</option>
-                                    <option value="315">North-west</option>
-                                </select>
-                            </div>
-                            <div class="settings-group">
-                                <label for="slideshow-sky-lat-input">Seen from (latitude, longitude)</label>
-                                <div class="slideshow-sky-location">
-                                    <input type="number" id="slideshow-sky-lat-input" step="any" min="-90" max="90"
-                                        placeholder="Latitude" onchange="saveSlideshowSettings()">
-                                    <input type="number" id="slideshow-sky-lon-input" step="any" min="-180" max="180"
-                                        placeholder="Longitude" onchange="saveSlideshowSettings()">
-                                    <button type="button" class="btn-control btn-small"
-                                        onclick="useDeviceSkyLocation()">Use this device's location</button>
-                                </div>
-                                <p class="settings-hint">In degrees: north and east are positive.</p>
-                            </div>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -1225,6 +1146,88 @@
                         </div>
                     </div>
                 </div>
+                <div id="settings-slideshow" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Slideshow</h3>
+                        <div class="settings-group">
+                            <label for="slideshow-idle-input">Start after idle (seconds)</label>
+                            <input type="number" id="slideshow-idle-input" min="0" max="86400" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">How long the app sits untouched before the slideshow starts.
+                                It doesn't start while a game is being played. 0 means it only starts when you
+                                start it.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-photo-input">Show each photo for (seconds)</label>
+                            <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-videos-input" onchange="saveSlideshowSettings()">
+                                <span>Include videos
+                                    <span class="settings-hint">Videos in the slideshow's photo folder, such as
+                                        iPhone Live Photos. Importing files puts a Live Photo's video beside its
+                                        photo, and the slideshow plays it in the photo's place.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-video-seconds-input">Play each video for up to (seconds)</label>
+                            <input type="number" id="slideshow-video-seconds-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">A shorter video plays once and stays on its last frame for
+                                the rest of the photo time. 0 plays every video to its end.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-video-sound-input" onchange="saveSlideshowSettings()">
+                                <span>Play video sound
+                                    <span class="settings-hint">Off, videos play silently over any music.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div id="slideshow-sky-options">
+                            <p class="settings-hint">The slideshow's <b>Sky</b> button switches between the photos and
+                                the sky: the stars, planets and Moon as they are now, seen from the place below, by day
+                                as well as night. Drag it to look round, or let it turn slowly with its <b>Turn</b> button.
+                                Left on the sky, the next slideshow starts on it too.</p>
+                            <div class="settings-group">
+                                <label for="slideshow-sky-sunset-input">Show the sky after sunset for (minutes)</label>
+                                <input type="number" id="slideshow-sky-sunset-input" min="0" max="720" step="1"
+                                    onchange="saveSlideshowSettings()">
+                                <p class="settings-hint">The slideshow switches from the photos to the sky at sunset, and
+                                    back to the photos after this long (30 is half an hour). 0 never switches.</p>
+                            </div>
+                            <div class="settings-group" id="slideshow-sky-facing-group">
+                                <label for="slideshow-sky-facing-input">Starts looking</label>
+                                <select id="slideshow-sky-facing-input" class="slideshow-sky-select" onchange="saveSlideshowSettings()">
+                                    <option value="0">North</option>
+                                    <option value="45">North-east</option>
+                                    <option value="90">East</option>
+                                    <option value="135">South-east</option>
+                                    <option value="180">South</option>
+                                    <option value="225">South-west</option>
+                                    <option value="270">West</option>
+                                    <option value="315">North-west</option>
+                                </select>
+                            </div>
+                            <div class="settings-group">
+                                <label for="slideshow-sky-lat-input">Seen from (latitude, longitude)</label>
+                                <div class="slideshow-sky-location">
+                                    <input type="number" id="slideshow-sky-lat-input" step="any" min="-90" max="90"
+                                        placeholder="Latitude" onchange="saveSlideshowSettings()">
+                                    <input type="number" id="slideshow-sky-lon-input" step="any" min="-180" max="180"
+                                        placeholder="Longitude" onchange="saveSlideshowSettings()">
+                                    <button type="button" class="btn-control btn-small"
+                                        onclick="useDeviceSkyLocation()">Use this device's location</button>
+                                </div>
+                                <p class="settings-hint">In degrees: north and east are positive.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div id="settings-shopping" class="settings-panel">
                     <div class="manage-section">
                         <h3>Shopping List</h3>
@@ -1244,6 +1247,18 @@
                                 autocomplete="email" onchange="saveShoppingEmail()">
                             <p class="settings-hint">The Email button on the shopping list sends it here. It's sent
                                 through the mail server set in <b>Integrations</b>.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="speech-voice-select">Spoken Confirmation Voice</label>
+                            <div class="slideshow-sky-location">
+                                <select id="speech-voice-select" class="key-source-select" onchange="saveSpeechVoice()">
+                                    <option value="off">Off</option>
+                                    <option value="">Default</option>
+                                </select>
+                                <button type="button" class="btn-control btn-small" onclick="testSpeechVoice()">Test</button>
+                            </div>
+                            <p class="settings-hint">The voice that reads back what's added to the list by voice, or
+                                <b>Off</b> for none. Each device has its own voices, so this is chosen on each one.</p>
                         </div>
                     </div>
                 </div>
@@ -2829,11 +2844,11 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=70"></script>
-    <script src="slideshow.js?v=15"></script>
+    <script src="app.js?v=73"></script>
+    <script src="slideshow.js?v=16"></script>
     <script src="timers.js?v=2"></script>
     <script src="passwords.js?v=2"></script>
-    <script src="sky.js?v=13"></script>
+    <script src="sky.js?v=15"></script>
 </body>
 
 </html>

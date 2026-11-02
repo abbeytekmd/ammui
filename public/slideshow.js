@@ -48,6 +48,8 @@ class Slideshow {
         this.videoSound = false;
         this.sky = null; // the sky's settings (slideshowSky): the Sky button switches between it and the photos
         this.skyShowing = false;
+        this.skyAfterSunset = false; // the sky is up because it's just after sunset, and goes when that's over
+        this.sunsetHandled = null; // the sunset the sky has been put up for already (so switching it off sticks)
         this.videoShowing = false; // the video element is up instead of the photo
         this.slideIsVideo = false; // the slide being shown (or faded to) is a video
         this.bg = document.getElementById('screensaver-bg');
@@ -152,7 +154,31 @@ class Slideshow {
         if (this.skyShowing && !skySlideAvailable(sky)) this.hideSky(false, true);
         else if (this.skyShowing) showSkySlide(sky); // looking another way, or turning now
         this.updateSkyButton();
-        if (this.isActive) this.loadSun();
+        if (this.isActive) { this.loadSun(); this.checkSunsetSky(); }
+    }
+
+    // For the set time after sunset the sky shows instead of the photos, and then they come back.
+    // Switched back to the photos meanwhile, they stay; the next slideshow in that time starts on the sky again.
+    checkSunsetSky() {
+        if (!this.isActive) return;
+        const minutes = this.sky?.afterSunsetMinutes || 0;
+        let sunset = null;
+        if (minutes > 0 && skySlideAvailable(this.sky)) {
+            const now = Date.now();
+            const set = skyNextSunriseSunset(now - minutes * 60000, this.sky).set; // the sunset in the last `minutes`, if any
+            if (set !== null && set <= now) sunset = set;
+        }
+        if (sunset !== null) {
+            if (this.sunsetHandled === sunset) return;
+            this.sunsetHandled = sunset;
+            if (this.skyShowing || this.browserOpen) return;
+            this.showSky();
+            this.skyAfterSunset = true;
+            this.resetInterval();
+        } else if (this.skyAfterSunset && this.skyShowing) {
+            this.hideSky(false, true);
+            this.resetInterval();
+        }
     }
 
     // The Sky button: switches between the sky and the photos. The choice is remembered, so the
@@ -164,7 +190,7 @@ class Slideshow {
         this.resetInterval();
     }
 
-    // Shown when the sky is on in the settings, lit while the sky is up
+    // Shown once the sky has a place to be seen from, lit while the sky is up
     updateSkyButton() {
         const item = document.getElementById('ss-sky-item');
         if (!item) return;
@@ -189,6 +215,7 @@ class Slideshow {
     hideSky(now = false, uncover = false) {
         if (!this.skyShowing) return;
         this.skyShowing = false;
+        this.skyAfterSunset = false;
         this.overlay?.classList.remove('sky-mode');
         hideSkySlide(now);
         this.updateSkyButton();
@@ -240,7 +267,7 @@ class Slideshow {
         this._agendaTimer = setInterval(() => { this.loadAgenda(); this.loadShopping(); }, 15 * 60 * 1000);
         this.loadSun();
         clearInterval(this._sunTimer);
-        this._sunTimer = setInterval(() => this.loadSun(), 60 * 1000);
+        this._sunTimer = setInterval(() => { this.loadSun(); this.checkSunsetSky(); }, 60 * 1000);
 
         if (this.info) {
             this.info.style.cursor = 'pointer';
@@ -258,6 +285,7 @@ class Slideshow {
             this.showSky();
             this.resetInterval();
         }
+        this.checkSunsetSky();
         this.updateSkyButton();
     }
 
@@ -271,6 +299,7 @@ class Slideshow {
         this.closeBrowser();
         this.isActive = false;
         this.hideSky(true);
+        this.sunsetHandled = null;
         this.clearZoom();
         this.stopVideo();
         this.slideIsVideo = false;

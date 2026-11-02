@@ -8087,11 +8087,71 @@ async function runShoppingVoice(transcripts, quiet = false) {
     return false;
 }
 
-// Reads a short confirmation aloud, where the browser can
+// Reads a short confirmation aloud, where the browser can, in the voice chosen for this device
+// (or not at all, where it's switched off)
 function speak(text) {
-    if (!window.speechSynthesis) return;
+    if (!window.speechSynthesis || speechVoiceSetting() === 'off') return;
     speechSynthesis.cancel();
-    speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = chosenSpeechVoice();
+    if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+    }
+    speechSynthesis.speak(utterance);
+}
+
+// Settings > Shopping's voice, saved on this device as each has its own voices: a voice's URI,
+// 'off' for none, or '' for the default
+function speechVoiceSetting() {
+    try { return localStorage.getItem('speechVoice') || ''; } catch { return ''; }
+}
+
+// The voice picked (null = the default)
+function chosenSpeechVoice() {
+    const uri = speechVoiceSetting();
+    return uri && uri !== 'off' ? speechSynthesis.getVoices().find(v => v.voiceURI === uri) || null : null;
+}
+
+// Lists this device's English voices (or all of them, where it has none), by accent then name.
+// Browsers load their voices late, so it's filled again when they arrive.
+function fillSpeechVoices() {
+    const select = document.getElementById('speech-voice-select');
+    if (!select) return;
+    if (!window.speechSynthesis) {
+        select.disabled = true;
+        return;
+    }
+    const voices = speechSynthesis.getVoices();
+    const english = voices.filter(v => /^en([-_]|$)/i.test(v.lang));
+    const list = (english.length ? english : voices)
+        .sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    const saved = speechVoiceSetting();
+    select.innerHTML = '<option value="off">Off</option><option value="">Default</option>' + list
+        .map(v => `<option value="${escapeHtml(v.voiceURI)}">${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`).join('');
+    select.value = saved === 'off' || list.some(v => v.voiceURI === saved) ? saved : '';
+}
+window.speechSynthesis?.addEventListener('voiceschanged', fillSpeechVoices);
+
+function saveSpeechVoice() {
+    const uri = document.getElementById('speech-voice-select').value;
+    try {
+        if (uri) localStorage.setItem('speechVoice', uri);
+        else localStorage.removeItem('speechVoice');
+    } catch { }
+    if (uri !== 'off') testSpeechVoice();
+}
+
+function testSpeechVoice() {
+    if (!window.speechSynthesis) {
+        showToast("This browser can't speak.", 'error', 3000);
+        return;
+    }
+    if (speechVoiceSetting() === 'off') {
+        showToast('The voice is off: pick one to hear it.', 'info', 3000);
+        return;
+    }
+    speak('Added milk');
 }
 
 // --- Meals tab: items. Each is a single item (a quantity for one person, calories, a picture) or
@@ -11993,6 +12053,7 @@ async function fetchGeneralSettings() {
         }
         applySlideshowSettings(data);
         applySupermarketSetting(data);
+        fillSpeechVoices();
     } catch (err) {
         console.error('Failed to fetch general settings:', err);
     }
@@ -12052,11 +12113,10 @@ function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, s
         if (slideshow) slideshow.setVideoOptions(slideshowVideos);
     }
     if (slideshowSky) {
-        document.getElementById('slideshow-sky-mode-input').checked = slideshowSky.mode !== 'off';
+        document.getElementById('slideshow-sky-sunset-input').value = slideshowSky.afterSunsetMinutes ?? 0;
         document.getElementById('slideshow-sky-facing-input').value = Math.round(slideshowSky.facing / 45) % 8 * 45;
         document.getElementById('slideshow-sky-lat-input').value = slideshowSky.lat ?? '';
         document.getElementById('slideshow-sky-lon-input').value = slideshowSky.lon ?? '';
-        document.getElementById('slideshow-sky-options').hidden = slideshowSky.mode === 'off';
         if (slideshow) slideshow.setSkyOptions(slideshowSky);
     }
     if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
@@ -12066,10 +12126,10 @@ async function saveSlideshowSettings() {
     const idle = Number(document.getElementById('slideshow-idle-input').value);
     const photo = Number(document.getElementById('slideshow-photo-input').value);
     const videoSeconds = Number(document.getElementById('slideshow-video-seconds-input').value);
-    if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0)) return;
+    const afterSunset = Number(document.getElementById('slideshow-sky-sunset-input').value);
+    if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0) || !(afterSunset >= 0)) return;
     const sky = {
-        // Whether it turns is the sky's own Turn button now; 'fixed' is simply on
-        mode: document.getElementById('slideshow-sky-mode-input').checked ? 'fixed' : 'off',
+        afterSunsetMinutes: afterSunset,
         facing: Number(document.getElementById('slideshow-sky-facing-input').value)
     };
     // The location is saved once both halves of it are filled in (or both cleared)

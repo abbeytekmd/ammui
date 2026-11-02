@@ -237,8 +237,9 @@ let settings = {
     },
     // The sky from where the slideshow is, which the slideshow's Sky button switches to
     slideshowSky: {
-        mode: 'off', // 'off', 'fixed' (looking one way) or 'turning' (slowly round the horizon)
+        mode: 'fixed', // 'fixed' (looking one way) or 'turning' (slowly round the horizon), until the sky's Turn button is used
         facing: 180, // compass direction looked at when fixed, degrees from north
+        afterSunsetMinutes: 0, // the slideshow shows the sky instead of the photos for this long after sunset (0 = never)
         lat: null,
         lon: null
     },
@@ -307,6 +308,7 @@ function loadSettings() {
     const oldSkyLocation = getSetting('skyLocation', null);
     settings.slideshowSky = { ...settings.slideshowSky, lat: oldSkyLocation?.lat ?? null, lon: oldSkyLocation?.lon ?? null,
         ...(getSetting('slideshowSky', {}) || {}) };
+    if (settings.slideshowSky.mode === 'off') settings.slideshowSky.mode = 'fixed'; // the Sky button is always there now
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
     settings.passwordsEmail = getSetting('passwordsEmail', '') || '';
@@ -3152,10 +3154,12 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         if (max !== null) settings.slideshowVideos.maxSeconds = max;
         saveSettings();
     }
-    // Slideshow sky: how it's shown (or 'off', for no Sky button), and where from
+    // Slideshow sky: how it's shown, for how long after sunset, and where from
     const sky = req.body.slideshowSky;
     if (sky && typeof sky === 'object') {
-        if (['off', 'fixed', 'turning'].includes(sky.mode)) settings.slideshowSky.mode = sky.mode;
+        if (['fixed', 'turning'].includes(sky.mode)) settings.slideshowSky.mode = sky.mode;
+        const afterSunset = Math.round(Number(sky.afterSunsetMinutes));
+        if (Number.isFinite(afterSunset)) settings.slideshowSky.afterSunsetMinutes = Math.min(Math.max(afterSunset, 0), 720);
         const facing = Number(sky.facing);
         if (Number.isFinite(facing)) settings.slideshowSky.facing = ((Math.round(facing) % 360) + 360) % 360;
         if ('lat' in sky || 'lon' in sky) {

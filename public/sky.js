@@ -267,7 +267,7 @@ const skyFromVec = v => ({ alt: Math.asin(v[2] / Math.hypot(...v)) / SKY_DEG, az
 
 const SKY_H = 675;
 const SKY_LOOK_ALT = 45;     // the lens points half way up, between the horizon and overhead
-const SKY_HORIZON_AT = 0.86; // the horizon straight ahead, this far down (leaving room for the compass points)
+const SKY_HORIZON_AT = 0.93; // the horizon straight ahead, this far down (leaving just room for the compass points)
 const SKY_ZENITH_AT = 0.03;  // straight overhead, this far down
 
 // A projection facing the given azimuth in a picture w wide: alt/az -> [x, y], or null when it's
@@ -506,8 +506,8 @@ function skyLensSvg(scene, facing, w) {
         const xy = project(0, i * 22.5);
         if (!xy || xy[0] < -40 || xy[0] > w + 40) continue;
         const main = i % 4 === 0;
-        frame.push(`<line x1="${fmt(xy[0])}" y1="${fmt(xy[1])}" x2="${fmt(xy[0])}" y2="${fmt(xy[1] + (main ? 14 : 8))}" class="sky-tick"/>
-            <text x="${fmt(xy[0])}" y="${fmt(xy[1] + (main ? 42 : 34))}" class="sky-compass${main ? '' : ' minor'}">${SKY_COMPASS[i]}</text>`);
+        frame.push(`<line x1="${fmt(xy[0])}" y1="${fmt(xy[1])}" x2="${fmt(xy[0])}" y2="${fmt(xy[1] + (main ? 10 : 6))}" class="sky-tick"/>
+            <text x="${fmt(xy[0])}" y="${fmt(xy[1] + (main ? 28 : 22))}" class="sky-compass${main ? '' : ' minor'}">${SKY_COMPASS[i]}</text>`);
     }
     // The warm glow on the horizon below the Sun, when it's near enough to be in view
     let glow = '';
@@ -569,9 +569,9 @@ const SKY_FRAME_MS = 50;       // turning: at most 20 pictures a second (gentle 
 
 let skySlide = null; // { el, timer, frame }
 
-// sky: the slideshowSky setting { mode, facing, lat, lon }
+// sky: the slideshowSky setting { mode, facing, afterSunsetMinutes, lat, lon }
 function skySlideAvailable(sky) {
-    return !!sky && sky.mode !== 'off' && sky.lat != null && sky.lon != null;
+    return !!sky && sky.lat != null && sky.lon != null;
 }
 
 function showSkySlide(sky) {
