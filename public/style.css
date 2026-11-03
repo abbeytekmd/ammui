@@ -8570,7 +8570,7 @@ input:checked+.slider:before {
     }
 
     /* The map floats over the photo at the top left, as in portrait, and the shopping list takes its
-       place in the panel. Lyrics take the shopping list's place while they're up. */
+       place in the panel. Lyrics go above the shopping list while they're up. */
     .ss-side-panel > .ss-lyrics-panel {
         flex: 0 1 40vh;
         min-height: 0;
@@ -8612,7 +8612,9 @@ input:checked+.slider:before {
         border-radius: 14px;
     }
 
-    .screensaver-overlay.has-lyrics .ss-shopping {
+    /* Given way to the lyrics when they'd squeeze them (fitSsLyrics in app.js) */
+    .screensaver-overlay.lyrics-hide-shopping .ss-shopping:not(:empty),
+    .screensaver-overlay.lyrics-hide-agenda .ss-agenda:not(:empty) {
         display: none;
     }
 

@@ -5107,6 +5107,7 @@ function escapeHtml(str) {
 window.addEventListener('resize', () => {
     const panel = document.getElementById('ss-lyrics-panel');
     if (panel && panel.style.display !== 'none') {
+        fitSsLyrics(panel);
         syncLyricsSpacerPadding(panel);
         updateLyricsHighlight(currentPositionSeconds, true);
     }
@@ -5200,14 +5201,30 @@ function clearLyrics() {
 function updateSsLyricsVisibility() {
     const panel = document.getElementById('ss-lyrics-panel');
     if (!panel) return;
-    // Landscape screens put the lyrics where the shopping list goes, so it hides while they're up
-    document.getElementById('screensaver-overlay')?.classList.toggle('has-lyrics', isLyricsDisplayActive());
     if (isLyricsDisplayActive()) {
         panel.style.display = 'block';
+        fitSsLyrics(panel);
         syncLyricsSpacerPadding(panel);
         updateLyricsHighlight(currentPositionSeconds, true);
     } else {
         panel.style.display = 'none';
+        fitSsLyrics(panel);
+    }
+}
+
+// On landscape screens the lyrics share the side panel with the calendar and shopping list, which
+// stay while the lyrics still get their full height (40vh). When they'd squeeze the lyrics, the
+// shopping list gives way first, then the calendar.
+function fitSsLyrics(panel) {
+    const overlay = document.getElementById('screensaver-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('lyrics-hide-shopping', 'lyrics-hide-agenda');
+    // Only in the side panel; in portrait the lyrics float over the photo and the others aren't shown
+    if (!isLyricsDisplayActive() || getComputedStyle(panel).position !== 'static') return;
+    const full = window.innerHeight * 0.4 - 1;
+    for (const cls of ['lyrics-hide-shopping', 'lyrics-hide-agenda']) {
+        if (panel.clientHeight >= full) return;
+        overlay.classList.add(cls);
     }
 }
 
@@ -13965,7 +13982,7 @@ function renderPlugList() {
                 <div class="manage-item-actions">
                     <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="btn-toggle ${p.hidden ? 'btn-enable' : 'btn-disable'}" onclick="togglePlugHidden(${i})"
-                            title="Show or hide this plug on the Plugs and Lights tab">${p.hidden ? 'Show' : 'Hide'}</button>
+                            title="Show or hide this plug on the Controls tab">${p.hidden ? 'Show' : 'Hide'}</button>
                     </div>
                     <button class="btn-delete" onclick="forgetPlug(${i})" title="Remove this plug">Forget</button>
                 </div>

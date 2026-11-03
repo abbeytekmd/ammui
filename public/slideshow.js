@@ -383,6 +383,7 @@ class Slideshow {
             }).filter(d => d.items.length);
             if (!days.length) {
                 el.innerHTML = '';
+                if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
                 return;
             }
             el.innerHTML = days.map(({ label, items }) => `<div class="ss-agenda-title">${label}</div><ul class="ss-agenda-list">${items.map(it => `
@@ -392,6 +393,7 @@ class Slideshow {
                     <span class="ss-agenda-text">${escapeHtml(it.title)}</span>
                     ${it.source ? `<span class="ss-agenda-source" style="color:${it.color || 'var(--accent)'}">${escapeHtml(it.source)}</span>` : ''}
                 </li>`).join('')}</ul>`).join('');
+            if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
         } catch (err) {
             console.warn('[SLIDESHOW] Calendar load failed:', err.message);
         }
@@ -438,6 +440,7 @@ class Slideshow {
         const linesOf = list => list.text.split('\n').map(l => l.trim()).filter(Boolean);
         if (!lists.some(l => linesOf(l).length)) {
             el.innerHTML = '';
+            if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
             return;
         }
         const current = currentShoppingList(lists);
@@ -448,6 +451,7 @@ class Slideshow {
                     onclick="event.stopPropagation(); slideshow.showShoppingList('${escapeHtml(l.id)}')">${escapeHtml(l.name)}</button>`).join('')}</div>`;
         el.innerHTML = header + (lines.length ? `<ul class="ss-shopping-list">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
             : '<div class="ss-shopping-empty">Nothing on this list</div>');
+        if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
     }
 
     // A tab's list, which the shopping list dialog then opens on too
