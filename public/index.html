@@ -667,6 +667,12 @@
                 <h3>Twinkly Lights</h3>
                 <div id="smarthome-lights-grid" class="smarthome-grid"></div>
             </div>
+            <div id="smarthome-heating" class="smarthome-section" hidden>
+                <div id="smarthome-heating-banner" class="smarthome-banner heating-banner" aria-hidden="true"></div>
+                <h3>Heating</h3>
+                <div id="smarthome-heating-status" class="smarthome-status"></div>
+                <div id="smarthome-heating-grid" class="smarthome-grid"></div>
+            </div>
         </section>
 
         <section id="energy-view" class="smarthome-view" hidden>
@@ -1785,6 +1791,14 @@
                             <button id="btn-glow-save" class="btn-control primary" onclick="saveGlowAccount(this)">Save &amp; Connect</button>
                             <span id="glow-status" class="settings-hint" style="margin:0;"></span>
                         </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Heating (tado°)</h3>
+                        <p class="settings-hint">Shows your tado° rooms on the Plugs and Lights tab, to see their
+                            temperatures and change what they're heating to until the next scheduled change. tado° has
+                            no local control, so this goes through tado's servers, which limit how often they can be
+                            asked: room temperatures are refreshed every few minutes.</p>
+                        <div id="tado-account" class="tado-account"></div>
                     </div>
                 </div>
             </div>

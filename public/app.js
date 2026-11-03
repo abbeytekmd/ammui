@@ -12926,11 +12926,13 @@ async function refreshSmartHome() {
     clearTimeout(smartHomeTimer);
     if (appView !== 'smarthome') return;
     if (!document.hidden) {
+        const heatingLoad = loadHeating();
         try {
             const res = await fetch('/api/smart-home/plugs?live=1');
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || res.statusText);
             smartHomePlugs = data.plugs || [];
+            await heatingLoad; // so "no plugs" isn't shown above the heating
             if (!smartHomeDragging) renderSmartHome();
         } catch (err) {
             document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
@@ -13021,7 +13023,7 @@ function energyBannerSvg() {
 function renderSmartHome() {
     const status = document.getElementById('smarthome-status');
     const shown = smartHomePlugs.filter(p => !p.hidden);
-    status.textContent = shown.length ? '' : smartHomePlugs.length
+    status.textContent = shown.length || heating.rooms.length ? '' : smartHomePlugs.length
         ? 'All plugs are hidden. Show them again from Manage Plugs.'
         : 'No plugs found yet. Use Manage Plugs to search the network.';
     const lights = shown.filter(p => p.type === 'twinkly');
@@ -13036,6 +13038,153 @@ function renderSmartHome() {
     const banner = document.getElementById('smarthome-lights-banner');
     if (lights.length && !banner.innerHTML) banner.innerHTML = lightsBannerSvg();
     banner.classList.toggle('on', lights.some(p => p.outlets.some(o => o.on)));
+}
+
+// Heating: the rooms of a tado° home (see lib/smart-home/tado.js). The server keeps their states
+// for a few minutes, as tado limits how often it can be asked, so polling it here costs nothing.
+// Taps on − and + are gathered and sent together once they stop.
+const HEAT_MIN = 5, HEAT_MAX = 25, HEAT_SEND_DELAY = 1200;
+let heating = { configured: false, rooms: [] };
+const heatBusy = new Map(); // room id -> a change waiting to be sent, or being sent
+
+const HEAT_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 14.76V4.5a2 2 0 0 0-4 0v10.26a4 4 0 1 0 4 0Z"></path><path d="M12 9v7"></path></svg>`;
+const heatText = v => typeof v === 'number' ? `${v.toFixed(1)}°` : '–';
+
+async function loadHeating() {
+    try {
+        const res = await fetch('/api/tado/rooms');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        // A room mid-change keeps what's shown for it until the change has been made
+        if (!heatBusy.size) heating = data;
+    } catch (err) {
+        heating = { ...heating, error: err.message };
+    }
+    if (!heatBusy.size) renderHeating();
+}
+
+// When a change made here or in the tado app ends: today's time, or the day too if later.
+function heatClock(iso) {
+    const d = new Date(iso);
+    const today = d.toDateString() === new Date().toDateString();
+    return today ? clockTime(d) : `${d.toLocaleDateString([], { weekday: 'short' })} ${clockTime(d)}`;
+}
+
+function heatingBannerSvg() {
+    const width = 2400, pitch = 120;
+    let radiators = '';
+    for (let x = 12, n = 0; x < width; x += pitch, n++) {
+        let fins = '';
+        for (let f = 0; f < 8; f++) fins += `<rect class="radiator-fin" x="${x + f * 11}" y="20" width="8" height="25" rx="3"></rect>`;
+        let waves = '';
+        for (const dx of [18, 41, 64]) {
+            const delay = -(((n * 3 + dx) * 0.37) % 2.4).toFixed(2);
+            waves += `<path class="heat-wave" d="M${x + dx} 17c-3-2.5 3-4.5 0-7s3-4.5 0-7" style="animation-delay:${delay}s"></path>`;
+        }
+        radiators += `${fins}<rect class="radiator-pipe" x="${x - 4}" y="24" width="94" height="3" rx="1.5"></rect>
+            <rect class="radiator-pipe" x="${x - 4}" y="38" width="94" height="3" rx="1.5"></rect>${waves}`;
+    }
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">${radiators}</svg>`;
+}
+
+function renderHeating() {
+    const section = document.getElementById('smarthome-heating');
+    section.hidden = !heating.configured && !heating.signedOut;
+    if (section.hidden) return;
+    const connect = '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Connect tado°</button>';
+    document.getElementById('smarthome-heating-status').innerHTML = heating.signedOut
+        ? `tado° has signed this device out. ${connect}`
+        : heating.error ? `${escapeHtml(heating.error)}${heating.needsLogin ? ` ${connect}` : ''}`
+        : heating.rooms.length ? '' : 'No rooms found in this tado° home.';
+    document.getElementById('smarthome-heating-grid').innerHTML = heating.rooms.map(heatCard).join('');
+    const banner = document.getElementById('smarthome-heating-banner');
+    if (heating.rooms.length && !banner.innerHTML) banner.innerHTML = heatingBannerSvg();
+    banner.classList.toggle('on', heating.rooms.some(r => r.on && r.heating > 0));
+}
+
+function heatCard(r, i) {
+    const details = [r.humidity != null ? `${Math.round(r.humidity)}% humidity` : '', r.on && r.heating ? `Heating ${r.heating}%` : ''];
+    const status = !r.online ? 'Offline' : r.openWindow ? 'Window open' : details.filter(Boolean).join(' · ') || 'tado°';
+    const plan = r.manual ? (r.until ? `Until ${heatClock(r.until)}` : 'Until changed')
+        : r.next ? `Schedule: ${r.next.on ? heatText(r.next.target) : 'off'} at ${heatClock(r.next.at)}` : 'On schedule';
+    const off = r.online ? '' : 'disabled';
+    return `
+        <div class="plug-card heat-card ${r.on && r.heating > 0 ? 'on' : ''} ${r.online ? '' : 'unavailable'}">
+            <div class="plug-card-head">
+                <div class="plug-card-icon">${HEAT_ICON}</div>
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(r.name)}</div>
+                    <div class="plug-card-status">${escapeHtml(status)}</div>
+                </div>
+                <div class="heat-now" title="Temperature in the room">${heatText(r.temperature)}</div>
+            </div>
+            <div class="heat-target">
+                <button type="button" class="heat-step" onclick="stepHeating(${i}, -0.5)" ${off}
+                    aria-label="Lower ${escapeHtml(r.name)}">−</button>
+                <div class="heat-target-value ${r.on ? '' : 'off'}">${r.on ? heatText(r.target) : 'Off'}<span>${r.on ? 'Heating to' : 'Not heating'}</span></div>
+                <button type="button" class="heat-step" onclick="stepHeating(${i}, 0.5)" ${off}
+                    aria-label="Raise ${escapeHtml(r.name)}">+</button>
+            </div>
+            <div class="heat-actions">
+                <span class="heat-plan">${escapeHtml(plan)}</span>
+                ${r.on ? `<button type="button" class="btn-control btn-small" onclick="turnOffHeating(${i})" ${off}>Off</button>` : ''}
+                ${r.manual ? `<button type="button" class="btn-control btn-small" onclick="resumeHeating(${i})" ${off}
+                    title="Go back to following the tado° schedule">Resume schedule</button>` : ''}
+            </div>
+        </div>`;
+}
+
+// − and + move the target half a degree; from off, either turns the room on at what its schedule wants next.
+function stepHeating(i, delta) {
+    const r = heating.rooms[i];
+    if (!r) return;
+    const target = r.on ? (r.target ?? 20) + delta : (r.next?.on && r.next.target) || 20;
+    Object.assign(r, { on: true, target: Math.min(HEAT_MAX, Math.max(HEAT_MIN, target)), manual: true });
+    renderHeating();
+    clearTimeout(heatBusy.get(r.id));
+    heatBusy.set(r.id, setTimeout(() => heatingRequest(r, '', { on: true, target: r.target }), HEAT_SEND_DELAY));
+}
+
+function turnOffHeating(i) {
+    const r = heating.rooms[i];
+    if (!r) return;
+    clearTimeout(heatBusy.get(r.id));
+    Object.assign(r, { on: false, target: null, manual: true });
+    renderHeating();
+    heatingRequest(r, '', { on: false });
+}
+
+function resumeHeating(i) {
+    const r = heating.rooms[i];
+    if (r) heatingRequest(r, '/resume');
+}
+
+async function heatingRequest(r, path, body = {}) {
+    const mark = {};
+    heatBusy.set(r.id, mark);
+    let failed = false;
+    try {
+        const res = await fetch(`/api/tado/rooms/${encodeURIComponent(r.id)}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        // Unless another tap has come in since
+        if (heatBusy.get(r.id) === mark) {
+            const i = heating.rooms.findIndex(x => x.id === r.id);
+            if (i >= 0) heating.rooms[i] = data.room;
+        }
+    } catch (err) {
+        failed = true;
+        showToast(`Couldn't change ${r.name}: ${err.message}`, 'error', 5000);
+    }
+    if (heatBusy.get(r.id) !== mark) return;
+    heatBusy.delete(r.id);
+    if (failed) await loadHeating(); // show what it's really doing
+    else renderHeating();
 }
 
 // Energy tab: smart meter readings (Bright app login, see lib/smart-home/glow.js). They move
@@ -13779,6 +13928,7 @@ async function loadPlugSettings() {
         password.value = '';
         password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
         loadGlowAccount();
+        loadTadoAccount();
     } catch (err) {
         list.innerHTML = `<div class="empty-state-mini">Couldn't load plugs: ${escapeHtml(err.message)}</div>`;
         return;
@@ -13941,6 +14091,79 @@ async function saveGlowAccount(btn) {
         status.textContent = `Failed: ${err.message}`;
     } finally {
         btn.disabled = false;
+    }
+}
+
+// tado°: signing in is done on tado's own site, by opening the link and confirming the code shown,
+// while the server waits for it. Checked every few seconds until it's done.
+let tadoPairingTimer = null;
+
+async function loadTadoAccount() {
+    clearTimeout(tadoPairingTimer);
+    const box = document.getElementById('tado-account');
+    let account;
+    try {
+        account = await (await fetch('/api/tado/account')).json();
+    } catch (err) {
+        box.innerHTML = `<span class="settings-hint">Couldn't load: ${escapeHtml(err.message)}</span>`;
+        return;
+    }
+    renderTadoAccount(account);
+    if (account.pairing && !account.pairing.error) tadoPairingTimer = setTimeout(loadTadoAccount, 3000);
+}
+
+function renderTadoAccount(a) {
+    const box = document.getElementById('tado-account');
+    const button = (label, action, primary) =>
+        `<button type="button" class="btn-control ${primary ? 'primary' : ''}" onclick="${action}">${label}</button>`;
+    if (a.pairing) {
+        box.innerHTML = a.pairing.error
+            ? `<p class="settings-hint">${escapeHtml(a.pairing.error)}</p>${button('Try Again', 'connectTado(this)', true)}`
+            : `<p class="settings-hint">Open tado°'s sign-in page, log in, and confirm the code
+                <strong class="tado-code">${escapeHtml(a.pairing.userCode)}</strong>. This page will carry on by itself.</p>
+               <div class="tado-buttons">
+                   <a class="btn-control primary" href="${escapeHtml(a.pairing.url)}" target="_blank" rel="noopener">Open tado° Sign-in</a>
+                   <span class="settings-hint" style="margin:0;"><span class="spinner"></span> Waiting for confirmation…</span>
+               </div>`;
+        return;
+    }
+    if (a.connected) {
+        const left = a.allowance ? ` · ${a.allowance.remaining} requests left today` : '';
+        box.innerHTML = `<div class="tado-buttons">
+                <span class="settings-hint plug-state ok" style="margin:0;">Connected to ${escapeHtml(a.homeName || 'your home')} (${escapeHtml(a.generation)})${left}</span>
+                ${button('Disconnect', 'disconnectTado()')}
+            </div>`;
+        return;
+    }
+    box.innerHTML = `${a.signedOut ? '<p class="settings-hint">tado° has signed this device out; connect again to carry on.</p>' : ''}
+        ${button('Connect tado°', 'connectTado(this)', true)}`;
+}
+
+async function connectTado(btn) {
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/tado/connect', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        renderTadoAccount(data);
+        // Opened straight away where a new tab can be; the link stays for tablets that block it
+        if (data.pairing?.url) window.open(data.pairing.url, '_blank', 'noopener');
+        tadoPairingTimer = setTimeout(loadTadoAccount, 3000);
+    } catch (err) {
+        btn.disabled = false;
+        showToast(`Couldn't connect to tado°: ${err.message}`, 'error', 5000);
+    }
+}
+
+async function disconnectTado() {
+    if (!confirm('Disconnect tado°? The heating will stop showing here until it\'s connected again.')) return;
+    try {
+        const res = await fetch('/api/tado/account', { method: 'DELETE' });
+        renderTadoAccount(await res.json());
+        heating = { configured: false, rooms: [] };
+        if (appView === 'smarthome') renderHeating();
+    } catch (err) {
+        showToast(`Couldn't disconnect: ${err.message}`, 'error', 5000);
     }
 }
 

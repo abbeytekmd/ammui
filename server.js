@@ -35,6 +35,7 @@ import { pipeline } from 'stream/promises';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import * as smartHome from './lib/smart-home/index.js';
 import * as energy from './lib/smart-home/glow.js';
+import * as tado from './lib/smart-home/tado.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
@@ -454,6 +455,7 @@ for (const d of devices.values()) {
 loadSettings();
 smartHome.init({ getSetting, setSetting });
 energy.init({ getSetting, setSetting });
+tado.init({ getSetting, setSetting });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -6676,6 +6678,45 @@ app.post('/api/energy/account', async (req, res) => {
     } catch (err) {
         smartHomeError(res, err);
     }
+});
+
+// Heating: rooms of a tado° home, through tado's cloud API (see lib/smart-home/tado.js)
+app.get('/api/tado/rooms', async (req, res) => {
+    res.json(await tado.listRooms());
+});
+
+// { on, target }: heat to target (or turn off) until the room's next scheduled change
+app.post('/api/tado/rooms/:id', async (req, res) => {
+    try {
+        res.json({ room: await tado.setRoom(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/tado/rooms/:id/resume', async (req, res) => {
+    try {
+        res.json({ room: await tado.resumeSchedule(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.get('/api/tado/account', (req, res) => {
+    res.json(tado.getAccount());
+});
+
+// Starts signing in; the reply has the link and code to confirm on tado's site
+app.post('/api/tado/connect', async (req, res) => {
+    try {
+        res.json(await tado.startPairing());
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.delete('/api/tado/account', (req, res) => {
+    res.json(tado.disconnect());
 });
 
 // Update API routes

@@ -11769,3 +11769,144 @@ input:checked+.slider:before {
     max-width: 100%;
     font-size: 1rem;
 }
+
+/* Heating (tado°): radiators along the banner, with heat rising off them while any room is heating */
+.heating-banner .radiator-fin,
+.heating-banner .radiator-pipe {
+    fill: var(--text-muted);
+    fill-opacity: 0.14;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.4;
+}
+
+.heating-banner .heat-wave {
+    fill: none;
+    stroke: #f97316;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.heating-banner.on .radiator-fin {
+    fill: #f97316;
+    fill-opacity: 0.25;
+}
+
+.heating-banner.on .heat-wave {
+    animation: heat-rise 2.4s ease-in-out infinite;
+}
+
+@keyframes heat-rise {
+    0% { opacity: 0; transform: translateY(3px); }
+    40% { opacity: 0.8; }
+    100% { opacity: 0; transform: translateY(-3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .heating-banner.on .heat-wave {
+        animation: none;
+        opacity: 0.6;
+    }
+}
+
+.heat-card.on {
+    border-color: rgba(249, 115, 22, 0.5);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.25);
+}
+
+.heat-card.on .plug-card-icon {
+    background: #f97316;
+}
+
+.heat-card .plug-card-title {
+    flex: 1;
+}
+
+.heat-now {
+    flex: none;
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.heat-target {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.heat-step {
+    flex: none;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.heat-step:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.heat-step:disabled {
+    cursor: default;
+}
+
+.heat-target-value {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 1.8rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.heat-target-value.off {
+    color: var(--text-muted);
+}
+
+.heat-target-value span {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.heat-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.heat-plan {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.tado-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.tado-buttons a.btn-control {
+    text-decoration: none;
+}
+
+.tado-code {
+    font-family: monospace;
+    font-size: 1.1em;
+    letter-spacing: 0.08em;
+}
