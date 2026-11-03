@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=81">
+    <link rel="stylesheet" href="style.css?v=82">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -85,6 +85,16 @@
                         <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"></path>
                     </svg>
                     <span>Energy</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="petrol" onclick="showPetrol()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 22V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v17"></path>
+                        <line x1="2" y1="22" x2="15" y2="22"></line>
+                        <line x1="3" y1="10" x2="14" y2="10"></line>
+                        <path d="M14 13h2a2 2 0 0 1 2 2v3a1.5 1.5 0 0 0 3 0V9l-3-3"></path>
+                    </svg>
+                    <span>Petrol</span>
                 </button>
                 <button type="button" class="lib-tab" data-mode="games" onclick="showGames()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -690,6 +700,39 @@
             </div>
         </section>
 
+        <!-- Petrol tab: a map of the stations around this device and their pump prices (built by app.js) -->
+        <section id="petrol-view" class="smarthome-view petrol-view" hidden>
+            <div class="smarthome-header">
+                <h2>Petrol</h2>
+                <div class="smarthome-actions petrol-actions">
+                    <div id="petrol-fuels" class="nutrition-sources" role="tablist" aria-label="Fuel">
+                        <button type="button" role="tab" data-fuel="E10" onclick="setPetrolFuel('E10')">Unleaded</button>
+                        <button type="button" role="tab" data-fuel="E5" onclick="setPetrolFuel('E5')">Super</button>
+                        <button type="button" role="tab" data-fuel="B7_STANDARD" onclick="setPetrolFuel('B7_STANDARD')">Diesel</button>
+                        <button type="button" role="tab" data-fuel="B7_PREMIUM" onclick="setPetrolFuel('B7_PREMIUM')">Premium Diesel</button>
+                    </div>
+                    <select id="petrol-radius" class="petrol-radius" onchange="setPetrolRadius(this.value)" aria-label="How far">
+                        <option value="2">2 miles</option>
+                        <option value="5">5 miles</option>
+                        <option value="10">10 miles</option>
+                        <option value="20">20 miles</option>
+                    </select>
+                    <button type="button" class="btn-control btn-small" onclick="locatePetrol(true)"
+                        title="Find where this device is again">Locate</button>
+                    <button type="button" class="btn-control btn-small" onclick="openFuelFinderSettings()"
+                        title="Set the Fuel Finder client id and secret">Fuel Finder Login</button>
+                </div>
+            </div>
+            <div id="petrol-status" class="smarthome-status"></div>
+            <div id="petrol-body" class="petrol-body" hidden>
+                <div id="petrol-map" class="petrol-map"></div>
+                <div class="petrol-side">
+                    <div id="petrol-summary" class="petrol-summary"></div>
+                    <div id="petrol-list" class="petrol-list"></div>
+                </div>
+            </div>
+        </section>
+
         <!-- Alarms tab: countdown timers and alarms at a time of day (built by timers.js) -->
         <section id="alarms-view" class="alarms-view" hidden>
             <div class="alarms-side">
@@ -1280,7 +1323,7 @@
                                 <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
                             </div>
                             <p class="settings-hint">Fetches the Discogs, AcoustID, YouTube and USDA keys, the S3 connection
-                                details, the mail server and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
+                                details, the mail server and the TP-Link, Bright and Fuel Finder logins from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
                             <label class="settings-check" style="margin-top: 0.5rem;">
                                 <input type="checkbox" id="key-sharing-allow" onchange="saveKeySharing()">
@@ -1347,6 +1390,23 @@
                             <p class="settings-hint">Optional. Adds US foods to the places the Meals tab can look up
                                 ingredient calories; UK foods and UK products work without a key. <a href="https://fdc.nal.usda.gov/api-key-signup"
                                     target="_blank" rel="noopener">Get a free key here</a>.</p>
+                        </div>
+
+                        <div class="settings-group" id="fuel-finder-settings" style="margin-top: 1.5rem;">
+                            <label for="fuel-finder-client-id">Fuel Finder (UK Petrol Prices)</label>
+                            <input type="text" id="fuel-finder-client-id" placeholder="Client ID" autocomplete="off" spellcheck="false">
+                            <input type="password" id="fuel-finder-client-secret" placeholder="Client secret" autocomplete="new-password"
+                                style="margin-top: 0.5rem;">
+                            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-top: 0.5rem;">
+                                <button class="btn-control btn-small primary" onclick="saveFuelFinderAccount(this)">Save &amp; Connect</button>
+                                <span id="fuel-finder-status" class="settings-hint" style="margin:0;"></span>
+                            </div>
+                            <p class="settings-hint">Shows the pump prices of petrol stations near this device on the
+                                Petrol tab, from the government's Fuel Finder scheme, which every UK forecourt has to keep
+                                up to date. Sign in with GOV.UK One Login on the <a
+                                    href="https://www.developer.fuel-finder.service.gov.uk/fuel-finder/public-api"
+                                    target="_blank" rel="noopener">Fuel Finder developer site</a> to get a free client ID
+                                and secret. It only answers from UK internet connections.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -2874,7 +2934,7 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=75"></script>
+    <script src="app.js?v=76"></script>
     <script src="slideshow.js?v=16"></script>
     <script src="timers.js?v=2"></script>
     <script src="passwords.js?v=2"></script>

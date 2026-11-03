@@ -3748,12 +3748,12 @@ async function importKeysFromDevice() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to get keys');
-        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', usdaApiKey: 'USDA', s3: 'S3', tplinkAccount: 'TP-Link login', glowAccount: 'Bright login' };
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', usdaApiKey: 'USDA', s3: 'S3', tplinkAccount: 'TP-Link login', glowAccount: 'Bright login', fuelFinderAccount: 'Fuel Finder login' };
         showToast(data.imported.length
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
         if (data.s3Verified === false) showToast(`The S3 details from ${data.source} were copied but the connection test failed here`, 'error');
-        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadEmailSettings(), fetchS3Settings()]);
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadFuelFinderAccount(), loadEmailSettings(), fetchS3Settings()]);
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -4521,6 +4521,7 @@ function openServerSettingsModal() {
         loadAcoustidKey();
         loadYoutubeKey();
         loadUsdaKey();
+        loadFuelFinderAccount();
         loadEmailSettings();
         loadKeySources();
         loadKeySharing();
@@ -5836,7 +5837,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
 
 function setAppView(view) {
     appView = view;
@@ -14109,6 +14110,309 @@ async function saveGlowAccount(btn) {
     } finally {
         btn.disabled = false;
     }
+}
+
+// Fuel Finder (Settings → Integrations): the client id and secret the Petrol tab reads prices with
+async function loadFuelFinderAccount() {
+    try {
+        const account = await (await fetch('/api/fuel/account')).json();
+        document.getElementById('fuel-finder-client-id').value = account.clientId || '';
+        const secret = document.getElementById('fuel-finder-client-secret');
+        secret.value = '';
+        secret.placeholder = account.hasSecret ? 'Client secret saved (leave blank to keep)' : 'Client secret';
+    } catch (err) {
+        document.getElementById('fuel-finder-status').textContent = `Couldn't load: ${err.message}`;
+    }
+}
+
+async function saveFuelFinderAccount(btn) {
+    const status = document.getElementById('fuel-finder-status');
+    btn.disabled = true;
+    status.textContent = 'Connecting...';
+    try {
+        const res = await fetch('/api/fuel/account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                clientId: document.getElementById('fuel-finder-client-id').value,
+                clientSecret: document.getElementById('fuel-finder-client-secret').value,
+            })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        await loadFuelFinderAccount();
+        status.textContent = 'Connected';
+        if (appView === 'petrol') refreshPetrol();
+    } catch (err) {
+        status.textContent = `Failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function openFuelFinderSettings() {
+    openServerSettingsModal();
+    const tab = [...document.querySelectorAll('#server-settings-modal .settings-tab')]
+        .find(b => b.textContent.trim().toLowerCase() === 'integrations');
+    if (tab) switchSettingsTab('integrations', tab);
+    document.getElementById('fuel-finder-settings').scrollIntoView({ block: 'center' });
+}
+
+// Petrol tab: a map of the petrol stations around this device with the price of one fuel on each,
+// and the same stations listed cheapest first. Prices come from the government's Fuel Finder scheme
+// through the server (lib/fuel-prices.js). Forecourts update them within half an hour of a change.
+const PETROL_FUELS = { E10: 'Unleaded', E5: 'Super unleaded', B7_STANDARD: 'Diesel', B7_PREMIUM: 'Premium diesel' };
+const PETROL_REFRESH_MS = 5 * 60 * 1000;
+const PETROL_LOADING_RETRY_MS = 5000;
+const PETROL_STALE_DAYS = 7; // a price unchanged for longer than this may no longer be right
+const METRES_PER_MILE = 1609.34;
+let petrolFuel = PETROL_FUELS[localStorage.getItem('petrolFuel')] ? localStorage.getItem('petrolFuel') : 'E10';
+let petrolRadius = Number(localStorage.getItem('petrolRadius')) || 5;
+let petrolPlace = null; // { lat, lon, source: 'device' | 'saved' | 'last' }
+let petrolData = null;
+let petrolTimer = null;
+let petrolMap = null;
+let petrolLayer = null; // the station pins
+let petrolHere = null; // { dot, circle }
+let petrolFitted = ''; // the place and radius the map was last fitted to
+const petrolPins = new Map(); // station id -> marker
+
+function showPetrol() {
+    setAppView('petrol');
+    setPetrolFuel(petrolFuel, false);
+    document.getElementById('petrol-radius').value = String(petrolRadius);
+    petrolMap?.invalidateSize();
+    if (petrolPlace) refreshPetrol();
+    else locatePetrol();
+}
+
+function setPetrolFuel(fuel, redraw = true) {
+    petrolFuel = fuel;
+    try { localStorage.setItem('petrolFuel', fuel); } catch { /* not kept; fine */ }
+    document.querySelectorAll('#petrol-fuels [data-fuel]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.fuel === fuel);
+        btn.setAttribute('aria-selected', btn.dataset.fuel === fuel ? 'true' : 'false');
+    });
+    if (redraw && petrolData?.stations) renderPetrol(petrolData);
+}
+
+function setPetrolRadius(miles) {
+    petrolRadius = Number(miles) || 5;
+    try { localStorage.setItem('petrolRadius', String(petrolRadius)); } catch { /* not kept; fine */ }
+    refreshPetrol();
+}
+
+function devicePosition(fresh) {
+    return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        reject, { timeout: 15000, maximumAge: fresh ? 0 : 10 * 60 * 1000 }));
+}
+
+// Where this device is: the browser's location if it'll share it, else the location in the
+// slideshow settings, else wherever it was last found
+async function locatePetrol(fresh = false) {
+    const status = document.getElementById('petrol-status');
+    status.innerHTML = '<div class="energy-loading"><span class="spinner"></span>Finding where this device is…</div>';
+    let place = null;
+    let why = '';
+    if (!window.isSecureContext) why = 'the browser only shares its location over HTTPS';
+    else if (!navigator.geolocation) why = 'this browser can\'t share its location';
+    else {
+        try {
+            place = { ...await devicePosition(fresh), source: 'device' };
+        } catch (err) {
+            why = err.code === 1 ? 'the browser wasn\'t allowed to share its location' : err.message;
+        }
+    }
+    if (!place) {
+        try {
+            const sky = (await (await fetch('/api/settings/general')).json()).slideshowSky;
+            if (typeof sky?.lat === 'number' && typeof sky?.lon === 'number') place = { lat: sky.lat, lon: sky.lon, source: 'saved' };
+        } catch { /* fall through */ }
+    }
+    if (!place) {
+        try {
+            const last = JSON.parse(localStorage.getItem('petrolPlace'));
+            if (typeof last?.lat === 'number' && typeof last?.lon === 'number') place = { lat: last.lat, lon: last.lon, source: 'last' };
+        } catch { /* none */ }
+    }
+    if (!place) {
+        document.getElementById('petrol-body').hidden = true;
+        status.textContent = `Couldn't find where this device is: ${why}. Allow it to share its location, or set one under Settings → Slideshow ("Seen from").`;
+        return;
+    }
+    if (place.source === 'device') {
+        try { localStorage.setItem('petrolPlace', JSON.stringify({ lat: place.lat, lon: place.lon })); } catch { /* not kept; fine */ }
+    } else if (why) {
+        showToast(`Using ${place.source === 'saved' ? 'the location from the slideshow settings' : 'where this device was last found'}: ${why}`, 'info', 4000);
+    }
+    petrolPlace = place;
+    refreshPetrol();
+}
+
+async function refreshPetrol() {
+    clearTimeout(petrolTimer);
+    if (appView !== 'petrol' || !petrolPlace) return;
+    if (!document.hidden) await loadPetrol();
+    if (appView === 'petrol') petrolTimer = setTimeout(refreshPetrol, petrolData?.loading ? PETROL_LOADING_RETRY_MS : PETROL_REFRESH_MS);
+}
+
+async function loadPetrol() {
+    const { lat, lon } = petrolPlace;
+    try {
+        const res = await fetch(`/api/fuel?lat=${lat}&lon=${lon}&miles=${petrolRadius}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        petrolData = data;
+    } catch (err) {
+        petrolData = { configured: true, error: err.message, stations: petrolData?.stations, updated: petrolData?.updated };
+    }
+    renderPetrol(petrolData);
+}
+
+const petrolPrice = p => `${p.toFixed(1)}p`;
+
+// "12 min ago", "3 hours ago", "5 days ago"
+function petrolAge(iso) {
+    const mins = (Date.now() - new Date(iso)) / 60000;
+    if (!(mins >= 0)) return '';
+    if (mins < 60) return `${Math.max(1, Math.round(mins))} min ago`;
+    if (mins < 48 * 60) return `${Math.round(mins / 60)} hours ago`;
+    return `${Math.round(mins / 1440)} days ago`;
+}
+
+const petrolIsStale = iso => iso && Date.now() - new Date(iso) > PETROL_STALE_DAYS * 86400000;
+
+function renderPetrol(data) {
+    const status = document.getElementById('petrol-status');
+    const body = document.getElementById('petrol-body');
+    if (!data.configured) {
+        body.hidden = true;
+        status.textContent = 'Petrol prices aren\'t set up yet. Press Fuel Finder Login to add a free client ID and secret from the government\'s Fuel Finder service.';
+        return;
+    }
+    if (!data.stations) {
+        body.hidden = true;
+        status.innerHTML = data.loading
+            ? '<div class="energy-loading"><span class="spinner"></span>Finding the petrol stations around here. The first time in a new area takes a minute or two…</div>'
+            : `Couldn't get petrol prices: ${escapeHtml(data.error || 'no reply')}`;
+        return;
+    }
+    status.innerHTML = data.error ? `Couldn't get the latest prices (${escapeHtml(data.error)}), so these may be out of date.` : '';
+    body.hidden = false;
+    drawPetrolMap(data);
+    drawPetrolList(data);
+}
+
+// Stations selling the chosen fuel, cheapest first, each banded by where its price sits between the cheapest and dearest
+function petrolRanked(data) {
+    const selling = data.stations.filter(s => s.prices[petrolFuel] && !s.closed)
+        .sort((a, b) => a.prices[petrolFuel].price - b.prices[petrolFuel].price || a.miles - b.miles);
+    const prices = selling.map(s => s.prices[petrolFuel].price);
+    const min = Math.min(...prices), max = Math.max(...prices);
+    return selling.map(s => {
+        const t = max > min ? (s.prices[petrolFuel].price - min) / (max - min) : 0;
+        return { ...s, band: t <= 0.2 ? 'cheap' : t >= 0.8 ? 'dear' : 'mid' };
+    });
+}
+
+function ensurePetrolMap() {
+    if (petrolMap) return;
+    petrolMap = L.map('petrol-map', { zoomControl: true, attributionControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap · Prices: Fuel Finder (OGL)',
+        maxZoom: 18
+    }).addTo(petrolMap);
+    petrolLayer = L.layerGroup().addTo(petrolMap);
+}
+
+function petrolPopup(s) {
+    const prices = Object.entries(PETROL_FUELS).filter(([f]) => s.prices[f]).map(([f, label]) => {
+        const p = s.prices[f];
+        return `<tr class="${f === petrolFuel ? 'current' : ''}"><td>${label}</td><td>${petrolPrice(p.price)}</td>
+            <td class="${petrolIsStale(p.updated) ? 'stale' : ''}">${p.updated ? petrolAge(p.updated) : ''}</td></tr>`;
+    }).join('');
+    const directions = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}`;
+    return `<div class="petrol-popup">
+        <strong>${escapeHtml(s.name)}</strong>
+        ${s.brand && s.brand.toLowerCase() !== s.name.toLowerCase() ? `<div>${escapeHtml(s.brand)}</div>` : ''}
+        <div class="petrol-popup-address">${escapeHtml([s.address, s.postcode].filter(Boolean).join(', '))}</div>
+        <table>${prices}</table>
+        <div class="petrol-popup-foot">${s.miles} miles away ·
+            <a href="${directions}" target="_blank" rel="noopener">Directions</a></div>
+    </div>`;
+}
+
+function drawPetrolMap(data) {
+    ensurePetrolMap();
+    petrolMap.invalidateSize();
+    const { lat, lon } = petrolPlace;
+    const radius = petrolRadius * METRES_PER_MILE;
+    if (!petrolHere) {
+        petrolHere = {
+            circle: L.circle([lat, lon], { radius, color: '#6366f1', weight: 1.5, dashArray: '6 6', fill: false, interactive: false }).addTo(petrolMap),
+            dot: L.circleMarker([lat, lon], { radius: 8, fillColor: '#6366f1', color: '#fff', weight: 2.5, fillOpacity: 1 })
+                .bindTooltip('This device').addTo(petrolMap),
+        };
+    } else {
+        petrolHere.circle.setLatLng([lat, lon]).setRadius(radius);
+        petrolHere.dot.setLatLng([lat, lon]);
+    }
+    // Fitted to the circle when the place or distance changes, not on every refresh, so panning around stays put
+    const view = `${lat},${lon},${petrolRadius}`;
+    if (petrolFitted !== view) {
+        petrolMap.fitBounds(L.latLng(lat, lon).toBounds(radius * 2), { padding: [10, 10] });
+        petrolFitted = view;
+    }
+    const open = [...petrolPins].find(([, m]) => m.isPopupOpen())?.[0];
+    petrolLayer.clearLayers();
+    petrolPins.clear();
+    // Dearest first so the cheapest are drawn on top where pins overlap
+    for (const s of petrolRanked(data).reverse()) {
+        const icon = L.divIcon({
+            className: 'petrol-pin-icon', iconSize: null,
+            html: `<div class="petrol-pin ${s.band}">${petrolPrice(s.prices[petrolFuel].price)}</div>`,
+        });
+        const pin = L.marker([s.lat, s.lon], { icon, title: s.name, riseOnHover: true }).bindPopup(petrolPopup(s)).addTo(petrolLayer);
+        petrolPins.set(s.id, pin);
+    }
+    if (open) petrolPins.get(open)?.openPopup();
+}
+
+function drawPetrolList(data) {
+    const ranked = petrolRanked(data);
+    const fuel = PETROL_FUELS[petrolFuel].toLowerCase();
+    const summary = document.getElementById('petrol-summary');
+    const list = document.getElementById('petrol-list');
+    const where = petrolPlace.source === 'device' ? '' : ' of the saved location';
+    if (!ranked.length) {
+        summary.textContent = `No stations within ${petrolRadius} miles${where} have a ${fuel} price.`;
+        list.innerHTML = '';
+        return;
+    }
+    const average = ranked.reduce((sum, s) => sum + s.prices[petrolFuel].price, 0) / ranked.length;
+    const cheapest = ranked[0];
+    summary.innerHTML = `<div class="petrol-summary-price">${petrolPrice(cheapest.prices[petrolFuel].price)}</div>
+        <div>Cheapest ${fuel} within ${petrolRadius} miles${where}, at ${escapeHtml(cheapest.name)}.
+        Average ${petrolPrice(average)} across ${ranked.length} station${ranked.length === 1 ? '' : 's'}.</div>
+        ${data.updated ? `<div class="petrol-summary-updated">Prices checked at ${clockTime(data.updated)}</div>` : ''}`;
+    list.innerHTML = ranked.map(s => {
+        const p = s.prices[petrolFuel];
+        const changed = p.updated ? ` · <span class="${petrolIsStale(p.updated) ? 'stale' : ''}">changed ${petrolAge(p.updated)}</span>` : '';
+        return `<button type="button" class="petrol-row" onclick="focusPetrolStation('${s.id}')">
+            <span class="petrol-row-price ${s.band}">${petrolPrice(p.price)}</span>
+            <span class="petrol-row-text">
+                <span class="petrol-row-name">${escapeHtml(s.name)}</span>
+                <span class="petrol-row-meta">${s.miles} mi${s.supermarket ? ' · supermarket' : ''}${s.motorway ? ' · motorway' : ''}${changed}</span>
+            </span>
+        </button>`;
+    }).join('');
+}
+
+function focusPetrolStation(id) {
+    const pin = petrolPins.get(id);
+    if (!pin) return;
+    petrolMap.setView(pin.getLatLng(), Math.max(petrolMap.getZoom(), 15));
+    pin.openPopup();
 }
 
 // tado°: signing in is done on tado's own site, by opening the link and confirming the code shown,

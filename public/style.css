@@ -11912,3 +11912,214 @@ input:checked+.slider:before {
     font-size: 1.1em;
     letter-spacing: 0.08em;
 }
+
+/* ─── Petrol tab ──────────────────────────────────────────────────────── */
+.petrol-view {
+    overflow: hidden;
+}
+
+.petrol-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.petrol-actions .nutrition-sources button {
+    flex: none;
+    white-space: nowrap;
+}
+
+.petrol-radius {
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+}
+
+.petrol-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    gap: 1rem;
+}
+
+.petrol-body[hidden] {
+    display: none;
+}
+
+.petrol-map {
+    min-height: 20rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.petrol-side {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.petrol-summary {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.petrol-summary-price {
+    color: #22c55e;
+    font-size: 1.75rem;
+    font-weight: 800;
+}
+
+.petrol-summary-updated {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+}
+
+.petrol-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.petrol-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.petrol-row:hover {
+    border-color: var(--primary);
+}
+
+.petrol-row-price {
+    min-width: 4.2rem;
+    font-size: 1.1rem;
+    font-weight: 800;
+}
+
+.petrol-row-price.cheap { color: #22c55e; }
+.petrol-row-price.mid { color: #f59e0b; }
+.petrol-row-price.dear { color: #f43f5e; }
+
+.petrol-row-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.petrol-row-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.petrol-row-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.petrol-view .stale {
+    color: #f59e0b;
+}
+
+/* The price pins: the marker's point is at the bottom middle of the label */
+.petrol-pin-icon {
+    background: none;
+    border: none;
+}
+
+.petrol-pin {
+    position: absolute;
+    transform: translate(-50%, calc(-100% - 6px));
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.4rem;
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 800;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.petrol-pin::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    margin-left: -6px;
+    border: 6px solid transparent;
+    border-bottom: none;
+    border-top-color: inherit;
+}
+
+.petrol-pin.cheap { background: #16a34a; border-color: #16a34a; }
+.petrol-pin.mid { background: #d97706; border-color: #d97706; }
+.petrol-pin.dear { background: #e11d48; border-color: #e11d48; }
+
+.petrol-popup {
+    color: #0f172a;
+    font-family: inherit;
+    font-size: 0.85rem;
+    line-height: 1.35;
+}
+
+.petrol-popup-address {
+    color: #475569;
+    margin: 0.2rem 0 0.4rem;
+}
+
+.petrol-popup table {
+    border-collapse: collapse;
+}
+
+.petrol-popup td {
+    padding: 0.1rem 0.75rem 0.1rem 0;
+}
+
+.petrol-popup tr.current td {
+    font-weight: 800;
+}
+
+.petrol-popup td.stale {
+    color: #b45309;
+}
+
+.petrol-popup-foot {
+    margin-top: 0.4rem;
+    color: #475569;
+}
+
+@media (max-width: 800px) {
+    .petrol-view {
+        overflow-y: auto;
+    }
+
+    .petrol-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: 22rem auto;
+    }
+
+    .petrol-list {
+        overflow: visible;
+    }
+}

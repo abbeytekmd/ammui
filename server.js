@@ -36,6 +36,7 @@ import VirtualRenderer from './lib/virtual-renderer.js';
 import * as smartHome from './lib/smart-home/index.js';
 import * as energy from './lib/smart-home/glow.js';
 import * as tado from './lib/smart-home/tado.js';
+import * as fuelPrices from './lib/fuel-prices.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
@@ -456,6 +457,7 @@ loadSettings();
 smartHome.init({ getSetting, setSetting });
 energy.init({ getSetting, setSetting });
 tado.init({ getSetting, setSetting });
+fuelPrices.init({ getSetting, setSetting, cachePath: path.join(baseDataDir, 'cache', 'fuel-prices.json') });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -3082,6 +3084,8 @@ app.get('/api/peer/keys', (req, res) => {
     if (tplink?.username && tplink?.password) keys.tplinkAccount = { username: tplink.username, password: tplink.password };
     const glow = getSetting('glowAccount', null);
     if (glow?.username && glow?.password) keys.glowAccount = { username: glow.username, password: glow.password };
+    const fuelFinder = fuelPrices.getCredentials();
+    if (fuelFinder) keys.fuelFinderAccount = fuelFinder;
     if (settings.email.host) keys.email = { ...settings.email };
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
@@ -3135,6 +3139,12 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
         // Saved even if the login check fails here; the Smart Home tab shows the error
         await energy.setAccount({ username: glow.username, password: glow.password }).catch(() => { });
         imported.push('glowAccount');
+    }
+    const fuelFinder = keys?.fuelFinderAccount;
+    if (typeof fuelFinder?.clientId === 'string' && fuelFinder.clientId.trim() && typeof fuelFinder.clientSecret === 'string' && fuelFinder.clientSecret) {
+        // Saved even if signing in fails here; the Petrol tab shows the error
+        await fuelPrices.setAccount(fuelFinder).catch(() => { });
+        imported.push('fuelFinderAccount');
     }
     const email = keys?.email;
     if (typeof email?.host === 'string' && email.host.trim()) {
@@ -6717,6 +6727,26 @@ app.post('/api/tado/connect', async (req, res) => {
 
 app.delete('/api/tado/account', (req, res) => {
     res.json(tado.disconnect());
+});
+
+// Petrol prices near a place, from the government's Fuel Finder scheme (see lib/fuel-prices.js)
+app.get('/api/fuel', async (req, res) => {
+    const lat = Number(req.query.lat), lon = Number(req.query.lon);
+    if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return res.status(400).json({ error: 'lat and lon are needed' });
+    const radius = Math.min(Math.max(Number(req.query.miles) || 5, 1), fuelPrices.MAX_RADIUS);
+    res.json(await fuelPrices.nearby({ lat, lon, radius }));
+});
+
+app.get('/api/fuel/account', (req, res) => {
+    res.json(fuelPrices.getAccount());
+});
+
+app.post('/api/fuel/account', express.json(), async (req, res) => {
+    try {
+        res.json(await fuelPrices.setAccount(req.body || {}));
+    } catch (err) {
+        smartHomeError(res, err);
+    }
 });
 
 // Update API routes
