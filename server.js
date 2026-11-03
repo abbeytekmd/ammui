@@ -3647,21 +3647,34 @@ function addShoppingIngredients(text, skipLine = -1) {
     return added;
 }
 
-const shoppingListText = () => getSetting('shoppingList', {}).text || '';
+// The shopping lists: [{ id, name, text }], each free text with one item per line. Lists from
+// before there could be several (and snapshots from then) were the one 'shoppingList' setting.
+const SHOPPING_LIST_NAME_MAX = 60;
+function getShoppingLists() {
+    const lists = getSetting('shoppingLists', null)?.lists;
+    if (Array.isArray(lists) && lists.length) return lists;
+    return [{ id: 'main', name: 'Shopping List', text: getSetting('shoppingList', {}).text || '' }];
+}
+const saveShoppingLists = lists => setSetting('shoppingLists', { lists });
+const allShoppingText = () => getShoppingLists().map(l => l.text).join('\n');
 
 // Lists from before the two were joined
-addShoppingIngredients(shoppingListText());
+addShoppingIngredients(allShoppingText());
 
-// After an ingredient is renamed: its lines on the shopping list take the new name, keeping their
+// After an ingredient is renamed: its lines on the shopping lists take the new name, keeping their
 // amounts ("2 pints of Milk" -> "2 pints of Semi-skimmed milk"), and its chosen picture follows it
 function renameOnShoppingList(oldName, newName) {
     const oldKey = shoppingItemKey(oldName);
-    const text = shoppingListText();
-    const renamed = text.split('\n').map(line => {
-        const { before, item, after } = splitShoppingLine(line);
-        return shoppingItemKey(item) === oldKey ? before + newName + after : line;
-    }).join('\n');
-    if (renamed !== text) setSetting('shoppingList', { text: renamed });
+    let changed = false;
+    const lists = getShoppingLists().map(list => {
+        const text = list.text.split('\n').map(line => {
+            const { before, item, after } = splitShoppingLine(line);
+            return shoppingItemKey(item) === oldKey ? before + newName + after : line;
+        }).join('\n');
+        if (text !== list.text) changed = true;
+        return { ...list, text };
+    });
+    if (changed) saveShoppingLists(lists);
     const newKey = shoppingItemKey(newName);
     const pick = getShoppingProductPick(oldKey);
     if (pick && newKey !== oldKey && !getShoppingProductPick(newKey)) {
@@ -3670,21 +3683,61 @@ function renameOnShoppingList(oldName, newName) {
     }
 }
 
-const onShoppingList = name => shoppingListText().split('\n').some(line => shoppingItemKey(line) === shoppingItemKey(name));
+const onShoppingList = name => allShoppingText().split('\n').some(line => shoppingItemKey(line) === shoppingItemKey(name));
 
-// --- Meals tab: the shopping list, free text with one item per line ---
-app.get('/api/shopping-list', (req, res) => {
-    res.json({ text: shoppingListText() });
+// A list's name from a request: { name } trimmed, or { error }
+function shoppingListName(value) {
+    const name = typeof value === 'string' ? value.trim() : '';
+    if (!name) return { error: 'Give the list a name' };
+    if (name.length > SHOPPING_LIST_NAME_MAX) return { error: `A list's name can be up to ${SHOPPING_LIST_NAME_MAX} characters` };
+    return { name };
+}
+
+// --- Meals tab: the shopping lists ---
+app.get('/api/shopping-lists', (req, res) => {
+    res.json({ lists: getShoppingLists() });
 });
 
-app.put('/api/shopping-list', express.json(), (req, res) => {
-    const text = req.body?.text;
-    if (typeof text !== 'string') return res.status(400).json({ error: 'text is required' });
-    if (text.length > 20000) return res.status(400).json({ error: 'The list is too long' });
-    // Stored inside an object so a list like "123" isn't read back as a number
-    setSetting('shoppingList', { text });
-    const skipLine = Number.isInteger(req.body.skipLine) ? req.body.skipLine : -1;
-    res.json({ text, ingredientsAdded: addShoppingIngredients(text, skipLine) });
+app.post('/api/shopping-lists', express.json(), (req, res) => {
+    const { name, error } = shoppingListName(req.body?.name);
+    if (error) return res.status(400).json({ error });
+    const lists = getShoppingLists();
+    if (lists.length >= 50) return res.status(400).json({ error: 'There are too many lists' });
+    const list = { id: crypto.randomUUID(), name, text: '' };
+    lists.push(list);
+    saveShoppingLists(lists);
+    res.json({ list, lists });
+});
+
+// Changes a list's name and/or items
+app.put('/api/shopping-lists/:id', express.json(), (req, res) => {
+    const lists = getShoppingLists();
+    const list = lists.find(l => l.id === req.params.id);
+    if (!list) return res.status(404).json({ error: 'That list has been deleted' });
+    const { text } = req.body || {};
+    if (text !== undefined) {
+        if (typeof text !== 'string') return res.status(400).json({ error: 'text is required' });
+        if (text.length > 20000) return res.status(400).json({ error: 'The list is too long' });
+        list.text = text;
+    }
+    if (req.body?.name !== undefined) {
+        const { name, error } = shoppingListName(req.body.name);
+        if (error) return res.status(400).json({ error });
+        list.name = name;
+    }
+    saveShoppingLists(lists);
+    const skipLine = Number.isInteger(req.body?.skipLine) ? req.body.skipLine : -1;
+    res.json({ list, ingredientsAdded: text === undefined ? 0 : addShoppingIngredients(text, skipLine) });
+});
+
+// The last list can't go: there's always one to put things on
+app.delete('/api/shopping-lists/:id', (req, res) => {
+    const lists = getShoppingLists();
+    if (!lists.some(l => l.id === req.params.id)) return res.status(404).json({ error: 'That list has already been deleted' });
+    if (lists.length === 1) return res.status(400).json({ error: "The only list can't be deleted" });
+    const rest = lists.filter(l => l.id !== req.params.id);
+    saveShoppingLists(rest);
+    res.json({ lists: rest });
 });
 
 // Where an emailed item links to: its search on the chosen supermarket's website, or null with
@@ -3704,28 +3757,30 @@ function supermarketSearchUrl(line) {
     return supermarket.search + encodeURIComponent(query);
 }
 
-// Emails the saved list to the nominated address, each item linked to its search on the chosen supermarket's website
-app.post('/api/shopping-list/email', async (req, res) => {
+// Emails a saved list to the nominated address, each item linked to its search on the chosen supermarket's website
+app.post('/api/shopping-lists/:id/email', async (req, res) => {
+    const list = getShoppingLists().find(l => l.id === req.params.id);
+    if (!list) return res.status(404).json({ error: 'That list has been deleted' });
     if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
     if (!settings.shoppingEmail) return res.status(400).json({ error: 'Set an email address in Server Settings → Shopping first' });
     const sender = emailSender();
     if (!isEmailAddress(sender)) return res.status(400).json({ error: 'Set a From address for the mail server first' });
-    const lines = shoppingListText().split('\n').map(l => l.trim()).filter(Boolean);
-    if (!lines.length) return res.status(400).json({ error: 'The shopping list is empty' });
+    const lines = list.text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: `The ${list.name} list is empty` });
     const date = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
     const escape = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
     try {
         await emailTransport().sendMail({
             from: { name: settings.deviceName || 'AMMUI', address: sender },
             to: settings.shoppingEmail,
-            subject: `Shopping list – ${date}`,
+            subject: `${list.name} – ${date}`,
             text: lines.map(l => `- ${l}`).join('\n'),
             html: `<ul>${lines.map(l => {
                 const url = supermarketSearchUrl(l);
                 return `<li>${url ? `<a href="${escape(url)}">${escape(l)}</a>` : escape(l)}</li>`;
             }).join('')}</ul>`
         });
-        console.log(`Shopping list (${lines.length} items) emailed to ${settings.shoppingEmail}.`);
+        console.log(`Shopping list "${list.name}" (${lines.length} items) emailed to ${settings.shoppingEmail}.`);
         res.json({ ok: true, to: settings.shoppingEmail, items: lines.length });
     } catch (err) {
         console.error('Emailing the shopping list failed:', err.message);

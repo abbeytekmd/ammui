@@ -3239,6 +3239,58 @@ p.subtitle {
     margin-left: 0.5rem;
 }
 
+/* A tab per list, scrolling sideways when there are many, with + for a new one */
+.shopping-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.shopping-tabs-list {
+    display: flex;
+    gap: 0.25rem;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.shopping-tab {
+    flex-shrink: 0;
+    max-width: 14rem;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid transparent;
+    border-radius: 0.6rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.shopping-tab:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.shopping-tab.active {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+}
+
+.shopping-tab-new {
+    font-size: 1.15rem;
+    line-height: 1;
+    padding: 0.35rem 0.7rem;
+}
+
 .shopping-list-wrap {
     position: relative;
     flex: 1;
@@ -8630,6 +8682,45 @@ input:checked+.slider:before {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* With more than one list, their names as tabs in place of the title */
+.ss-shopping-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.ss-shopping-tab {
+    max-width: 100%;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: inherit;
+    font-size: clamp(12px, 0.9vw, 16px);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.ss-shopping-tab.active {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.ss-shopping-empty {
+    padding: 3px 0;
+    font-size: clamp(14px, 1.1vw, 20px);
+    color: rgba(255, 255, 255, 0.5);
 }
 
 .ss-agenda-list + .ss-agenda-title {

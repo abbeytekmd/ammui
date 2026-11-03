@@ -6056,7 +6056,7 @@ function drawCalendarEvents() {
                 t.textContent = time;
                 el.appendChild(t);
             }
-            el.appendChild(document.createTextNode(ev.title));
+            el.appendChild(document.createTextNode(calendarMeals ? mealCalendarLabel(ev) : ev.title));
             if (ev.entry) {
                 el.classList.add('local-entry');
                 el.dataset.entryId = ev.entry.id;
@@ -6073,7 +6073,6 @@ function drawCalendarEvents() {
             } else {
                 el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
             }
-            // Just the food: a day's calories and so on are in its day view
             cell.appendChild(el);
         });
         if (list.length > shown) {
@@ -6085,6 +6084,14 @@ function drawCalendarEvents() {
         }
     });
     if (mealDayDate) renderMealDayView();
+}
+
+// A meal on the Meals calendar: who it's for and its calories (the food's in its tooltip and day view)
+function mealCalendarLabel(ev) {
+    const meal = ev.entry?.meal || ev.planned;
+    const who = meal.family?.length ? meal.family.map(f => f.name).join(', ') : ev.entry?.people || 'Everyone';
+    const t = sumNutrition(mealDayRows(meal));
+    return t.counted ? `${who} · ${Math.round(t.kcal).toLocaleString()} kcal` : who;
 }
 
 function entryToCalendarEvent(entry) {
@@ -7663,10 +7670,16 @@ function showMealStatsTip(col) {
     tip.style.top = `${rect.top - body.top + document.getElementById('meal-stats-body').scrollTop - tip.offsetHeight - 6}px`;
 }
 
-// --- Meals tab: shopping list, free text with one item per line, saved shortly after each change ---
+// --- Meals tab: shopping lists, each free text with one item per line, saved shortly after each change ---
+let shoppingLists = [];       // [{ id, name, text }] as last loaded
 let shoppingSavedText = '';   // the list as the server last had it
 let shoppingSavedSkip = -1;   // the line being typed when it was saved, not yet made an ingredient
 let shoppingSaveTimer = null;
+
+// The list showing, here and in the slideshow, kept on this device; the first when it's gone
+const currentShoppingList = (lists = shoppingLists) =>
+    lists.find(l => l.id === localStorage.getItem('shoppingListId')) || lists[0];
+const setShoppingListId = id => localStorage.setItem('shoppingListId', id);
 
 // Leaves the box alone while someone is typing in it or a change is waiting to be saved
 async function loadShoppingList() {
@@ -7674,14 +7687,103 @@ async function loadShoppingList() {
     shoppingProductFailed.clear();
     if (shoppingSaveTimer || document.activeElement === box) return;
     try {
-        const res = await fetch('/api/shopping-list');
+        const res = await fetch('/api/shopping-lists');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load the shopping list');
+        if (!res.ok) throw new Error(data.error || 'Failed to load the shopping lists');
         if (shoppingSaveTimer || document.activeElement === box) return;
-        shoppingSavedText = box.value = data.text;
-        showShoppingPictures();
+        shoppingLists = data.lists;
+        showShoppingList();
     } catch (err) {
         setCalendarSettingsStatus('shopping-status', `Couldn't load the shopping list: ${err.message}`, true);
+    }
+}
+
+// Puts the current list in the box, with its tab picked
+function showShoppingList() {
+    const box = document.getElementById('shopping-list');
+    const list = currentShoppingList();
+    hideShoppingSuggestions();
+    shoppingSavedText = box.value = list?.text || '';
+    shoppingSavedSkip = -1;
+    if (box.dataset.listId !== list?.id) box.scrollTop = 0;
+    box.dataset.listId = list?.id || '';
+    renderShoppingTabs();
+    renderShoppingThumbs();
+    showShoppingPictures();
+}
+
+function renderShoppingTabs() {
+    const current = currentShoppingList();
+    document.getElementById('shopping-tabs').innerHTML = shoppingLists.map(l => `
+        <button type="button" role="tab" class="shopping-tab${l === current ? ' active' : ''}" aria-selected="${l === current}"
+            onclick="switchShoppingList('${escapeHtml(l.id)}')">${escapeHtml(l.name)}</button>`).join('');
+    document.getElementById('btn-shopping-delete').disabled = shoppingLists.length < 2;
+}
+
+// Saves what's typed on the list showing before moving to another
+async function switchShoppingList(id) {
+    if (id === currentShoppingList()?.id) return;
+    await saveShoppingListNow();
+    setShoppingListId(id);
+    showShoppingList();
+}
+
+async function shoppingListsRequest(url, method, body) {
+    const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+}
+
+const shoppingListUrl = list => `/api/shopping-lists/${encodeURIComponent(list.id)}`;
+
+async function createShoppingList() {
+    const name = prompt('Name for the new list:', '')?.trim();
+    if (!name) return;
+    try {
+        await saveShoppingListNow();
+        const data = await shoppingListsRequest('/api/shopping-lists', 'POST', { name });
+        shoppingLists = data.lists;
+        setShoppingListId(data.list.id);
+        showShoppingList();
+        document.getElementById('shopping-list').focus();
+    } catch (err) {
+        showToast(`Couldn't add the list: ${err.message}`);
+    }
+}
+
+async function renameShoppingList() {
+    const list = currentShoppingList();
+    if (!list) return;
+    const name = prompt('Rename this list:', list.name)?.trim();
+    if (!name || name === list.name) return;
+    try {
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'PUT', { name });
+        list.name = data.list.name;
+        renderShoppingTabs();
+    } catch (err) {
+        showToast(`Couldn't rename the list: ${err.message}`);
+    }
+}
+
+// Not the only one: there's always a list to put things on
+async function deleteShoppingList() {
+    const list = currentShoppingList();
+    if (!list || shoppingLists.length < 2) return;
+    const items = document.getElementById('shopping-list').value.split('\n').filter(l => l.trim()).length;
+    if (!confirm(`Delete the "${list.name}" list${items ? ` and the ${items} item${items === 1 ? '' : 's'} on it` : ''}?`)) return;
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = null;
+    try {
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'DELETE');
+        shoppingLists = data.lists;
+        showShoppingList();
+    } catch (err) {
+        showToast(`Couldn't delete the list: ${err.message}`);
     }
 }
 
@@ -7784,15 +7886,11 @@ async function saveShoppingListNow() {
     // once the caret leaves it or the list loses focus
     const skipLine = document.activeElement === box ? shoppingCaretLine(box).index : -1;
     showShoppingPictures();
-    if (text === shoppingSavedText && skipLine === shoppingSavedSkip) return;
+    const list = currentShoppingList();
+    if (!list || (text === shoppingSavedText && skipLine === shoppingSavedSkip)) return;
     try {
-        const res = await fetch('/api/shopping-list', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text, skipLine })
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'PUT', { text, skipLine });
+        list.text = text;
         shoppingSavedText = text;
         shoppingSavedSkip = skipLine;
         setCalendarSettingsStatus('shopping-status', '');
@@ -7813,10 +7911,9 @@ async function emailShoppingList() {
     btn.disabled = true;
     try {
         await saveShoppingListNow();
-        const res = await fetch('/api/shopping-list/email', { method: 'POST' });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        showToast(`Shopping list emailed to ${data.to}`, 'success', 3000);
+        const list = currentShoppingList();
+        const data = await shoppingListsRequest(`${shoppingListUrl(list)}/email`, 'POST');
+        showToast(`${list.name} emailed to ${data.to}`, 'success', 3000);
     } catch (err) {
         showToast(err.message);
     } finally {
@@ -7826,7 +7923,7 @@ async function emailShoppingList() {
 
 function clearShoppingList() {
     const box = document.getElementById('shopping-list');
-    if (!box.value.trim() || !confirm('Clear the whole shopping list?')) return;
+    if (!box.value.trim() || !confirm(`Clear everything on the "${currentShoppingList()?.name}" list?`)) return;
     box.value = '';
     saveShoppingListNow();
 }

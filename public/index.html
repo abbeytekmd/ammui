@@ -2668,6 +2668,8 @@
                     <h2>Shopping List</h2>
                 </div>
                 <div class="shopping-header-actions">
+                    <button type="button" class="btn-control ghost btn-small" onclick="renameShoppingList()">Rename</button>
+                    <button type="button" id="btn-shopping-delete" class="btn-control ghost btn-small" onclick="deleteShoppingList()">Delete</button>
                     <button type="button" id="btn-shopping-email" class="btn-control ghost btn-small" onclick="emailShoppingList()"
                         title="Email the list to the address set in Server Settings → Shopping">Email</button>
                     <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
@@ -2675,6 +2677,12 @@
                 </div>
             </div>
             <div class="modal-body shopping-modal-body">
+                <!-- A tab per list (the slideshow's copy has the same tabs), and + for a new one -->
+                <div class="shopping-tabs" role="tablist" aria-label="Shopping lists">
+                    <div id="shopping-tabs" class="shopping-tabs-list"></div>
+                    <button type="button" class="shopping-tab shopping-tab-new" onclick="createShoppingList()"
+                        title="New list" aria-label="New list">+</button>
+                </div>
                 <!-- One item per line, saved as you type. Lines don't wrap, so each has a picture beside it. -->
                 <div class="shopping-list-wrap">
                     <textarea id="shopping-list" class="shopping-list" spellcheck="true" maxlength="20000" wrap="off"

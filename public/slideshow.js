@@ -417,20 +417,44 @@ class Slideshow {
             .map(([t, up]) => event(t, up)).join('');
     }
 
-    // The shopping list in the side panel, one item per line, left empty (and so hidden) when there's nothing on it
+    // The shopping list in the side panel, one item per line, left empty (and so hidden) when there's
+    // nothing on any list. With more than one list, a tab for each switches between them.
     async loadShopping() {
-        const el = document.getElementById('ss-shopping');
-        if (!el) return;
+        if (!document.getElementById('ss-shopping')) return;
         try {
-            const res = await fetch('/api/shopping-list');
+            const res = await fetch('/api/shopping-lists');
             const data = await res.json();
-            if (!res.ok) throw new Error(data.error || 'Failed to load the shopping list');
-            const lines = data.text.split('\n').map(l => l.trim()).filter(Boolean);
-            el.innerHTML = !lines.length ? '' : `<div class="ss-agenda-title">Shopping List</div><ul class="ss-shopping-list">${
-                lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`;
+            if (!res.ok) throw new Error(data.error || 'Failed to load the shopping lists');
+            this.shoppingLists = data.lists;
+            this.renderShopping();
         } catch (err) {
             console.warn('[SLIDESHOW] Shopping list load failed:', err.message);
         }
+    }
+
+    renderShopping() {
+        const el = document.getElementById('ss-shopping');
+        const lists = this.shoppingLists || [];
+        const linesOf = list => list.text.split('\n').map(l => l.trim()).filter(Boolean);
+        if (!lists.some(l => linesOf(l).length)) {
+            el.innerHTML = '';
+            return;
+        }
+        const current = currentShoppingList(lists);
+        const lines = linesOf(current);
+        const header = lists.length < 2 ? `<div class="ss-agenda-title">${escapeHtml(current.name)}</div>`
+            : `<div class="ss-shopping-tabs" role="tablist">${lists.map(l => `
+                <button type="button" role="tab" class="ss-shopping-tab${l === current ? ' active' : ''}" aria-selected="${l === current}"
+                    onclick="event.stopPropagation(); slideshow.showShoppingList('${escapeHtml(l.id)}')">${escapeHtml(l.name)}</button>`).join('')}</div>`;
+        el.innerHTML = header + (lines.length ? `<ul class="ss-shopping-list">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+            : '<div class="ss-shopping-empty">Nothing on this list</div>');
+    }
+
+    // A tab's list, which the shopping list dialog then opens on too
+    showShoppingList(id) {
+        setShoppingListId(id);
+        this.renderShopping();
+        loadShoppingList();
     }
 
     resetInterval() {
