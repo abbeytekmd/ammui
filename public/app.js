@@ -13314,6 +13314,7 @@ async function loadEnergy({ refresh = false } = {}) {
 function renderEnergy(data) {
     const section = document.getElementById('smarthome-energy');
     const grid = document.getElementById('smarthome-energy-grid');
+    document.getElementById('btn-energy-tariff-test').hidden = true; // until there's a tariff and history to test against
     section.hidden = !data.configured;
     document.getElementById('energy-status').textContent = data.configured ? ''
         : 'No smart meter set up yet. Press Bright Login to add the login from your Bright app.';
@@ -13326,6 +13327,8 @@ function renderEnergy(data) {
         return;
     }
     grid.innerHTML = data.fuels.map(energyCard).join('') || '<div class="smarthome-status">No meter readings yet.</div>';
+    energyData = data;
+    document.getElementById('btn-energy-tariff-test').hidden = !data.fuels.some(tariffTestUsage);
 }
 
 // A round top for a chart's scale and the step between its gridlines, e.g. 13.2 -> { max: 15, step: 5 }
@@ -13435,8 +13438,151 @@ function energyCard(f) {
                     <div class="plug-card-status">${status}</div>
                 </div>
             </div>
+            ${energyTariff(f)}
             <div class="energy-panes">${energyTodayPane(f)}${energyThisWeekPane(f)}${energyMonthPane(f, name)}</div>
         </div>`;
+}
+
+const penceText = p => `${+p.toFixed(3)}p`;
+
+// --- Test a Tariff: the last 12 months' use (up to last month) priced on the current tariff and on a
+// standing charge and unit rate typed in, per fuel and together ---
+let energyData = null; // the last summary shown
+
+// What a fuel's months are priced from: the months with readings, their kWh and days, and the current
+// charges. A multi-rate tariff's split between its rates isn't known, so its unit rate is the average
+// the bills worked out at (cost less the standing charge, over the kWh), else the rates' plain average.
+function tariffTestUsage(f) {
+    const t = f.tariff;
+    if (!t || !t.rates.length || t.standingCharge == null) return null;
+    const months = (f.months || []).filter(m => m.kwh > 0);
+    if (!months.length) return null;
+    const daysIn = key => new Date(+key.slice(0, 4), +key.slice(5, 7), 0).getDate();
+    const kwh = months.reduce((s, m) => s + m.kwh, 0);
+    const days = months.reduce((s, m) => s + daysIn(m.month), 0);
+    let rate = t.rates[0].rate;
+    let estimated = false;
+    if (t.rates.length > 1) {
+        const billed = months.reduce((s, m) => s + m.pence, 0);
+        rate = f.hasCost && billed > 0 ? Math.max(0, (billed - t.standingCharge * days) / kwh)
+            : t.rates.reduce((s, r) => s + r.rate, 0) / t.rates.length;
+        estimated = true;
+    }
+    return { months, kwh, days, standing: t.standingCharge, rate, estimated,
+        from: months[0].month, to: months[months.length - 1].month };
+}
+
+const tariffTestCost = (u, standing, rate) => ({ units: u.kwh * rate, standing: u.days * standing, total: u.kwh * rate + u.days * standing });
+
+function openTariffTest() {
+    const fuels = (energyData?.fuels || []).map(f => ({ f, u: tariffTestUsage(f) })).filter(x => x.u);
+    const body = document.getElementById('tariff-test-body');
+    if (!fuels.length) {
+        body.innerHTML = '<p class="settings-hint">There isn\'t a tariff or enough meter history to compare with yet.</p>';
+    } else {
+        const monthLabel = key => `${monthName(key, 'short')} ${key.slice(0, 4)}`;
+        body.innerHTML = fuels.map(({ f, u }) => {
+            const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
+            const period = `${monthLabel(u.from)} – ${monthLabel(u.to)}${u.months.length < 12 ? ` (only ${u.months.length} months of readings)` : ''}`;
+            return `
+                <div class="tariff-test-fuel" data-fuel="${escapeAttr(f.fuel)}">
+                    <div class="tariff-test-head">
+                        <h3>${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}${name}</h3>
+                        <span class="settings-hint">${kwhText(u.kwh)} over ${u.days} days, ${period}</span>
+                    </div>
+                    <div class="tariff-test-inputs">
+                        <label>Standing charge <span class="settings-hint">p/day</span>
+                            <input type="number" inputmode="decimal" min="0" step="0.01" data-field="standing" value="${+u.standing.toFixed(3)}"
+                                oninput="renderTariffTestResults()"></label>
+                        <label>Unit rate <span class="settings-hint">p/kWh</span>
+                            <input type="number" inputmode="decimal" min="0" step="0.01" data-field="rate" value="${+u.rate.toFixed(3)}"
+                                oninput="renderTariffTestResults()"></label>
+                    </div>
+                    <p class="settings-hint">Now: ${penceText(u.standing)}/day and ${penceText(u.rate)}/kWh${
+                        u.estimated ? ' (the average of your rates, as your bills worked out, since how much was on each isn\'t known)' : ''}</p>
+                    <div class="tariff-test-result"></div>
+                </div>`;
+        }).join('') + '<div id="tariff-test-total" class="tariff-test-total"></div>';
+        tariffTestFuels = fuels;
+        renderTariffTestResults();
+    }
+    document.getElementById('tariff-test-modal').style.display = 'flex';
+    body.querySelector('input')?.focus();
+}
+
+let tariffTestFuels = [];
+
+function closeTariffTest() {
+    document.getElementById('tariff-test-modal').style.display = 'none';
+}
+
+// "£12.34 cheaper" / "£12.34 dearer" / "The same", for new minus current in pence
+function tariffTestDifference(diff, current) {
+    if (Math.abs(diff) < 0.5) return '<span class="tariff-test-diff">The same</span>';
+    const pct = current ? ` (${Math.abs(Math.round(diff / current * 100))}%)` : '';
+    return `<span class="tariff-test-diff ${diff < 0 ? 'cheaper' : 'dearer'}">${pounds(Math.abs(diff))} a year ${diff < 0 ? 'cheaper' : 'dearer'}${pct}</span>`;
+}
+
+function renderTariffTestResults() {
+    let current = 0, next = 0, complete = true;
+    for (const { f, u } of tariffTestFuels) {
+        const el = document.querySelector(`#tariff-test-body .tariff-test-fuel[data-fuel="${f.fuel}"]`);
+        if (!el) continue;
+        const read = field => { const v = parseFloat(el.querySelector(`[data-field="${field}"]`).value); return Number.isFinite(v) && v >= 0 ? v : null; };
+        const standing = read('standing'), rate = read('rate');
+        const now = tariffTestCost(u, u.standing, u.rate);
+        const out = el.querySelector('.tariff-test-result');
+        if (standing === null || rate === null) {
+            out.innerHTML = '<p class="settings-hint">Enter a standing charge and unit rate to compare.</p>';
+            complete = false;
+            continue;
+        }
+        const then = tariffTestCost(u, standing, rate);
+        current += now.total;
+        next += then.total;
+        const perMonth = p => pounds(p / u.months.length);
+        out.innerHTML = `
+            <table class="tariff-test-table">
+                <thead><tr><th></th><th class="num">Current</th><th class="num">New</th></tr></thead>
+                <tbody>
+                    <tr><td>Units</td><td class="num">${pounds(now.units)}</td><td class="num">${pounds(then.units)}</td></tr>
+                    <tr><td>Standing charges</td><td class="num">${pounds(now.standing)}</td><td class="num">${pounds(then.standing)}</td></tr>
+                    <tr class="total"><td>Total</td><td class="num">${pounds(now.total)}</td><td class="num">${pounds(then.total)}</td></tr>
+                    <tr><td>Per month</td><td class="num">${perMonth(now.total)}</td><td class="num">${perMonth(then.total)}</td></tr>
+                </tbody>
+            </table>
+            ${tariffTestDifference(then.total - now.total, now.total)}`;
+    }
+    const total = document.getElementById('tariff-test-total');
+    if (total) {
+        total.hidden = tariffTestFuels.length < 2 || !complete;
+        total.innerHTML = `<span>Both together: ${pounds(current)} now, ${pounds(next)} on the new charges</span>
+            ${tariffTestDifference(next - current, current)}`;
+    }
+}
+
+// The tariff on the meter: its unit rate (or each rate of a multi-rate one, such as day and night) and
+// the standing charge, which the costs shown include
+function energyTariff(f) {
+    const t = f.tariff;
+    if (!t || (!t.rates.length && t.standingCharge == null)) return '';
+    const multi = t.rates.length > 1;
+    const rates = t.rates.map((r, i) => `
+        <div><span>${multi ? `Rate ${r.tier ?? i + 1}` : 'Unit rate'}</span><b>${penceText(r.rate)}/kWh</b>${
+            r.ratePerM3 != null ? `${penceText(r.ratePerM3)}/m³` : ''}</div>`).join('');
+    // A month's worth is this month's: its number of days at the daily charge
+    const now = new Date();
+    const monthDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const standing = t.standingCharge != null ? `
+        <div><span>Standing charge</span><b>${penceText(t.standingCharge)}/day</b>${f.hasCost ? 'included in costs' : ''}</div>
+        <div><span>Standing charge per month</span><b>${pounds(t.standingCharge * monthDays)}</b>${
+            now.toLocaleDateString([], { month: 'long' })}, ${monthDays} days</div>` : '';
+    const kind = multi ? `${t.rates.length}-rate tariff` : t.type === 'flatrate' ? 'Single rate, all day' : 'Tariff';
+    return `
+            <div class="energy-tariff">
+                <div class="energy-section-label">${kind}${t.from ? `, since ${shortDate(t.from)}` : ''}</div>
+                <div class="energy-totals">${rates}${standing}</div>
+            </div>`;
 }
 
 const periodAverage = periods => {

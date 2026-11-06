@@ -689,6 +689,8 @@
             <div class="smarthome-header">
                 <h2>Energy</h2>
                 <div class="smarthome-actions">
+                    <button type="button" id="btn-energy-tariff-test" class="btn-control btn-small" onclick="openTariffTest()" hidden
+                        title="See what the last 12 months would have cost on a different tariff">Test a Tariff</button>
                     <button type="button" class="btn-control btn-small" onclick="openPlugSettings()"
                         title="Set the Bright login that reads your smart meter">Bright Login</button>
                 </div>
@@ -919,6 +921,28 @@
             </div>
             <div id="modal-cast-list" class="device-list">
                 <!-- Renderers for casting will be listed here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Energy tab: the last 12 months' use priced on the current tariff and on one typed in (built by app.js) -->
+    <div id="tariff-test-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeTariffTest()">
+        <div class="modal-content" style="max-width: 620px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Test a Tariff</h2>
+                    <p class="modal-subtitle">Your last 12 months' use, on your current charges and on new ones</p>
+                </div>
+                <button class="btn-close" onclick="closeTariffTest()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="tariff-test-body" class="tariff-test"></div>
             </div>
         </div>
     </div>
