@@ -6057,7 +6057,8 @@ function drawCalendarEvents() {
     const timeFmt = { hour: '2-digit', minute: '2-digit' };
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
-        const list = byDay.get(cell.dataset.date) || [];
+        const dayEvents = byDay.get(cell.dataset.date) || [];
+        const list = calendarMeals ? mealCalendarPersonEvents(dayEvents) : dayEvents;
         cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
         const maxEvents = calendarMaxEventsPerDay();
@@ -6065,7 +6066,7 @@ function drawCalendarEvents() {
         list.slice(0, shown).forEach(ev => {
             const el = document.createElement('div');
             el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '') + (ev.planned ? ' planned' : '');
-            el.style.setProperty('--event-color', ev.entry?.meal || ev.planned ? MEAL_ENTRY_COLOR
+            el.style.setProperty('--event-color', ev.mealPerson || ev.entry?.meal || ev.planned ? MEAL_ENTRY_COLOR
                 : ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
             const time = ev.allDay ? '' : new Date(ev.start).toLocaleTimeString(undefined, timeFmt);
             if (time) {
@@ -6074,8 +6075,10 @@ function drawCalendarEvents() {
                 t.textContent = time;
                 el.appendChild(t);
             }
-            el.appendChild(document.createTextNode(calendarMeals ? mealCalendarLabel(ev) : ev.title));
-            if (ev.entry) {
+            el.appendChild(document.createTextNode(ev.title));
+            if (ev.mealPerson) {
+                el.title = ev.tooltip;
+            } else if (ev.entry) {
                 el.classList.add('local-entry');
                 el.dataset.entryId = ev.entry.id;
                 if (ev.entry.repeat) el.classList.add('repeating');
@@ -6104,12 +6107,36 @@ function drawCalendarEvents() {
     if (mealDayDate) renderMealDayView();
 }
 
-// A meal on the Meals calendar: who it's for and its calories (the food's in its tooltip and day view)
-function mealCalendarLabel(ev) {
-    const meal = ev.entry?.meal || ev.planned;
-    const who = meal.family?.length ? meal.family.map(f => f.name).join(', ') : ev.entry?.people || 'Everyone';
-    const t = sumNutrition(mealDayRows(meal));
-    return t.counted ? `${who} · ${Math.round(t.kcal).toLocaleString()} kcal` : who;
+// A day on the Meals calendar: one row per person, with the calories of all their meals that day
+// (the meals are in its tooltip and the day view). A meal not set for anyone counts for everyone
+// picked; with no family set up, it's shown under who it says it's for, or Everyone.
+function mealCalendarPersonEvents(list) {
+    const picked = mealDayFamily.filter(f => !mealDayPeople || mealDayPeople.has(f.id));
+    const people = new Map(); // key -> { name, rows, meals, planned }
+    const add = (key, name, ev, rows) => {
+        if (!people.has(key)) people.set(key, { name, rows: [], meals: [], planned: true });
+        const p = people.get(key);
+        p.rows.push(...rows);
+        p.meals.push(mealDayAbout(ev).name);
+        if (!ev.planned) p.planned = false;
+    };
+    for (const ev of list) {
+        const meal = ev.entry?.meal || ev.planned;
+        const rows = mealDayRows(meal);
+        const forWhom = meal.family?.length
+            ? meal.family.filter(f => !mealDayPeople || mealDayPeople.has(f.id))
+            : picked;
+        if (forWhom.length) forWhom.forEach(f => add(f.id, f.name, ev, rows));
+        else { const who = ev.entry?.people || 'Everyone'; add(`name:${who}`, who, ev, rows); }
+    }
+    // In the family's order, then anyone else
+    const order = id => { const i = mealDayFamily.findIndex(f => f.id === id); return i < 0 ? Infinity : i; };
+    return [...people.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([, p]) => {
+        const t = sumNutrition(p.rows);
+        const label = t.counted ? `${p.name} · ${Math.round(t.kcal).toLocaleString()} kcal` : p.name;
+        return { allDay: true, planned: p.planned, mealPerson: true, title: label,
+            tooltip: [label, ...p.meals, p.planned ? 'From the meal plan. Click the day to add it.' : ''].filter(Boolean).join('\n') };
+    });
 }
 
 function entryToCalendarEvent(entry) {
@@ -8023,12 +8050,48 @@ function renderShoppingThumbs() {
         return `<img class="shopping-thumb" src="${escapeHtml(product.image)}" alt="${escapeHtml(label)}"
             title="${escapeHtml(label)} - click for others" loading="lazy" ${position}>`;
     }).join('');
+    renderShoppingDeletes(box, top, rowHeight);
     scrollShoppingThumbs();
+}
+
+const SHOPPING_DELETE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+
+// A delete button beside each line with something on it, in the list's right padding
+function renderShoppingDeletes(box, top, rowHeight) {
+    const outer = document.getElementById('shopping-deletes-layer');
+    const layer = document.getElementById('shopping-deletes');
+    if (!outer || !layer) return;
+    // Clear of the list's vertical scrollbar, when it has one (offsetWidth - clientWidth is both borders plus it)
+    outer.style.right = `${box.offsetWidth - box.clientWidth - 1}px`;
+    const size = parseFloat(getComputedStyle(document.documentElement).fontSize) * 2.6; // .shopping-delete's height
+    layer.innerHTML = box.value.split('\n').map((line, i) => line.trim()
+        ? `<button type="button" class="shopping-delete" style="top: ${top + i * rowHeight + (rowHeight - size) / 2}px"
+            onmousedown="event.preventDefault()" onclick="deleteShoppingLine(${i})"
+            title="Remove ${escapeAttr(line.trim())}" aria-label="Remove ${escapeAttr(line.trim())}">${SHOPPING_DELETE_ICON}</button>`
+        : '').join('');
+}
+
+// Takes a line off the list (bought) and saves straight away
+function deleteShoppingLine(index) {
+    const box = document.getElementById('shopping-list');
+    const lines = box.value.split('\n');
+    if (index < 0 || index >= lines.length) return;
+    lines.splice(index, 1);
+    const scroll = box.scrollTop;
+    box.value = lines.join('\n');
+    box.scrollTop = scroll;
+    hideShoppingSuggestions();
+    renderShoppingThumbs();
+    saveShoppingListNow();
 }
 
 function scrollShoppingThumbs() {
     const box = document.getElementById('shopping-list');
-    document.getElementById('shopping-thumbs').style.transform = `translateY(${-box.scrollTop}px)`;
+    const shift = `translateY(${-box.scrollTop}px)`;
+    document.getElementById('shopping-thumbs').style.transform = shift;
+    const deletes = document.getElementById('shopping-deletes');
+    if (deletes) deletes.style.transform = shift;
 }
 
 // Looks every line up again (after the supermarket or a chosen picture changes), keeping the old
@@ -13498,11 +13561,16 @@ function plugCard(p) {
         </div>`;
 }
 
+// A plug with Confirm ticked in its settings asks before it's switched, dimmed or its scene changed
+const confirmPlugControl = (p, question) => !p.confirm || confirm(question);
+
 async function togglePlugOutlet(btn) {
     const p = smartHomePlugs[+btn.dataset.plug];
     const outlet = p?.outlets.find(o => o.id === btn.dataset.outlet);
     if (!outlet) return;
     const on = !outlet.on;
+    const what = outlet.name && outlet.name !== p.name && p.outlets.length > 1 ? `${p.name} (${outlet.name})` : p.name;
+    if (!confirmPlugControl(p, `Turn ${what} ${on ? 'on' : 'off'}?`)) return;
     outlet.on = on; // show it straight away; the reply has the real state
     renderSmartHome();
     try {
@@ -13531,6 +13599,7 @@ async function setPlugBrightness(input) {
     smartHomeDragging = false;
     const p = smartHomePlugs[+input.dataset.plug];
     if (!p) return;
+    if (!confirmPlugControl(p, `Set ${p.name} to ${input.value}%?`)) { renderSmartHome(); return; }
     try {
         const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}/brightness`, {
             method: 'POST',
@@ -13586,6 +13655,7 @@ function closePlugScenes() {
 async function choosePlugScene(choice) {
     const state = plugScenes;
     if (!state || state.busy) return;
+    if (!confirmPlugControl(state.plug, `Change the scene on ${state.plug.name}?`)) return;
     state.busy = true;
     renderPlugScenes();
     try {
@@ -13981,7 +14051,10 @@ function renderPlugList() {
                     ${state ? `<span class="manage-item-host plug-state ${p.supported && p.online ? 'ok' : ''}">${escapeHtml(state)}</span>` : ''}
                 </div>
                 <div class="manage-item-actions">
-                    <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                        <label class="plug-confirm-toggle" title="Ask before this plug is switched from the app">
+                            <input type="checkbox" ${p.confirm ? 'checked' : ''} onchange="togglePlugConfirm(${i}, this.checked)"> Confirm
+                        </label>
                         <button class="btn-toggle ${p.hidden ? 'btn-enable' : 'btn-disable'}" onclick="togglePlugHidden(${i})"
                             title="Show or hide this plug on the Controls tab">${p.hidden ? 'Show' : 'Hide'}</button>
                     </div>
@@ -14017,6 +14090,10 @@ function renamePlug(i) {
 
 function togglePlugHidden(i) {
     updatePlug(i, { hidden: !managedPlugs[i].hidden });
+}
+
+function togglePlugConfirm(i, on) {
+    updatePlug(i, { confirm: on });
 }
 
 async function forgetPlug(i) {

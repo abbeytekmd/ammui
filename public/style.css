@@ -3304,7 +3304,7 @@ p.subtitle {
     flex: 1;
     min-height: 12rem;
     resize: none;
-    padding: 0.5rem 1rem 0.5rem 4.5rem;
+    padding: 0.5rem 4rem 0.5rem 4.5rem; /* the right padding is where the delete buttons go */
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--card-border);
     border-radius: 1rem;
@@ -3381,6 +3381,43 @@ p.subtitle {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+/* Over the list's right padding (JS keeps it clear of the scrollbar): a delete button per line */
+.shopping-deletes {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    width: 3.5rem;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.shopping-delete {
+    position: absolute;
+    right: 0.5rem;
+    width: 2.6rem;
+    height: 2.6rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.7;
+}
+
+.shopping-delete:hover,
+.shopping-delete:focus-visible {
+    opacity: 1;
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.1);
 }
 
 /* A line with no picture: a "+" to choose one */
@@ -5552,6 +5589,17 @@ p.subtitle {
 
 .manage-name-input:focus {
     box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+/* Plug settings: ask before switching this plug */
+.plug-confirm-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
 }
 
 .btn-toggle {

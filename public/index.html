@@ -2764,6 +2764,8 @@
                         oninput="shoppingListEdited()" onkeydown="shoppingListKeydown(event)"
                         onblur="hideShoppingSuggestions(); saveShoppingListNow()" onscroll="scrollShoppingThumbs(); hideShoppingSuggestions()"></textarea>
                     <div class="shopping-thumbs" aria-hidden="true"><div id="shopping-thumbs"></div></div>
+                    <!-- A delete button per line, to cross items off one by one while shopping -->
+                    <div id="shopping-deletes-layer" class="shopping-deletes"><div id="shopping-deletes"></div></div>
                     <!-- Saved ingredients matching the line being typed -->
                     <div id="shopping-suggest" class="shopping-suggest" hidden></div>
                 </div>
