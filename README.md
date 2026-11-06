@@ -29,7 +29,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
 * Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Controls tab (see [Controls](#controls)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
-* See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
+* See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)). It shows your tariff too, and **Test a Tariff** works out whether a new deal would have been cheaper over the last 12 months (see [Test a Tariff](#test-a-tariff)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
 * Meal planning with **items**. An item is either a single thing (e.g. Peas), with its quantity for one person, a picture and calories, or made of other items (e.g. Mash, Roast chicken), each at the amount it uses; those can be made of others in turn. Items are made and changed in the **item builder**, which searches Open Food Facts for a single item's name and picture, and your items for what one is made of. Plan a meal on the Meals tab's own Calendar by adding one or more items (or making a new one there and then), an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan and Items tabs down the left, with the shopping list alongside. Items are included in the backup (see [Backup and restore](#backup-and-restore)).
 * Shopping lists, opened from the Meals tab or by tapping one on the slideshow, typed or by voice ("add milk"). Keep as many as you like (e.g. Groceries, Hardware): add, rename and delete them from the tabs along the top of the shopping list, and switch between them with the same tabs on the slideshow. It shares the items list with the meals: saved single items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
@@ -368,6 +368,27 @@ The **Energy** tab shows your electricity and gas use from your smart meter, wit
 Costs are shown alongside where the Bright account has them. It's read through the free **Bright** app (by Hildebrand), so you need a Bright account linked to your meter first.
 
 To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Controls** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
+
+### Your tariff
+
+Each card shows the tariff your supplier has put on your meter: the unit rate (in p/kWh, and p/m³ for gas), the standing charge per day and for the current month, and the date the tariff started. The costs on the Energy tab already include the standing charge. A tariff with more than one rate (such as Economy 7) shows each rate as Rate 1, Rate 2 and so on, since the meter doesn't say which is day and which is night.
+
+### Test a Tariff
+
+Thinking of switching? Press **Test a Tariff** on the Energy tab, type in a new tariff's standing charge and unit rate for electricity and gas, and see straight away whether it would have saved you money. It takes your actual use over the last 12 months and prices it twice, on your current charges and on the new ones, then shows for each fuel:
+
+* the cost of the units, the standing charges and the total for the year, both ways
+* the cost per month, both ways
+* how much cheaper or dearer the new tariff would be over the year, in pounds and as a percentage
+
+With both fuels filled in, it also shows the two added together, so you can weigh up a dual fuel deal in one go. The boxes start with your current charges, and the results change as you type.
+
+Good to know:
+
+* Both sides use the same 12 months of use, priced at today's charges, so it compares the two tariffs fairly. Since it uses today's charges and not the ones in force at the time, the "current" figure won't match what you actually paid over the year.
+* It's based on how much you used, not when, so it can't tell you what a time-of-use tariff (cheaper at night, say) would cost. If your current tariff has more than one rate, it uses the average rate your bills worked out at instead.
+* With less than a year of readings (see below), it uses the months there are and says how many.
+* Nothing you type is saved, and it doesn't change anything with your supplier.
 
 ### How far back the history goes
 
