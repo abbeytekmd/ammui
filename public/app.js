@@ -8460,6 +8460,18 @@ async function sendIngredient(url, method, body) {
     return data;
 }
 
+// A dialog closes when its backdrop is clicked. But a press that starts inside the dialog (selecting
+// text in a box, say) and is let go over the backdrop also counts as a click on the backdrop, which
+// closed the dialog by surprise. So a click on a backdrop only gets through when the press started
+// on that backdrop too.
+let modalPressStart = null;
+document.addEventListener('pointerdown', e => { modalPressStart = e.target; }, true);
+document.addEventListener('click', e => {
+    const started = modalPressStart;
+    modalPressStart = null;
+    if (e.target.classList?.contains('modal-overlay') && started && started !== e.target) e.stopPropagation();
+}, true);
+
 // Opens a dialog over any others already showing
 function bringModalToFront(id) {
     document.body.appendChild(document.getElementById(id));
