@@ -3597,7 +3597,7 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         settings.deviceName = deviceName;
         saveSettings();
         renameMediaKeyServer(oldLibraryName, localLibraryName());
-        renewHttpsCertificate(); // named after the server, so devices trust it again under the new name
+        renewHttpsCertificate(); // the server certificate covers <name>.local, so it's issued again
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
@@ -7177,7 +7177,7 @@ http.createServer(app)
 // The server's name from Settings is also its address on the network: <name>.local
 advertiseLocalName(() => settings.deviceName);
 
-// Kept to give it a new certificate when the server is renamed (the certificate carries its name)
+// Kept to give it a new server certificate when the server is renamed (it covers <name>.local)
 let httpsServer = null;
 function renewHttpsCertificate() {
     if (!httpsServer) return;
