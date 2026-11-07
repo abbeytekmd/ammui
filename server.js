@@ -61,7 +61,7 @@ import {
     listPasswords, getPassword, savePassword, deletePassword,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
-import { PeerListener, PeerConnections, PeerError, derivePeerKey, cleanLibraryPath, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
+import { PeerListener, PeerConnections, PeerError, ShareRules, derivePeerKey, cleanLibraryPath, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import http from 'http';
@@ -3180,11 +3180,68 @@ function peerListenerConfig() {
     return { enabled: !!s.enabled, port: s.port, salt: s.salt, key: peerListenerKeyCache.key };
 }
 
+// What the peer link shares: { "music/Artist": "on", "music/Artist/Live": "off" }. Anything
+// without a flag takes its folder's, and the top of the library is off (see ShareRules).
+const peerShareFlags = () => {
+    const flags = getSetting('peerShares', null);
+    return flags && typeof flags === 'object' ? flags : {};
+};
+let peerShareRules = new ShareRules(peerShareFlags());
+function savePeerShareFlags(flags) {
+    setSetting('peerShares', flags);
+    peerShareRules = new ShareRules(flags);
+}
+
+// Library path ("music/Artist") of a path on disk under local/, or null if it's not in a section
+// the peer link serves
+function peerShareRel(absPath) {
+    const rel = path.relative(localLibraryRoot, absPath).split(path.sep).join('/');
+    try { return rel && !rel.startsWith('..') ? cleanLibraryPath(rel) || null : null; } catch (e) { return null; }
+}
+
+// Keep flags with what they're on when it's renamed or moved. With keepOwn false (a folder's
+// contents merged into another folder), only the flags inside it move; its own goes.
+function movePeerShares(fromAbs, toAbs, { keepOwn = true } = {}) {
+    const from = peerShareRel(fromAbs);
+    if (!from) return;
+    const to = peerShareRel(toAbs);
+    const flags = peerShareFlags();
+    let changed = false;
+    for (const [key, value] of Object.entries(flags)) {
+        const inside = key.startsWith(from + '/');
+        if (key !== from && !inside) continue;
+        delete flags[key];
+        changed = true;
+        if (!to || (!inside && !keepOwn)) continue;
+        const moved = to + key.slice(from.length);
+        if (!(moved in flags)) flags[moved] = value;
+    }
+    if (changed) savePeerShareFlags(flags);
+}
+
+const forgetPeerShares = absPath => movePeerShares(absPath, null);
+
+// Flags left on things that are no longer there (moved or deleted some other way) are dropped,
+// so they can't apply to something new that later turns up with the same name
+async function prunePeerShares() {
+    const flags = peerShareFlags();
+    let dropped = 0;
+    for (const key of Object.keys(flags)) {
+        const exists = await fsp.stat(path.join(localLibraryRoot, ...key.split('/'))).then(() => true, () => false);
+        if (!exists) { delete flags[key]; dropped++; }
+    }
+    if (dropped) {
+        savePeerShareFlags(flags);
+        console.log(`[PEER] Dropped ${dropped} sharing setting(s) for things no longer in the library.`);
+    }
+}
+
 const peerListener = new PeerListener({
     certDir: certsDir,
     libraryRoot: localLibraryRoot,
     getConfig: peerListenerConfig,
     getName: () => settings.deviceName || 'AMMUI',
+    getShares: () => peerShareRules,
 });
 let peerListenerQueue = Promise.resolve();
 const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
@@ -3237,6 +3294,25 @@ app.post('/api/settings/peer-listener', express.json(), async (req, res) => {
     if (enabled !== undefined) console.log(`[PEER] Peer link ${next.enabled ? 'switched on' : 'switched off'}.`);
     await applyPeerListener();
     res.json(peerListener.status());
+});
+
+app.get('/api/peer-shares', (req, res) => {
+    res.json({ flags: peerShareFlags() });
+});
+
+// { path: "music/Artist", value: "on" | "off" | "inherit" }
+app.post('/api/peer-shares', express.json(), (req, res) => {
+    const { path: wanted, value } = req.body || {};
+    if (!['on', 'off', 'inherit'].includes(value)) return res.status(400).json({ error: 'value must be on, off or inherit' });
+    let rel;
+    try { rel = cleanLibraryPath(wanted); } catch (e) { rel = ''; }
+    if (!rel) return res.status(400).json({ error: 'Only folders and files in music, pictures and videos can be shared' });
+    const flags = peerShareFlags();
+    if (value === 'inherit') delete flags[rel];
+    else flags[rel] = value;
+    savePeerShareFlags(flags);
+    console.log(`[PEER] Sharing of ${rel}: ${value === 'inherit' ? 'as its folder' : value}.`);
+    res.json({ flags });
 });
 
 app.get('/api/peer-links', (req, res) => {
@@ -4720,6 +4796,7 @@ app.post('/api/delete', express.json(), async (req, res) => {
             fs.unlinkSync(filePath);
             console.log(`Deleted file: ${filePath}`);
         }
+        forgetPeerShares(filePath);
         res.json({ success: true });
     } catch (err) {
         console.error('Delete error:', err.message);
@@ -7135,6 +7212,7 @@ function startServices() {
     startIndexScheduler(findDeviceByUdn);
     smartHome.startBackgroundDiscovery();
     applyPeerListener();
+    prunePeerShares().catch(err => console.warn('[PEER] Could not tidy the sharing settings:', err.message));
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {
         const local = findDeviceByUdn(SERVER_UDN);
@@ -8661,6 +8739,7 @@ app.post('/api/local/merge-folder', express.json(), async (req, res) => {
 
         // Remove the now-empty source folder
         await fs.promises.rmdir(sourcePath);
+        movePeerShares(sourcePath, targetPath, { keepOwn: false });
 
         // Bring moved tracks' Artist/Album Artist tags in line with their new folder location
         const audioExts = new Set(['.mp3', '.flac', '.m4a', '.aac', '.wav']);
@@ -8749,6 +8828,7 @@ app.post('/api/local/paste', express.json(), async (req, res) => {
                     await fs.promises.cp(srcPath, destPath, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true });
                     await fs.promises.rm(srcPath, { recursive: true, force: true });
                 }
+                movePeerShares(srcPath, destPath);
             }
             done++;
         } catch (e) {
@@ -8808,6 +8888,7 @@ app.post('/api/local/rename-folder', express.json(), async (req, res) => {
 
             // Remove the now empty old directory
             await fs.promises.rmdir(oldDirPath);
+            movePeerShares(oldDirPath, newDirPath, { keepOwn: false });
             console.log(`[RENAME] Merge complete: ${oldDirPath} removed`);
 
             // Bring moved tracks' Artist/Album Artist tags in line with their new folder location
@@ -8827,6 +8908,7 @@ app.post('/api/local/rename-folder', express.json(), async (req, res) => {
         } else {
             // Simple rename
             await fs.promises.rename(oldDirPath, newDirPath);
+            movePeerShares(oldDirPath, newDirPath);
             console.log(`[RENAME] Simple rename complete`);
 
             // Bring contained tracks' Artist/Album tags in line with the new folder name

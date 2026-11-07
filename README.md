@@ -37,7 +37,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Calories, protein, carbs, fat and alcohol units for each item and meal per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
 * Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
-* Peer link: browse another AMMUI server's music, pictures and videos, on your network or over the internet, and download them to your device or copy them into your own library. Encrypted, password protected, and off unless switched on (see [Peer Link](#peer-link)).
+* Peer link: browse the music, pictures and videos another AMMUI server shares, on your network or over the internet, and download them to your device or copy them into your own library. Encrypted, password protected, and off unless switched on (see [Peer Link](#peer-link)).
 
 ## My journey to here...
 I'd been using an Amazon Echo Show for a while. It was great but...
@@ -278,6 +278,14 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 Connects two AMMUI servers, such as yours and a relative's in another house, so each can browse the other's library and download from it.
 
 **On the server to share from**: *Server Settings → Peer Link → Let Other Servers Connect*. Set a password (at least 8 characters), and the port if 7443 doesn't suit, and tick the box. Give the other person this server's address, the port and the password.
+
+**Choose what to share**: nothing is shared until you share it. In **Media**, open a folder's or file's ⋯ menu and set **Peer Share**:
+
+* **On**: shared, along with everything in it.
+* **Off**: not shared, nor anything in it.
+* **As Parent** (the default): the same as the folder it's in. The music, pictures and videos folders themselves count as off.
+
+So you can share a whole artist and switch one album off, or leave a folder off and switch on just one album inside it. The other server only sees what's shared (a folder that isn't shared but has something shared inside it shows just that). Shared items have a small share mark by their name, and *Server Settings → Peer Link → What's Shared* lists everything you've set. Renaming, moving or deleting things in AMMUI keeps their settings with them.
 
 **On the server connecting**: *Server Settings → Peer Link → Connect to Another Server*. Enter the address (IP or host name), port and password, then **Connect**. Then open **Remote Libraries** from the logo menu to browse. Each file has **Download** (saves it to the device you're using) and **Copy to My Library** (saves it on this server, at the same place as on the other one, e.g. `music/Artist/Album`). Folders can be copied whole. Files already there are skipped. Pictures, music and videos open in the browser when you click their names.
 

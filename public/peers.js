@@ -28,10 +28,144 @@ const peerAgo = ms => {
     return `${Math.round(mins / 60)} h ago`;
 };
 
+// --- What this server shares ---------------------------------------------------------------
+// Each folder and file in music, pictures and videos is On, Off or As Parent (the default: it
+// takes its folder's setting). The sections themselves are off unless switched on, so nothing is
+// shared until something is. Set from the ⋯ menu in Media; listed in Settings → Peer Link.
+
+const PEER_SHARE_SECTIONS = ['music', 'pictures', 'videos'];
+let peerShareFlags = null; // { "music/Artist": "on" | "off" }, null until loaded
+
+const peerShareable = id => typeof id === 'string' && PEER_SHARE_SECTIONS.includes(id.split('/')[0]);
+
+// { value: 'on' | 'off', explicit, from }: `from` is the path the setting comes from (null for
+// the default off at the top)
+function peerShareState(id) {
+    const flags = peerShareFlags || {};
+    const parts = String(id).split('/').filter(Boolean);
+    for (let i = parts.length; i > 0; i--) {
+        const p = parts.slice(0, i).join('/');
+        if (flags[p] === 'on' || flags[p] === 'off') return { value: flags[p], explicit: i === parts.length, from: p };
+    }
+    return { value: 'off', explicit: false, from: null };
+}
+
+const peerShareAttr = s => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+
+const PEER_SHARE_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><line x1="8.6" y1="13.5" x2="15.4" y2="17.5"></line><line x1="15.4" y1="6.5" x2="8.6" y2="10.5"></line></svg>';
+
+function peerShareBadgeInner(id) {
+    const st = peerShareState(id);
+    // Off by default isn't marked: only what's shared, and what's been switched off inside it
+    if (st.value === 'off' && !st.explicit) return '';
+    const title = st.value === 'on'
+        ? (st.explicit ? 'Shared on the peer link' : `Shared on the peer link (from ${st.from})`)
+        : 'Not shared on the peer link (switched off here)';
+    return `<span class="peer-share-badge ${st.value}${st.explicit ? ' explicit' : ''}" title="${peerShareAttr(title)}">${PEER_SHARE_ICON}</span>`;
+}
+
+function peerShareBadgeHtml(id) {
+    if (!peerShareable(id)) return '';
+    return `<span class="peer-share-slot" data-share-path="${peerShareAttr(id)}">${peerShareFlags ? peerShareBadgeInner(id) : ''}</span>`;
+}
+
+function peerShareMenuHtml(id) {
+    if (!peerShareable(id)) return '';
+    const parentHint = id.includes('/') ? 'Same as the folder it is in' : 'Off (the top of the library is not shared)';
+    return `<div class="dropdown-item peer-share-row" onclick="event.stopPropagation()" data-share-path="${peerShareAttr(id)}">
+        ${PEER_SHARE_ICON.replace('width="12" height="12"', 'width="14" height="14"')}
+        <span class="peer-share-label">Peer Share</span>
+        <span class="peer-share-seg" role="group" aria-label="Share on the peer link">
+            <button type="button" data-v="on" onclick="setPeerShareFromMenu(this, event)" title="Shared, with everything in it unless switched off there">On</button>
+            <button type="button" data-v="off" onclick="setPeerShareFromMenu(this, event)" title="Not shared, nor anything in it unless switched on there">Off</button>
+            <button type="button" data-v="inherit" onclick="setPeerShareFromMenu(this, event)" title="${peerShareAttr(parentHint)}">As Parent</button>
+        </span>
+    </div>`;
+}
+
+// Bring the badges and menu buttons on screen up to date (a change to a folder changes
+// everything shown inside it)
+function refreshPeerShareUi() {
+    if (!peerShareFlags) return;
+    document.querySelectorAll('.peer-share-slot[data-share-path]').forEach(slot => {
+        slot.innerHTML = peerShareBadgeInner(slot.dataset.sharePath);
+    });
+    document.querySelectorAll('.peer-share-row[data-share-path]').forEach(row => {
+        const st = peerShareState(row.dataset.sharePath);
+        const current = st.explicit ? st.value : 'inherit';
+        row.querySelectorAll('button[data-v]').forEach(b => {
+            const on = b.dataset.v === current;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        });
+        // "As Parent" says what that comes to when it's on
+        const inheritBtn = row.querySelector('button[data-v="inherit"]');
+        if (inheritBtn) inheritBtn.classList.toggle('inherits-on', !st.explicit && st.value === 'on');
+    });
+}
+
+async function loadPeerShares() {
+    try {
+        peerShareFlags = (await peerApi('/api/peer-shares')).flags || {};
+        refreshPeerShareUi();
+        renderPeerShareList();
+    } catch (e) {
+        console.warn('[PEER] Could not load sharing settings:', e.message);
+    }
+}
+
+async function setPeerShare(id, value) {
+    try {
+        peerShareFlags = (await peerApi('/api/peer-shares', { method: 'POST', body: JSON.stringify({ path: id, value }) })).flags || {};
+        refreshPeerShareUi();
+        renderPeerShareList();
+    } catch (e) {
+        showToast(`Couldn't change sharing: ${e.message}`);
+    }
+}
+
+function setPeerShareFromMenu(btn, event) {
+    if (event) event.stopPropagation();
+    const row = btn.closest('[data-share-path]');
+    if (row) setPeerShare(row.dataset.sharePath, btn.dataset.v);
+}
+
+// Settings → Peer Link: everything with a setting of its own
+function renderPeerShareList() {
+    const list = document.getElementById('peer-share-list');
+    if (!list || !peerShareFlags) return;
+    const entries = Object.entries(peerShareFlags)
+        .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+    list.innerHTML = '';
+    if (!entries.length) {
+        const li = document.createElement('li');
+        li.className = 'settings-hint';
+        li.textContent = 'Nothing is shared yet.';
+        list.appendChild(li);
+        return;
+    }
+    for (const [p, value] of entries) {
+        const li = document.createElement('li');
+        li.className = 'peer-link-item';
+        li.innerHTML = `<div class="peer-link-info"><b></b><span class="settings-hint"></span></div>
+            <div class="peer-link-actions"><button class="btn-control btn-small">Remove</button></div>`;
+        li.querySelector('b').textContent = p;
+        li.querySelector('.settings-hint').textContent = value === 'on'
+            ? 'Shared, with everything in it unless switched off there'
+            : 'Switched off, with everything in it unless switched on there';
+        const btn = li.querySelector('button');
+        btn.title = 'Remove this setting, so it goes back to being the same as its folder';
+        btn.onclick = () => setPeerShare(p, 'inherit');
+        list.appendChild(li);
+    }
+}
+
+loadPeerShares();
+
 // --- Settings → Peer Link -------------------------------------------------------------------
 
 async function loadPeerLinkSettings() {
-    await Promise.all([loadPeerListener(), loadPeerLinks()]);
+    await Promise.all([loadPeerListener(), loadPeerLinks(), loadPeerShares()]);
 }
 
 async function loadPeerListener() {

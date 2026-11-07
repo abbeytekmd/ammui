@@ -12298,6 +12298,77 @@ input:checked+.slider:before {
     flex: none;
     width: 7rem;
 }
+/* Peer Share: the badge beside a shared item's name, and On / Off / As Parent in its menu */
+.peer-share-slot {
+    display: inline-flex;
+    vertical-align: middle;
+}
+.peer-share-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 0.4rem;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.peer-share-badge.on.explicit {
+    color: var(--primary);
+    opacity: 1;
+}
+.peer-share-badge.off {
+    position: relative;
+    opacity: 0.6;
+}
+.peer-share-badge.off::after {
+    content: '';
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    top: 50%;
+    border-top: 2px solid currentColor;
+    transform: rotate(-45deg);
+}
+.dropdown-item.peer-share-row {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    cursor: default;
+}
+.dropdown-item.peer-share-row:hover {
+    background: transparent;
+}
+.peer-share-label {
+    flex: 1;
+}
+.peer-share-seg {
+    display: inline-flex;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    overflow: hidden;
+}
+.peer-share-seg button {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.3rem 0.55rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.peer-share-seg button + button {
+    border-left: 1px solid var(--card-border);
+}
+.peer-share-seg button:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+.peer-share-seg button.active {
+    background: var(--primary);
+    color: #fff;
+}
+.peer-share-seg button.inherits-on::after {
+    content: ' (On)';
+    font-weight: 500;
+}
 .peer-link-list {
     list-style: none;
     margin: 0;

@@ -2495,7 +2495,7 @@ function renderBrowser(items) {
                         `playTrack('${escJs(item.uri)}', '${escJs(item.title)}', '${escJs(item.artist)}', '${escJs(item.album)}', '${escJs(item.duration)}', '${escJs(item.protocolInfo)}', '${escJs(item.albumArtUrl)}', '${escJs(pathStr)}')`}">
                 <div class="item-icon${thumbUrl ? ' has-thumb' : ''}">${icon}</div>
                 <div class="item-info">
-                    <div class="item-title">${item.title}</div>
+                    <div class="item-title">${item.title}${isLocalServer && typeof peerShareBadgeHtml === 'function' ? peerShareBadgeHtml(item.id) : ''}</div>
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
@@ -2564,6 +2564,7 @@ function renderBrowser(items) {
                         </button>
                         <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
                             ${isLocalServer ? `
+                                ${typeof peerShareMenuHtml === 'function' ? peerShareMenuHtml(item.id) : ''}
                                 ${isContainer && currentBrowserMode === 'photo' ? `
                                 <button class="dropdown-item" onclick="identifyFolderPictureDatesFromFilename(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2713,6 +2714,7 @@ function renderBrowser(items) {
             </div>
         `;
     }).join('');
+    if (typeof refreshPeerShareUi === 'function') refreshPeerShareUi();
 
     // Restore scroll position after DOM update. Rows use `content-visibility: auto`,
     // so off-screen heights are only `contain-intrinsic-size` estimates until they
