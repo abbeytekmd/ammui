@@ -1,7 +1,6 @@
 // Peer link: Settings → Peer Link (connections to other AMMUI servers, and letting them connect
-// here), and the Remote Libraries window for browsing and downloading from them.
-
-const peerBrowserState = { id: null, path: '', peers: [] };
+// here), and what's shared. A connected server shows up as a media server in its own right
+// (served by lib/peer-services/media.js), so it's browsed in Media like any other.
 
 async function peerApi(url, options = {}) {
     const res = await fetch(url, {
@@ -12,14 +11,6 @@ async function peerApi(url, options = {}) {
     if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { code: data.code, fingerprint: data.fingerprint });
     return data;
 }
-
-const peerSizeText = bytes => {
-    if (!Number.isFinite(bytes)) return '';
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let i = 0;
-    while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
-    return `${bytes.toFixed(i && bytes < 10 ? 1 : 0)} ${units[i]}`;
-};
 
 const peerAgo = ms => {
     const mins = Math.round((Date.now() - ms) / 60000);
@@ -225,9 +216,20 @@ async function savePeerListener({ toggle = false } = {}) {
 async function loadPeerLinks() {
     try {
         const { peers } = await peerApi('/api/peer-links');
-        peerBrowserState.peers = peers;
         renderPeerLinks(peers);
     } catch (e) { }
+    // A connection added, removed or renamed changes the list of media servers
+    if (typeof fetchDevices === 'function') fetchDevices();
+}
+
+// Show that server in Media
+async function openPeerInMedia(p) {
+    if (typeof fetchDevices === 'function') await fetchDevices();
+    if (!currentDevices.some(d => d.udn === p.udn && d.isServer)) {
+        return showToast(`${p.name} doesn't share media (it may need updating)`);
+    }
+    if (document.getElementById('server-settings-modal').style.display === 'flex') closeServerSettingsModal();
+    selectServer(p.udn);
 }
 
 function renderPeerLinks(peers) {
@@ -239,14 +241,14 @@ function renderPeerLinks(peers) {
         li.innerHTML = `
             <div class="peer-link-info"><b></b><span class="settings-hint peer-link-address"></span><span class="settings-hint peer-link-error"></span></div>
             <div class="peer-link-actions">
-                <button class="btn-control btn-small primary" data-act="browse">Browse</button>
+                <button class="btn-control btn-small primary" data-act="open" title="Browse it in Media">Open in Media</button>
                 <button class="btn-control btn-small ghost" data-act="remove">Remove</button>
             </div>`;
         li.querySelector('b').textContent = p.name;
         li.querySelector('.peer-link-address').textContent = `${p.host}:${p.port}`;
         const err = li.querySelector('.peer-link-error');
         if (p.error) { err.textContent = p.error; err.style.color = '#f87171'; } else err.remove();
-        li.querySelector('[data-act="browse"]').onclick = () => openPeerBrowser(p.id);
+        li.querySelector('[data-act="open"]').onclick = () => openPeerInMedia(p);
         li.querySelector('[data-act="remove"]').onclick = () => removePeerLink(p);
 
         if (p.code === 'FINGERPRINT_CHANGED' && p.newFingerprint) {
@@ -291,7 +293,7 @@ async function addPeerLink() {
         passwordEl.value = '';
         document.getElementById('peer-add-address').value = '';
         document.getElementById('peer-add-port').value = '';
-        setPeerAddStatus(`Connected to ${peer.name}. Its certificate (${peer.fingerprint.slice(0, 23)}…) is now trusted.`);
+        setPeerAddStatus(`Connected to ${peer.name}: it's now in the list of media servers. Its certificate (${peer.fingerprint.slice(0, 23)}…) is trusted.`);
         await loadPeerLinks();
     } catch (e) {
         setPeerAddStatus(e.message, true);
@@ -321,169 +323,4 @@ async function setPeerPassword(p, password) {
         showToast(`Connected to ${p.name}`, 'success', 3000);
     } catch (e) { showToast(e.message); }
     loadPeerLinks();
-}
-
-// --- Remote Libraries window -----------------------------------------------------------------
-
-async function openPeerBrowser(id) {
-    document.querySelectorAll('.dropdown-menu.active').forEach(d => d.classList.remove('active'));
-    const modal = document.getElementById('peer-browser-modal');
-    try {
-        peerBrowserState.peers = (await peerApi('/api/peer-links')).peers;
-    } catch (e) {
-        return showToast(e.message);
-    }
-    const select = document.getElementById('peer-browser-select');
-    select.innerHTML = '';
-    for (const p of peerBrowserState.peers) {
-        const opt = document.createElement('option');
-        opt.value = p.id;
-        opt.textContent = p.name;
-        select.appendChild(opt);
-    }
-    modal.style.display = 'flex';
-    if (!peerBrowserState.peers.length) {
-        select.style.display = 'none';
-        document.getElementById('peer-browser-crumbs').innerHTML = '';
-        document.getElementById('peer-browser-copy-folder').style.display = 'none';
-        const list = document.getElementById('peer-browser-list');
-        list.innerHTML = `<div class="peer-browser-empty">No other servers yet.<br><br>
-            <button class="btn-control primary">Connect to One in Settings</button></div>`;
-        list.querySelector('button').onclick = () => {
-            closePeerBrowser();
-            openServerSettingsModal();
-            const tab = document.querySelector('#server-settings-modal .settings-tab[data-tab="peerlink"]');
-            switchSettingsTab('peerlink', tab);
-        };
-        return;
-    }
-    select.style.display = '';
-    const start = peerBrowserState.peers.some(p => p.id === id) ? id
-        : peerBrowserState.peers.some(p => p.id === peerBrowserState.id) ? peerBrowserState.id : peerBrowserState.peers[0].id;
-    select.value = start;
-    if (document.getElementById('server-settings-modal').style.display === 'flex') closeServerSettingsModal();
-    peerBrowseTo(start, start === peerBrowserState.id ? peerBrowserState.path : '');
-}
-
-function closePeerBrowser() {
-    document.getElementById('peer-browser-modal').style.display = 'none';
-}
-
-const peerFileUrl = (id, rel, download) =>
-    `/api/peer-links/${encodeURIComponent(id)}/file?path=${encodeURIComponent(rel)}${download ? '&download=1' : ''}`;
-
-let peerBrowseSeq = 0;
-async function peerBrowseTo(id, rel) {
-    const seq = ++peerBrowseSeq;
-    peerBrowserState.id = id;
-    peerBrowserState.path = rel;
-    const peer = peerBrowserState.peers.find(p => p.id === id);
-    renderPeerCrumbs(peer, rel);
-    document.getElementById('peer-browser-copy-folder').style.display = rel ? '' : 'none';
-    const list = document.getElementById('peer-browser-list');
-    list.innerHTML = '<div class="peer-browser-empty">Loading...</div>';
-    let data;
-    try {
-        data = await peerApi(`/api/peer-links/${encodeURIComponent(id)}/list?path=${encodeURIComponent(rel)}`);
-    } catch (e) {
-        if (seq !== peerBrowseSeq) return;
-        list.innerHTML = '<div class="peer-browser-empty"></div>';
-        const box = list.firstChild;
-        box.textContent = e.message;
-        if (['FINGERPRINT_CHANGED', 'NEEDS_PASSWORD'].includes(e.code)) {
-            box.append(document.createElement('br'), document.createElement('br'));
-            const btn = document.createElement('button');
-            btn.className = 'btn-control primary';
-            btn.textContent = 'Fix in Settings';
-            btn.onclick = () => {
-                closePeerBrowser();
-                openServerSettingsModal();
-                switchSettingsTab('peerlink', document.querySelector('#server-settings-modal .settings-tab[data-tab="peerlink"]'));
-            };
-            box.appendChild(btn);
-        }
-        return;
-    }
-    if (seq !== peerBrowseSeq) return;
-    list.innerHTML = '';
-    if (!data.entries.length) {
-        list.innerHTML = '<div class="peer-browser-empty">This folder is empty.</div>';
-        return;
-    }
-    const sectionNames = { music: 'Music', pictures: 'Pictures', videos: 'Videos' };
-    for (const e of data.entries) {
-        const childPath = rel ? `${rel}/${e.name}` : e.name;
-        const row = document.createElement('div');
-        row.className = `peer-browser-row ${e.type}`;
-        const icon = e.type === 'dir' ? '📁' : e.kind === 'audio' ? '🎵' : e.kind === 'image' ? '🖼️' : e.kind === 'video' ? '🎬' : '📄';
-        row.innerHTML = `<span class="peer-row-icon"></span><span class="peer-row-name"></span><span class="peer-row-size"></span><span class="peer-row-actions"></span>`;
-        row.querySelector('.peer-row-icon').textContent = icon;
-        row.querySelector('.peer-row-name').textContent = !rel ? (sectionNames[e.name] || e.name) : e.name;
-        row.querySelector('.peer-row-size').textContent = e.type === 'file' ? peerSizeText(e.size) : '';
-        const actions = row.querySelector('.peer-row-actions');
-        if (e.type === 'dir') {
-            row.querySelector('.peer-row-name').onclick = () => peerBrowseTo(id, childPath);
-            row.querySelector('.peer-row-icon').onclick = () => peerBrowseTo(id, childPath);
-        } else {
-            if (['audio', 'image', 'video'].includes(e.kind)) {
-                row.querySelector('.peer-row-name').onclick = () => window.open(peerFileUrl(id, childPath, false), '_blank');
-                row.querySelector('.peer-row-name').title = 'Open';
-            }
-            const dl = document.createElement('a');
-            dl.className = 'btn-control btn-small ghost';
-            dl.textContent = 'Download';
-            dl.title = 'Save to this device';
-            dl.href = peerFileUrl(id, childPath, true);
-            dl.setAttribute('download', e.name);
-            actions.appendChild(dl);
-        }
-        if (rel) {
-            const copy = document.createElement('button');
-            copy.className = 'btn-control btn-small';
-            copy.textContent = 'Copy to My Library';
-            copy.title = `Copy to this server's library, at ${childPath}`;
-            copy.onclick = () => peerCopy(childPath);
-            actions.appendChild(copy);
-        }
-        list.appendChild(row);
-    }
-    if (data.truncated) {
-        const more = document.createElement('div');
-        more.className = 'peer-browser-empty';
-        more.textContent = 'This folder has too many entries to show them all.';
-        list.appendChild(more);
-    }
-}
-
-function renderPeerCrumbs(peer, rel) {
-    const crumbs = document.getElementById('peer-browser-crumbs');
-    crumbs.innerHTML = '';
-    const parts = rel ? rel.split('/') : [];
-    const sectionNames = { music: 'Music', pictures: 'Pictures', videos: 'Videos' };
-    const add = (label, target) => {
-        const b = document.createElement('button');
-        b.className = 'peer-crumb';
-        b.textContent = label;
-        b.onclick = () => peerBrowseTo(peer.id, target);
-        crumbs.appendChild(b);
-    };
-    add('Library', '');
-    parts.forEach((part, i) => {
-        const sep = document.createElement('span');
-        sep.className = 'peer-crumb-sep';
-        sep.textContent = '›';
-        crumbs.appendChild(sep);
-        add(i === 0 ? (sectionNames[part] || part) : part, parts.slice(0, i + 1).join('/'));
-    });
-}
-
-async function peerCopy(rel) {
-    if (!rel || !peerBrowserState.id) return;
-    try {
-        const { jobId } = await peerApi(`/api/peer-links/${encodeURIComponent(peerBrowserState.id)}/copy`, { method: 'POST', body: JSON.stringify({ path: rel }) });
-        localStorage.setItem('activeDownloadJob', jobId);
-        openDownloadProgressModal(jobId, rel.split('/').pop());
-    } catch (e) {
-        showToast(`Couldn't copy: ${e.message}`);
-    }
 }

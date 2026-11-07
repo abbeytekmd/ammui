@@ -549,7 +549,7 @@ if [ -n "$SYSTEMCTL" ] && [ -f "$UNIT_FILE" ]; then
     rm -f "$UNIT_FILE"
     $SYSTEMCTL daemon-reload
 fi
-for port in "$HTTP_PORT" "$HTTPS_PORT" 3000 3443; do
+for port in "$HTTP_PORT" "$HTTPS_PORT"; do
     pid="$(ss -ltnpH "sport = :$port" 2>/dev/null | sed -n 's/.*"node",pid=\([0-9]*\).*/\1/p' | head -n1)"
     [ -n "$pid" ] && { info 'Stopping the AMMUI server.'; kill "$pid" 2>/dev/null; }
 done
@@ -670,11 +670,11 @@ stop_running_server() {
         info 'Stopping the AMMUI service that is already running.'
         $SYSTEMCTL stop "$SERVICE_NAME"
     fi
-    # The ports it was using: the saved ones, or 3000 and 3443 from before they could be changed.
-    # Another program on one isn't a problem: choose_ports picks free ones later.
+    # The ports it was using (the saved ones). Another program on one isn't a problem:
+    # choose_ports picks free ones later.
     local port pid name saved=''
     [ -f "$INSTALL_DIR/scripts/ports.js" ] && saved="$(cd "$INSTALL_DIR" && node scripts/ports.js 2>/dev/null)"
-    for port in $saved 3000 3443; do
+    for port in $saved; do
         read -r pid name <<<"$(listening_pid "$port")"
         [ "${name:-}" = node ] || continue
         info "Stopping the AMMUI server that is already running (process $pid)."

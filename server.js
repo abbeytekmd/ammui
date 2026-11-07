@@ -10,7 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
-import MediaServer from './lib/media-server.js';
+import { createMediaServer, registerMediaServerKind } from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
 import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay } from './lib/photo-date.js';
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
@@ -19,7 +19,7 @@ import { advertiseLocalName, localNameFor } from './lib/local-name.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
-import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName, isPlaceholderImage } from './lib/local-dlna-server.js';
+import { setupLocalDlna, listLibraryChildren, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName, isPlaceholderImage } from './lib/local-dlna-server.js';
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
@@ -38,13 +38,13 @@ import * as energy from './lib/smart-home/glow.js';
 import * as tado from './lib/smart-home/tado.js';
 import * as fuelPrices from './lib/fuel-prices.js';
 import exifr from 'exifr';
-import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
+    logPlay, getTopTracks, getTopAlbums,
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
     setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, migrateMediaKeys, renameMediaKeyServer,
+    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, resolveMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -61,7 +61,8 @@ import {
     listPasswords, getPassword, savePassword, deletePassword,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
-import { PeerListener, PeerConnections, PeerError, ShareRules, derivePeerKey, cleanLibraryPath, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
+import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
+import { MEDIA_SERVICE, MEDIA_SERVICE_VERSION, ShareRules, cleanLibraryPath, mediaServiceRouter, PeerMediaServer, mountPeerMediaRoutes } from './lib/peer-services/media.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import http from 'http';
@@ -123,13 +124,6 @@ const app = express();
 // Plain HTTP on `port` is for players: DLNA/Sonos/AirPlay devices can't fetch from a self-signed
 // server. Browsers use the same app over HTTPS on `httpsPort` (the microphone needs a secure page).
 const DEFAULT_PORTS = { httpPort: 80, httpsPort: 443 };
-// A server set up before the ports could be changed, and updated from the app (not the installer),
-// stays on the 3000 and 3443 it always used: players and bookmarks know it there, and Linux keeps
-// ports below 1024 for root
-if (getSetting('deviceName', '')) {
-    if (getSetting('httpPort', null) === null) setSetting('httpPort', 3000);
-    if (getSetting('httpsPort', null) === null) setSetting('httpsPort', 3443);
-}
 const savedPort = key => Number(getSetting(key, null)) || DEFAULT_PORTS[key];
 const port = savedPort('httpPort');
 const httpsPort = savedPort('httpsPort');
@@ -326,14 +320,7 @@ function loadSettings() {
     settings.allowKeySharing = !!getSetting('allowKeySharing', false);
     const savedS3 = getSetting('s3', {}) || {};
     settings.s3 = { ...settings.s3, ...savedS3 };
-    // Installs from before the connection test existed: a configured bucket was already in use
-    if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
-    // Installs from before the folder was its own setting backed up into one named after the server
-    if (!('folder' in savedS3) && savedS3.bucket && settings.deviceName) {
-        settings.s3.folder = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
-        setSetting('s3', settings.s3);
-    }
     settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
     settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
     const savedVideos = getSetting('slideshowVideos', {}) || {};
@@ -342,11 +329,7 @@ function loadSettings() {
         maxSeconds: savedVideos.maxSeconds ?? settings.slideshowVideos.maxSeconds,
         sound: savedVideos.sound ?? settings.slideshowVideos.sound
     };
-    // The location once saved for the Sky tab carries over
-    const oldSkyLocation = getSetting('skyLocation', null);
-    settings.slideshowSky = { ...settings.slideshowSky, lat: oldSkyLocation?.lat ?? null, lon: oldSkyLocation?.lon ?? null,
-        ...(getSetting('slideshowSky', {}) || {}) };
-    if (settings.slideshowSky.mode === 'off') settings.slideshowSky.mode = 'fixed'; // the Sky button is always there now
+    settings.slideshowSky = { ...settings.slideshowSky, ...(getSetting('slideshowSky', {}) || {}) };
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
     settings.passwordsEmail = getSetting('passwordsEmail', '') || '';
@@ -364,9 +347,9 @@ function loadSettings() {
 }
 
 // Rotations, deleted markers and tags are keyed by mediaKey() ("<server name>/<path>").
-// Bring any older/unresolved keys up to date first, then load them.
+// Resolve keys saved for servers identified since, then load them.
 function loadMediaKeyedSettings() {
-    const changed = migrateMediaKeys();
+    const changed = resolveMediaKeys();
     if (changed) console.log(`[MEDIA-KEYS] Converted ${changed} saved entries to server name + path.`);
     settings.manualRotations = getAllPhotoRotations();
     settings.deletedPhotos = getAllDeletedPhotos();
@@ -395,10 +378,6 @@ function saveSettings() {
     setSetting('startup', settings.startup);
 }
 
-// stats.json migration completed to play_history.db
-
-// loadStats(); // Migrated to DB
-
 // Names used on disk can't hold characters Windows forbids (the library is shared with a
 // Windows machine). Those are swapped for the fullwidth lookalike (? -> ？) so
 // "What Is Love?" still reads correctly; / and \ have no lookalike and become _.
@@ -409,18 +388,11 @@ function safeName(s) {
     return String(s).replace(/\u0019/g, '’').replace(/[\u0000-\u001f\u007f]/g, '')
         .replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
 }
-// What earlier versions saved: every forbidden character replaced by _
-function legacySafeName(s) {
-    return String(s).replace(/[<>:"/\\|?*]/g, '_');
-}
-
 function findCaseInsensitivePath(parent, name) {
     if (!fs.existsSync(parent)) return path.join(parent, name);
     try {
         const files = fs.readdirSync(parent);
-        // Also accept a folder saved under the old "_" naming, so an existing album isn't split in two
-        const wanted = [name.toLowerCase(), legacySafeName(name).toLowerCase()];
-        const match = files.find(f => f.toLowerCase() === wanted[0]) || files.find(f => f.toLowerCase() === wanted[1]);
+        const match = files.find(f => f.toLowerCase() === name.toLowerCase());
         if (match) {
             const fullPath = path.join(parent, match);
             if (fs.statSync(fullPath).isDirectory()) {
@@ -443,12 +415,12 @@ if (!NETWORK_UDN) {
 }
 const isOwnUdn = (udn) => !!udn && (udn === SERVER_UDN || udn === NETWORK_UDN);
 
-// Until the server is named, saved media keys keep using the name older installs defaulted to
+// The local library's name (and the server name in its media keys): 'AMMUI' until the server is named
 const localLibraryName = (name = settings.deviceName) => `${name || 'AMMUI'} Media Library`;
 setLocalMediaServer({
     name: () => localLibraryName(),
     origin: () => `http://${getLocalIp()}:${port}`,
-    ports: [...new Set([port, httpsPort, 3000, 3443])], // 3000 and 3443: the ports before they could be changed
+    ports: [...new Set([port, httpsPort])],
 });
 loadDevices();
 for (const d of devices.values()) {
@@ -1272,10 +1244,8 @@ async function handleSSDPMessage(headers, rinfo) {
     // PREVENT SELF-OVERWRITE: If this is our own local server (match by UDN), 
     // ignore the SSDP announcement. We handle our own server via manual injection 
     // to ensure it's always available with the correct services list.
-    // Older AMMUI installs all advertised SERVER_UDN; those are dropped too, since storing one
-    // under that UDN would replace our own library entry.
     const usn = (headers.USN || '').toLowerCase();
-    if (usn.includes(SERVER_UDN.toLowerCase()) || usn.includes(NETWORK_UDN.toLowerCase())) {
+    if (usn.includes(NETWORK_UDN.toLowerCase())) {
         return;
     }
 
@@ -1553,12 +1523,12 @@ app.get('/api/browse/:udn', async (req, res) => {
         return res.status(503).json({ error: 'Device is still being discovered, please try again' });
     }
 
-    if (!device.services || device.services.length === 0) {
+    if (!device.isPeer && (!device.services || device.services.length === 0)) {
         return res.status(400).json({ error: 'Device has no services available. Try refreshing the device list.' });
     }
 
     try {
-        const server = new MediaServer(device);
+        const server = createMediaServer(device);
         const items = await server.browse(objectId);
         // Favourites get a heart in the file browser
         for (const item of items) {
@@ -1567,7 +1537,8 @@ app.get('/api/browse/:udn', async (req, res) => {
         res.json({ objectId, items });
     } catch (err) {
         console.error('Failed to browse device:', err.message);
-        res.status(500).json({ error: err.message });
+        // A peer's errors say what to do about them ("enter the password again", ...)
+        res.status(err instanceof PeerError ? (err.status || 502) : 500).json({ error: err.message, code: err.code });
     }
 });
 
@@ -2347,7 +2318,6 @@ app.get('/api/library-index/:udn/search', async (req, res) => {
             await buildIndex(device, 'first search');
         }
         const { items, truncated } = searchLibraryIndex(udn, String(q), String(objectId));
-        for (const it of items) if (!it.key && it.uri) it.key = mediaKey(it.uri); // indexed before keys existed
         const meta = getLibraryIndexMeta(udn);
         res.json({ items, truncated, builtAt: meta?.built_at || null, itemCount: meta?.item_count || 0 });
     } catch (err) {
@@ -2413,7 +2383,7 @@ app.get('/api/browse-recursive/:udn', async (req, res) => {
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
     try {
-        const server = new MediaServer(device);
+        const server = createMediaServer(device);
         const items = await server.browseRecursive(objectId);
         res.json({ objectId, items });
     } catch (err) {
@@ -2470,7 +2440,7 @@ app.post('/api/playlist/:udn/play-folder', express.json(), async (req, res) => {
     if (!serverDevice) return res.status(404).json({ error: 'Media Server not found' });
 
     try {
-        const server = new MediaServer(serverDevice);
+        const server = createMediaServer(serverDevice);
         const tracks = await server.browseRecursive(objectId, title);
 
         if (tracks.length === 0) {
@@ -2508,7 +2478,7 @@ app.post('/api/playlist/:udn/queue-folder', express.json(), async (req, res) => 
     if (!serverDevice) return res.status(404).json({ error: 'Media Server not found' });
 
     try {
-        const server = new MediaServer(serverDevice);
+        const server = createMediaServer(serverDevice);
         const tracks = await server.browseRecursive(objectId, title);
 
         if (tracks.length === 0) {
@@ -2830,9 +2800,16 @@ app.get('/api/devices', (_req, res) => {
     res.json(Array.from(uniqueDevicesMap.values()));
 });
 
-app.delete('/api/devices/:udn', (req, res) => {
+app.delete('/api/devices/:udn', async (req, res) => {
     const { udn } = req.params;
     console.log(`Manually deleting device: ${udn}`);
+
+    // Forgetting a peer link server ends the connection to it (it'd only come back otherwise)
+    const peerDevice = findDeviceByUdn(udn);
+    if (peerDevice?.isPeer) {
+        await peerLinks.remove(peerDevice.peerId);
+        return res.json({ success: true });
+    }
 
     // Find device by UDN to get its location
     let locationToDelete = null;
@@ -3238,10 +3215,19 @@ async function prunePeerShares() {
 
 const peerListener = new PeerListener({
     certDir: certsDir,
-    libraryRoot: localLibraryRoot,
     getConfig: peerListenerConfig,
     getName: () => settings.deviceName || 'AMMUI',
-    getShares: () => peerShareRules,
+});
+// What this server offers other servers over the peer link (see lib/peer-services/)
+peerListener.addService({
+    name: MEDIA_SERVICE,
+    version: MEDIA_SERVICE_VERSION,
+    router: mediaServiceRouter({
+        libraryRoot: localLibraryRoot,
+        getShares: () => peerShareRules,
+        listChildren: listLibraryChildren,
+        resolveArt: dir => resolveFolderArt(dir, { findDiscogsArtUrl, getCachedArt }),
+    }),
 });
 let peerListenerQueue = Promise.resolve();
 const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
@@ -3255,6 +3241,47 @@ const peerLinks = new PeerConnections({
     decrypt: decryptSecret,
     clientName: () => settings.deviceName || 'AMMUI',
 });
+
+// Each server connected to over the peer link that shares media is one more media server in the
+// list, browsed and played like the others. Their files come through this server (see
+// mountPeerMediaRoutes), so their URLs are on this server's own address.
+const PEER_UDN_PREFIX = 'uuid:ammui-peer-';
+registerMediaServerKind({
+    test: device => !!device?.isPeer,
+    create: device => new PeerMediaServer(device, { peers: peerLinks, origin: () => `http://${getLocalIp()}:${port}` }),
+});
+mountPeerMediaRoutes(app, peerLinks);
+
+function syncPeerDevices() {
+    const links = peerLinks.summary().filter(p => p.services[MEDIA_SERVICE]);
+    const wanted = new Map(links.map(p => [PEER_UDN_PREFIX + p.id, p]));
+    let changed = false;
+    for (const [key, d] of devices) {
+        if (d.isPeer && !wanted.has(d.udn)) { devices.delete(key); changed = true; }
+    }
+    for (const [udn, p] of wanted) {
+        const existing = devices.get(udn);
+        const location = `peer://${p.id}`;
+        const device = {
+            udn, location,
+            friendlyName: p.name,
+            type: 'server', isServer: true, isRenderer: false,
+            isPeer: true, peerId: p.id, peerAddress: `${p.host}:${p.port}`, peerError: p.error || null,
+            protocol: 'Peer Link',
+            iconUrl: '/amm-icon.png',
+            services: [],
+            lastSeen: Date.now(),
+            // Kept from before: what the user renamed it to, or switched off
+            customName: existing?.customName, disabledServer: existing?.disabledServer,
+        };
+        if (!existing || existing.friendlyName !== device.friendlyName || existing.peerAddress !== device.peerAddress) changed = true;
+        devices.set(udn, device);
+        devices.set(location, device);
+    }
+    if (changed) saveDevices();
+}
+peerLinks.on('change', syncPeerDevices);
+syncPeerDevices();
 
 const peerError = (res, err) => {
     if (!(err instanceof PeerError)) console.error('[PEER]', err);
@@ -3316,14 +3343,14 @@ app.post('/api/peer-shares', express.json(), (req, res) => {
 });
 
 app.get('/api/peer-links', (req, res) => {
-    res.json({ peers: peerLinks.summary() });
+    res.json({ peers: peerLinks.summary().map(p => ({ ...p, udn: PEER_UDN_PREFIX + p.id })) });
 });
 
 // { address, port?, password }: connects, trusting the certificate it sees, and saves the connection
 app.post('/api/peer-links', express.json(), async (req, res) => {
     try {
         const peer = await peerLinks.add(req.body || {});
-        res.json({ peer: peerLinks.summary().find(p => p.id === peer.id) });
+        res.json({ peer: { ...peerLinks.summary().find(p => p.id === peer.id), udn: PEER_UDN_PREFIX + peer.id } });
     } catch (err) { peerError(res, err); }
 });
 
@@ -3345,111 +3372,6 @@ app.post('/api/peer-links/:id/trust', async (req, res) => {
 app.delete('/api/peer-links/:id', async (req, res) => {
     await peerLinks.remove(req.params.id);
     res.json({ ok: true });
-});
-
-app.get('/api/peer-links/:id/list', async (req, res) => {
-    try {
-        res.json(await peerLinks.list(req.params.id, req.query.path || ''));
-    } catch (err) { peerError(res, err); }
-});
-
-// A file from the other server, to this browser. Pictures, music and video can be shown inline;
-// anything else (and everything with ?download=1) comes as an attachment, so nothing from the
-// other server can run as a page on this one.
-const PEER_INLINE_TYPES = /\.(mp3|flac|m4a|aac|wav|ogg|opus|jpe?g|png|webp|gif|bmp|mp4|m4v|mov|webm)$/i;
-app.get('/api/peer-links/:id/file', async (req, res) => {
-    const ac = new AbortController();
-    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
-    try {
-        const rel = cleanLibraryPath(req.query.path);
-        const name = rel.split('/').pop() || 'download';
-        const r = await peerLinks.openFile(req.params.id, rel, { range: req.headers.range, signal: ac.signal });
-        res.status(r.status);
-        for (const h of ['content-length', 'content-range', 'accept-ranges', 'last-modified']) {
-            if (r.headers[h]) res.setHeader(h, r.headers[h]);
-        }
-        if (req.query.download || !PEER_INLINE_TYPES.test(name)) res.attachment(name);
-        else res.type(path.extname(name));
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox");
-        r.res.on('error', () => res.destroy());
-        r.res.pipe(res);
-    } catch (err) {
-        if (err.code === 'CANCELLED') return;
-        if (res.headersSent) return res.destroy();
-        peerError(res, err);
-    }
-});
-
-// { path }: copies that file or folder into this server's library at the same place
-// (music/Artist/Album/...), as a download job shown in the download progress window
-app.post('/api/peer-links/:id/copy', express.json(), async (req, res) => {
-    let rel, peer;
-    try {
-        rel = cleanLibraryPath(req.body?.path);
-        if (!rel) return res.status(400).json({ error: 'Choose a file or folder' });
-        peer = peerLinks.get(req.params.id);
-    } catch (err) { return peerError(res, err); }
-
-    const job = createDownloadJob(`${rel.split('/').pop()} from ${peer.name || peer.host}`);
-    res.json({ jobId: job.id });
-
-    (async () => {
-        let copied = 0;
-        try {
-            job.current = 'Listing files...';
-            pushDownloadJobUpdate(job);
-            const { files, truncated } = await peerLinks.tree(peer.id, rel);
-            job.total = files.length;
-            pushDownloadJobUpdate(job);
-            for (const f of files) {
-                const title = f.path.split('/').slice(1).join('/');
-                const dest = path.join(localLibraryRoot, ...f.path.split('/'));
-                const part = path.join(path.dirname(dest), `.${path.basename(dest)}.peer-part`);
-                job.current = title;
-                pushDownloadJobUpdate(job);
-                try {
-                    const existing = await fsp.stat(dest).catch(() => null);
-                    if (existing?.isFile() && existing.size === f.size) {
-                        job.skippedCount++;
-                        job.log.push({ status: 'skipped', title });
-                    } else if (existing) {
-                        job.skippedCount++;
-                        job.log.push({ status: 'skipped', title: `${title} (a different file with that name is already here)` });
-                    } else {
-                        await fsp.mkdir(path.dirname(dest), { recursive: true });
-                        const r = await peerLinks.openFile(peer.id, f.path);
-                        await pipeline(r.res, fs.createWriteStream(part));
-                        const written = (await fsp.stat(part)).size;
-                        if (f.size && written !== f.size) throw new Error(`only ${written} of ${f.size} bytes arrived`);
-                        await fsp.rename(part, dest);
-                        copied++;
-                        job.downloadCount++;
-                        job.log.push({ status: 'done', title });
-                    }
-                } catch (err) {
-                    await fsp.unlink(part).catch(() => { });
-                    job.failCount++;
-                    job.log.push({ status: 'failed', title, error: err.message });
-                    // Lost the other server altogether: don't fail every remaining file one by one
-                    if (err.code === 'UNREACHABLE' || err.code === 'FINGERPRINT_CHANGED' || err.code === 'NEEDS_PASSWORD') throw err;
-                }
-                pushDownloadJobUpdate(job);
-            }
-            if (truncated) job.log.push({ status: 'failed', title: 'That folder has too many files: only the first 100,000 were copied' });
-            console.log(`[PEER] Copied ${copied} file(s) of ${rel} from "${peer.name}" (${job.skippedCount} already here, ${job.failCount} failed).`);
-        } catch (err) {
-            job.error = err.message;
-        } finally {
-            if (copied) markDirty(SERVER_UDN, findDeviceByUdn);
-            job.done = true;
-            job.current = '';
-            pushDownloadJobUpdate(job);
-            const clients = downloadJobClients.get(job.id);
-            if (clients) { for (const c of clients) { try { c.end(); } catch (e) { } } clients.clear(); }
-            setTimeout(() => { downloadJobs.delete(job.id); downloadJobClients.delete(job.id); }, 10 * 60 * 1000);
-        }
-    })();
 });
 
 app.get('/api/settings/s3', (req, res) => {
@@ -3955,19 +3877,15 @@ function addShoppingIngredients(text, skipLine = -1) {
     return added;
 }
 
-// The shopping lists: [{ id, name, text }], each free text with one item per line. Lists from
-// before there could be several (and snapshots from then) were the one 'shoppingList' setting.
+// The shopping lists: [{ id, name, text }], each free text with one item per line
 const SHOPPING_LIST_NAME_MAX = 60;
 function getShoppingLists() {
     const lists = getSetting('shoppingLists', null)?.lists;
     if (Array.isArray(lists) && lists.length) return lists;
-    return [{ id: 'main', name: 'Shopping List', text: getSetting('shoppingList', {}).text || '' }];
+    return [{ id: 'main', name: 'Shopping List', text: '' }];
 }
 const saveShoppingLists = lists => setSetting('shoppingLists', { lists });
 const allShoppingText = () => getShoppingLists().map(l => l.text).join('\n');
-
-// Lists from before the two were joined
-addShoppingIngredients(allShoppingText());
 
 // After an ingredient is renamed: its lines on the shopping lists take the new name, keeping their
 // amounts ("2 pints of Milk" -> "2 pints of Semi-skimmed milk"), and its chosen picture follows it
@@ -4385,13 +4303,11 @@ function cleanNutrition(n) {
         if (unit.length > 40 || !Number.isFinite(g) || g <= 0 || g > 100000) return `Invalid weight for "${unit}"`;
         gramsPerUnit[unit.toLowerCase()] = g;
     }
-    // Exports from the first, USDA-only version have fdcId/fdcName instead
-    const legacyUsda = !n.source && Number.isInteger(n.fdcId) && n.fdcId > 0;
-    const source = legacyUsda ? 'usda' : NUTRITION_SOURCES.includes(n.source) ? n.source : '';
+    const source = NUTRITION_SOURCES.includes(n.source) ? n.source : '';
     return {
         kcalPer100g, ...macros, gramsPerUnit, source,
-        sourceId: source ? String((legacyUsda ? n.fdcId : n.sourceId) ?? '').slice(0, 40) : '',
-        sourceName: source ? String((legacyUsda ? n.fdcName : n.sourceName) ?? '').slice(0, 300) : '',
+        sourceId: source ? String(n.sourceId ?? '').slice(0, 40) : '',
+        sourceName: source ? String(n.sourceName ?? '').slice(0, 300) : '',
     };
 }
 
@@ -5008,7 +4924,7 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
     try {
-        const server = new MediaServer(device);
+        const server = createMediaServer(device);
         let downloadCount = 0;
         let failCount = 0;
 
@@ -5065,7 +4981,7 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
     // Run download in background — push updates to SSE clients
     (async () => {
         try {
-            const server = new MediaServer(device);
+            const server = createMediaServer(device);
             job.current = 'Scanning folder...';
             pushDownloadJobUpdate(job);
             const batch = livePhotoBatch(await server.browseRecursive(objectId));
@@ -5200,8 +5116,7 @@ let screensaverCache = {
     objectId: null,
     images: [],
     status: 'idle', // idle, loading, ready
-    timestamp: 0,
-    refreshTriggered: false
+    timestamp: 0
 };
 
 // Bumped whenever a photo is deleted/hidden, so browsers cycling a cached slideshow
@@ -5408,13 +5323,6 @@ app.get('/api/slideshow/random', async (req, res) => {
             foundImage = imagesToUse[index];
             if (foundImage.isVideo) return res.json(slideshowVideoSlide(foundImage));
 
-            // HACK: If we just updated the code but the cache is old, trigger refresh
-            const isLegacyPath = typeof foundImage._path === 'string' && foundImage._path && !foundImage._path.startsWith('[');
-            if (!peerImages && (!foundImage.folderId || isLegacyPath) && !screensaverCache.refreshTriggered) {
-                console.log('[SCREENSAVER] Cache is stale (missing folderId or structured path), triggering refresh');
-                screensaverCache.refreshTriggered = true;
-                refreshScreensaverCache(device, objectId);
-            }
         } else {
             // Trigger build if needed
             if (!cacheValid || screensaverCache.status === 'idle') {
@@ -5438,7 +5346,7 @@ app.get('/api/slideshow/random', async (req, res) => {
 
             // FALLBACK: RANDOM WALK
             // console.log('[SCREENSAVER] Cache not ready, using Random Walk fallback');
-            const mediaServer = new MediaServer(device);
+            const mediaServer = createMediaServer(device);
             let currentId = objectId;
             let currentTitle = settings.screensaver.pathName || '';
             let attempts = 0;
@@ -7212,6 +7120,9 @@ function startServices() {
     startIndexScheduler(findDeviceByUdn);
     smartHome.startBackgroundDiscovery();
     applyPeerListener();
+    // What each connected server offers, and its name, can change when it's updated or renamed
+    peerLinks.refreshAll();
+    setInterval(() => peerLinks.refreshAll(), 60 * 60 * 1000).unref?.();
     prunePeerShares().catch(err => console.warn('[PEER] Could not tidy the sharing settings:', err.message));
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {

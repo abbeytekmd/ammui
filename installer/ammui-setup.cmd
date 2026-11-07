@@ -403,7 +403,7 @@ if (Test-Path -LiteralPath $InstallDir) {
 Write-Host 'Uninstalling AMMUI' -ForegroundColor Green
 
 # Stop the server and the kiosk browser, which hold files in the folders being removed.
-foreach ($port in $HttpPort, $HttpsPort, 3000, 3443) {
+foreach ($port in $HttpPort, $HttpsPort) {
     $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     $proc = if ($conn) { Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue }
     if ($proc -and $proc.ProcessName -eq 'node') { Info 'Stopping the AMMUI server.'; Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -570,10 +570,9 @@ function Get-SavedPorts {
 }
 
 function Stop-RunningServer {
-    # The server has to be stopped to update it, and a second copy could not open the ports. They
-    # are the saved ones, or 3000 and 3443 from before they could be changed. Another program on
-    # one isn't a problem: Select-Ports picks free ones later.
-    foreach ($port in (@(Get-SavedPorts) + 3000, 3443 | Where-Object { $_ })) {
+    # The server has to be stopped to update it, and a second copy could not open the saved
+    # ports. Another program on one isn't a problem: Select-Ports picks free ones later.
+    foreach ($port in (@(Get-SavedPorts) | Where-Object { $_ })) {
         $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $conn) { continue }
         $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue

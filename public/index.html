@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=86">
+    <link rel="stylesheet" href="style.css?v=87">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -132,16 +132,6 @@
                             <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
                         </svg>
                         Server Settings
-                    </button>
-                    <button id="btn-remote-libraries" onclick="openPeerBrowser()" class="dropdown-item"
-                        title="Browse and download from other AMMUI servers">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <rect x="2" y="3" width="8" height="7" rx="1"></rect>
-                            <rect x="14" y="14" width="8" height="7" rx="1"></rect>
-                            <path d="M6 10v4a3 3 0 0 0 3 3h5"></path>
-                        </svg>
-                        Remote Libraries
                     </button>
                     <button id="btn-client-settings" onclick="openClientSettingsModal()" class="dropdown-item"
                         title="Devices: servers, players, AirPlay, plugs">
@@ -1725,9 +1715,10 @@
                     <div class="manage-section">
                         <h3>Connect to Another Server</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Browse another AMMUI server's music, pictures and videos and download
-                                them, on this network or over the internet. That server needs <b>Let other servers
-                                connect</b> switched on below, and gives you its address, port and password.</p>
+                            <p class="settings-hint">Add another AMMUI server's shared music, pictures and videos, on this
+                                network or over the internet. It then appears in the list of media servers, to browse,
+                                play on any player, search and download from like the others. That server needs <b>Let
+                                other servers connect</b> switched on below, and gives you its address, port and password.</p>
                             <div class="peer-add-row">
                                 <input type="text" id="peer-add-address" placeholder="Address or IP (e.g. 192.168.1.20 or home.example.com)" spellcheck="false" autocomplete="off">
                                 <input type="number" id="peer-add-port" placeholder="Port" min="1" max="65535" class="peer-port-input">
@@ -1747,8 +1738,8 @@
                             <label class="settings-check">
                                 <input type="checkbox" id="peer-listener-enabled" onchange="savePeerListener({ toggle: true })">
                                 <span>Let other servers connect to this one
-                                    <span class="settings-hint">They can browse and download the music, pictures and videos
-                                        you share (see What's Shared below; nothing else, and they can't change anything).
+                                    <span class="settings-hint">They see this server as a media server, with the music, pictures
+                                        and videos you share (see What's Shared below; nothing else, and they can't change anything).
                                         Switched off, the port is closed and everyone connected is cut off.</span>
                                 </span>
                             </label>
@@ -2370,31 +2361,6 @@
     </div>
 
     <!-- Download Progress Modal -->
-    <!-- Remote Libraries: another AMMUI's library over the peer link -->
-    <div id="peer-browser-modal" class="modal-overlay" style="display: none;">
-        <div class="modal-content manage-modal-content peer-browser-content">
-            <div class="modal-header">
-                <div class="modal-title-group">
-                    <h2>Remote Libraries</h2>
-                </div>
-                <button class="btn-close" onclick="closePeerBrowser()">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="peer-browser-bar">
-                <select id="peer-browser-select" onchange="peerBrowseTo(this.value, '')"></select>
-                <div id="peer-browser-crumbs" class="peer-browser-crumbs"></div>
-                <button id="peer-browser-copy-folder" class="btn-control btn-small" style="display:none;"
-                    onclick="peerCopy(peerBrowserState.path)" title="Copy everything in this folder to this server's library">Copy Folder to My Library</button>
-            </div>
-            <div id="peer-browser-list" class="peer-browser-list"></div>
-        </div>
-    </div>
-
     <div id="download-progress-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content download-progress-modal-content">
             <div class="modal-header">
@@ -3068,8 +3034,8 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=80"></script>
-    <script src="peers.js?v=2"></script>
+    <script src="app.js?v=82"></script>
+    <script src="peers.js?v=3"></script>
     <script src="slideshow.js?v=16"></script>
     <script src="timers.js?v=2"></script>
     <script src="passwords.js?v=2"></script>

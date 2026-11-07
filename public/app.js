@@ -96,8 +96,7 @@ function applyDefaultLocalHomes() {
     for (const [type, folder] of Object.entries(defaults)) {
         try {
             const key = `serverHomeLocations_${type}`;
-            // Music homes may still live under the pre-per-type key; don't shadow them
-            const homes = JSON.parse(localStorage.getItem(key) || (type === 'music' && localStorage.getItem('serverHomeLocations')) || '{}');
+            const homes = JSON.parse(localStorage.getItem(key) || '{}');
             if (homes[LOCAL_SERVER_UDN]) continue;
             homes[LOCAL_SERVER_UDN] = [{ id: '0', title: 'Root' }, { id: folder, title: folder }];
             localStorage.setItem(key, JSON.stringify(homes));
@@ -390,11 +389,6 @@ async function selectServer(udn) {
 
         const storedHome = localStorage.getItem(`serverHomeLocations_${mode}`);
         if (storedHome) homeLocations = JSON.parse(storedHome);
-        else if (mode === 'music') {
-            // Check old key for music migration
-            const oldHome = localStorage.getItem('serverHomeLocations');
-            if (oldHome) homeLocations = JSON.parse(oldHome);
-        }
     } catch (e) {
         console.error('Failed to parse paths:', e);
     }
@@ -3774,10 +3768,7 @@ function showPlayerArt(url) {
     ];
 
     console.log(`[ART] Loading artwork: ${url}`);
-    let legacyHandled = false;
-
     const onLoaded = (container) => {
-        legacyHandled = true;
         if (container) container.classList.add('visible');
         updateCardNowPlaying();
     };
@@ -3828,7 +3819,8 @@ function mediaUrl(url) {
     try {
         const u = new URL(url);
         const isThisServer = u.hostname === window.location.hostname || ['127.0.0.1', 'localhost', '::1'].includes(u.hostname);
-        if (isThisServer && u.pathname.startsWith('/local-files/')) return u.pathname + u.search;
+        // (and peer link servers' files, which this server streams from them)
+        if (isThisServer && (u.pathname.startsWith('/local-files/') || u.pathname.startsWith('/peer-media/'))) return u.pathname + u.search;
     } catch (e) { }
     return `/api/media-proxy?url=${encodeURIComponent(url)}`;
 }
@@ -4844,12 +4836,14 @@ function renderManageDevices() {
         if (device.isAirPlay || device.protocol === 'AirPlay') return 'AirPlay';
         if (device.isSonos || device.protocol === 'Sonos') return 'Sonos';
         if (device.isVirtual || device.udn === BROWSER_PLAYER_UDN) return 'Browser';
+        if (device.isPeer) return 'Peer Link';
         return 'DLNA';
     };
 
     const renderItem = (device, role) => {
         let host = 'unknown';
         try { host = new URL(device.location).hostname; } catch (e) { host = device.location; }
+        if (device.isPeer) host = device.peerAddress || host;
         const isServerDisabled = role === 'server' ? !!device.disabledServer : !!device.disabledPlayer;
         const isLocallyDisabled = isLocalDisabled(device.udn);
         const isActive = role === 'server' ? selectedServerUdn === device.udn : selectedRendererUdn === device.udn;
@@ -5718,13 +5712,7 @@ async function setHome(type = 'music') {
     let homeLocations = {};
     try {
         const stored = localStorage.getItem(`serverHomeLocations_${type}`);
-        if (!stored && type === 'music') {
-            // Migration: check for old key
-            const oldStored = localStorage.getItem('serverHomeLocations');
-            if (oldStored) homeLocations = JSON.parse(oldStored);
-        } else if (stored) {
-            homeLocations = JSON.parse(stored);
-        }
+        if (stored) homeLocations = JSON.parse(stored);
     } catch (e) {
         console.error('Failed to parse home locations:', e);
     }
@@ -9500,12 +9488,7 @@ async function goHome(type = 'music') {
     let homeLocations = {};
     try {
         const stored = localStorage.getItem(`serverHomeLocations_${type}`);
-        if (!stored && type === 'music') {
-            const oldStored = localStorage.getItem('serverHomeLocations');
-            if (oldStored) homeLocations = JSON.parse(oldStored);
-        } else if (stored) {
-            homeLocations = JSON.parse(stored);
-        }
+        if (stored) homeLocations = JSON.parse(stored);
     } catch (e) {
         console.error('Failed to parse home locations:', e);
     }
@@ -9552,12 +9535,7 @@ function updateHomeButtons() {
         let homeLocations = {};
         try {
             const stored = localStorage.getItem(`serverHomeLocations_${type}`);
-            if (!stored && type === 'music') {
-                const oldStored = localStorage.getItem('serverHomeLocations');
-                if (oldStored) homeLocations = JSON.parse(oldStored);
-            } else if (stored) {
-                homeLocations = JSON.parse(stored);
-            }
+            if (stored) homeLocations = JSON.parse(stored);
         } catch (e) {
             console.error(`Failed to parse ${type} home locations:`, e);
         }
@@ -9695,23 +9673,6 @@ async function init() {
     // Initialize screensaver mode label
     if (slideshow) slideshow.updateModeUI();
 
-    // Migrate Discogs token to server if it exists locally
-    const localToken = localStorage.getItem('discogsToken');
-    if (localToken) {
-        console.log('Migrating Discogs token to server...');
-        try {
-            await fetch('/api/settings/discogs', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ token: localToken })
-            });
-            localStorage.removeItem('discogsToken');
-            console.log('Discogs token migrated and removed from localStorage');
-        } catch (e) {
-            console.error('Migration failed:', e);
-        }
-    }
-
     await fetchDevices();
 
     // Auto-select and fetch playlist if a renderer was previously selected
@@ -9744,10 +9705,6 @@ async function init() {
 
                 const storedHome = localStorage.getItem(`serverHomeLocations_${mode}`);
                 if (storedHome) homeLocations = JSON.parse(storedHome);
-                else if (mode === 'music') {
-                    const oldHome = localStorage.getItem('serverHomeLocations');
-                    if (oldHome) homeLocations = JSON.parse(oldHome);
-                }
             } catch (e) {
                 console.error('Failed to parse paths:', e);
             }
