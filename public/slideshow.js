@@ -46,6 +46,7 @@ class Slideshow {
         this.video = document.getElementById('screensaver-video');
         this.videoMaxSeconds = 60; // longest a video slide plays (0 = to its end)
         this.videoSound = false;
+        this.videosEnabled = false; // "Include videos": slideshows started from the library take in the folder's videos too
         this.sky = null; // the sky's settings (slideshowSky): the Sky button switches between it and the photos
         this.skyShowing = false;
         this.skyAfterSunset = false; // the sky is up because it's just after sunset, and goes when that's over
@@ -142,7 +143,8 @@ class Slideshow {
     }
 
     // From the General settings: how long videos play and whether they're heard
-    setVideoOptions({ maxSeconds, sound }) {
+    setVideoOptions({ enabled, maxSeconds, sound }) {
+        this.videosEnabled = !!enabled;
         if (maxSeconds >= 0) this.videoMaxSeconds = maxSeconds;
         this.videoSound = !!sound;
         if (this.videoShowing) this.video.muted = !this.videoSound;

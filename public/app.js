@@ -783,7 +783,8 @@ async function playFolderSlideshow(objectId, title) {
         const response = await fetch(`/api/browse-recursive/${encodeURIComponent(selectedServerUdn)}?objectId=${encodeURIComponent(objectId)}`);
         if (!response.ok) throw new Error('Failed to fetch folder items');
         const data = await response.json();
-        const images = (data.items || []).filter(item => isImageItem(item));
+        const all = data.items || [];
+        const images = slideshowItems(all.filter(isImageItem), all.filter(isVideoItem));
         if (images.length === 0) {
             showToast('No photos found in this folder.', 'info', 3000);
             return;
@@ -1535,7 +1536,10 @@ async function playAll() {
     // In Videos mode, videos are the things we cast/queue; everywhere else they're excluded.
     const inVideoMode = currentBrowserMode === 'video';
     const tracks = currentBrowserItems.filter(item => item.type === 'item' && !isImageItem(item) && (inVideoMode || !isVideoItem(item)));
-    const images = currentBrowserItems.filter(item => isImageItem(item));
+    // In Photos, the slideshow's photos plus (with "Include videos" on) the folder's videos
+    const images = currentBrowserMode === 'photo'
+        ? slideshowItems(currentBrowserItems.filter(isImageItem), currentFolderVideos)
+        : currentBrowserItems.filter(item => isImageItem(item));
     const containers = currentBrowserItems.filter(item => item.type === 'container');
 
     // If we are in photo mode and have no images but have containers, do a recursive slideshow
@@ -2208,6 +2212,39 @@ function livePhotoStem(item) {
     }
 }
 
+// The videos in the photo folder being browsed, which the photo grid leaves out
+let currentFolderVideos = [];
+
+// What a slideshow started from the library shows: its photos and, with "Include videos" on,
+// its videos too (as the server does for the other slideshows, see livePairs): a Live Photo's
+// video takes its photo's place, and the rest fall in among the photos by date.
+function slideshowItems(photos, videos) {
+    if (!slideshow?.videosEnabled || !videos.length) return photos;
+    // Folder and name without extension (a recursive listing can have the same name in several folders)
+    const liveKey = item => {
+        try {
+            const p = decodeURIComponent(new URL(item.uri, window.location.href).pathname).toLowerCase();
+            const dot = p.lastIndexOf('.');
+            return dot > p.lastIndexOf('/') ? p.slice(0, dot) : p;
+        } catch (e) {
+            return null;
+        }
+    };
+    const byKey = new Map(videos.map(v => [liveKey(v), v]));
+    const paired = new Set();
+    const items = photos.map(p => {
+        const v = byKey.get(liveKey(p));
+        if (!v) return p;
+        paired.add(v);
+        return { ...v, isVideo: true, livePhotoUri: p.uri };
+    });
+    const rest = videos.filter(v => !paired.has(v)).map(v => ({ ...v, isVideo: true }));
+    if (!rest.length) return items;
+    const byDate = (a, b) => (photoDateSortKey(a) - photoDateSortKey(b)) ||
+        String(a.title || '').localeCompare(String(b.title || ''), undefined, { numeric: true, sensitivity: 'base' });
+    return [...items, ...rest].sort(byDate);
+}
+
 function markLivePhotos(items) {
     const videos = new Map(items.filter(isVideoItem).map(v => [livePhotoStem(v), v.uri]));
     if (!videos.size) return;
@@ -2273,8 +2310,10 @@ function renderBrowser(items) {
 
     // Each library category shows only its own media type (plus folders for navigation).
     // Music: audio only · Photos: images only · Videos: videos only.
+    currentFolderVideos = [];
     if (currentBrowserMode === 'photo') {
         markLivePhotos(items);
+        currentFolderVideos = items.filter(isVideoItem); // not shown, but a slideshow with videos on plays them
         items = items.filter(i => i.type === 'container' || isImageItem(i));
     } else if (currentBrowserMode === 'video') {
         items = items.filter(i => i.type === 'container' || isVideoItem(i));
@@ -12002,9 +12041,10 @@ function manualStartSlideshow() {
 async function startPhotoSlideshow(u, t, d, l, fid, ft) {
     if (slideshow) {
         // Find current images to allow navigation
-        const images = currentBrowserItems.filter(item => isImageItem(item));
+        const images = slideshowItems(currentBrowserItems.filter(item => isImageItem(item)), currentFolderVideos);
         if (images.length > 0) {
-            const index = images.findIndex(img => img.uri === u);
+            // A Live Photo tapped with videos on starts on its video, which stands in for it
+            const index = images.findIndex(img => img.uri === u || img.livePhotoUri === u);
             if (index !== -1) {
                 // slideshow.start calls slideshow.next() which increments the index.
                 // To start at index, we must pass index - 1.
