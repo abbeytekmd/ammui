@@ -3250,6 +3250,23 @@ function runStartupCommand(command = settings.startup.command) {
 // (the page already open reloads itself).
 const restartMarkerPath = path.join(baseDataDir, '.restarting');
 
+// A server without a name waits for one before it starts its services, so it opens the app in
+// this machine's browser to be named. Not when a startup command has opened one already, nor when
+// the installer started it (it opens the page itself once the certificate is trusted, so the
+// browser doesn't show a certificate warning first), nor where there's no desktop to open it on.
+function openToName() {
+    const url = `http://localhost:${port}/`; // goes on to HTTPS once that's listening
+    const waiting = `This server has no name yet: open ${url} in a browser to name it, then it will start up.`;
+    if (settings.startup.command || process.env.AMMUI_INSTALLER === '1') return console.log(waiting);
+    const command = process.platform === 'win32' ? `start "" "${url}"`
+        : process.platform === 'darwin' ? `open "${url}"`
+        : (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) && resolveLikeSpawn('xdg-open') ? `xdg-open "${url}"`
+        : null;
+    if (!command) return console.log(waiting);
+    console.log('This server has no name yet: opening the app in the browser to name it, then it will start up.');
+    runStartupCommand(command);
+}
+
 function runStartupOnBoot() {
     try {
         const age = Date.now() - fs.statSync(restartMarkerPath).mtimeMs;
@@ -3362,7 +3379,7 @@ app.post('/api/settings/general', express.json(), (req, res) => {
         settings.deviceName = deviceName;
         saveSettings();
         renameMediaKeyServer(oldLibraryName, localLibraryName());
-        renewHttpsCertificate(); // named after the server, so devices trust it again under the new name
+        renewHttpsCertificate(); // the server certificate covers <name>.local, so it's issued again
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
@@ -6944,13 +6961,13 @@ http.createServer(app)
         console.log(`AMMUI server listening at http://localhost:${port}`);
         runStartupOnBoot();
         if (settings.deviceName) startServices();
-        else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
+        else openToName();
     });
 
 // The server's name from Settings is also its address on the network: <name>.local
 advertiseLocalName(() => settings.deviceName);
 
-// Kept to give it a new certificate when the server is renamed (the certificate carries its name)
+// Kept to give it a new server certificate when the server is renamed (it covers <name>.local)
 let httpsServer = null;
 function renewHttpsCertificate() {
     if (!httpsServer) return;
