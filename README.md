@@ -28,6 +28,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Watch a track's music video on YouTube, right from the track list (via a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
 * Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Controls tab (see [Controls](#controls)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
+* See and change your tado° heating from the Controls tab: each room's temperature and humidity, what it's heating to, and its next scheduled change. Raise or lower a room, turn it off, or put it back on its schedule (see [Heating (tado°)](#heating-tado)).
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)). It shows your tariff too, and **Test a Tariff** works out whether a new deal would have been cheaper over the last 12 months (see [Test a Tariff](#test-a-tariff)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
@@ -357,6 +358,26 @@ Plugs and lights take their names from the Tapo or Twinkly app unless you rename
 * **A wrong password isn't retried.** Tapo plugs lock themselves for a while after too many failed logins, so once a plug refuses the password AMMUI stops trying it until you save a different one. A card that says *Wrong TP-Link password* has a button that goes straight to the login.
 * **Check that the server can see broadcasts.** Plugs are found by a broadcast on the local network (UDP ports 9999, 20002 and 5555), so they must be on the same subnet as the server, and the server machine's firewall must allow those replies.
 * If a plug's address changes (for example after a router restart), it's picked up again at the next search.
+
+### Heating (tado°)
+
+If you have tado° smart thermostats or radiator valves, the Controls tab shows a **Heating** section with a card for each room in your tado° home. Each card shows:
+
+* the room's temperature now, its humidity, and how hard it's heating
+* what it's heating to (or *Off*)
+* what happens next: the next scheduled change, or *Until* a time if you've changed it from here
+* *Window open* when tado° has spotted an open window, and *Offline* when the room's devices can't be reached
+
+**−** and **+** change what a room is heating to, in half-degree steps from 5° to 25°. **Off** turns its heating off. Both last until the room's next scheduled change. **Resume schedule** puts the room straight back on its tado° schedule.
+
+To set it up, open **Devices** from the menu, go to the **Controls** tab and press **Connect tado°**. tado°'s sign-in page opens: log in there and confirm the code it shows. **Disconnect** on the same tab removes it again. Both tado° generations work: V3+ and tado° X.
+
+Good to know:
+
+* **This goes through tado°'s servers.** tado° has no local control, so unlike the plugs, the heating needs an internet connection and tado°'s service to be up.
+* **tado° limits how often it can be asked.** Each account has a daily allowance of requests, which is small without an Auto-Assist subscription. AMMUI spreads it over the day: room temperatures are refreshed every few minutes rather than live, and some requests are kept back for changes you make. The settings show how many requests are left today.
+* **Each server needs its own sign-in.** tado° replaces the sign-in every time it's used, so it isn't copied by **Copy Keys From Another Device**: two servers sharing one would sign each other out. If tado° signs a server out, the Controls tab says so and offers to connect again.
+* Heating can't be controlled by voice yet.
 
 ## Energy
 
