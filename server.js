@@ -1,3 +1,4 @@
+import './lib/supervisor.js'; // first: run directly, this process only supervises the real server
 import { serverLogs, terminalLog, clearServerLogs } from './lib/logger-init.js';
 global.serverLogs = serverLogs; // Expose for internal debugging log tracking
 
@@ -11,9 +12,10 @@ import xml2js from 'xml2js';
 import Renderer from './lib/renderer.js';
 import MediaServer from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
-import { getImageDate, extractDateFromString, isPhotoItem, monthDay } from './lib/photo-date.js';
-import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand } from './lib/voice-command.js';
+import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay } from './lib/photo-date.js';
+import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
+import { advertiseLocalName, localNameFor } from './lib/local-name.js';
 import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
@@ -21,6 +23,9 @@ import { setupLocalDlna, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirFo
 import multer from 'multer';
 import * as mm from 'music-metadata';
 import NodeID3 from 'node-id3';
+// node-id3 throws on malformed COMR (commercial) frames when reading existing tags; skip them
+// (on update they're dropped from the rewritten tag, which is harmless)
+const ID3_OPTS = { exclude: ['COMR'] };
 
 import sizeOf from 'image-size';
 import { S3Client, HeadObjectCommand, CopyObjectCommand, ListObjectsV2Command, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -30,28 +35,43 @@ import { pipeline } from 'stream/promises';
 import VirtualRenderer from './lib/virtual-renderer.js';
 import * as smartHome from './lib/smart-home/index.js';
 import * as energy from './lib/smart-home/glow.js';
+import * as tado from './lib/smart-home/tado.js';
+import * as fuelPrices from './lib/fuel-prices.js';
 import exifr from 'exifr';
 import { logPlay, getTopTracks, getTopAlbums } from './lib/stats-db.js';
 import {
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
-    getFileTags, setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
+    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, isPhotoDeleted, migrateMediaKeys, renameMediaKeyServer,
+    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, migrateMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
     getCachedYoutubeCandidates, setCachedYoutubeCandidates,
     getArtistChannel, setArtistChannel, setChannelProgress, countChannelLookupsSince, saveChannelVideos, getChannelVideos, getDbStats, clearNonOfficialYoutubeMatches, getLibraryIndexMeta, searchLibraryIndex, getLibraryIndexItem, getLibraryIndexItemsUnder, removeFromLibraryIndex, getLibraryIndexPhotosOnDay, getLibraryIndexPhotosSince,
-    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealPeople,
-    listRecipes, getRecipe, saveRecipe, deleteRecipe,
-    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, deleteIngredient, mealsUsingIngredient,
+    getCalendarEntries, getCalendarEntry, saveCalendarEntry, deleteCalendarEntry, getAllCalendarEntryTags, getLastMealFamily,
+    getMealPlan, setMealPlanSettings, saveMealPlanDay,
+    calendarEntryOccursOn, skipCalendarEntryOccurrence,
+    listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient,
+    itemsUsingIngredient, itemPartsLoop,
+    getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
+    listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
+    RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
+    listPasswords, getPassword, savePassword, deletePassword,
 } from './lib/db.js';
+import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
+import http from 'http';
 import https from 'https';
+import net from 'net';
 import crypto from 'crypto';
+import { xmlEscape } from './lib/upnp.js';
+import { splitShoppingLine } from './public/shopping-items.js';
+import { searchFoods, getFood, NutritionError, SOURCES as NUTRITION_SOURCES, SUPERMARKETS, findShoppingProduct, searchShoppingProducts, shoppingProductKey, shoppingItemKey } from './lib/nutrition.js';
 import { exec, execFile, execSync, spawn } from 'child_process';
+import nodemailer from 'nodemailer';
 import { PassThrough, Readable } from 'stream';
 import { promisify } from 'util';
 import { createRequire } from 'module';
@@ -98,11 +118,24 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const app = express();
-const port = 3000;
-// Same app over HTTPS, for browsers (the microphone needs a secure page). Renderers keep using
-// plain HTTP on `port`, since DLNA/Sonos/AirPlay devices can't fetch from a self-signed server.
-const httpsPort = 3443;
+// The ports: 80 and 443 unless Settings (or the installer, when one was taken) chose others.
+// Plain HTTP on `port` is for players: DLNA/Sonos/AirPlay devices can't fetch from a self-signed
+// server. Browsers use the same app over HTTPS on `httpsPort` (the microphone needs a secure page).
+const DEFAULT_PORTS = { httpPort: 80, httpsPort: 443 };
+// A server set up before the ports could be changed, and updated from the app (not the installer),
+// stays on the 3000 and 3443 it always used: players and bookmarks know it there, and Linux keeps
+// ports below 1024 for root
+if (getSetting('deviceName', '')) {
+    if (getSetting('httpPort', null) === null) setSetting('httpPort', 3000);
+    if (getSetting('httpsPort', null) === null) setSetting('httpsPort', 3443);
+}
+const savedPort = key => Number(getSetting(key, null)) || DEFAULT_PORTS[key];
+const port = savedPort('httpPort');
+const httpsPort = savedPort('httpsPort');
+// An address on this server over HTTPS, leaving out the port when it's the usual 443
+const httpsOrigin = host => `https://${host}${httpsPort === 443 ? '' : `:${httpsPort}`}`;
 const certsDir = path.join(baseDataDir, 'certs');
+useSecretKeyIn(baseDataDir); // the Passwords tab's key, beside the database
 
 // Ensure directories exist
 if (!fs.existsSync(path.join(__dirname, 'uploads'))) fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true });
@@ -122,7 +155,7 @@ let httpsReady = false;
 app.use((req, res, next) => {
     if (!httpsReady || req.secure || req.method !== 'GET' || (req.path !== '/' && req.path !== '/index.html')) return next();
     const host = (req.headers.host || 'localhost').replace(/:\d+$/, '');
-    res.redirect(302, `https://${host}:${httpsPort}${req.originalUrl}`);
+    res.redirect(302, `${httpsOrigin(host)}${req.originalUrl}`);
 });
 
 const logsDir = path.join(baseDataDir, 'logs');
@@ -180,6 +213,7 @@ let settings = {
     discogsToken: '',
     acoustidKey: '',
     youtubeApiKey: '',
+    usdaApiKey: '', // USDA FoodData Central, one of the sources of ingredient calories
     allowKeySharing: false, // let other AMMUI installs on the network copy the keys above
     s3: {
         endpoint: '',
@@ -188,17 +222,56 @@ let settings = {
         secretAccessKey: '',
         bucket: '',
         enabled: false, // daily automatic sync
+        time: '03:00', // when the daily sync runs (local time, HH:MM)
         verified: false, // the connection test passed with the current details
         mirror: false,
-        mirrorMaxDeletePercent: 10
+        mirrorMaxDeletePercent: 10,
+        // The bucket folder backups go into. Set from the server's name at the first backup and
+        // kept after that, so renaming the server doesn't start a new backup ('' = not yet).
+        folder: ''
     },
     deviceName: 'AMMUI',
+    slideshowIdleSeconds: 60, // how long the UI sits untouched before the slideshow starts
+    slideshowPhotoSeconds: 60, // how long each photo shows
+    // Videos in the slideshow's photo folder (iPhone Live Photos, filed beside their photo when
+    // imported) shown in the slideshow, each in place of its photo
+    slideshowVideos: {
+        enabled: false,
+        maxSeconds: 60, // a longer video is cut short here (0 = plays to its end)
+        sound: false
+    },
+    // The sky from where the slideshow is, which the slideshow's Sky button switches to
+    slideshowSky: {
+        mode: 'fixed', // 'fixed' (looking one way) or 'turning' (slowly round the horizon), until the sky's Turn button is used
+        facing: 180, // compass direction looked at when fixed, degrees from north
+        afterSunsetMinutes: 0, // the slideshow shows the sky instead of the photos for this long after sunset (0 = never)
+        lat: null,
+        lon: null
+    },
+    supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
+    shoppingEmail: '', // where the Email button on the shopping list sends it
+    passwordsEmail: '', // where the Passwords tab's Email buttons send an entry ('' = the shopping list's address)
+    // Outgoing mail server, for emailing the shopping list
+    email: {
+        host: '',
+        port: 587,
+        security: 'starttls', // 'starttls', 'ssl' (TLS from the start, usually port 465) or 'none'
+        username: '',
+        password: '',
+        from: '' // sender address; the username when empty
+    },
     calendars: [], // [{ id, name, url, color }] iCal feeds shown on the Calendar tab
     calendarTagColors: {}, // { tag: '#rrggbb' } colours of calendar entry tags
     screensaver: {
         serverUdn: null,
         objectId: null,
         pathName: 'Not Set'
+    },
+    // Command run once the web server is listening, e.g. to open a browser on this machine
+    startup: {
+        browser: 'none', // 'none', one of STARTUP_BROWSERS, or 'manual' (command typed by the user)
+        kiosk: false,
+        command: ''
     },
     manualRotations: {},
     deletedPhotos: {},
@@ -213,22 +286,74 @@ let s3SyncStatus = {
     lastError: null,
     currentFile: '',
     syncedCount: 0,
-    totalCount: 0
+    totalCount: 0,
+    cancelling: false, // Cancel was pressed, and it's stopping
+    cancelled: false, // the last backup or restore was cancelled before it finished
+    restarting: false // after restoring data, while the server restarts to load it
 };
+
+// The backup or restore going on, so Cancel can stop it: the upload in progress is aborted,
+// as are the requests and downloads given its signal, and the loops stop at the next file.
+let s3Run = null; // { cancelled, abort: AbortController, upload }
+
+function beginS3Run() {
+    s3Run = { cancelled: false, abort: new AbortController(), upload: null };
+    Object.assign(s3SyncStatus, { cancelling: false, cancelled: false });
+    return s3Run;
+}
+
+function cancelS3Run() {
+    if (!s3SyncStatus.running || !s3Run || s3Run.cancelled) return false;
+    s3Run.cancelled = true;
+    s3SyncStatus.cancelling = true;
+    s3Run.abort.abort();
+    s3Run.upload?.abort().catch(() => {});
+    return true;
+}
+
+// Runs an Upload so that Cancel can abort it
+async function runS3Upload(upload) {
+    if (s3Run) s3Run.upload = upload;
+    try { await upload.done(); } finally { if (s3Run) s3Run.upload = null; }
+}
 
 function loadSettings() {
     settings.discogsToken = getSetting('discogsToken', '');
     settings.acoustidKey = getSetting('acoustidKey', '');
     settings.youtubeApiKey = getSetting('youtubeApiKey', '');
+    settings.usdaApiKey = getSetting('usdaApiKey', '');
     settings.allowKeySharing = !!getSetting('allowKeySharing', false);
     const savedS3 = getSetting('s3', {}) || {};
     settings.s3 = { ...settings.s3, ...savedS3 };
     // Installs from before the connection test existed: a configured bucket was already in use
     if (!('verified' in savedS3)) settings.s3.verified = !!(savedS3.bucket && savedS3.accessKeyId && savedS3.secretAccessKey);
     settings.deviceName = getSetting('deviceName', '');
+    // Installs from before the folder was its own setting backed up into one named after the server
+    if (!('folder' in savedS3) && savedS3.bucket && settings.deviceName) {
+        settings.s3.folder = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+        setSetting('s3', settings.s3);
+    }
+    settings.slideshowIdleSeconds = getSetting('slideshowIdleSeconds', 60);
+    settings.slideshowPhotoSeconds = getSetting('slideshowPhotoSeconds', 60);
+    const savedVideos = getSetting('slideshowVideos', {}) || {};
+    settings.slideshowVideos = {
+        enabled: savedVideos.enabled ?? settings.slideshowVideos.enabled,
+        maxSeconds: savedVideos.maxSeconds ?? settings.slideshowVideos.maxSeconds,
+        sound: savedVideos.sound ?? settings.slideshowVideos.sound
+    };
+    // The location once saved for the Sky tab carries over
+    const oldSkyLocation = getSetting('skyLocation', null);
+    settings.slideshowSky = { ...settings.slideshowSky, lat: oldSkyLocation?.lat ?? null, lon: oldSkyLocation?.lon ?? null,
+        ...(getSetting('slideshowSky', {}) || {}) };
+    if (settings.slideshowSky.mode === 'off') settings.slideshowSky.mode = 'fixed'; // the Sky button is always there now
+    settings.supermarket = getSetting('supermarket', '') || '';
+    settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
+    settings.passwordsEmail = getSetting('passwordsEmail', '') || '';
+    settings.email = { ...settings.email, ...(getSetting('email', {}) || {}) };
     settings.calendars = getSetting('calendars', []) || [];
     settings.calendarTagColors = getSetting('calendarTagColors', {}) || {};
     settings.screensaver = { ...settings.screensaver, ...(getSetting('screensaver', {}) || {}) };
+    settings.startup = { ...settings.startup, ...(getSetting('startup', {}) || {}) };
     // Default the slideshow to the local server's pictures folder until the user picks another
     if (!settings.screensaver.serverUdn || !settings.screensaver.objectId) {
         settings.screensaver = { serverUdn: SERVER_UDN, objectId: 'pictures', pathName: 'pictures' };
@@ -251,12 +376,22 @@ function saveSettings() {
     setSetting('discogsToken', settings.discogsToken);
     setSetting('acoustidKey', settings.acoustidKey);
     setSetting('youtubeApiKey', settings.youtubeApiKey);
+    setSetting('usdaApiKey', settings.usdaApiKey);
     setSetting('allowKeySharing', settings.allowKeySharing);
     setSetting('s3', settings.s3);
     setSetting('deviceName', settings.deviceName);
+    setSetting('slideshowIdleSeconds', settings.slideshowIdleSeconds);
+    setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
+    setSetting('slideshowVideos', settings.slideshowVideos);
+    setSetting('slideshowSky', settings.slideshowSky);
+    setSetting('supermarket', settings.supermarket);
+    setSetting('shoppingEmail', settings.shoppingEmail);
+    setSetting('passwordsEmail', settings.passwordsEmail);
+    setSetting('email', settings.email);
     setSetting('calendars', settings.calendars);
     setSetting('calendarTagColors', settings.calendarTagColors);
     setSetting('screensaver', settings.screensaver);
+    setSetting('startup', settings.startup);
 }
 
 // stats.json migration completed to play_history.db
@@ -266,9 +401,12 @@ function saveSettings() {
 // Names used on disk can't hold characters Windows forbids (the library is shared with a
 // Windows machine). Those are swapped for the fullwidth lookalike (? -> ？) so
 // "What Is Love?" still reads correctly; / and \ have no lookalike and become _.
+// Control characters aren't allowed either (Windows fails the save with ENOENT). Some taggers
+// (Amazon MP3s among them) store ’ as \u0019, so that one is put back; the rest are dropped.
 const FILENAME_LOOKALIKES = { '<': '＜', '>': '＞', ':': '：', '"': '＂', '|': '｜', '?': '？', '*': '＊' };
 function safeName(s) {
-    return String(s).replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
+    return String(s).replace(/\u0019/g, '’').replace(/[\u0000-\u001f\u007f]/g, '')
+        .replace(/[<>:"|?*]/g, c => FILENAME_LOOKALIKES[c]).replace(/[/\\]/g, '_');
 }
 // What earlier versions saved: every forbidden character replaced by _
 function legacySafeName(s) {
@@ -309,7 +447,7 @@ const localLibraryName = (name = settings.deviceName) => `${name || 'AMMUI'} Med
 setLocalMediaServer({
     name: () => localLibraryName(),
     origin: () => `http://${getLocalIp()}:${port}`,
-    ports: [port, httpsPort],
+    ports: [...new Set([port, httpsPort, 3000, 3443])], // 3000 and 3443: the ports before they could be changed
 });
 loadDevices();
 for (const d of devices.values()) {
@@ -318,6 +456,8 @@ for (const d of devices.values()) {
 loadSettings();
 smartHome.init({ getSetting, setSetting });
 energy.init({ getSetting, setSetting });
+tado.init({ getSetting, setSetting });
+fuelPrices.init({ getSetting, setSetting, cachePath: path.join(baseDataDir, 'cache', 'fuel-prices.json') });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -413,6 +553,10 @@ const S3_CONTENT_TYPES = {
 };
 // macOS/Windows housekeeping files (.DS_Store, ._foo, Thumbs.db, desktop.ini) aren't backed up
 const S3_SKIP_NAMES = /^(\.|thumbs\.db$|desktop\.ini$)/i;
+// Beside the library in each server's bucket folder: a snapshot of the database
+const S3_SYSTEM_FOLDER = '_ammui';
+const S3_DB_SNAPSHOT = `${S3_SYSTEM_FOLDER}/ammui.db`;
+const backupSnapshotPath = path.join(baseDataDir, 'cache', 'backup-snapshot.db');
 
 function createS3Client(config = settings.s3) {
     return new S3Client({
@@ -427,6 +571,12 @@ function createS3Client(config = settings.s3) {
 }
 
 const S3_CONNECTION_FIELDS = ['endpoint', 'region', 'bucket', 'accessKeyId', 'secretAccessKey'];
+
+// A folder name that's safe in the bucket (and on disk, when restored)
+const s3FolderName = name => String(name || '').trim().replace(/[<>:"/\\|?*]/g, '_');
+
+// The bucket folder this server backs up into: as set, or (before the first backup) its name
+const s3BackupFolder = () => settings.s3.folder || s3FolderName(settings.deviceName || 'AMMUI');
 
 // Plain-language reasons for the errors people actually hit while setting up a bucket
 function describeS3Error(err) {
@@ -481,9 +631,11 @@ async function syncToS3({ manual = false } = {}) {
         return;
     }
 
+    let run = null;
     try {
         try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
         s3Log('[S3] Starting sync...');
+        run = beginS3Run();
         s3SyncStatus.running = true;
         s3SyncStatus.syncedCount = 0;
         s3SyncStatus.totalCount = 0;
@@ -517,9 +669,16 @@ async function syncToS3({ manual = false } = {}) {
 
         // Per top-level folder (music / pictures / videos) tallies for the summary line
         const tally = {};
-        const devicePrefix = settings.deviceName.replace(/[<>:"/\\|?*]/g, '_');
+        const devicePrefix = s3BackupFolder();
+        if (!settings.s3.folder) {
+            // From now on it stays this folder, whatever the server is called
+            settings.s3.folder = devicePrefix;
+            saveSettings();
+        }
         const localKeys = new Set();
+        await backupDatabaseToS3(s3, devicePrefix, localKeys);
         for (const filePath of allFiles) {
+            if (run.cancelled) break;
             const localRel = path.relative(localDir, filePath).replace(/\\/g, '/');
             const relativePath = `${devicePrefix}/${localRel}`;
             localKeys.add(relativePath);
@@ -536,10 +695,11 @@ async function syncToS3({ manual = false } = {}) {
                     head = await s3.send(new HeadObjectCommand({
                         Bucket: settings.s3.bucket,
                         Key: relativePath
-                    }));
+                    }), { abortSignal: run.abort.signal });
                 } catch (e) {
                     // Not found, proceed with upload
                 }
+                if (run.cancelled) break;
                 if (head && head.ContentLength === size) {
                     // Older syncs stored everything as audio/mpeg; correct the type in place
                     // (a server-side copy, nothing is re-sent). Copies are limited to 5GB.
@@ -577,10 +737,11 @@ async function syncToS3({ manual = false } = {}) {
                     leavePartsOnError: false,
                 });
 
-                await parallelUploads3.done();
+                await runS3Upload(parallelUploads3);
                 s3SyncStatus.syncedCount++;
                 t.uploaded++;
             } catch (err) {
+                if (run.cancelled) break;
                 t.failed++;
                 s3Log(`[S3] Failed to upload ${relativePath}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Upload failed for ${relativePath}: ${err.message}`;
@@ -592,16 +753,57 @@ async function syncToS3({ manual = false } = {}) {
             s3Log(`[S3] ${section}: ${t.uploaded} uploaded, ${t.skipped} already backed up, ${t.failed} failed`);
         }
 
+        // Cancelled, the files not reached yet would look deleted: nothing is mirrored
+        if (run.cancelled) {
+            s3Log(`[S3] Backup cancelled after ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files. ` +
+                'What was uploaded stays, and the next backup carries on from there.');
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+
         if (settings.s3.mirror) await mirrorDeleteFromS3(s3, `${devicePrefix}/`, localKeys);
 
         s3SyncStatus.lastSync = new Date().toISOString();
         s3Log(`[S3] Sync complete! ${s3SyncStatus.syncedCount}/${s3SyncStatus.totalCount} files processed.`);
     } catch (err) {
-        s3Log(`[S3] Global Sync Error: ${err.message}`, true);
-        s3SyncStatus.lastError = err.message;
+        if (run?.cancelled) {
+            s3Log('[S3] Backup cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Global Sync Error: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
     } finally {
         s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
         s3SyncStatus.currentFile = '';
+        s3Run = null;
+    }
+}
+
+// The app's own data, sent with every backup: a snapshot of the database (always sent, since its
+// size says nothing about whether it changed)
+async function backupDatabaseToS3(s3, devicePrefix, localKeys) {
+    const key = `${devicePrefix}/${S3_DB_SNAPSHOT}`;
+    localKeys.add(key);
+    try {
+        s3SyncStatus.currentFile = 'Database snapshot';
+        await fsp.mkdir(path.dirname(backupSnapshotPath), { recursive: true });
+        snapshotDatabase(backupSnapshotPath);
+        await runS3Upload(new Upload({
+            client: s3,
+            params: { Bucket: settings.s3.bucket, Key: key, Body: fs.createReadStream(backupSnapshotPath), ContentType: 'application/vnd.sqlite3' },
+            queueSize: 4,
+            partSize: 5 * 1024 * 1024,
+            leavePartsOnError: false,
+        }));
+        s3Log('[S3] Backed up the database (meals, tags, settings and the rest)');
+    } catch (err) {
+        if (s3Run?.cancelled) return;
+        s3Log(`[S3] Failed to back up the database: ${err.message}`, true);
+        s3SyncStatus.lastError = `Database backup failed: ${err.message}`;
+    } finally {
+        await fsp.unlink(backupSnapshotPath).catch(() => {});
     }
 }
 
@@ -676,13 +878,60 @@ async function listS3Folders() {
     return folders.sort((a, b) => a.localeCompare(b));
 }
 
-// Download everything under one bucket folder into the local library. Files already present
-// with the same size are left alone, so a restore can be re-run after an interruption.
-async function restoreFromS3(folder) {
+// Every object under prefix, without "folder" placeholder objects
+async function listS3Objects(s3, prefix) {
+    const objects = [];
+    let token;
+    do {
+        const page = await s3.send(new ListObjectsV2Command({
+            Bucket: settings.s3.bucket,
+            Prefix: prefix,
+            ContinuationToken: token
+        }));
+        for (const obj of page.Contents || []) {
+            if (!obj.Key.endsWith('/')) objects.push(obj);
+        }
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+    return objects;
+}
+
+// The library folder (music, pictures, videos...) a file in a backup is in: '' for one at the top
+const s3MediaSection = rel => rel.includes('/') ? rel.split('/')[0] : '';
+
+// What a bucket folder holds, for choosing what to restore: { media: [{ section, files, bytes }],
+// data: { backedUpAt, bytes, groups } or null if it was backed up before the database was }
+async function describeS3Backup(folder) {
+    const prefix = `${folder}/`;
+    const media = new Map();
+    let data = null;
+    for (const obj of await listS3Objects(createS3Client(), prefix)) {
+        const rel = obj.Key.slice(prefix.length);
+        if (rel === S3_DB_SNAPSHOT) data = { backedUpAt: obj.LastModified, bytes: obj.Size, groups: Object.keys(RESTORE_GROUPS) };
+        if (rel.startsWith(`${S3_SYSTEM_FOLDER}/`)) continue;
+        const section = s3MediaSection(rel);
+        const m = media.get(section) || { section, files: 0, bytes: 0 };
+        m.files++;
+        m.bytes += obj.Size || 0;
+        media.set(section, m);
+    }
+    return { media: [...media.values()].sort((a, b) => a.section.localeCompare(b.section)), data };
+}
+
+// Downloads the chosen library folders (media: sections from describeS3Backup) under one bucket
+// folder into the local library, then puts back the chosen groups of data (data: keys of
+// RESTORE_GROUPS) from its database snapshot and restarts, so everything is loaded from it.
+// takeOver: this server carries on as the one backed up, under its name, so its backups go on
+// into the same folder. Files already present with the same size are left alone, so a restore
+// can be re-run after an interruption.
+async function restoreFromS3(folder, { media = [], data = [], takeOver = false } = {}) {
     if (s3SyncStatus.running) return;
+    let restart = false;
+    let run = null;
     try {
         try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
         s3Log(`[S3] Starting restore from ${folder}/ ...`);
+        run = beginS3Run();
         s3SyncStatus.running = true;
         s3SyncStatus.mode = 'restore';
         s3SyncStatus.syncedCount = 0;
@@ -691,24 +940,17 @@ async function restoreFromS3(folder) {
 
         const s3 = createS3Client();
         const prefix = `${folder}/`;
-        const objects = [];
-        let token;
-        do {
-            const page = await s3.send(new ListObjectsV2Command({
-                Bucket: settings.s3.bucket,
-                Prefix: prefix,
-                ContinuationToken: token
-            }));
-            for (const obj of page.Contents || []) {
-                if (!obj.Key.endsWith('/')) objects.push(obj); // skip "folder" placeholder objects
-            }
-            token = page.IsTruncated ? page.NextContinuationToken : undefined;
-        } while (token);
-        s3SyncStatus.totalCount = objects.length;
+        const objects = (await listS3Objects(s3, prefix)).filter(obj => {
+            const rel = obj.Key.slice(prefix.length);
+            return !rel.startsWith(`${S3_SYSTEM_FOLDER}/`) && media.includes(s3MediaSection(rel));
+        });
+        const useSnapshot = data.length > 0 || takeOver;
+        s3SyncStatus.totalCount = objects.length + (useSnapshot ? 1 : 0);
 
         const localDir = path.join(__dirname, 'local');
         let downloaded = 0, skipped = 0, failed = 0;
         for (const obj of objects) {
+            if (run.cancelled) break;
             const rel = obj.Key.slice(prefix.length);
             s3SyncStatus.currentFile = rel;
             const target = path.resolve(localDir, rel);
@@ -728,13 +970,18 @@ async function restoreFromS3(folder) {
                 }
                 s3Log(`[S3] Downloading ${rel}...`);
                 await fsp.mkdir(path.dirname(target), { recursive: true });
-                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: obj.Key }));
+                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: obj.Key }),
+                    { abortSignal: run.abort.signal });
                 // Write to a temp file first so an interrupted download doesn't leave a truncated file
                 const tmp = `${target}.restoring`;
-                await pipeline(Body, fs.createWriteStream(tmp));
+                await pipeline(Body, fs.createWriteStream(tmp), { signal: run.abort.signal });
                 await fsp.rename(tmp, target);
                 downloaded++;
             } catch (err) {
+                if (run.cancelled) {
+                    await fsp.unlink(`${target}.restoring`).catch(() => {});
+                    break;
+                }
                 failed++;
                 s3Log(`[S3] Failed to download ${rel}: ${err.message}`, true);
                 s3SyncStatus.lastError = `Download failed for ${rel}: ${err.message}`;
@@ -742,24 +989,151 @@ async function restoreFromS3(folder) {
             }
             s3SyncStatus.syncedCount++;
         }
-
         if (downloaded > 0) markDirty(SERVER_UDN, findDeviceByUdn);
+        if (media.length) s3Log(`[S3] Files: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
+
+        // Cancelled: the data here is left as it is, and nothing restarts
+        if (run.cancelled) {
+            s3Log("[S3] Restore cancelled. The files downloaded stay; the data wasn't restored.");
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+
+        if (useSnapshot) {
+            s3SyncStatus.currentFile = 'Database snapshot';
+            try {
+                s3Log('[S3] Downloading the database snapshot...');
+                await fsp.mkdir(path.dirname(backupSnapshotPath), { recursive: true });
+                const { Body } = await s3.send(new GetObjectCommand({ Bucket: settings.s3.bucket, Key: `${prefix}${S3_DB_SNAPSHOT}` }));
+                await pipeline(Body, fs.createWriteStream(backupSnapshotPath));
+                const { counts, deviceName } = restoreFromSnapshot(backupSnapshotPath, data);
+                if (takeOver) {
+                    settings.s3.folder = folder;
+                    setSetting('s3', settings.s3);
+                }
+                // Tags, favourites and photo changes are saved against the server's name: the
+                // restored ones under the old server's, any kept here under this one's
+                if (takeOver && deviceName) {
+                    renameMediaKeyServer(localLibraryName(), localLibraryName(deviceName));
+                    setSetting('deviceName', deviceName);
+                    s3Log(`[S3] This server is now "${deviceName}", and backs up into ${folder}/`);
+                } else {
+                    if (takeOver) s3Log("[S3] The backup doesn't say which server it came from, so this server keeps its own name", true);
+                    if (data.includes('tags')) renameMediaKeyServer(localLibraryName(deviceName), localLibraryName());
+                }
+                const restored = Object.entries(counts).filter(([, n]) => n).map(([table, n]) => `${table} ${n}`).join(', ');
+                if (data.length) s3Log(`[S3] Restored ${data.join(', ')}${restored ? ` (${restored})` : ''}`);
+                restart = true;
+            } catch (err) {
+                s3Log(`[S3] Failed to restore the database: ${err.message}`, true);
+                s3SyncStatus.lastError = `Database restore failed: ${err.message}`;
+            } finally {
+                await fsp.unlink(backupSnapshotPath).catch(() => {});
+            }
+            s3SyncStatus.syncedCount++;
+        }
+
         s3SyncStatus.lastRestore = new Date().toISOString();
-        s3Log(`[S3] Restore complete: ${downloaded} downloaded, ${skipped} already present, ${failed} failed.`);
+        s3Log(`[S3] Restore complete${restart ? '. Restarting to load the restored data...' : '.'}`);
     } catch (err) {
-        s3Log(`[S3] Global Restore Error: ${err.message}`, true);
-        s3SyncStatus.lastError = err.message;
+        if (run?.cancelled) {
+            s3Log('[S3] Restore cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Global Restore Error: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
     } finally {
         s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
         s3SyncStatus.currentFile = '';
+        s3Run = null;
+    }
+    if (restart) {
+        // Long enough for the page to see it's restarting
+        s3SyncStatus.restarting = true;
+        setTimeout(restartServer, 3000);
     }
 }
 
+// Moves this server's backup to another folder in the bucket. S3 can't rename, so each file is
+// copied within the bucket (nothing is uploaded again) and the original deleted once it's copied.
+// A file over 5GB can't be copied in one go: it's left where it is, and the next backup uploads
+// it again. Cancelled part way, what's not moved yet stays in the old folder.
+async function moveS3Folder(from, to) {
+    if (s3SyncStatus.running) return;
+    let run = null;
+    try {
+        try { fs.writeFileSync(s3SyncLogPath, ''); } catch (e) { /* ignore */ }
+        s3Log(`[S3] Moving the backup from ${from}/ to ${to}/ ...`);
+        run = beginS3Run();
+        Object.assign(s3SyncStatus, { running: true, mode: 'move', syncedCount: 0, totalCount: 0, lastError: null });
+        const s3 = createS3Client();
+        const bucket = settings.s3.bucket;
+        const objects = await listS3Objects(s3, `${from}/`);
+        s3SyncStatus.totalCount = objects.length;
+        let moved = 0, failed = 0;
+        for (const obj of objects) {
+            if (run.cancelled) break;
+            const rel = obj.Key.slice(from.length + 1);
+            s3SyncStatus.currentFile = rel;
+            try {
+                if (obj.Size >= 5 * 1024 * 1024 * 1024) throw new Error('over 5GB, too big to copy (the next backup uploads it again)');
+                await s3.send(new CopyObjectCommand({
+                    Bucket: bucket,
+                    Key: `${to}/${rel}`,
+                    CopySource: `${bucket}/${obj.Key.split('/').map(encodeURIComponent).join('/')}`
+                }), { abortSignal: run.abort.signal });
+                await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: obj.Key }), { abortSignal: run.abort.signal });
+                moved++;
+            } catch (err) {
+                if (run.cancelled) break;
+                failed++;
+                s3Log(`[S3] Couldn't move ${rel}: ${err.message}`, true);
+                s3SyncStatus.lastError = `Move failed for ${rel}: ${err.message}`;
+            }
+            s3SyncStatus.syncedCount++;
+        }
+        if (run.cancelled) {
+            s3Log(`[S3] Move cancelled after ${moved} of ${objects.length} files. The rest stay in ${from}/; ` +
+                `backups go into ${to}/ from now on, and the next one uploads what isn't there.`);
+            s3SyncStatus.cancelled = true;
+            return;
+        }
+        s3Log(`[S3] Moved ${moved} files${failed ? `; ${failed} couldn't be, and stay in ${from}/` : ''}. Backups now go into ${to}/.`);
+    } catch (err) {
+        if (run?.cancelled) {
+            s3Log('[S3] Move cancelled.');
+            s3SyncStatus.cancelled = true;
+        } else {
+            s3Log(`[S3] Move failed: ${err.message}`, true);
+            s3SyncStatus.lastError = err.message;
+        }
+    } finally {
+        s3SyncStatus.running = false;
+        s3SyncStatus.cancelling = false;
+        s3SyncStatus.currentFile = '';
+        s3Run = null;
+    }
+}
+
+// The automatic backup runs once a day at settings.s3.time. If the server wasn't running then
+// (the machine was off), it runs once the server has been up for a few minutes later that day.
+const S3_STARTUP_GRACE = 5 * 60 * 1000;
+const localDate = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
 function scheduleS3Sync() {
-    // Daily Sync (every 24 hours)
-    setInterval(syncToS3, 86400000);
-    // Run first sync after 24 hours
-    setTimeout(syncToS3, 86400000);
+    const startedAt = Date.now();
+    setInterval(async () => {
+        if (!settings.s3.enabled || s3SyncStatus.running || Date.now() - startedAt < S3_STARTUP_GRACE) return;
+        const now = new Date();
+        const today = localDate(now);
+        if (getSetting('s3LastAutoSyncDate') === today) return;
+        const [h, m] = (settings.s3.time || '03:00').split(':').map(Number);
+        if (now.getHours() * 60 + now.getMinutes() < h * 60 + m) return;
+        setSetting('s3LastAutoSyncDate', today);
+        await syncToS3();
+    }, 60 * 1000);
 }
 // Cache renderer instances to avoid recreating them on every API call
 let rendererCache = new Map();
@@ -1185,6 +1559,10 @@ app.get('/api/browse/:udn', async (req, res) => {
     try {
         const server = new MediaServer(device);
         const items = await server.browse(objectId);
+        // Favourites get a heart in the file browser
+        for (const item of items) {
+            if (item.uri && settings.fileTags?.[mediaKey(item.uri)]?.includes('fav')) item.fav = true;
+        }
         res.json({ objectId, items });
     } catch (err) {
         console.error('Failed to browse device:', err.message);
@@ -1299,14 +1677,56 @@ app.get('/api/media-proxy', async (req, res) => {
     }
 });
 
+// Why a port can't be listened on, in words
+const listenProblem = (err, p) => err.code === 'EADDRINUSE' ? `Port ${p} is in use by another program`
+    : err.code === 'EACCES' ? `This computer doesn't let AMMUI use port ${p}` : err.message;
+
+// The HTTP and HTTPS ports (Settings). New ones are checked by opening them briefly, then take effect on restart.
+app.get('/api/settings/port', (req, res) => {
+    res.json({
+        httpPort: savedPort('httpPort'), httpsPort: savedPort('httpsPort'),
+        httpError: httpListenError, httpsError: httpsListenError,
+    });
+});
+
+app.post('/api/settings/port', express.json(), async (req, res) => {
+    const wanted = { httpPort: Number(req.body?.httpPort), httpsPort: Number(req.body?.httpsPort) };
+    const running = { httpPort: port, httpsPort };
+    for (const p of Object.values(wanted)) {
+        if (!Number.isInteger(p) || p < 1 || p > 65535) return res.status(400).json({ error: 'A port must be a whole number from 1 to 65535' });
+    }
+    if (wanted.httpPort === wanted.httpsPort) return res.status(400).json({ error: 'HTTP and HTTPS need different ports' });
+    for (const key of ['httpPort', 'httpsPort']) {
+        // A port this server already has open is fine for either of them
+        if (Object.values(running).includes(wanted[key])) continue;
+        const problem = await new Promise(resolve => {
+            const probe = net.createServer()
+                .once('error', err => resolve(listenProblem(err, wanted[key])))
+                .once('listening', () => probe.close(() => resolve(null)))
+                .listen(wanted[key]);
+        });
+        if (problem) return res.status(400).json({ error: problem });
+    }
+    setSetting('httpPort', wanted.httpPort);
+    setSetting('httpsPort', wanted.httpsPort);
+    const restart = wanted.httpPort !== port || wanted.httpsPort !== httpsPort;
+    res.json({ ...wanted, restart });
+    if (restart) {
+        console.log(`[PORTS] Changed to HTTP ${wanted.httpPort}, HTTPS ${wanted.httpsPort}; restarting.`);
+        setTimeout(restartServer, 500);
+    }
+});
+
 // Addresses for the Settings page, and the CA certificate a device installs to trust them.
 app.get('/api/https/info', (req, res) => {
-    const { dns, ips } = localHostNames();
-    const hosts = [...ips.filter(ip => ip !== '127.0.0.1'), ...dns.filter(h => h !== 'localhost')];
+    const { dns, ips } = localHostNames(settings.deviceName);
+    // The server's own .local name first: the one to use
+    const local = localNameFor(settings.deviceName);
+    const hosts = [...new Set([...(local ? [local] : []), ...ips.filter(ip => ip !== '127.0.0.1'), ...dns.filter(h => h !== 'localhost')])];
     res.json({
         httpsPort,
         available: fs.existsSync(caCertificatePath(certsDir)),
-        urls: hosts.map(h => `https://${h}:${httpsPort}/`),
+        urls: hosts.map(h => `${httpsOrigin(h)}/`),
     });
 });
 
@@ -1316,6 +1736,79 @@ app.get('/api/https/ca.crt', (req, res) => {
     res.set('Content-Type', 'application/x-x509-ca-cert');
     res.set('Content-Disposition', 'attachment; filename="ammui-ca.crt"');
     res.sendFile(caPath);
+});
+
+// Browsers can't trust a certificate themselves, so Windows devices get a script that adds the CA
+// to the current user's trusted roots (no admin needed; Windows asks the user to confirm).
+app.get('/api/https/trust-ammui.cmd', (req, res) => {
+    const caPath = caCertificatePath(certsDir);
+    if (!fs.existsSync(caPath)) return res.status(404).send('HTTPS is not set up');
+    const pem = fs.readFileSync(caPath, 'utf8').trim().split(/\r?\n/);
+    const script = [
+        '@echo off',
+        'title Trust the AMMUI certificate',
+        'set "CRT=%TEMP%\\ammui-ca.crt"',
+        '(',
+        ...pem.map(line => `echo ${line}`),
+        ') > "%CRT%"',
+        'echo Adding the AMMUI certificate to this Windows user\'s trusted certificates.',
+        'echo Choose Yes in the Windows security warning that appears.',
+        'echo.',
+        'certutil -user -addstore Root "%CRT%" >nul',
+        'if errorlevel 1 (echo The certificate was NOT installed.) else (echo Done. Restart your browser to remove the warning.)',
+        'del "%CRT%" >nul 2>&1',
+        'echo.',
+        'pause',
+        '',
+    ].join('\r\n');
+    res.set('Content-Type', 'application/octet-stream');
+    res.set('Content-Disposition', 'attachment; filename="trust-ammui.cmd"');
+    res.send(script);
+});
+
+// iPhone / iPad: a configuration profile carrying the CA, which Safari offers to install. iOS still
+// makes the user turn on full trust for it in Certificate Trust Settings; nothing can skip that.
+app.get('/api/https/ammui.mobileconfig', (req, res) => {
+    const caPath = caCertificatePath(certsDir);
+    if (!fs.existsSync(caPath)) return res.status(404).send('HTTPS is not set up');
+    const ca = new crypto.X509Certificate(fs.readFileSync(caPath));
+    // Stable ids per CA, so installing again replaces the profile rather than adding a second one.
+    const hash = crypto.createHash('sha256').update(ca.raw).digest('hex');
+    const uuid = n => {
+        const h = hash.slice(n * 32, n * 32 + 32);
+        return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`.toUpperCase();
+    };
+    const id = `local.ammui.ca.${hash.slice(0, 12)}`;
+    const name = xmlEscape(ca.subject.match(/^CN=(.*)$/m)?.[1] ?? 'AMMUI Local CA');
+    const profile = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadCertificateFileName</key><string>ammui-ca.crt</string>
+            <key>PayloadContent</key><data>${ca.raw.toString('base64')}</data>
+            <key>PayloadDisplayName</key><string>${name}</string>
+            <key>PayloadIdentifier</key><string>${id}.root</string>
+            <key>PayloadType</key><string>com.apple.security.root</string>
+            <key>PayloadUUID</key><string>${uuid(1)}</string>
+            <key>PayloadVersion</key><integer>1</integer>
+        </dict>
+    </array>
+    <key>PayloadDescription</key><string>Lets this device open AMMUI over HTTPS without a warning. After installing, turn it on under Settings, General, About, Certificate Trust Settings.</string>
+    <key>PayloadDisplayName</key><string>AMMUI</string>
+    <key>PayloadIdentifier</key><string>${id}</string>
+    <key>PayloadRemovalDisallowed</key><false/>
+    <key>PayloadType</key><string>Configuration</string>
+    <key>PayloadUUID</key><string>${uuid(0)}</string>
+    <key>PayloadVersion</key><integer>1</integer>
+</dict>
+</plist>
+`;
+    res.set('Content-Type', 'application/x-apple-aspen-config');
+    res.set('Content-Disposition', 'inline; filename="ammui.mobileconfig"');
+    res.send(profile);
 });
 
 // ---------------------------------------------------------------------------
@@ -2473,8 +2966,83 @@ app.post('/api/settings/youtube', express.json(), (req, res) => {
     res.json({ success: true });
 });
 
+app.get('/api/settings/usda', (req, res) => {
+    const key = settings.usdaApiKey || '';
+    const hasKey = key.length > 0;
+    const maskedKey = hasKey ? key.substring(0, 4) + '****************' : '';
+    res.json({ hasKey, maskedKey });
+});
+
+app.post('/api/settings/usda', express.json(), (req, res) => {
+    const { key } = req.body;
+    settings.usdaApiKey = (key || '').trim();
+    saveSettings();
+    console.log(`USDA API key ${key ? 'updated' : 'removed'} on server.`);
+    res.json({ success: true });
+});
+
+// --- Outgoing email (the mail server the shopping list is sent through) ---
+const isEmailAddress = s => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(s);
+const EMAIL_SECURITY = ['starttls', 'ssl', 'none'];
+
+// The mail server fields from a request, falling back to the current ones; a password left
+// out (or still masked) keeps the saved one
+function cleanEmailSettings(body, current) {
+    const str = v => (typeof v === 'string' ? v.trim() : '');
+    const port = Math.round(Number(body.port));
+    const password = typeof body.password === 'string' && !body.password.includes('****') ? body.password : current.password;
+    return {
+        host: str(body.host),
+        port: port > 0 && port < 65536 ? port : 587,
+        security: EMAIL_SECURITY.includes(body.security) ? body.security : 'starttls',
+        username: str(body.username),
+        password: str(body.username) ? password : '',
+        from: str(body.from)
+    };
+}
+
+function emailTransport(email = settings.email) {
+    return nodemailer.createTransport({
+        host: email.host,
+        port: email.port,
+        secure: email.security === 'ssl',
+        requireTLS: email.security === 'starttls',
+        ignoreTLS: email.security === 'none',
+        auth: email.username ? { user: email.username, pass: email.password } : undefined,
+        connectionTimeout: 15000
+    });
+}
+
+const emailSender = (email = settings.email) => email.from || email.username;
+
+app.get('/api/settings/email', (req, res) => {
+    const { password, ...email } = settings.email;
+    res.json({ ...email, password: password ? '****************' : '' });
+});
+
+app.post('/api/settings/email', express.json(), (req, res) => {
+    const email = cleanEmailSettings(req.body || {}, settings.email);
+    if (email.from && !isEmailAddress(email.from)) return res.status(400).json({ error: 'The From address isn\'t an email address' });
+    settings.email = email;
+    saveSettings();
+    console.log(`Mail server ${email.host ? `set to ${email.host}:${email.port}` : 'removed'}.`);
+    res.json({ success: true });
+});
+
+// Connects and logs in to the mail server with the details given, without sending anything
+app.post('/api/settings/email/test', express.json(), async (req, res) => {
+    const email = cleanEmailSettings(req.body || {}, settings.email);
+    if (!email.host) return res.status(400).json({ error: 'Enter the mail server first' });
+    try {
+        await emailTransport(email).verify();
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(502).json({ error: err.message });
+    }
+});
+
 // --- Copying API keys between AMMUI installs on the same network ---
-const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey'];
+const SHARED_KEY_NAMES = ['discogsToken', 'acoustidKey', 'youtubeApiKey', 'usdaApiKey'];
 
 // Loopback, private (10/8, 172.16/12, 192.168/16), link-local and IPv6 unique-local addresses
 function isLanAddress(addr = '') {
@@ -2516,6 +3084,9 @@ app.get('/api/peer/keys', (req, res) => {
     if (tplink?.username && tplink?.password) keys.tplinkAccount = { username: tplink.username, password: tplink.password };
     const glow = getSetting('glowAccount', null);
     if (glow?.username && glow?.password) keys.glowAccount = { username: glow.username, password: glow.password };
+    const fuelFinder = fuelPrices.getCredentials();
+    if (fuelFinder) keys.fuelFinderAccount = fuelFinder;
+    if (settings.email.host) keys.email = { ...settings.email };
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
 });
@@ -2569,13 +3140,24 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
         await energy.setAccount({ username: glow.username, password: glow.password }).catch(() => { });
         imported.push('glowAccount');
     }
+    const fuelFinder = keys?.fuelFinderAccount;
+    if (typeof fuelFinder?.clientId === 'string' && fuelFinder.clientId.trim() && typeof fuelFinder.clientSecret === 'string' && fuelFinder.clientSecret) {
+        // Saved even if signing in fails here; the Petrol tab shows the error
+        await fuelPrices.setAccount(fuelFinder).catch(() => { });
+        imported.push('fuelFinderAccount');
+    }
+    const email = keys?.email;
+    if (typeof email?.host === 'string' && email.host.trim()) {
+        settings.email = cleanEmailSettings(email, settings.email);
+        imported.push('email');
+    }
     if (imported.length) saveSettings();
     console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);
     res.json({ source: source.name, imported, s3Verified });
 });
 
 app.get('/api/settings/s3', (req, res) => {
-    const s3 = { ...settings.s3 };
+    const s3 = { ...settings.s3, folder: s3BackupFolder() };
     // Mask secret
     if (s3.secretAccessKey) {
         s3.secretAccessKey = s3.secretAccessKey.substring(0, 4) + '****************';
@@ -2593,6 +3175,8 @@ function unmaskS3Secret(body) {
 app.post('/api/settings/s3', express.json(), (req, res) => {
     const newS3 = unmaskS3Secret(req.body);
     delete newS3.verified; // only a passing connection test sets this
+    delete newS3.folder; // changed on its own (POST /api/sync/s3/folder), as it may move the backup
+    if ('time' in newS3 && !/^([01]\d|2[0-3]):[0-5]\d$/.test(newS3.time)) delete newS3.time;
     const connectionChanged = S3_CONNECTION_FIELDS.some(f => f in newS3 && (newS3[f] || '') !== (settings.s3[f] || ''));
     settings.s3 = { ...settings.s3, ...newS3 };
     if (connectionChanged) settings.s3.verified = false;
@@ -2611,17 +3195,174 @@ app.post('/api/sync/s3/test', express.json(), async (req, res) => {
     res.json(result);
 });
 
+// Settings → Startup: a command run once the web server is up, normally to open a browser
+// on this machine at the app. The browser choices build the command for this OS; 'manual'
+// runs whatever was typed.
+const STARTUP_BROWSERS = ['chrome', 'edge', 'firefox', 'safari'];
+
+function startupCommand(browser, kiosk) {
+    const url = `http://localhost:${port}`;
+    const flags = {
+        chrome: kiosk ? '--kiosk' : '--new-window',
+        edge: kiosk ? '--kiosk --edge-kiosk-type=fullscreen' : '--new-window',
+        firefox: kiosk ? '--kiosk' : '--new-window'
+    }[browser];
+    if (process.platform === 'darwin') {
+        if (browser === 'safari') return `open -a Safari ${url}`; // Safari has no kiosk mode
+        const appName = { chrome: 'Google Chrome', edge: 'Microsoft Edge', firefox: 'Firefox' }[browser];
+        return appName ? `open -na "${appName}" --args ${flags} ${url}` : null;
+    }
+    if (browser === 'safari') return null; // only on macOS
+    if (process.platform === 'win32') {
+        // start finds the browsers through their App Paths registration, so no full path is needed
+        const exe = { chrome: 'chrome', edge: 'msedge', firefox: 'firefox' }[browser];
+        return exe ? `start "" ${exe} ${flags} ${url}` : null;
+    }
+    const candidates = {
+        chrome: ['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser'],
+        edge: ['microsoft-edge', 'microsoft-edge-stable'],
+        firefox: ['firefox']
+    }[browser];
+    if (!candidates) return null;
+    const exe = candidates.find(name => resolveLikeSpawn(name)) || candidates[0];
+    return `${exe} ${flags} ${url}`;
+}
+
+// The command each browser choice gives on this OS (null where that browser isn't available)
+function startupPresets() {
+    return Object.fromEntries(STARTUP_BROWSERS.map(b => [b, { normal: startupCommand(b, false), kiosk: startupCommand(b, true) }]));
+}
+
+function runStartupCommand(command = settings.startup.command) {
+    if (!command) return;
+    console.log(`[STARTUP] Running: ${command}`);
+    try {
+        // Detached and not waited on: a browser started this way keeps running until it's closed
+        const child = spawn(command, { shell: true, detached: true, windowsHide: true, stdio: 'ignore' });
+        child.on('error', err => console.error('[STARTUP] Command failed:', err.message));
+        child.unref();
+    } catch (err) {
+        console.error('[STARTUP] Command failed:', err.message);
+    }
+}
+
+// Update & Restart drops this marker so the restarted server doesn't open a second browser
+// (the page already open reloads itself).
+const restartMarkerPath = path.join(baseDataDir, '.restarting');
+
+function runStartupOnBoot() {
+    try {
+        const age = Date.now() - fs.statSync(restartMarkerPath).mtimeMs;
+        fs.unlinkSync(restartMarkerPath);
+        if (age < 5 * 60 * 1000) return console.log('[STARTUP] Restarted after an update: startup command skipped.');
+    } catch { /* no marker: a normal start */ }
+    runStartupCommand();
+}
+
+app.get('/api/settings/startup', (req, res) => {
+    res.json({ ...settings.startup, platform: process.platform, url: `http://localhost:${port}`, presets: startupPresets() });
+});
+
+app.post('/api/settings/startup', express.json(), (req, res) => {
+    const browser = String(req.body.browser || 'none');
+    const kiosk = !!req.body.kiosk;
+    let command;
+    if (browser === 'none') command = '';
+    else if (browser === 'manual') command = String(req.body.command || '').trim();
+    else if (STARTUP_BROWSERS.includes(browser)) {
+        command = startupCommand(browser, kiosk);
+        if (!command) return res.status(400).json({ error: `${browser} isn't available on this system` });
+    } else return res.status(400).json({ error: 'Unknown browser' });
+    settings.startup = { browser, kiosk, command };
+    saveSettings();
+    res.json({ ...settings.startup, platform: process.platform, url: `http://localhost:${port}`, presets: startupPresets() });
+});
+
+app.post('/api/settings/startup/run', (req, res) => {
+    if (!settings.startup.command) return res.status(400).json({ error: 'No startup command is set' });
+    runStartupCommand();
+    res.json({ ok: true });
+});
+
 app.get('/api/settings/general', (req, res) => {
-    res.json({ deviceName: settings.deviceName });
+    res.json({
+        deviceName: settings.deviceName,
+        slideshowIdleSeconds: settings.slideshowIdleSeconds,
+        slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
+        slideshowVideos: settings.slideshowVideos,
+        slideshowSky: settings.slideshowSky,
+        supermarket: settings.supermarket,
+        supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
+        shoppingEmail: settings.shoppingEmail,
+        passwordsEmail: settings.passwordsEmail
+    });
 });
 
 app.post('/api/settings/general', express.json(), (req, res) => {
+    // Slideshow timings: whole seconds, idle 10s–24h, photos 5s–1h. 0 turns that timer off.
+    const seconds = (v, min, max) => {
+        const n = Math.round(Number(v));
+        if (!Number.isFinite(n)) return null;
+        return n <= 0 ? 0 : Math.min(Math.max(n, min), max);
+    };
+    const idle = seconds(req.body.slideshowIdleSeconds, 10, 86400);
+    const photo = seconds(req.body.slideshowPhotoSeconds, 5, 3600);
+    if (idle !== null || photo !== null) {
+        if (idle !== null) settings.slideshowIdleSeconds = idle;
+        if (photo !== null) settings.slideshowPhotoSeconds = photo;
+        saveSettings();
+    }
+    // Slideshow videos: on/off, sound, and how long each plays (5s–1h, 0 = to its end)
+    const videos = req.body.slideshowVideos;
+    if (videos && typeof videos === 'object') {
+        if (typeof videos.enabled === 'boolean') settings.slideshowVideos.enabled = videos.enabled;
+        if (typeof videos.sound === 'boolean') settings.slideshowVideos.sound = videos.sound;
+        const max = seconds(videos.maxSeconds, 5, 3600);
+        if (max !== null) settings.slideshowVideos.maxSeconds = max;
+        saveSettings();
+    }
+    // Slideshow sky: how it's shown, for how long after sunset, and where from
+    const sky = req.body.slideshowSky;
+    if (sky && typeof sky === 'object') {
+        if (['fixed', 'turning'].includes(sky.mode)) settings.slideshowSky.mode = sky.mode;
+        const afterSunset = Math.round(Number(sky.afterSunsetMinutes));
+        if (Number.isFinite(afterSunset)) settings.slideshowSky.afterSunsetMinutes = Math.min(Math.max(afterSunset, 0), 720);
+        const facing = Number(sky.facing);
+        if (Number.isFinite(facing)) settings.slideshowSky.facing = ((Math.round(facing) % 360) + 360) % 360;
+        if ('lat' in sky || 'lon' in sky) {
+            const blank = v => v === null || v === '';
+            const lat = Number(sky.lat), lon = Number(sky.lon);
+            if (blank(sky.lat) && blank(sky.lon)) Object.assign(settings.slideshowSky, { lat: null, lon: null });
+            else if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) Object.assign(settings.slideshowSky, { lat, lon });
+            else return res.status(400).json({ error: 'Latitude must be -90 to 90 and longitude -180 to 180' });
+        }
+        saveSettings();
+    }
+    if (typeof req.body.supermarket === 'string') {
+        const id = req.body.supermarket;
+        if (id && !SUPERMARKETS.some(s => s.id === id)) return res.status(400).json({ error: 'Unknown supermarket' });
+        settings.supermarket = id;
+        saveSettings();
+    }
+    if (typeof req.body.shoppingEmail === 'string') {
+        const address = req.body.shoppingEmail.trim();
+        if (address && !isEmailAddress(address)) return res.status(400).json({ error: 'That isn\'t an email address' });
+        settings.shoppingEmail = address;
+        saveSettings();
+    }
+    if (typeof req.body.passwordsEmail === 'string') {
+        const address = req.body.passwordsEmail.trim();
+        if (address && !isEmailAddress(address)) return res.status(400).json({ error: 'That isn\'t an email address' });
+        settings.passwordsEmail = address;
+        saveSettings();
+    }
     const deviceName = String(req.body.deviceName || '').trim();
     if (deviceName) {
         const oldLibraryName = localLibraryName();
         settings.deviceName = deviceName;
         saveSettings();
         renameMediaKeyServer(oldLibraryName, localLibraryName());
+        renewHttpsCertificate(); // named after the server, so devices trust it again under the new name
         loadMediaKeyedSettings();
         console.log(`Device name updated to: ${deviceName}`);
         updateLocalDlnaName(deviceName);
@@ -2719,10 +3460,10 @@ function cleanCalendarEntry(body) {
     const description = String(body.description || '').trim();
     const tags = [...new Set((Array.isArray(body.tags) ? body.tags : []).map(t => String(t).trim()).filter(Boolean))];
     if (!DATE_RE.test(date) || isNaN(new Date(`${date}T00:00:00`))) return 'A valid date is required';
-    if (!title) return 'A title is required';
+    // A meal's title is its optional name
+    if (!title && !body.meal) return 'A title is required';
     if (title.length > 200) return 'The title is too long';
     if (description.length > 10000) return 'The description is too long';
-    if (!tags.length) return 'Add at least one tag';
     if (tags.some(t => t.length > 60)) return 'A tag is too long';
 
     // Optional repeat: { unit: day|week|month, interval: 1-999, until?: YYYY-MM-DD }
@@ -2738,16 +3479,21 @@ function cleanCalendarEntry(body) {
         repeat = { unit, interval, until };
     }
 
-    // Optional linked recipe
-    const recipeId = body.recipeId ? String(body.recipeId) : null;
-    if (recipeId && !getRecipe(recipeId)) return 'That meal no longer exists';
-    // A meal is for 1-10 people
-    let people = null;
-    if (recipeId) {
-        people = Number(body.people);
-        if (!Number.isInteger(people) || people < 1 || people > 10) return 'People must be a whole number from 1 to 10';
+    // A meal (on the Meals tab's calendar): { parts: [{ id, amount, unit, times }] (its one item), family: [family member ids],
+    // times (how many of the meal, 1 if left out) }. It has no name of its own: it's its item's.
+    let meal = null;
+    if (body.meal) {
+        const ids = list => [...new Set((Array.isArray(list) ? list : []).map(String).filter(Boolean))];
+        const parts = cleanMealParts(body.meal.parts);
+        if (typeof parts === 'string') return parts;
+        meal = { parts, family: ids(body.meal.family), times: body.meal.times == null ? 1 : Number(body.meal.times) };
+        if (meal.parts.length !== 1) return 'Choose one item';
+        if (!Number.isFinite(meal.times) || meal.times <= 0 || meal.times > 99) return 'How many must be more than 0 and at most 99';
+        if (meal.family.some(id => !getGamePlayer(id))) return 'A family member no longer exists';
     }
-    return { date, title, description, repeat, recipeId, people, tags };
+    // Meals don't need tags; other entries do
+    if (!meal && !tags.length) return 'Add at least one tag';
+    return { date, title: meal ? '' : title, description: meal ? '' : description, repeat, meal, tags: meal ? [] : tags };
 }
 
 app.put('/api/calendar-entries/tag-color', express.json(), (req, res) => {
@@ -2785,9 +3531,9 @@ app.get('/api/calendar-entries/tags', (req, res) => {
     res.json({ tags, colors: Object.fromEntries(tags.map(t => [t, settings.calendarTagColors[t]])) });
 });
 
-// { people: n|null } from the most recently saved meal entry, to prefill a new one
-app.get('/api/calendar-entries/last-people', (req, res) => {
-    res.json({ people: getLastMealPeople() });
+// { family: [ids] } from the most recently saved meal with any, to prefill a new one
+app.get('/api/calendar-entries/last-family', (req, res) => {
+    res.json({ family: getLastMealFamily() });
 });
 
 app.post('/api/calendar-entries', express.json(), (req, res) => {
@@ -2810,65 +3556,599 @@ app.delete('/api/calendar-entries/:id', (req, res) => {
     res.json({ success: true });
 });
 
-// --- Recipes (Recipes tab) ---
-// Returns a clean recipe, or a string saying what's wrong
-function cleanRecipe(body) {
-    const name = String(body.name || '').trim();
-    // Each ingredient is { name, amount, unit } (the name is matched to a saved ingredient on save);
-    // a plain string is taken as just the name
-    const ingredients = (Array.isArray(body.ingredients) ? body.ingredients : [])
-        .map(i => i && typeof i === 'object' ? i : { name: i })
-        .map(i => ({ amount: String(i.amount ?? '').trim(), unit: String(i.unit ?? '').trim(), name: String(i.name ?? '').trim() }))
-        .filter(i => i.name);
-    if (!name) return 'A meal name is required';
-    if (name.length > 200) return 'The name is too long';
-    if (ingredients.length > 500) return 'Too many ingredients';
-    if (ingredients.some(i => i.name.length > 300)) return 'An ingredient is too long';
-    if (ingredients.some(i => i.amount.length > 20 || i.unit.length > 40)) return 'An amount or unit is too long';
-    return { name, ingredients };
+// One occurrence of a repeating entry, by its date: PUT makes it an entry of its own with the
+// changes given (the series skips that date), DELETE just skips it
+function findOccurrence(req, res) {
+    const series = getCalendarEntry(req.params.id);
+    if (!series) { res.status(404).json({ error: 'Entry not found' }); return null; }
+    const date = req.params.date;
+    if (!series.repeat || !DATE_RE.test(date) || !calendarEntryOccursOn(series, date)) {
+        res.status(400).json({ error: 'That entry does not repeat on that date' });
+        return null;
+    }
+    return date;
 }
 
-app.get('/api/recipes', (req, res) => {
-    res.json({ recipes: listRecipes() });
+app.put('/api/calendar-entries/:id/occurrences/:date', express.json(), (req, res) => {
+    const date = findOccurrence(req, res);
+    if (!date) return;
+    const entry = cleanCalendarEntry({ ...req.body, repeat: null });
+    if (typeof entry === 'string') return res.status(400).json({ error: entry });
+    ensureTagColors(entry.tags);
+    res.json(skipCalendarEntryOccurrence(req.params.id, date, { id: crypto.randomUUID(), ...entry }));
 });
 
-app.get('/api/recipes/:id', (req, res) => {
-    const recipe = getRecipe(req.params.id);
-    if (!recipe) return res.status(404).json({ error: 'Meal not found' });
-    res.json(recipe);
-});
-
-app.post('/api/recipes', express.json(), (req, res) => {
-    const recipe = cleanRecipe(req.body);
-    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
-    res.json(saveRecipe({ id: crypto.randomUUID(), ...recipe }));
-});
-
-app.put('/api/recipes/:id', express.json(), (req, res) => {
-    if (!getRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
-    const recipe = cleanRecipe(req.body);
-    if (typeof recipe === 'string') return res.status(400).json({ error: recipe });
-    res.json(saveRecipe({ id: req.params.id, ...recipe }));
-});
-
-app.delete('/api/recipes/:id', (req, res) => {
-    if (!deleteRecipe(req.params.id)) return res.status(404).json({ error: 'Meal not found' });
+app.delete('/api/calendar-entries/:id/occurrences/:date', (req, res) => {
+    const date = findOccurrence(req, res);
+    if (!date) return;
+    skipCalendarEntryOccurrence(req.params.id, date);
     res.json({ success: true });
 });
 
-// --- Ingredients (Recipes tab): each with the preferred quantity for one person ---
-// Returns a clean ingredient, or a string saying what's wrong
+// --- Meals tab's Meal Plan: a meal for each day of a block of weeks, rotating on the calendar ---
+const MEAL_PLAN_MAX_WEEKS = 8;
+
+app.get('/api/meal-plan', (req, res) => {
+    res.json(getMealPlan());
+});
+
+// { weeks: 1-8, startDate: YYYY-MM-DD|null }
+app.put('/api/meal-plan', express.json(), (req, res) => {
+    const weeks = Number(req.body.weeks);
+    const startDate = req.body.startDate ? String(req.body.startDate) : null;
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > MEAL_PLAN_MAX_WEEKS) return res.status(400).json({ error: `Weeks must be from 1 to ${MEAL_PLAN_MAX_WEEKS}` });
+    if (startDate && (!DATE_RE.test(startDate) || isNaN(new Date(`${startDate}T00:00:00`)))) return res.status(400).json({ error: 'The start date is not valid' });
+    setMealPlanSettings({ weeks, startDate });
+    res.json(getMealPlan());
+});
+
+// A meal's parts in order: each { id, amount, unit, times } (or a plain id) is an item, with any
+// quantity per person of its own ('' for the item's) and how many of it (1 if left out). Returns
+// them without repeats, or a string saying what's wrong.
+function cleanMealParts(list) {
+    const seen = new Set();
+    const text = v => String(v ?? '').trim();
+    const parts = (Array.isArray(list) ? list : [])
+        .map(p => p && typeof p === 'object'
+            ? { id: text(p.id), amount: text(p.amount), unit: text(p.unit), times: p.times == null ? 1 : Number(p.times) }
+            : { id: text(p), amount: '', unit: '', times: 1 })
+        .filter(p => p.id && !seen.has(p.id) && seen.add(p.id));
+    if (parts.length > 20) return 'Too many items';
+    if (parts.some(p => p.amount.length > 20 || p.unit.length > 40)) return 'An amount or unit is too long';
+    if (parts.some(p => !Number.isFinite(p.times) || p.times <= 0 || p.times > 99)) return 'How many must be more than 0 and at most 99';
+    if (parts.some(p => !getIngredient(p.id))) return 'An item no longer exists';
+    return parts;
+}
+
+// One day of the plan (0-based): { parts: [{ id, amount, unit, times }] (its one item), repeat?: { unit: day|week, interval } },
+// or { skipped: true } to leave it empty where another day's repeat would fill it. No parts clears it.
+app.put('/api/meal-plan/days/:day', express.json(), (req, res) => {
+    const day = Number(req.params.day);
+    if (!Number.isInteger(day) || day < 0 || day >= MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Not a day of the plan' });
+    const parts = cleanMealParts(req.body.parts);
+    if (typeof parts === 'string') return res.status(400).json({ error: parts });
+    if (parts.length > 1) return res.status(400).json({ error: 'Choose one item' });
+    const skipped = !!req.body.skipped;
+    let repeat = null;
+    if (req.body.repeat && !skipped) {
+        const unit = String(req.body.repeat.unit || '');
+        const interval = Number(req.body.repeat.interval);
+        if (!['day', 'week'].includes(unit)) return res.status(400).json({ error: 'Repeat must be days or weeks' });
+        if (!Number.isInteger(interval) || interval < 1 || interval > MEAL_PLAN_MAX_WEEKS * 7) return res.status(400).json({ error: 'Repeat every must be a whole number from 1 to 56' });
+        repeat = { unit, interval };
+    }
+    saveMealPlanDay(day, { name: '', parts: skipped ? [] : parts, repeat, skipped });
+    res.json(getMealPlan());
+});
+
+// The shopping list's items are the saved ingredients, the same list meals use. Any item that isn't
+// one yet is added, as a meal does when saved (matched loosely: "2 Eggs" is the saved "Egg").
+// skipLine is a line still being typed, left until it's finished. Returns how many were added.
+function addShoppingIngredients(text, skipLine = -1) {
+    const known = new Set(listIngredients().map(i => shoppingItemKey(i.name)));
+    let added = 0;
+    for (const [i, line] of text.split('\n').entries()) {
+        if (i === skipLine) continue;
+        const item = splitShoppingLine(line).item.trim();
+        const key = shoppingItemKey(item);
+        if (!key || known.has(key) || item.length > 300) continue;
+        known.add(key);
+        saveIngredient({ id: crypto.randomUUID(), name: item.charAt(0).toUpperCase() + item.slice(1), amount: '', unit: '' });
+        added++;
+    }
+    return added;
+}
+
+// The shopping lists: [{ id, name, text }], each free text with one item per line. Lists from
+// before there could be several (and snapshots from then) were the one 'shoppingList' setting.
+const SHOPPING_LIST_NAME_MAX = 60;
+function getShoppingLists() {
+    const lists = getSetting('shoppingLists', null)?.lists;
+    if (Array.isArray(lists) && lists.length) return lists;
+    return [{ id: 'main', name: 'Shopping List', text: getSetting('shoppingList', {}).text || '' }];
+}
+const saveShoppingLists = lists => setSetting('shoppingLists', { lists });
+const allShoppingText = () => getShoppingLists().map(l => l.text).join('\n');
+
+// Lists from before the two were joined
+addShoppingIngredients(allShoppingText());
+
+// After an ingredient is renamed: its lines on the shopping lists take the new name, keeping their
+// amounts ("2 pints of Milk" -> "2 pints of Semi-skimmed milk"), and its chosen picture follows it
+function renameOnShoppingList(oldName, newName) {
+    const oldKey = shoppingItemKey(oldName);
+    let changed = false;
+    const lists = getShoppingLists().map(list => {
+        const text = list.text.split('\n').map(line => {
+            const { before, item, after } = splitShoppingLine(line);
+            return shoppingItemKey(item) === oldKey ? before + newName + after : line;
+        }).join('\n');
+        if (text !== list.text) changed = true;
+        return { ...list, text };
+    });
+    if (changed) saveShoppingLists(lists);
+    const newKey = shoppingItemKey(newName);
+    const pick = getShoppingProductPick(oldKey);
+    if (pick && newKey !== oldKey && !getShoppingProductPick(newKey)) {
+        setShoppingProductPick(newKey, pick.product);
+        deleteShoppingProductPick(oldKey);
+    }
+}
+
+const onShoppingList = name => allShoppingText().split('\n').some(line => shoppingItemKey(line) === shoppingItemKey(name));
+
+// A list's name from a request: { name } trimmed, or { error }
+function shoppingListName(value) {
+    const name = typeof value === 'string' ? value.trim() : '';
+    if (!name) return { error: 'Give the list a name' };
+    if (name.length > SHOPPING_LIST_NAME_MAX) return { error: `A list's name can be up to ${SHOPPING_LIST_NAME_MAX} characters` };
+    return { name };
+}
+
+// --- Meals tab: the shopping lists ---
+app.get('/api/shopping-lists', (req, res) => {
+    res.json({ lists: getShoppingLists() });
+});
+
+app.post('/api/shopping-lists', express.json(), (req, res) => {
+    const { name, error } = shoppingListName(req.body?.name);
+    if (error) return res.status(400).json({ error });
+    const lists = getShoppingLists();
+    if (lists.length >= 50) return res.status(400).json({ error: 'There are too many lists' });
+    const list = { id: crypto.randomUUID(), name, text: '' };
+    lists.push(list);
+    saveShoppingLists(lists);
+    res.json({ list, lists });
+});
+
+// Changes a list's name and/or items
+app.put('/api/shopping-lists/:id', express.json(), (req, res) => {
+    const lists = getShoppingLists();
+    const list = lists.find(l => l.id === req.params.id);
+    if (!list) return res.status(404).json({ error: 'That list has been deleted' });
+    const { text } = req.body || {};
+    if (text !== undefined) {
+        if (typeof text !== 'string') return res.status(400).json({ error: 'text is required' });
+        if (text.length > 20000) return res.status(400).json({ error: 'The list is too long' });
+        list.text = text;
+    }
+    if (req.body?.name !== undefined) {
+        const { name, error } = shoppingListName(req.body.name);
+        if (error) return res.status(400).json({ error });
+        list.name = name;
+    }
+    saveShoppingLists(lists);
+    const skipLine = Number.isInteger(req.body?.skipLine) ? req.body.skipLine : -1;
+    res.json({ list, ingredientsAdded: text === undefined ? 0 : addShoppingIngredients(text, skipLine) });
+});
+
+// The last list can't go: there's always one to put things on
+app.delete('/api/shopping-lists/:id', (req, res) => {
+    const lists = getShoppingLists();
+    if (!lists.some(l => l.id === req.params.id)) return res.status(404).json({ error: 'That list has already been deleted' });
+    if (lists.length === 1) return res.status(400).json({ error: "The only list can't be deleted" });
+    const rest = lists.filter(l => l.id !== req.params.id);
+    saveShoppingLists(rest);
+    res.json({ lists: rest });
+});
+
+// Where an emailed item links to: its search on the chosen supermarket's website, or null with
+// none chosen. A picture chosen by hand names the exact product ("Heinz Baked Beans"), though
+// without another supermarket's name; otherwise it's the item without its amount ("2 pints of Milk" -> "Milk").
+function supermarketSearchUrl(line) {
+    const supermarket = SUPERMARKETS.find(s => s.id === settings.supermarket);
+    if (!supermarket?.search) return null;
+    const product = getShoppingProductPick(shoppingItemKey(line))?.product;
+    let query = splitShoppingLine(line).item.trim() || line;
+    if (product?.name) {
+        const brand = product.brand?.split(',')[0].trim();
+        const brandTag = brand?.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const otherShop = SUPERMARKETS.some(s => s !== supermarket && s.brands.includes(brandTag));
+        query = brand && !otherShop && !product.name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${product.name}` : product.name;
+    }
+    return supermarket.search + encodeURIComponent(query);
+}
+
+// Emails a saved list to the nominated address, each item linked to its search on the chosen supermarket's website
+app.post('/api/shopping-lists/:id/email', async (req, res) => {
+    const list = getShoppingLists().find(l => l.id === req.params.id);
+    if (!list) return res.status(404).json({ error: 'That list has been deleted' });
+    if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
+    if (!settings.shoppingEmail) return res.status(400).json({ error: 'Set an email address in Server Settings → Shopping first' });
+    const sender = emailSender();
+    if (!isEmailAddress(sender)) return res.status(400).json({ error: 'Set a From address for the mail server first' });
+    const lines = list.text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: `The ${list.name} list is empty` });
+    const date = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+    const escape = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    try {
+        await emailTransport().sendMail({
+            from: { name: settings.deviceName || 'AMMUI', address: sender },
+            to: settings.shoppingEmail,
+            subject: `${list.name} – ${date}`,
+            text: lines.map(l => `- ${l}`).join('\n'),
+            html: `<ul>${lines.map(l => {
+                const url = supermarketSearchUrl(l);
+                return `<li>${url ? `<a href="${escape(url)}">${escape(l)}</a>` : escape(l)}</li>`;
+            }).join('')}</ul>`
+        });
+        console.log(`Shopping list "${list.name}" (${lines.length} items) emailed to ${settings.shoppingEmail}.`);
+        res.json({ ok: true, to: settings.shoppingEmail, items: lines.length });
+    } catch (err) {
+        console.error('Emailing the shopping list failed:', err.message);
+        res.status(502).json({ error: `Couldn't send the email: ${err.message}` });
+    }
+});
+
+// --- Passwords tab: name, username, password, website and notes, the passwords kept encrypted
+// (lib/secret-box.js). The list never carries the passwords themselves: each is fetched on its own,
+// to show, copy or change it.
+const PASSWORD_FIELD_LIMITS = { name: 200, username: 200, password: 1000, url: 2000, notes: 10000 };
+const passwordId = req => Number.parseInt(req.params.id, 10);
+const passwordSummary = r => ({ id: r.id, name: r.name, username: r.username, url: r.url, notes: r.notes, hasPassword: !!r.password, updatedAt: r.updated_at });
+const passwordsEmailTo = () => settings.passwordsEmail || settings.shoppingEmail;
+
+// The fields from a request, trimmed and limited; the password is left as typed
+function passwordFields(body) {
+    const out = {};
+    for (const [key, max] of Object.entries(PASSWORD_FIELD_LIMITS)) {
+        if (typeof body?.[key] !== 'string') continue;
+        const value = key === 'password' ? body[key] : body[key].trim();
+        if (value.length > max) throw new Error(`The ${key} is too long`);
+        out[key] = value;
+    }
+    return out;
+}
+
+app.get('/api/passwords', (req, res) => {
+    // The address set here, and the shopping list's, which is used when none is
+    res.json({ entries: listPasswords().map(passwordSummary), emailTo: settings.passwordsEmail, fallbackEmailTo: settings.shoppingEmail });
+});
+
+app.get('/api/passwords/:id/password', (req, res) => {
+    const row = getPassword(passwordId(req));
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    try {
+        res.json({ password: decryptSecret(row.password) });
+    } catch {
+        res.status(500).json({ error: 'This password was saved with another key (on another server?) and can\'t be read here' });
+    }
+});
+
+app.post('/api/passwords', express.json(), (req, res) => {
+    try {
+        const fields = passwordFields(req.body);
+        if (!fields.name) return res.status(400).json({ error: 'Give it a name' });
+        const id = savePassword({ username: '', url: '', notes: '', ...fields, password: encryptSecret(fields.password || '') });
+        res.json(passwordSummary(getPassword(id)));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Fields left out keep what they had (so leaving the password out leaves it as it is)
+app.put('/api/passwords/:id', express.json(), (req, res) => {
+    const id = passwordId(req);
+    const row = getPassword(id);
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    try {
+        const fields = passwordFields(req.body);
+        if ('name' in fields && !fields.name) return res.status(400).json({ error: 'Give it a name' });
+        const password = 'password' in fields ? encryptSecret(fields.password) : row.password;
+        savePassword({ ...row, ...fields, password }, id);
+        res.json(passwordSummary(getPassword(id)));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete('/api/passwords/:id', (req, res) => {
+    if (!deletePassword(passwordId(req))) return res.status(404).json({ error: 'No such entry' });
+    res.json({ ok: true });
+});
+
+// Emails one entry, password and all, to the Passwords tab's address
+app.post('/api/passwords/:id/email', async (req, res) => {
+    const row = getPassword(passwordId(req));
+    if (!row) return res.status(404).json({ error: 'No such entry' });
+    if (!settings.email.host) return res.status(400).json({ error: 'Set up a mail server in Server Settings → Integrations first' });
+    const to = passwordsEmailTo();
+    if (!to) return res.status(400).json({ error: 'Set the address to send to first' });
+    const sender = emailSender();
+    if (!isEmailAddress(sender)) return res.status(400).json({ error: 'Set a From address for the mail server first' });
+    let password;
+    try { password = decryptSecret(row.password); } catch { return res.status(500).json({ error: 'This password can\'t be read on this server' }); }
+    const escape = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+    const rows = [['Name', row.name], ['Username', row.username], ['Password', password], ['Website', row.url], ['Notes', row.notes]];
+    try {
+        await emailTransport().sendMail({
+            from: { name: settings.deviceName || 'AMMUI', address: sender },
+            to,
+            subject: `Password: ${row.name}`,
+            text: rows.map(([label, value]) => `${label}: ${value || '-'}`).join('\n'),
+            html: `<table cellpadding="4">${rows.map(([label, value]) =>
+                `<tr><th align="left" valign="top">${label}</th><td style="white-space:pre-wrap">${escape(value || '-')}</td></tr>`).join('')}</table>`,
+        });
+        console.log(`Password entry "${row.name}" emailed to ${to}.`);
+        res.json({ ok: true, to });
+    } catch (err) {
+        console.error('Emailing a password entry failed:', err.message);
+        res.status(502).json({ error: `Couldn't send the email: ${err.message}` });
+    }
+});
+
+// The product picture for one shopping list line: { product: { code, name, brand, image } | null, picked }.
+// A picture chosen by hand (picked) wins. Otherwise it's looked up once and kept: a match for
+// 90 days, no match for a week (Open Food Facts keeps growing).
+const SHOPPING_PRODUCT_TTL = 90 * 24 * 3600 * 1000;
+const SHOPPING_NO_PRODUCT_TTL = 7 * 24 * 3600 * 1000;
+const shoppingProductLookups = new Map(); // key -> Promise, so the same item isn't searched twice at once
+
+const shoppingLine = req => String(req.query.item ?? req.body?.item ?? '').trim().slice(0, 200);
+
+async function automaticShoppingProduct(line) {
+    const supermarket = settings.supermarket;
+    const key = shoppingProductKey(line, supermarket);
+    if (key.endsWith('|')) return null;
+    const cached = getCachedShoppingProduct(key);
+    if (cached && Date.now() - cached.fetchedAt < (cached.product ? SHOPPING_PRODUCT_TTL : SHOPPING_NO_PRODUCT_TTL)) {
+        return cached.product;
+    }
+    try {
+        let lookup = shoppingProductLookups.get(key);
+        if (!lookup) {
+            lookup = findShoppingProduct(line, supermarket)
+                .then(product => { setCachedShoppingProduct(key, product); return product; })
+                .finally(() => shoppingProductLookups.delete(key));
+            shoppingProductLookups.set(key, lookup);
+        }
+        return await lookup;
+    } catch (err) {
+        // An old picture beats none while Open Food Facts is down or busy
+        if (cached) return cached.product;
+        throw err;
+    }
+}
+
+app.get('/api/shopping-list/product', async (req, res) => {
+    const line = shoppingLine(req);
+    const pick = getShoppingProductPick(shoppingItemKey(line));
+    if (pick) return res.json({ product: pick.product, picked: true });
+    try {
+        res.json({ product: await automaticShoppingProduct(line), picked: false });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// Products to choose a line's picture from: the line's item, or q if given ("andrex" for "toilet roll")
+app.get('/api/shopping-list/products', async (req, res) => {
+    const query = String(req.query.q ?? '').trim().slice(0, 200) || shoppingLine(req);
+    if (!query) return res.status(400).json({ error: 'Enter something to search for' });
+    try {
+        res.json({ products: await searchShoppingProducts(query, settings.supermarket) });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// Chooses the picture for a line's item, for every line with that item from now on (like album
+// art). product is one from the list above, or null for no picture.
+app.put('/api/shopping-list/product', express.json(), (req, res) => {
+    const key = shoppingItemKey(shoppingLine(req));
+    if (!key) return res.status(400).json({ error: 'item is required' });
+    const p = req.body.product;
+    let product = null;
+    if (p !== null) {
+        const text = v => String(v ?? '').trim().slice(0, 200);
+        if (!p || !/^\d{1,30}$/.test(String(p.code)) || !/^https:\/\/images\.openfoodfacts\.org\//.test(String(p.image))) {
+            return res.status(400).json({ error: 'Pick a product from the list' });
+        }
+        product = { code: String(p.code), name: text(p.name), brand: text(p.brand), image: String(p.image).slice(0, 500) };
+    }
+    setShoppingProductPick(key, product);
+    res.json({ product, picked: true });
+});
+
+// Forgets the chosen picture: the item goes back to the automatic one
+app.delete('/api/shopping-list/product', async (req, res) => {
+    const line = shoppingLine(req);
+    deleteShoppingProductPick(shoppingItemKey(line));
+    try {
+        res.json({ product: await automaticShoppingProduct(line), picked: false });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// --- Games tab: players, and each player's game for the day (day = days since 1970, their local date) ---
+app.get('/api/games/players', (req, res) => {
+    res.json(listGamePlayers());
+});
+
+app.post('/api/games/players', express.json(), (req, res) => {
+    const name = String(req.body.name ?? '').trim();
+    if (!name) return res.status(400).json({ error: 'Enter a name' });
+    if (name.length > 40) return res.status(400).json({ error: 'That name is too long' });
+    if (findGamePlayerByName(name)) return res.status(400).json({ error: `"${name}" is already in the family` });
+    res.json(addGamePlayer(crypto.randomUUID(), name));
+});
+
+app.delete('/api/games/players/:id', (req, res) => {
+    if (!deleteGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    res.json({ success: true });
+});
+
+function gameDay(value) {
+    const day = Number(value);
+    return Number.isInteger(day) && day > 0 ? day : null;
+}
+
+app.get('/api/games/players/:id/game', (req, res) => {
+    const day = gameDay(req.query.day);
+    if (day === null) return res.status(400).json({ error: 'day is required' });
+    if (!getGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    res.json({ ...getWordGame(req.params.id, day), stats: getWordGameStats(req.params.id, day) });
+});
+
+// Guesses only ever get added to, and a finished game stays finished, so a day can't be replayed
+app.put('/api/games/players/:id/game', express.json(), (req, res) => {
+    const day = gameDay(req.body.day);
+    const guesses = req.body.guesses;
+    const status = req.body.status;
+    if (day === null) return res.status(400).json({ error: 'day is required' });
+    if (!Array.isArray(guesses) || guesses.length > 6 || !guesses.every(g => /^[a-z]{5}$/.test(g))) {
+        return res.status(400).json({ error: 'Invalid guesses' });
+    }
+    if (!['playing', 'won', 'lost'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
+    if (!getGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
+    const saved = getWordGame(req.params.id, day);
+    if (saved.status !== 'playing' || saved.guesses.some((g, i) => guesses[i] !== g)) {
+        return res.status(409).json({ error: 'This game was already played', ...saved, stats: getWordGameStats(req.params.id, day) });
+    }
+    saveWordGame(req.params.id, day, guesses, status);
+    res.json({ guesses, status, stats: getWordGameStats(req.params.id, day) });
+});
+
+// --- Items (Meals tab): a single item with its quantity for one person, or one made of other items ---
+// Returns a clean item, or a string saying what's wrong. id is the item being changed (null for a
+// new one). parts, if given, is [{ id, amount, unit }]: the items it's made of, or [] for a single item.
 function cleanIngredient(body, id) {
     const name = String(body.name ?? '').trim();
     const amount = String(body.amount ?? '').trim();
     const unit = String(body.unit ?? '').trim();
-    if (!name) return 'An ingredient name is required';
-    if (name.length > 300) return 'The ingredient name is too long';
+    if (!name) return 'An item name is required';
+    if (name.length > 300) return 'The item name is too long';
     if (amount.length > 20 || unit.length > 40) return 'The amount or unit is too long';
-    const sameName = findIngredientIdByName(name);
-    if (sameName && sameName !== id) return `"${name}" is already in the list`;
-    return { name, amount, unit };
+    // Nor one the shopping list counts as the same item ("Egg" when there's "Eggs")
+    const key = shoppingItemKey(name);
+    const sameId = findIngredientIdByName(name) || (key && listIngredients().find(i => shoppingItemKey(i.name) === key)?.id);
+    if (sameId && sameId !== id) return `"${getIngredient(sameId).name}" is already in the list`;
+    // Left out, confirmed and parts stay as they are
+    const confirmed = 'confirmed' in body ? !!body.confirmed : undefined;
+    let parts;
+    if ('parts' in body) {
+        parts = cleanItemParts(body.parts, id);
+        if (typeof parts === 'string') return parts;
+    }
+    if (!('nutrition' in body)) return { name, amount, unit, confirmed, parts };
+    const nutrition = cleanNutrition(body.nutrition);
+    return typeof nutrition === 'string' ? nutrition : { name, amount, unit, confirmed, parts, nutrition };
 }
+
+// The items an item is made of: [{ id, amount, unit }] in order (an item can be in it more than
+// once). Returns a string saying what's wrong.
+function cleanItemParts(list, id) {
+    if (!Array.isArray(list)) return 'Invalid items';
+    const parts = list.map(p => ({ id: String(p?.id || ''), amount: String(p?.amount ?? '').trim(), unit: String(p?.unit ?? '').trim() }));
+    if (parts.length > 200) return 'Too many items';
+    if (parts.some(p => p.amount.length > 20 || p.unit.length > 40)) return 'An amount or unit is too long';
+    if (parts.some(p => !p.id || !getIngredient(p.id))) return 'An item no longer exists';
+    if (id && (parts.some(p => p.id === id) || itemPartsLoop(id, parts.map(p => p.id)))) return "An item can't be made of itself";
+    return parts;
+}
+
+// An ingredient's calories: null, or { kcalPer100g, proteinPer100g, carbsPer100g, fatPer100g, alcoholPer100g,
+// gramsPerUnit: { unit: grams }, source, sourceId, sourceName } (a macro is null if not known; source
+// is the food table it came from, or '' if typed in). Returns a string saying what's wrong.
+function cleanNutrition(n) {
+    if (n == null) return null;
+    if (typeof n !== 'object') return 'Invalid calories';
+    const kcalPer100g = Number(n.kcalPer100g);
+    if (!Number.isFinite(kcalPer100g) || kcalPer100g < 0 || kcalPer100g > 1000) return 'Calories per 100 g must be between 0 and 1000';
+    const macros = {};
+    for (const [key, label] of [['proteinPer100g', 'Protein'], ['carbsPer100g', 'Carbs'], ['fatPer100g', 'Fat'], ['alcoholPer100g', 'Alcohol']]) {
+        if (n[key] == null || n[key] === '') { macros[key] = null; continue; }
+        const g = Number(n[key]);
+        if (!Number.isFinite(g) || g < 0 || g > 100) return `${label} per 100 g must be between 0 and 100`;
+        macros[key] = g;
+    }
+    const gramsPerUnit = {};
+    for (const [unit, grams] of Object.entries(n.gramsPerUnit && typeof n.gramsPerUnit === 'object' ? n.gramsPerUnit : {})) {
+        const g = Number(grams);
+        if (unit.length > 40 || !Number.isFinite(g) || g <= 0 || g > 100000) return `Invalid weight for "${unit}"`;
+        gramsPerUnit[unit.toLowerCase()] = g;
+    }
+    // Exports from the first, USDA-only version have fdcId/fdcName instead
+    const legacyUsda = !n.source && Number.isInteger(n.fdcId) && n.fdcId > 0;
+    const source = legacyUsda ? 'usda' : NUTRITION_SOURCES.includes(n.source) ? n.source : '';
+    return {
+        kcalPer100g, ...macros, gramsPerUnit, source,
+        sourceId: source ? String((legacyUsda ? n.fdcId : n.sourceId) ?? '').slice(0, 40) : '',
+        sourceName: source ? String((legacyUsda ? n.fdcName : n.sourceName) ?? '').slice(0, 300) : '',
+    };
+}
+
+// Calorie lookups for ingredients: UK food tables (bundled), Open Food Facts or USDA
+function nutritionError(res, err) {
+    if (err instanceof NutritionError) return res.status(err.status).json({ error: err.message });
+    console.error('[Nutrition]', err);
+    res.status(500).json({ error: 'Calorie lookup failed' });
+}
+
+app.get('/api/nutrition/search', async (req, res) => {
+    const query = String(req.query.q ?? '').trim();
+    if (!query) return res.status(400).json({ error: 'Enter something to search for' });
+    try {
+        res.json({ foods: await searchFoods(String(req.query.source || 'cofid'), query, { usdaKey: settings.usdaApiKey, branded: req.query.branded === '1' }) });
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+app.get('/api/nutrition/food/:source/:id', async (req, res) => {
+    try {
+        res.json(await getFood(req.params.source, req.params.id, { usdaKey: settings.usdaApiKey }));
+    } catch (err) {
+        nutritionError(res, err);
+    }
+});
+
+// Items given calories before protein, carbs and fat (or alcohol) were kept get them from the food
+// they were looked up from. Online sources are asked one at a time; anything that fails is tried
+// again on the next start.
+async function fillMissingMacros() {
+    const noMacros = n => n.proteinPer100g == null && n.carbsPer100g == null && n.fatPer100g == null;
+    const missing = listIngredients().filter(i => i.nutrition?.source && i.nutrition.sourceId
+        && (noMacros(i.nutrition) || i.nutrition.alcoholPer100g == null)
+        && (i.nutrition.source !== 'usda' || settings.usdaApiKey));
+    let filled = 0;
+    for (const ingredient of missing) {
+        const { source, sourceId } = ingredient.nutrition;
+        try {
+            const food = await getFood(source, sourceId, { usdaKey: settings.usdaApiKey });
+            let changed = false;
+            if (noMacros(ingredient.nutrition) && !noMacros(food)) { setIngredientMacros(ingredient.id, food); changed = true; }
+            if (ingredient.nutrition.alcoholPer100g == null && food.alcoholPer100g != null) { setIngredientAlcohol(ingredient.id, food.alcoholPer100g); changed = true; }
+            if (changed) filled++;
+        } catch (err) {
+            console.warn(`[Nutrition] Couldn't look up protein, carbs, fat and alcohol for "${ingredient.name}": ${err.message}`);
+            if (err.status === 429) break;
+        }
+    }
+    if (filled) console.log(`[Nutrition] Added protein, carbs, fat or alcohol to ${filled} item${filled === 1 ? '' : 's'}`);
+}
+fillMissingMacros().catch(err => console.error('[Nutrition]', err));
 
 app.get('/api/ingredients', (req, res) => {
     res.json({ ingredients: listIngredients() });
@@ -2881,29 +4161,71 @@ app.post('/api/ingredients', express.json(), (req, res) => {
 });
 
 app.put('/api/ingredients/:id', express.json(), (req, res) => {
-    if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
+    const current = getIngredient(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Item not found' });
     const ingredient = cleanIngredient(req.body, req.params.id);
     if (typeof ingredient === 'string') return res.status(400).json({ error: ingredient });
-    res.json(saveIngredient({ id: req.params.id, ...ingredient }));
+    const saved = saveIngredient({ id: req.params.id, ...ingredient });
+    if (saved.name !== current.name) renameOnShoppingList(current.name, saved.name);
+    res.json(saved);
 });
 
 app.delete('/api/ingredients/:id', (req, res) => {
-    const meals = mealsUsingIngredient(req.params.id);
-    if (meals.length) {
-        const shown = meals.slice(0, 3).join(', ') + (meals.length > 3 ? ` and ${meals.length - 3} more` : '');
-        return res.status(409).json({ error: `It's used in ${shown}. Remove it from ${meals.length === 1 ? 'that meal' : 'those meals'} first.` });
+    const users = itemsUsingIngredient(req.params.id);
+    if (users.length) {
+        const shown = users.slice(0, 3).join(', ') + (users.length > 3 ? ` and ${users.length - 3} more` : '');
+        return res.status(409).json({ error: `It's part of ${shown}. Take it out of ${users.length === 1 ? 'that item' : 'those items'} first.` });
     }
-    if (!deleteIngredient(req.params.id)) return res.status(404).json({ error: 'Ingredient not found' });
+    const ingredient = getIngredient(req.params.id);
+    if (!ingredient) return res.status(404).json({ error: 'Item not found' });
+    if (onShoppingList(ingredient.name)) return res.status(409).json({ error: "It's on the shopping list. Take it off there first." });
+    deleteIngredient(req.params.id);
     res.json({ success: true });
 });
 
 app.get('/api/sync/s3/status', (req, res) => {
-    res.json(s3SyncStatus);
+    res.json({ ...s3SyncStatus, bootId });
 });
 
 app.post('/api/sync/s3/start', (req, res) => {
     if (s3SyncStatus.running) return res.status(400).json({ error: 'Sync already running' });
     syncToS3({ manual: true }); // Trigger async
+    res.json({ success: true });
+});
+
+// Changes the bucket folder this server backs up into. move: takes the backup already in the
+// old folder along (moveS3Folder), only into a folder with nothing in it; otherwise the next
+// backup starts afresh in the new one.
+app.post('/api/sync/s3/folder', express.json(), async (req, res) => {
+    const folder = s3FolderName(req.body.folder);
+    if (!folder || folder.startsWith('.')) return res.status(400).json({ error: 'Enter a folder name' });
+    if (s3SyncStatus.running) return res.status(400).json({ error: 'Wait for the backup or restore to finish first' });
+    const from = s3BackupFolder();
+    if (folder === from) return res.json({ success: true, folder });
+    if (req.body.move) {
+        if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+            return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+        }
+        try {
+            const page = await createS3Client().send(new ListObjectsV2Command({ Bucket: settings.s3.bucket, Prefix: `${folder}/`, MaxKeys: 1 }));
+            if (page.KeyCount > 0 || page.Contents?.length) {
+                return res.status(409).json({ error: `"${folder}" already has a backup in it. Pick another name.` });
+            }
+        } catch (err) {
+            return res.status(500).json({ error: err.message });
+        }
+    }
+    settings.s3.folder = folder;
+    saveSettings();
+    console.log(`[S3] Backups now go into ${folder}/ (was ${from}/)${req.body.move ? ', moving the old backup there' : ''}`);
+    if (req.body.move) moveS3Folder(from, folder); // runs on; its progress shows in the status
+    res.json({ success: true, folder });
+});
+
+// Stops the backup or restore going on (see s3Run)
+app.post('/api/sync/s3/cancel', (req, res) => {
+    if (!cancelS3Run()) return res.status(400).json({ error: 'Nothing to cancel' });
+    s3Log('[S3] Cancelling...');
     res.json({ success: true });
 });
 
@@ -2918,6 +4240,20 @@ app.get('/api/sync/s3/folders', async (req, res) => {
     }
 });
 
+app.get('/api/sync/s3/backup', async (req, res) => {
+    const folder = String(req.query.folder || '').replace(/\/+$/, '');
+    if (!folder) return res.status(400).json({ error: 'No folder chosen' });
+    if (!settings.s3.bucket || !settings.s3.accessKeyId) {
+        return res.status(400).json({ error: 'Enter the bucket and access keys first' });
+    }
+    try {
+        res.json(await describeS3Backup(folder));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// media: library folders to download; data: groups of RESTORE_GROUPS to put back from the snapshot
 app.post('/api/sync/s3/restore', express.json(), (req, res) => {
     const folder = String(req.body.folder || '').replace(/\/+$/, '');
     if (!folder) return res.status(400).json({ error: 'No folder chosen' });
@@ -2925,7 +4261,11 @@ app.post('/api/sync/s3/restore', express.json(), (req, res) => {
         return res.status(400).json({ error: 'Enter the bucket and access keys first' });
     }
     if (s3SyncStatus.running) return res.status(400).json({ error: 'A sync or restore is already running' });
-    restoreFromS3(folder); // Trigger async
+    const media = Array.isArray(req.body.media) ? req.body.media.map(String) : [];
+    const data = Array.isArray(req.body.data) ? req.body.data.filter(g => Object.hasOwn(RESTORE_GROUPS, g)) : [];
+    const takeOver = req.body.takeOver === true;
+    if (!media.length && !data.length && !takeOver) return res.status(400).json({ error: 'Choose something to restore' });
+    restoreFromS3(folder, { media, data, takeOver }); // Trigger async
     res.json({ success: true });
 });
 
@@ -2939,7 +4279,9 @@ app.get('/api/sync/s3/log', (req, res) => {
     }
 });
 
-const upload = multer({ dest: 'uploads/' });
+// Browsers send file names as UTF-8; multer would otherwise read them as Latin-1, turning
+// "You’re" into "Youâ\u0080\u0099re".
+const upload = multer({ dest: 'uploads/', defParamCharset: 'utf8' });
 
 app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -3071,30 +4413,29 @@ app.post('/api/upload-local-file', upload.single('file'), async (req, res) => {
         if (isImage || isVideo) {
             // Images go in the date-based picture tree; videos get the same
             // date foldering but under their own local/videos root so they stay a
-            // separate library category. detectPictureDate falls back to filename /
-            // folder-name dates when there's no readable EXIF, which is what we want
-            // for phone/WhatsApp names.
-            const rootSub = isVideo ? 'videos' : 'pictures';
+            // separate library category, except a Live Photo's video, which goes beside its
+            // photo (the browser says when its photo is in the same upload, and which month folder
+            // the photo went to). detectPictureDate falls back to filename / folder-name dates when
+            // there's no readable EXIF, which is what we want for phone/WhatsApp names.
             const hintSegments = relativePath.split(/[/\\]/).reverse();
             const detected = await detectPictureDate(req.file.path, { hintFilename: filename, hintSegments, useBirthtime: false });
+            const photoDir = /^(\d{4}\/\d{2}|unknown-date)$/.test(req.body.photoDir || '') ? req.body.photoDir : null;
+            const dateDir = isVideo && photoDir ? photoDir : dateFolder(detected);
+            const live = isVideo && (req.body.livePhoto === '1' || hasPhotoBeside(path.join(localDir, 'pictures', dateDir), filename));
+            const rootSub = isVideo && !live ? 'videos' : 'pictures';
 
-            let finalDir;
-            if (!detected) {
-                finalDir = path.join(localDir, rootSub, 'unknown-date');
-            } else {
-                const { year, month } = detected;
-                finalDir = path.join(localDir, rootSub, year, month ?? '01');
-            }
+            const finalDir = path.join(localDir, rootSub, dateDir);
             if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
             const finalPath = path.join(finalDir, filename);
             if (fs.existsSync(finalPath)) {
                 fs.unlinkSync(req.file.path);
-                return res.json({ success: true, filename, skipped: true });
+                return res.json({ success: true, filename, skipped: true, dateDir });
             }
 
             fs.renameSync(req.file.path, finalPath);
-            return res.json({ success: true, filename, type: isVideo ? 'video' : 'image', year: detected?.year, month: detected?.month });
+            if (live) console.log(`[UPLOAD] Live Photo video ${filename} filed beside its photo`);
+            return res.json({ success: true, filename, type: live ? 'live' : isVideo ? 'video' : 'image', year: detected?.year, month: detected?.month, dateDir });
 
         } else {
             let artist = 'Unknown Artist';
@@ -3173,6 +4514,50 @@ function getRecentCutoff() {
     return new Date(now.getFullYear(), now.getMonth() - 1, 1);
 }
 
+// iPhone Live Photos come as a photo and a short video of the same name side by side. The
+// video is filed beside its photo in the pictures tree (where the slideshow finds it) rather
+// than in the videos library: either because it came in the same batch as its photo, or
+// because the photo is already in the folder it's going to.
+const fileStem = name => path.basename(name, path.extname(name)).toLowerCase();
+
+function hasPhotoBeside(dir, filename) {
+    const stem = fileStem(filename);
+    try {
+        return fs.readdirSync(dir).some(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()) && fileStem(f) === stem);
+    } catch (e) {
+        return false;
+    }
+}
+
+const livePathKey = p => `${path.posix.dirname(p).toLowerCase()}|${fileStem(p)}`;
+
+// The paths in a batch that are videos with a photo of the same name in the same folder
+function liveVideoPaths(paths) {
+    const photos = new Set(paths.filter(p => IMAGE_EXTS.has(path.extname(p).toLowerCase())).map(livePathKey));
+    return new Set(paths.filter(p => VIDEO_EXTS.has(path.extname(p).toLowerCase()) && photos.has(livePathKey(p))));
+}
+
+// "YYYY/MM" (or "unknown-date") folder under pictures/videos for a detected date
+const dateFolder = detected => detected ? `${detected.year}/${detected.month ?? '01'}` : 'unknown-date';
+
+// Copying a folder from a server: each Live Photo's video is copied after its photo, so it can
+// follow the photo into whichever month folder the photo's date put it in.
+function livePhotoBatch(tracks) {
+    const live = liveVideoPaths(tracks.map(t => uriPath(t.uri)));
+    const isLive = t => live.has(uriPath(t.uri));
+    const photoDirs = new Map(); // livePathKey -> date folder its photo went to
+    return {
+        tracks: [...tracks.filter(t => !isLive(t)), ...tracks.filter(isLive)],
+        options: t => isLive(t) ? { livePhoto: true, photoDir: photoDirs.get(livePathKey(uriPath(t.uri))) } : {},
+        done: (t, result) => { if (result?.dateDir) photoDirs.set(livePathKey(uriPath(t.uri)), result.dateDir); },
+    };
+}
+
+// The path part of a media URL, for pairing Live Photos when copying a folder from a server
+function uriPath(uri) {
+    try { return decodeURIComponent(new URL(uri).pathname); } catch (e) { return ''; }
+}
+
 // An imported "albumart~Artist~Album" image (see albumArtName) goes back into
 // local/music/<Artist>/<Album> as that album's cover rather than into the pictures tree.
 // An album that already has a cover keeps it. srcPath is a temp file, removed either way.
@@ -3195,7 +4580,9 @@ function importAlbumArt(srcPath, artInfo, ext) {
     }
 }
 
-async function downloadFileHelper(uri, title, artist, album) {
+// `livePhoto`: a video whose photo is being copied with it, and `photoDir` the month folder the
+// photo went to (see livePhotoBatch). Pictures answer with the `dateDir` they went to.
+async function downloadFileHelper(uri, title, artist, album, { livePhoto = false, photoDir = null } = {}) {
     const localDir = path.join(__dirname, 'local');
 
     // Get extension from URI or default to .mp3
@@ -3269,8 +4656,8 @@ async function downloadFileHelper(uri, title, artist, album) {
         }
 
         // Post-process: determine Year/Month via shared detectPictureDate. Videos get the
-        // same date foldering under local/videos, as uploads do.
-        const rootSub = isVideo ? 'videos' : 'pictures';
+        // same date foldering under local/videos, as uploads do, and Live Photo videos go
+        // beside their photo.
         let hintSegments;
         try {
             const uriPath = new URL(uri).pathname;
@@ -3281,25 +4668,22 @@ async function downloadFileHelper(uri, title, artist, album) {
         if (detected) console.log(`[DOWNLOAD] Date detected: ${detected.year}-${detected.month ?? '??'} for ${filename}`);
 
         // Final fallback: unknown date folder
-        let finalDir;
-        if (!detected) {
-            console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
-            finalDir = path.join(localDir, rootSub, 'unknown-date');
-        } else {
-            const { year, month } = detected;
-            finalDir = path.join(localDir, rootSub, year, month ?? '01');
-        }
+        if (!detected) console.log(`[DOWNLOAD] No date found for ${filename}, placing in unknown-date`);
+        const dateDir = isVideo && livePhoto && photoDir ? photoDir : dateFolder(detected);
+        const live = isVideo && (livePhoto || hasPhotoBeside(path.join(localDir, 'pictures', dateDir), filename));
+        if (live) console.log(`[DOWNLOAD] Live Photo video ${filename} filed beside its photo`);
+        const finalDir = path.join(localDir, isVideo && !live ? 'videos' : 'pictures', dateDir);
         if (!fs.existsSync(finalDir)) fs.mkdirSync(finalDir, { recursive: true });
 
         const finalPath = path.join(finalDir, filename);
         if (fs.existsSync(finalPath)) {
             fs.unlinkSync(downloadPath);
-            return { success: true, filename: filename, skipped: true };
+            return { success: true, filename: filename, skipped: true, dateDir };
         }
 
         fs.renameSync(downloadPath, finalPath);
         console.log(`Picture saved to ${finalPath}`);
-        return { success: true, filename };
+        return { success: true, filename, dateDir };
     }
 }
 
@@ -3331,10 +4715,11 @@ app.post('/api/download-folder', express.json(), async (req, res) => {
         let downloadCount = 0;
         let failCount = 0;
 
-        const tracks = await server.browseRecursive(objectId);
-        for (const track of tracks) {
+        const batch = livePhotoBatch(await server.browseRecursive(objectId));
+        for (const track of batch.tracks) {
             try {
-                await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
+                batch.done(track, await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album,
+                    batch.options(track)));
                 downloadCount++;
             } catch (err) {
                 console.error(`Failed to download ${track.title}:`, err.message);
@@ -3386,7 +4771,8 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
             const server = new MediaServer(device);
             job.current = 'Scanning folder...';
             pushDownloadJobUpdate(job);
-            const tracks = await server.browseRecursive(objectId);
+            const batch = livePhotoBatch(await server.browseRecursive(objectId));
+            const tracks = batch.tracks;
             job.total = tracks.length;
             pushDownloadJobUpdate(job);
 
@@ -3394,7 +4780,9 @@ app.post('/api/download-folder-start', express.json(), async (req, res) => {
                 const track = tracks[i];
                 job.current = track.title;
                 try {
-                    const result = await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album);
+                    const result = await downloadFileHelper(track.uri, track.title, track.albumArtist || track.artist || albumArtist || artist, track.album || album,
+                        batch.options(track));
+                    batch.done(track, result);
                     if (result.skipped) {
                         job.skippedCount++;
                         job.log.push({ status: 'skipped', title: track.title });
@@ -3534,10 +4922,51 @@ function removeFromScreensaverCache(url) {
     }
 }
 
-// Fills the cache with the photos under its folder from the server's library index.
+// ─── Slideshow videos ────────────────────────────────────────────────────────
+// With videos turned on, the videos in the slideshow's photo folder join its photos: mostly
+// iPhone Live Photos, whose short video is filed beside its photo when imported. A video stands
+// in for the photo of the same name beside it, so the moment shows once, moving.
+
+// Folder and file name without extension, to pair a Live Photo's video with its photo
+const livePhotoKey = i => {
+    const p = uriPath(i.uri || i.res);
+    return p ? `${path.posix.dirname(p).toLowerCase()}|${fileStem(p)}` : null;
+};
+
+// Photos and (with videos on) videos from a library index listing, as the slideshow shows them
+function withLiveVideos(photos, videos) {
+    return settings.slideshowVideos.enabled && videos.length ? livePairs(photos, videos) : photos;
+}
+
+// The slideshow cache's photos and videos, worked out again only when either changes
+let slideshowPool = { images: null, videos: null, enabled: null, items: [] };
+function screensaverPool() {
+    const c = screensaverCache, enabled = settings.slideshowVideos.enabled;
+    const p = slideshowPool;
+    if (p.images !== c.images || p.videos !== c.videos || p.enabled !== enabled) {
+        slideshowPool = { images: c.images, videos: c.videos, enabled, items: withLiveVideos(c.images, c.videos || []) };
+    }
+    return slideshowPool.items;
+}
+
+// A video as /api/slideshow/random answers with a photo
+function slideshowVideoSlide(v) {
+    const url = v.uri || v.res;
+    const key = mediaKey(url);
+    return {
+        url, title: v.title, date: v.year || v.date || v['dc:date'] || '', key, isVideo: true,
+        manualRotation: settings.manualRotations?.[key] || 0, tags: settings.fileTags?.[key] || [],
+        location: v._path || '', folderId: v.folderId, folderTitle: v.folderTitle,
+    };
+}
+
+// Fills the cache with the photos (and videos, see "Slideshow videos") under its folder from the
+// server's library index.
 function loadScreensaverCacheFromIndex(cache, meta) {
-    const images = getLibraryIndexItemsUnder(cache.udn, cache.objectId).filter(isPhotoItem);
+    const items = getLibraryIndexItemsUnder(cache.udn, cache.objectId);
+    const images = items.filter(isPhotoItem);
     cache.images = images;
+    cache.videos = items.filter(isVideoItem);
     cache.indexBuiltAt = meta.built_at;
     cache.status = 'ready';
     cache.timestamp = Date.now();
@@ -3631,14 +5060,14 @@ app.get('/api/slideshow/random', async (req, res) => {
         // CHECK CACHE STRATEGY
         reloadScreensaverCacheIfReindexed();
         const cacheValid = screensaverCache.udn === serverUdn && screensaverCache.objectId === objectId;
-        const peerImages = peerObjectId ? ownPhotosUnder(peerObjectId) : null;
+        const peerImages = peerObjectId ? ownPhotosUnder(peerObjectId, req.query.videos === '1') : null;
         if (peerObjectId && !peerImages?.length) {
             return res.status(peerImages ? 404 : 503).json({ error: peerImages ? 'No images found' : 'Library not indexed yet' });
         }
         // If cache is ready and has images, use it!
         if (peerImages || (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0)) {
             // Another AMMUI's slideshow skips what's hidden there, not here
-            let imagesToUse = peerImages || screensaverCache.images.filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
+            let imagesToUse = peerImages || screensaverPool().filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
 
             if (mode === 'onThisDay') {
                 const today = new Date();
@@ -3680,6 +5109,7 @@ app.get('/api/slideshow/random', async (req, res) => {
 
             const index = Math.floor(Math.random() * imagesToUse.length);
             foundImage = imagesToUse[index];
+            if (foundImage.isVideo) return res.json(slideshowVideoSlide(foundImage));
 
             // HACK: If we just updated the code but the cache is old, trigger refresh
             const isLegacyPath = typeof foundImage._path === 'string' && foundImage._path && !foundImage._path.startsWith('[');
@@ -3842,24 +5272,35 @@ function slideshowSourceAmmui() {
 
 // Photos under a folder of our own library, for another AMMUI's slideshow. Kept apart from our
 // own slideshow's cache so the two don't keep replacing each other. Null until the library is indexed.
-const peerPhotoCache = new Map(); // objectId -> { builtAt, images }
-function ownPhotosUnder(objectId) {
+// `withVideos` when that AMMUI shows videos: they stand in for their photos as in withLiveVideos.
+const peerPhotoCache = new Map(); // objectId -> { builtAt, images, videos }
+function ownPhotosUnder(objectId, withVideos = false) {
     const meta = getLibraryIndexMeta(SERVER_UDN);
     if (!meta) return null;
     let cached = peerPhotoCache.get(objectId);
     if (!cached || cached.builtAt !== meta.built_at) {
         if (peerPhotoCache.size >= 4) peerPhotoCache.clear();
-        cached = { builtAt: meta.built_at, images: getLibraryIndexItemsUnder(SERVER_UDN, objectId).filter(isPhotoItem) };
+        const items = getLibraryIndexItemsUnder(SERVER_UDN, objectId);
+        cached = { builtAt: meta.built_at, images: items.filter(isPhotoItem), videos: items.filter(isVideoItem) };
         peerPhotoCache.set(objectId, cached);
     }
-    return cached.images;
+    if (!withVideos || !cached.videos.length) return cached.images;
+    cached.withVideos ||= livePairs(cached.images, cached.videos);
+    return cached.withVideos;
+}
+
+// withLiveVideos without looking at this server's own setting
+function livePairs(photos, videos) {
+    const paired = new Set(videos.map(livePhotoKey).filter(Boolean));
+    return [...photos.filter(i => !paired.has(livePhotoKey(i))), ...videos.map(v => ({ ...v, isVideo: true }))];
 }
 
 // Passes a slideshow request on to the source AMMUI, which picks the photos from its library, then
 // applies our own hidden photos, favourites, rotations and tags (those are saved here, not there).
 async function forwardSlideshowRequest(res, device, apiPath, mode) {
     const isList = apiPath === '/api/slideshow/list';
-    const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}`, device.location);
+    const videos = settings.slideshowVideos.enabled ? '&videos=1' : '';
+    const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}${videos}`, device.location);
     const isHidden = img => !!settings.deletedPhotos[mediaKey(img.url || img.uri || img.res)];
     const withOurMarks = img => {
         const key = mediaKey(img.url || img.uri || img.res);
@@ -3907,12 +5348,13 @@ function favouritesOnAmmui(device, objectId) {
         if (!rel.startsWith(folder) || !uri) continue;
         const title = rel.split('/').pop();
         const item = getLibraryIndexItem(device.udn, rel) || { type: 'item', title };
-        if (!isPhotoItem(item)) continue;
+        const isVideo = settings.slideshowVideos.enabled && isVideoItem(item);
+        if (!isPhotoItem(item) && !isVideo) continue;
         const folderId = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '0';
         const rot = settings.manualRotations?.[key] || 0;
         images.push({
             folderId, folderTitle: folderId === '0' ? device.friendlyName : folderId.split('/').pop(),
-            ...item, uri, key, tags, ...(rot ? { manualRotation: rot } : {}),
+            ...item, uri, key, tags, ...(rot ? { manualRotation: rot } : {}), ...(isVideo ? { isVideo } : {}),
         });
     }
     return images;
@@ -3947,11 +5389,13 @@ async function slideshowList(req, res) {
     let partial = false;
     if (indexMeta) {
         const cutoff = getRecentCutoff();
-        source = mode === 'onThisDay'
+        const dated = mode === 'onThisDay'
             ? getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()))
             : getLibraryIndexPhotosSince(serverUdn, objectId, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
+        const photos = dated.filter(isPhotoItem), videos = dated.filter(isVideoItem);
+        source = peerObjectId ? (req.query.videos === '1' ? livePairs(photos, videos) : photos) : withLiveVideos(photos, videos);
     } else if (peerObjectId) {
-        source = ownPhotosUnder(objectId);
+        source = ownPhotosUnder(objectId, req.query.videos === '1');
         if (!source) return res.status(503).json({ error: 'Library not indexed yet' });
     } else {
         reloadScreensaverCacheIfReindexed();
@@ -3972,7 +5416,7 @@ async function slideshowList(req, res) {
         }
         source = partial
             ? (cacheValid && screensaverCache.status === 'loading' ? screensaverCache.partialImages || [] : [])
-            : screensaverCache.images;
+            : screensaverPool();
     }
     // Another AMMUI's slideshow leaves out what's hidden there, not here
     let images = peerObjectId ? source : source.filter(img => {
@@ -4044,17 +5488,21 @@ app.post('/api/slideshow/rotate', (req, res) => {
     res.json({ success: true, rotation });
 });
 
+// Body is { url } for one photo or { urls: [...] } for a batch.
 app.post('/api/slideshow/delete', (req, res) => {
-    const { url } = req.body;
-    if (!url) return res.status(400).json({ error: 'URL required' });
+    const { url, urls } = req.body;
+    const list = Array.isArray(urls) ? urls.filter(u => typeof u === 'string' && u) : (url ? [url] : []);
+    if (list.length === 0) return res.status(400).json({ error: 'URL required' });
 
-    markPhotoDeleted(url);
-    settings.deletedPhotos[mediaKey(url)] = true;
+    for (const u of list) {
+        markPhotoDeleted(u);
+        settings.deletedPhotos[mediaKey(u)] = true;
+    }
     // Left in the scan cache (it's filtered out when served) so unhiding brings it straight back.
     slideshowDeleteVersion++;
 
-    console.log(`[SCREENSAVER] Marked photo as deleted: ${url}`);
-    res.json({ success: true });
+    console.log(`[SCREENSAVER] Marked ${list.length === 1 ? `photo as deleted: ${list[0]}` : `${list.length} photos as deleted`}`);
+    res.json({ success: true, count: list.length });
 });
 
 // A hidden key's file in this app's own library, or null for anything else (or a path escaping it).
@@ -4174,346 +5622,6 @@ app.post('/api/slideshow/favourite', (req, res) => {
 
     console.log(`[SCREENSAVER] Set favourite for ${url}: ${favourite}`);
     res.json({ success: true, favourite });
-});
-
-// Export entry for a saved key: files under /local-files/ become a path relative to the library
-// (so another instance can import them); anything else keeps a URL, as older exports did.
-function portableEntry(key) {
-    const parts = splitMediaKey(key);
-    if (parts && parts.path.startsWith('/local-files/')) {
-        return { type: 'local', path: decodeURIComponent(parts.path.slice('/local-files/'.length).split('?')[0]) };
-    }
-    return { type: 'remote', uri: mediaUrlFromKey(key) || key };
-}
-
-// How much the combined favourites/deleted/tags export would contain (shown in Settings)
-app.get('/api/library-data/counts', (req, res) => {
-    const fileTags = Object.values(getAllFileTags());
-    res.json({
-        favourites: getKeysByTag('fav').length,
-        deleted: Object.keys(getAllDeletedPhotos()).length,
-        tags: fileTags.reduce((n, tags) => n + tags.length, 0),
-        taggedFiles: fileTags.length,
-        ingredients: listIngredients().length,
-        meals: listRecipes().length,
-    });
-});
-
-// Meals and ingredients export by name (ids mean nothing on another instance)
-app.get('/api/ingredients/export', (req, res) => {
-    const ingredients = listIngredients().map(({ name, amount, unit }) => ({ name, amount, unit }));
-    res.json({ version: 1, exportedAt: new Date().toISOString(), ingredients });
-});
-
-app.get('/api/meals/export', (req, res) => {
-    const meals = listRecipes().map(r => getRecipe(r.id)).filter(Boolean)
-        .map(m => ({ name: m.name, ingredients: m.ingredients.map(({ name, amount, unit }) => ({ name, amount, unit })) }));
-    res.json({ version: 1, exportedAt: new Date().toISOString(), meals });
-});
-
-// New names are added; an existing ingredient is left as it is, except that an empty
-// one-person quantity is filled in from the file.
-app.post('/api/ingredients/import', express.json({ limit: '5mb' }), (req, res) => {
-    const { ingredients } = req.body;
-    if (!Array.isArray(ingredients)) return res.status(400).json({ error: 'ingredients array required' });
-    let added = 0, updated = 0, existing = 0, invalid = 0;
-    for (const item of ingredients) {
-        const id = item && typeof item === 'object' && findIngredientIdByName(String(item.name ?? '').trim());
-        const clean = item && typeof item === 'object' ? cleanIngredient(item, id || null) : 'invalid';
-        if (typeof clean === 'string') { invalid++; continue; }
-        if (!id) {
-            saveIngredient({ id: crypto.randomUUID(), ...clean });
-            added++;
-            continue;
-        }
-        const current = getIngredient(id);
-        if (!current.amount && !current.unit && (clean.amount || clean.unit)) {
-            saveIngredient({ id, name: current.name, amount: clean.amount, unit: clean.unit });
-            updated++;
-        } else existing++;
-    }
-    console.log(`[Ingredients Import] added=${added} updated=${updated} existing=${existing} invalid=${invalid}`);
-    res.json({ success: true, added, updated, existing, invalid, total: ingredients.length });
-});
-
-// Meals whose name is already here are skipped rather than overwritten. Their ingredients are
-// matched by name, and any not seen before are added to the ingredient list.
-app.post('/api/meals/import', express.json({ limit: '5mb' }), (req, res) => {
-    const { meals } = req.body;
-    if (!Array.isArray(meals)) return res.status(400).json({ error: 'meals array required' });
-    const names = new Set(listRecipes().map(r => r.name.toLowerCase()));
-    let added = 0, existing = 0, invalid = 0;
-    for (const item of meals) {
-        const meal = item && typeof item === 'object' ? cleanRecipe(item) : 'invalid';
-        if (typeof meal === 'string') { invalid++; continue; }
-        if (names.has(meal.name.toLowerCase())) { existing++; continue; }
-        saveRecipe({ id: crypto.randomUUID(), ...meal });
-        names.add(meal.name.toLowerCase());
-        added++;
-    }
-    console.log(`[Meals Import] added=${added} existing=${existing} invalid=${invalid}`);
-    res.json({ success: true, added, existing, invalid, total: meals.length });
-});
-
-// Portable export: local-files favourites are stored as host/port-free relative paths so the
-// file can be imported into a different instance of this app; favourites pointing at another
-// DLNA server are kept as full URIs since the host there is part of their identity.
-app.get('/api/favourites/export', (req, res) => {
-    const favourites = getKeysByTag('fav').map(portableEntry);
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), favourites });
-});
-
-app.post('/api/favourites/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { favourites } = req.body;
-    if (!Array.isArray(favourites)) return res.status(400).json({ error: 'favourites array required' });
-
-    // Rehome local-files favourites onto this instance's own address, same logic the DLNA
-    // browse handler uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const fav of favourites) {
-        let uri = null, relPath = null;
-        if (typeof fav === 'string') {
-            relPath = fav.replace(/^\/local-files\//, '').replace(/^\//, '');
-        } else if (fav && fav.type === 'remote' && fav.uri) {
-            uri = fav.uri;
-        } else if (fav && fav.type === 'local' && fav.path) {
-            relPath = fav.path.replace(/^\//, '');
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists });
-    }
-
-    // A photo can easily have moved (re-sorted into a different year/month, deduped, etc.)
-    // between when favourites were exported and imported. Only pay for indexing the whole
-    // pictures library if something actually failed the exact-path check.
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
-        filenameIndex = new Map();
-        for await (const filePath of walkImages(picturesRoot)) {
-            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
-            if (relFromPictures.startsWith('_deleted/')) continue; // don't resurrect deleted photos
-            const key = path.basename(filePath).toLowerCase();
-            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
-            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-            filenameIndex.get(key).push(relPath);
-        }
-    }
-
-    let added = 0, alreadyFav = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Favourites Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        if (getFileTags(uri).includes('fav')) { alreadyFav++; continue; }
-        addFileTag(uri, 'fav');
-        added++;
-    }
-
-    settings.fileTags = getAllFileTags();
-    console.log(`[Favourites Import] added=${added} alreadyFav=${alreadyFav} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, added, alreadyFav, fixed, ambiguous, missing, invalid, total: favourites.length });
-});
-
-// Portable export: same local-files-as-relative-path convention as favourites export, so
-// deleted (hidden-from-slideshow) markers can be copied to another instance of this app.
-app.get('/api/deleted/export', (req, res) => {
-    const deleted = Object.keys(getAllDeletedPhotos()).map(portableEntry);
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), deleted });
-});
-
-app.post('/api/deleted/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { deleted } = req.body;
-    if (!Array.isArray(deleted)) return res.status(400).json({ error: 'deleted array required' });
-
-    // Rehome local-files entries onto this instance's own address, same logic favourites import
-    // uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const item of deleted) {
-        let uri = null, relPath = null;
-        if (typeof item === 'string') {
-            relPath = item.replace(/^\/local-files\//, '').replace(/^\//, '');
-        } else if (item && item.type === 'remote' && item.uri) {
-            uri = item.uri;
-        } else if (item && item.type === 'local' && item.path) {
-            relPath = item.path.replace(/^\//, '');
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists });
-    }
-
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists) && fs.existsSync(picturesRoot)) {
-        filenameIndex = new Map();
-        for await (const filePath of walkImages(picturesRoot)) {
-            const relFromPictures = path.relative(picturesRoot, filePath).split(path.sep).join('/');
-            if (relFromPictures.startsWith('_deleted/')) continue;
-            const key = path.basename(filePath).toLowerCase();
-            const relPath = path.join('pictures', relFromPictures).split(path.sep).join('/');
-            if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-            filenameIndex.get(key).push(relPath);
-        }
-    }
-
-    let added = 0, alreadyDeleted = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Deleted Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        if (isPhotoDeleted(uri)) { alreadyDeleted++; continue; }
-        markPhotoDeleted(uri);
-        added++;
-    }
-
-    settings.deletedPhotos = getAllDeletedPhotos();
-    console.log(`[Deleted Import] added=${added} alreadyDeleted=${alreadyDeleted} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, added, alreadyDeleted, fixed, ambiguous, missing, invalid, total: deleted.length });
-});
-
-// Portable export: same local-files-as-relative-path convention as favourites/deleted export.
-// Exports every tag on every file (favourites included, since 'fav' is just a reserved tag) so
-// the whole file_tags table can be copied to another instance of this app.
-app.get('/api/tags/export', (req, res) => {
-    const tags = Object.entries(getAllFileTags()).map(([key, keyTags]) => ({ ...portableEntry(key), tags: keyTags }));
-
-    res.json({ version: 1, exportedAt: new Date().toISOString(), tags });
-});
-
-app.post('/api/tags/import', express.json({ limit: '5mb' }), async (req, res) => {
-    const { tags } = req.body;
-    if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags array required' });
-
-    // Rehome local-files entries onto this instance's own address, same logic favourites/deleted
-    // import uses so the resulting URIs match what the app will actually serve items as.
-    const baseUrl = `http://${getLocalIp()}:${port}`; // only used to build a URL; it's saved as a key
-
-    const localDir = path.join(__dirname, 'local');
-    const picturesRoot = path.join(localDir, 'pictures');
-    const musicRoot = path.join(localDir, 'music');
-
-    let invalid = 0;
-    const parsed = [];
-    for (const item of tags) {
-        let uri = null, relPath = null, itemTags = null;
-        if (item && item.type === 'remote' && item.uri && Array.isArray(item.tags)) {
-            uri = item.uri;
-            itemTags = item.tags;
-        } else if (item && item.type === 'local' && item.path && Array.isArray(item.tags)) {
-            relPath = item.path.replace(/^\//, '');
-            itemTags = item.tags;
-        } else {
-            invalid++;
-            continue;
-        }
-        const exists = relPath !== null ? fs.existsSync(path.join(localDir, relPath)) : true;
-        parsed.push({ uri, relPath, exists, itemTags });
-    }
-
-    // Files can move (re-sorted into a different folder, deduped, etc.) between when tags were
-    // exported and imported. Only pay for indexing the library if something failed the exact-path
-    // check, and cover both pictures and music since tags apply to either.
-    let filenameIndex = null;
-    if (parsed.some(p => p.relPath !== null && !p.exists)) {
-        filenameIndex = new Map();
-        const addToIndex = async (root, extSet, subdir) => {
-            if (!fs.existsSync(root)) return;
-            for await (const filePath of walkByExt(root, extSet)) {
-                const relFromRoot = path.relative(root, filePath).split(path.sep).join('/');
-                if (relFromRoot.startsWith('_deleted/')) continue; // don't resurrect deleted photos
-                const key = path.basename(filePath).toLowerCase();
-                const indexedPath = path.join(subdir, relFromRoot).split(path.sep).join('/');
-                if (!filenameIndex.has(key)) filenameIndex.set(key, []);
-                filenameIndex.get(key).push(indexedPath);
-            }
-        };
-        await addToIndex(picturesRoot, IMAGE_EXTS, 'pictures');
-        await addToIndex(musicRoot, AUDIO_EXTS, 'music');
-    }
-
-    let filesProcessed = 0, tagsAdded = 0, alreadyPresent = 0, missing = 0, fixed = 0, ambiguous = 0;
-
-    for (const item of parsed) {
-        let { uri, relPath, exists, itemTags } = item;
-
-        if (relPath !== null) {
-            if (!exists) {
-                const matches = filenameIndex?.get(path.basename(relPath).toLowerCase());
-                if (matches && matches.length) {
-                    console.log(`[Tags Import] Path fixup: ${relPath} -> ${matches[0]}${matches.length > 1 ? ` (${matches.length} candidates)` : ''}`);
-                    relPath = matches[0];
-                    fixed++;
-                    if (matches.length > 1) ambiguous++;
-                } else {
-                    missing++;
-                    continue;
-                }
-            }
-            uri = `${baseUrl}/local-files/${relPath.split('/').map(encodeURIComponent).join('/')}`;
-        }
-
-        const existingTags = getFileTags(uri);
-        for (const tag of itemTags) {
-            if (existingTags.includes(tag)) { alreadyPresent++; continue; }
-            addFileTag(uri, tag);
-            tagsAdded++;
-        }
-        filesProcessed++;
-    }
-
-    settings.fileTags = getAllFileTags();
-    console.log(`[Tags Import] filesProcessed=${filesProcessed} tagsAdded=${tagsAdded} alreadyPresent=${alreadyPresent} fixed=${fixed} ambiguous=${ambiguous} missing=${missing} invalid=${invalid}`);
-    res.json({ success: true, filesProcessed, tagsAdded, alreadyPresent, fixed, ambiguous, missing, invalid, total: tags.length });
 });
 
 app.post('/api/slideshow/set-date', async (req, res) => {
@@ -5448,6 +6556,23 @@ app.post('/api/smart-home/plugs/:id/brightness', async (req, res) => {
     }
 });
 
+// Twinkly scenes: the movies, playlist, effects and colour the lights can show (see lib/smart-home/twinkly.js)
+app.get('/api/smart-home/plugs/:id/scenes', async (req, res) => {
+    try {
+        res.json({ scenes: await smartHome.getScenes(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/smart-home/plugs/:id/scene', async (req, res) => {
+    try {
+        res.json(await smartHome.setScene(req.params.id, req.body || {}));
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
 // Timers kept on the device itself: a countdown and daily/weekly schedules (see lib/smart-home/index.js)
 app.get('/api/smart-home/plugs/:id/timers', async (req, res) => {
     try {
@@ -5481,7 +6606,8 @@ app.delete('/api/smart-home/plugs/:id/schedules/:rule', async (req, res) => {
     }
 });
 
-// Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent".
+// Voice: "turn on the curtain", "switch the kettle off", "set the tree to 40 percent",
+// "set the matrix to snowstorm", "make the tree red".
 // `transcripts` are the recogniser's guesses. Replies { handled: true, message }, or
 // { handled: false, error? } so the browser can try the words as a music request instead.
 app.post('/api/smart-home/voice', async (req, res) => {
@@ -5494,7 +6620,16 @@ app.post('/api/smart-home/voice', async (req, res) => {
         if (cmd) console.log(`[VOICE] "${transcripts[0]}" -> ${cmd.error}`);
         return res.json({ handled: false, error: cmd?.error });
     }
+    // Each light keeps its own scenes, so the one asked for is looked up on each
+    const sceneLabels = new Set();
     const results = await Promise.allSettled(cmd.targets.map(async ({ device, outlet }) => {
+        if (cmd.action === 'scene') {
+            const scene = matchScene(cmd.scene, await smartHome.getScenes(device.id));
+            if (!scene) throw new Error(`${device.name} has no scene called "${cmd.scene}"`);
+            sceneLabels.add(scene.label);
+            await smartHome.setScene(device.id, scene);
+            return;
+        }
         if (cmd.action === 'brightness') {
             const updated = await smartHome.setBrightness(device.id, cmd.value);
             // Asking for a brightness means wanting to see it
@@ -5506,7 +6641,8 @@ app.post('/api/smart-home/voice', async (req, res) => {
         for (const id of outlets) await smartHome.setOutlet(device.id, id, on);
     }));
     const failed = results.filter(r => r.status === 'rejected');
-    const did = cmd.action === 'brightness' ? `Set ${cmd.label} to ${cmd.value}%` : `Turned ${cmd.label} ${cmd.action}`;
+    const did = cmd.action === 'scene' ? `Set ${cmd.label} to ${[...sceneLabels].join(' / ') || cmd.scene}`
+        : cmd.action === 'brightness' ? `Set ${cmd.label} to ${cmd.value}%` : `Turned ${cmd.label} ${cmd.action}`;
     console.log(`[VOICE] "${transcripts[0]}" -> ${did}${failed.length ? ` (${failed.length} failed: ${failed[0].reason.message})` : ''}`);
     if (failed.length === results.length) return res.json({ handled: true, ok: false, message: `Couldn't reach ${cmd.label}: ${failed[0].reason.message}` });
     res.json({ handled: true, ok: true, message: failed.length ? `${did} (${failed.length} didn't answer)` : did });
@@ -5554,6 +6690,65 @@ app.post('/api/energy/account', async (req, res) => {
     }
 });
 
+// Heating: rooms of a tado° home, through tado's cloud API (see lib/smart-home/tado.js)
+app.get('/api/tado/rooms', async (req, res) => {
+    res.json(await tado.listRooms());
+});
+
+// { on, target }: heat to target (or turn off) until the room's next scheduled change
+app.post('/api/tado/rooms/:id', async (req, res) => {
+    try {
+        res.json({ room: await tado.setRoom(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/tado/rooms/:id/resume', async (req, res) => {
+    try {
+        res.json({ room: await tado.resumeSchedule(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.get('/api/tado/account', (req, res) => {
+    res.json(tado.getAccount());
+});
+
+// Starts signing in; the reply has the link and code to confirm on tado's site
+app.post('/api/tado/connect', async (req, res) => {
+    try {
+        res.json(await tado.startPairing());
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.delete('/api/tado/account', (req, res) => {
+    res.json(tado.disconnect());
+});
+
+// Petrol prices near a place, from the government's Fuel Finder scheme (see lib/fuel-prices.js)
+app.get('/api/fuel', async (req, res) => {
+    const lat = Number(req.query.lat), lon = Number(req.query.lon);
+    if (!(Math.abs(lat) <= 90) || !(Math.abs(lon) <= 180)) return res.status(400).json({ error: 'lat and lon are needed' });
+    const radius = Math.min(Math.max(Number(req.query.miles) || 5, 1), fuelPrices.MAX_RADIUS);
+    res.json(await fuelPrices.nearby({ lat, lon, radius }));
+});
+
+app.get('/api/fuel/account', (req, res) => {
+    res.json(fuelPrices.getAccount());
+});
+
+app.post('/api/fuel/account', express.json(), async (req, res) => {
+    try {
+        res.json(await fuelPrices.setAccount(req.body || {}));
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
 // Update API routes
 //
 // The server checks GitHub in the background (shortly after startup, then daily) so the UI can
@@ -5561,8 +6756,8 @@ app.post('/api/energy/account', async (req, res) => {
 // Each install follows a channel: Stable is the main branch, Dev is the dev branch (pushed to for
 // testing, then published by fast-forwarding main to it). Switching channel checks out that branch.
 // Applying an update fast-forwards the checkout, reinstalls packages only if package files
-// changed, then restarts: either by exiting for an external supervisor (AMMUI_SUPERVISED=1),
-// or by handing off to a small relauncher that starts a fresh server once this one has exited.
+// changed, then restarts by exiting for its supervisor to start it again: a service, or the
+// process it was started from (lib/supervisor.js).
 const bootId = Date.now().toString(36); // lets the UI spot that a restart has happened
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
 const UPDATE_CHANNELS = { stable: 'main', dev: 'dev' };
@@ -5625,28 +6820,12 @@ app.post('/api/updates/channel', async (req, res) => {
     res.json({ ...updateState, channel: updateChannel, applying: updateApplying, bootId });
 });
 
-// Starts a replacement server after this process exits (so ports are free), then exits.
+// Exits for the supervisor to start a fresh server: lib/supervisor.js waits for its restart exit
+// code; a service (systemd) starts it again whatever the code.
 function restartServer() {
-    if (process.env.AMMUI_SUPERVISED === '1') {
-        console.log('[UPDATE] Exiting for supervisor restart...');
-        process.exit(0);
-    }
-    const logPath = path.join(logsDir, 'server.log');
-    const relauncher = `
-        const { spawn } = require('child_process');
-        const fs = require('fs');
-        const [pid, exe, args, cwd, logPath] = JSON.parse(process.argv[1]);
-        const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
-        const started = Date.now();
-        (function wait() {
-            if (alive() && Date.now() - started < 30000) return setTimeout(wait, 250);
-            const out = fs.openSync(logPath, 'a');
-            spawn(exe, args, { cwd, detached: true, windowsHide: true, stdio: ['ignore', out, out] }).unref();
-        })();`;
-    const payload = JSON.stringify([process.pid, process.execPath, [...process.execArgv, ...process.argv.slice(1)], __dirname, logPath]);
-    spawn(process.execPath, ['-e', relauncher, payload], { cwd: __dirname, detached: true, windowsHide: true, stdio: 'ignore' }).unref();
-    console.log(`[UPDATE] Restarting (new server output goes to ${logPath})...`);
-    setTimeout(() => process.exit(0), 200);
+    try { fs.writeFileSync(restartMarkerPath, String(Date.now())); } catch { /* the browser may open again */ }
+    console.log('[SYSTEM] Restarting...');
+    setTimeout(() => process.exit(Number(process.env.AMMUI_RESTART_EXIT) || 0), 200);
 }
 
 app.post('/api/updates/apply', async (req, res) => {
@@ -5742,20 +6921,59 @@ function startServices() {
     }, 10000);
 }
 
-app.listen(port, () => {
-    console.log(`AMMUI server listening at http://localhost:${port}`);
-    if (settings.deviceName) startServices();
-    else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
-});
+// Why each port couldn't be opened, for the Settings page (reachable over whichever one did open).
+// (Plain http/https servers rather than app.listen, whose callback runs on failure too in Express 5.)
+let httpListenError = null;
+let httpsListenError = null;
+let httpsEnabled = true;
+// Neither port opened because something already has them: almost always another AMMUI server,
+// such as one restarted from Settings, which carries on in the background. This one is no use.
+const quitIfNoPorts = () => {
+    if (!httpListenError || (httpsEnabled && !httpsListenError)) return;
+    console.error(`[SYSTEM] Ports ${port} and ${httpsPort} are both taken - is AMMUI already running (perhaps in the background after a restart)? Stop it first. Exiting.`);
+    process.exit(1);
+};
+
+http.createServer(app)
+    .on('error', err => {
+        httpListenError = listenProblem(err, port);
+        console.error(`[HTTP] Could not listen on port ${port}: ${httpListenError}. Choose another port in Settings (over HTTPS, port ${httpsPort}).`);
+        quitIfNoPorts();
+    })
+    .listen(port, () => {
+        console.log(`AMMUI server listening at http://localhost:${port}`);
+        runStartupOnBoot();
+        if (settings.deviceName) startServices();
+        else console.log('This server has no name yet: open the app in a browser to name it, then it will start up.');
+    });
+
+// The server's name from Settings is also its address on the network: <name>.local
+advertiseLocalName(() => settings.deviceName);
+
+// Kept to give it a new certificate when the server is renamed (the certificate carries its name)
+let httpsServer = null;
+function renewHttpsCertificate() {
+    if (!httpsServer) return;
+    try {
+        httpsServer.setSecureContext(ensureHttpsCertificate(certsDir, settings.deviceName));
+    } catch (err) {
+        console.error('[HTTPS] Could not make a certificate for the new name:', err.message);
+    }
+}
 
 try {
-    https.createServer(ensureHttpsCertificate(certsDir), app)
-        .on('error', err => console.error(`[HTTPS] Could not listen on port ${httpsPort}:`, err.message))
+    httpsServer = https.createServer(ensureHttpsCertificate(certsDir, settings.deviceName), app)
+        .on('error', err => {
+            httpsListenError = listenProblem(err, httpsPort);
+            console.error(`[HTTPS] Could not listen on port ${httpsPort}: ${httpsListenError}. Choose another port in Settings (over HTTP, port ${port}).`);
+            quitIfNoPorts();
+        })
         .listen(httpsPort, () => {
             httpsReady = true;
             console.log(`AMMUI server listening at https://localhost:${httpsPort}`);
         });
 } catch (err) {
+    httpsEnabled = false;
     console.error('[HTTPS] Disabled - could not set up a certificate:', err.message);
 }
 
@@ -6823,6 +8041,18 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments, useBir
         }
     } catch (e) { /* ignore */ }
 
+    // 1b. A video's own creation time (EXIF doesn't cover QuickTime/MP4, and iPhone names like
+    // IMG_1234.MOV carry no date)
+    if (VIDEO_EXTS.has(path.extname(filename).toLowerCase())) {
+        try {
+            const { format } = await mm.parseFile(localPath, { duration: false, skipCovers: true });
+            if (format.creationTime?.getFullYear() >= 1990) {
+                const result = dateToYearMonth(format.creationTime);
+                if (result) return result;
+            }
+        } catch (e) { /* ignore */ }
+    }
+
     // 2. Date in filename
     const d = extractDateFromString(filename);
     if (d) return { year: d.year, month: d.month };
@@ -7114,7 +8344,7 @@ app.post('/api/local/move-va', async (req, res) => {
 
                 if (path.extname(targetPath).toLowerCase() === '.mp3') {
                     try {
-                        NodeID3.update({ performerInfo: effectiveArtist }, targetPath); // TPE2
+                        NodeID3.update({ performerInfo: effectiveArtist }, targetPath, ID3_OPTS); // TPE2
                     } catch (e) {
                         console.error(`[Move to VA] Failed to tag ${path.basename(targetPath)}:`, e.message);
                     }
@@ -7690,7 +8920,7 @@ function newIdentifySummary() {
 
 async function identifySingleFileFromFilename(filePath) {
     const fileName = path.basename(filePath);
-    const existing = NodeID3.read(filePath) || {};
+    const existing = NodeID3.read(filePath, ID3_OPTS) || {};
     const needsArtist = isBlankTag(existing.artist);
     const needsTitle = isBlankTag(existing.title);
     const needsAlbum = isBlankTag(existing.album);
@@ -7733,7 +8963,7 @@ async function identifySingleFileFromFilename(filePath) {
     if (needsAlbum && confirmed.album) update.album = confirmed.album;
     if (Object.keys(update).length === 0) return { status: 'no-track-match' };
 
-    const success = NodeID3.update(update, filePath);
+    const success = NodeID3.update(update, filePath, ID3_OPTS);
     if (success !== true) throw new Error('NodeID3 failed to write tags');
     return {
         status: 'tagged',
@@ -7755,7 +8985,7 @@ async function identifyTracksInDirectory(dirPath, mp3Files) {
 
     for (const file of mp3Files) {
         const fullPath = path.join(dirPath, file.name);
-        const existing = NodeID3.read(fullPath) || {};
+        const existing = NodeID3.read(fullPath, ID3_OPTS) || {};
         const needsArtist = isBlankTag(existing.artist);
         const needsTitle = isBlankTag(existing.title);
         const needsAlbum = isBlankTag(existing.album);
@@ -7881,7 +9111,7 @@ async function identifyTracksInDirectory(dirPath, mp3Files) {
         }
 
         try {
-            const success = NodeID3.update(update, p.fullPath);
+            const success = NodeID3.update(update, p.fullPath, ID3_OPTS);
             if (success !== true) throw new Error('NodeID3 failed to write tags');
             summary.tagged++;
             summary.details.push({
@@ -7992,7 +9222,7 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
         if (year !== undefined) tags.year = year === null ? '' : String(year);
         if (trackno !== undefined || trackof !== undefined) {
             // Both live in one TRCK frame ("3/12"), so change one and keep the other as it is
-            const [curNo = '', curOf = ''] = String((NodeID3.read(filePath) || {}).trackNumber || '').split('/');
+            const [curNo = '', curOf = ''] = String((NodeID3.read(filePath, ID3_OPTS) || {}).trackNumber || '').split('/');
             const no = trackno !== undefined ? String(trackno).trim() : curNo.trim();
             const of = trackof !== undefined ? String(trackof).trim() : curOf.trim();
             tags.trackNumber = !no && !of ? '' : !of ? no : `${no || 0}/${of}`;
@@ -8000,7 +9230,7 @@ app.post('/api/local/write-tags', express.json(), async (req, res) => {
 
         if (Object.keys(tags).length === 0) return res.status(400).json({ error: 'No editable field was supplied' });
 
-        const success = NodeID3.update(tags, filePath);
+        const success = NodeID3.update(tags, filePath, ID3_OPTS);
         if (success !== true) throw new Error('NodeID3 failed to write tags');
         stripId3v1(filePath);
 
@@ -8122,22 +9352,30 @@ app.post('/api/local/write-tags-to-folder', express.json(), async (req, res) => 
         const tagKey = field === 'albumartist' ? 'performerInfo' : field;
         const entries = await fs.promises.readdir(folderPath, { withFileTypes: true });
         let updated = 0;
+        const failed = [];
         for (const entry of entries) {
             if (!entry.isFile()) continue;
             if (!audioExts.has(path.extname(entry.name).toLowerCase())) continue;
             const target = path.join(folderPath, entry.name);
-            let tags = { [tagKey]: value };
-            if (field === 'trackof') {
-                // Set the total on every track but keep each track's own number
-                const [curNo = ''] = String((NodeID3.read(target) || {}).trackNumber || '').split('/');
-                tags = { trackNumber: `${curNo.trim() || 0}/${String(value).trim()}` };
+            // One unreadable file shouldn't stop the rest of the folder being updated
+            try {
+                let tags = { [tagKey]: value };
+                if (field === 'trackof') {
+                    // Set the total on every track but keep each track's own number
+                    const [curNo = ''] = String((NodeID3.read(target, ID3_OPTS) || {}).trackNumber || '').split('/');
+                    tags = { trackNumber: `${curNo.trim() || 0}/${String(value).trim()}` };
+                }
+                const result = NodeID3.update(tags, target, ID3_OPTS);
+                if (result === true) { stripId3v1(target); updated++; }
+                else failed.push(entry.name);
+            } catch (e) {
+                console.error(`[WRITE-TAGS-FOLDER] ${entry.name}:`, e.message);
+                failed.push(entry.name);
             }
-            const result = NodeID3.update(tags, target);
-            if (result === true) { stripId3v1(target); updated++; }
         }
 
-        terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}`);
-        res.json({ success: true, updated });
+        terminalLog(`[WRITE-TAGS] Copied ${field}="${value}" to ${updated} files in ${folderPath}${failed.length ? ` (${failed.length} failed: ${failed.join(', ')})` : ''}`);
+        res.json({ success: true, updated, failed });
     } catch (err) {
         console.error('[WRITE-TAGS-FOLDER]', err.message);
         res.status(500).json({ error: err.message });
@@ -8157,7 +9395,7 @@ async function syncSingleFile(filePath, opts = {}) {
 
     const tags = { artist, album };
     if (opts.includeAlbumArtist) tags.performerInfo = artist; // TPE2
-    const success = NodeID3.update(tags, filePath);
+    const success = NodeID3.update(tags, filePath, ID3_OPTS);
     if (success !== true) throw new Error('Failed to update tags in file');
     return { artist, album };
 }

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=53">
+    <link rel="stylesheet" href="style.css?v=83">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -62,12 +62,22 @@
                     </svg>
                     <span>Meals</span>
                 </button>
+                <button type="button" class="lib-tab" data-mode="alarms" onclick="showAlarms()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="13" r="8"></circle>
+                        <path d="M12 9v4l2 2"></path>
+                        <path d="M5 3 2 6"></path>
+                        <path d="m22 6-3-3"></path>
+                    </svg>
+                    <span>Alarms</span>
+                </button>
                 <button type="button" class="lib-tab" data-mode="smarthome" onclick="showSmartHome()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1Z"></path>
                     </svg>
-                    <span>Smart Home</span>
+                    <span>Controls</span>
                 </button>
                 <button type="button" class="lib-tab" data-mode="energy" onclick="showEnergy()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -75,6 +85,33 @@
                         <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"></path>
                     </svg>
                     <span>Energy</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="petrol" onclick="showPetrol()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 22V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v17"></path>
+                        <line x1="2" y1="22" x2="15" y2="22"></line>
+                        <line x1="3" y1="10" x2="14" y2="10"></line>
+                        <path d="M14 13h2a2 2 0 0 1 2 2v3a1.5 1.5 0 0 0 3 0V9l-3-3"></path>
+                    </svg>
+                    <span>Petrol</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="games" onclick="showGames()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="8" width="6" height="8" rx="1"></rect>
+                        <rect x="9" y="8" width="6" height="8" rx="1"></rect>
+                        <rect x="16" y="8" width="6" height="8" rx="1"></rect>
+                    </svg>
+                    <span>Games</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="passwords" onclick="showPasswords()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="11" width="16" height="10" rx="2"></rect>
+                        <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+                    </svg>
+                    <span>Passwords</span>
                 </button>
             </nav>
 
@@ -499,78 +536,121 @@
         </main>
 
         <section id="recipes-view" class="recipes-view" hidden>
-            <aside class="recipes-list-panel">
-                <div class="recipes-list-header">
-                    <h2>Meals</h2>
-                    <button type="button" class="btn-control btn-small primary" onclick="newRecipe()">+ New</button>
-                </div>
-                <input type="search" id="recipes-filter" class="recipes-filter" placeholder="Search meals..."
-                    autocomplete="off" oninput="renderRecipeList()">
-                <div id="recipes-list" class="recipes-list"></div>
-            </aside>
-            <div id="recipe-panel" class="recipe-panel">
-                <div id="recipe-empty" class="recipe-empty">
-                    <p>Select a meal, or add a new one.</p>
-                </div>
-                <div id="recipe-editor" class="recipe-editor" hidden>
-                    <input type="text" id="recipe-name" class="recipe-name-input" placeholder="Meal name"
-                        maxlength="200" autocomplete="off" oninput="markRecipeDirty()">
-                    <h3>Ingredients</h3>
-                    <ol id="recipe-ingredients" class="recipe-ingredients"></ol>
-                    <div class="tag-input-wrapper recipe-add-ingredient"
-                        onkeydown="if(event.key==='Enter') { event.preventDefault(); addRecipeIngredient(); }">
-                        <input type="text" id="recipe-amount-input" class="recipe-amount" placeholder="Amount"
-                            maxlength="20" autocomplete="off" aria-label="Amount">
-                        <input type="text" id="recipe-unit-input" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                            maxlength="40" autocomplete="off" aria-label="Unit">
-                        <input type="text" id="recipe-ingredient-input" placeholder="Add an ingredient, e.g. onions, chopped"
-                            maxlength="300" autocomplete="off" aria-label="Ingredient" list="ingredient-names"
-                            oninput="fillIngredientQuantity(this, document.getElementById('recipe-amount-input'), document.getElementById('recipe-unit-input'))">
-                        <button type="button" class="btn-control ghost btn-small" onclick="addRecipeIngredient()">Add</button>
+            <nav class="meals-tabs" role="tablist" aria-label="Meals">
+                <button type="button" class="meals-tab" data-tab="calendar" role="tab" onclick="setMealsTab('calendar')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>Calendar</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="plan" role="tab" onclick="setMealsTab('plan')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="17 1 21 5 17 9"></polyline>
+                        <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
+                        <polyline points="7 23 3 19 7 15"></polyline>
+                        <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
+                    </svg>
+                    <span>Meal Plan</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="ingredients" role="tab" onclick="setMealsTab('ingredients')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="8" y1="6" x2="21" y2="6"></line>
+                        <line x1="8" y1="12" x2="21" y2="12"></line>
+                        <line x1="8" y1="18" x2="21" y2="18"></line>
+                        <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                        <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                        <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                    </svg>
+                    <span>Items</span>
+                </button>
+                <button type="button" class="meals-tab" data-tab="stats" role="tab" onclick="setMealsTab('stats')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                    <span>Stats</span>
+                </button>
+                <!-- Not a tab: opens the shopping list over whatever's showing -->
+                <button type="button" class="meals-tab meals-shopping-btn" onclick="openShoppingModal()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"></path>
+                        <line x1="3" y1="6" x2="21" y2="6"></line>
+                        <path d="M16 10a4 4 0 0 1-8 0"></path>
+                    </svg>
+                    <span>Shopping List</span>
+                </button>
+            </nav>
+            <!-- The Calendar tab's calendar is moved in here while it shows meals (see openCalendarView) -->
+            <div id="meals-pane-calendar" class="meals-pane" hidden></div>
+            <!-- What was eaten each day of the last week or month, against the UK's recommended amounts -->
+            <div id="meals-pane-stats" class="meals-pane" hidden>
+                <div class="meal-plan-header">
+                    <h2>Stats</h2>
+                    <div id="meal-stats-period" class="nutrition-sources meal-stats-period" role="tablist" aria-label="Period">
+                        <button type="button" role="tab" data-days="7" onclick="setMealStatsDays(7)">Week</button>
+                        <button type="button" role="tab" data-days="30" onclick="setMealStatsDays(30)">Month</button>
                     </div>
-                    <datalist id="recipe-units">
-                        <option value="g"><option value="kg"><option value="ml"><option value="l">
-                        <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
-                        <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
-                        <option value="clove"><option value="slice"><option value="piece">
-                    </datalist>
-                    <!-- Saved ingredients, offered while typing an ingredient (filled by renderIngredientList) -->
-                    <datalist id="ingredient-names"></datalist>
-                    <div id="recipe-status" class="calendar-status"></div>
-                    <div class="recipe-actions">
-                        <button type="button" id="recipe-delete-btn" class="btn-control ghost calendar-entry-delete"
-                            onclick="deleteRecipe()">Delete</button>
-                        <span style="flex: 1;"></span>
-                        <button type="button" id="recipe-revert-btn" class="btn-control ghost" onclick="revertRecipe()">Discard Changes</button>
-                        <button type="button" id="recipe-save-btn" class="btn-control primary" onclick="saveRecipe()">Save</button>
-                    </div>
                 </div>
+                <div id="meal-stats-family" class="nutrition-sources meal-stats-family" role="group" aria-label="Whose food" hidden></div>
+                <div id="meal-stats-body" class="meal-stats-body"></div>
             </div>
-            <aside class="ingredients-panel">
+            <!-- A meal for each day of a block of weeks; it repeats on the Calendar from its start date -->
+            <div id="meals-pane-plan" class="meals-pane" hidden>
+                <div class="meal-plan-header">
+                    <h2>Meal Plan</h2>
+                    <label class="meal-plan-setting">Weeks
+                        <select id="meal-plan-weeks" class="calendar-range-select" onchange="saveMealPlanSettings()">
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8">8</option>
+                        </select>
+                    </label>
+                    <label class="meal-plan-setting">Day 1 is
+                        <input type="date" id="meal-plan-start" class="calendar-range-select" onchange="saveMealPlanSettings()">
+                    </label>
+                </div>
+                <div id="meal-plan-status" class="calendar-status"></div>
+                <div id="meal-plan-grid" class="calendar-grid meal-plan-grid" onclick="onMealPlanGridClick(event)"></div>
+            </div>
+            <div id="meals-pane-ingredients" class="meals-pane" hidden>
                 <div class="recipes-list-header">
-                    <h2>Ingredients</h2>
+                    <h2>Items</h2>
+                    <button type="button" class="btn-control btn-small primary" onclick="openItemBuilder()">+ New Item</button>
                 </div>
-                <p class="ingredients-hint">Quantity for one person. Picking one of these when adding to a meal fills in its quantity.</p>
-                <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search ingredients..."
-                    autocomplete="off" oninput="renderIngredientList()">
-                <div id="ingredients-list" class="ingredients-list"></div>
-                <div class="tag-input-wrapper ingredient-add"
-                    onkeydown="if(event.key==='Enter') { event.preventDefault(); addIngredient(); }">
-                    <input type="text" id="ingredient-add-name" placeholder="New ingredient" maxlength="300"
-                        autocomplete="off" aria-label="Ingredient name">
-                    <input type="text" id="ingredient-add-amount" class="recipe-amount" placeholder="Amount" maxlength="20"
-                        autocomplete="off" aria-label="Amount for one person">
-                    <input type="text" id="ingredient-add-unit" class="recipe-unit" placeholder="Unit" list="recipe-units"
-                        maxlength="40" autocomplete="off" aria-label="Unit">
-                    <button type="button" class="btn-control ghost btn-small" onclick="addIngredient()">Add</button>
+                <div class="ingredients-panel">
+                    <p class="ingredients-hint">An item is a single thing, with its quantity for one person, or made of
+                        other items. Click one to change it. A ★ marks an item that's confirmed, along with everything it's made of.</p>
+                    <input type="search" id="ingredients-filter" class="recipes-filter" placeholder="Search items..."
+                        autocomplete="off" oninput="renderIngredientList()">
+                    <div id="ingredients-list" class="ingredients-list"></div>
+                    <div id="ingredients-status" class="calendar-status"></div>
                 </div>
-                <div id="ingredients-status" class="calendar-status"></div>
-            </aside>
+                <datalist id="recipe-units">
+                    <option value="g"><option value="kg"><option value="ml"><option value="l">
+                    <option value="tsp"><option value="tbsp"><option value="cup"><option value="pinch">
+                    <option value="packet"><option value="tin"><option value="jar"><option value="bunch">
+                    <option value="clove"><option value="slice"><option value="piece">
+                </datalist>
+            </div>
         </section>
 
         <section id="smarthome-view" class="smarthome-view" hidden>
             <div class="smarthome-header">
-                <h2>Smart Home</h2>
+                <h2>Controls</h2>
                 <div class="smarthome-actions">
                     <button type="button" id="btn-smarthome-voice" class="btn-control btn-small" onclick="toggleVoiceCommand()"
                         title="Voice: &quot;turn on &lt;device&gt;&quot;, &quot;turn off all the lights&quot;, &quot;set &lt;device&gt; to 50 percent&quot;">
@@ -597,12 +677,20 @@
                 <h3>Twinkly Lights</h3>
                 <div id="smarthome-lights-grid" class="smarthome-grid"></div>
             </div>
+            <div id="smarthome-heating" class="smarthome-section" hidden>
+                <div id="smarthome-heating-banner" class="smarthome-banner heating-banner" aria-hidden="true"></div>
+                <h3>Heating</h3>
+                <div id="smarthome-heating-status" class="smarthome-status"></div>
+                <div id="smarthome-heating-grid" class="smarthome-grid"></div>
+            </div>
         </section>
 
         <section id="energy-view" class="smarthome-view" hidden>
             <div class="smarthome-header">
                 <h2>Energy</h2>
                 <div class="smarthome-actions">
+                    <button type="button" id="btn-energy-tariff-test" class="btn-control btn-small" onclick="openTariffTest()" hidden
+                        title="See what the last 12 months would have cost on a different tariff">Test a Tariff</button>
                     <button type="button" class="btn-control btn-small" onclick="openPlugSettings()"
                         title="Set the Bright login that reads your smart meter">Bright Login</button>
                 </div>
@@ -614,38 +702,163 @@
             </div>
         </section>
 
-        <section id="calendar-view" class="calendar-view" hidden>
-            <div class="calendar-header">
-                <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="15 18 9 12 15 6"></polyline>
-                    </svg>
-                </button>
-                <h2 id="calendar-title" class="calendar-title"></h2>
-                <button type="button" id="calendar-next-btn" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="9 18 15 12 9 6"></polyline>
-                    </svg>
-                </button>
-                <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
-                    title="Go to the current month">Today</button>
-                <select id="calendar-range-select" class="calendar-range-select" onchange="setCalendarRange(this.value)"
-                    title="How much of the calendar to show">
-                    <option value="month">Month</option>
-                    <option value="weeks">3 weeks</option>
-                </select>
+        <!-- Petrol tab: a map of the stations around this device and their pump prices (built by app.js) -->
+        <section id="petrol-view" class="smarthome-view petrol-view" hidden>
+            <div class="smarthome-header">
+                <h2>Petrol</h2>
+                <div class="smarthome-actions petrol-actions">
+                    <div id="petrol-fuels" class="nutrition-sources" role="tablist" aria-label="Fuel">
+                        <button type="button" role="tab" data-fuel="E10" onclick="setPetrolFuel('E10')">Unleaded</button>
+                        <button type="button" role="tab" data-fuel="E5" onclick="setPetrolFuel('E5')">Super</button>
+                        <button type="button" role="tab" data-fuel="B7_STANDARD" onclick="setPetrolFuel('B7_STANDARD')">Diesel</button>
+                        <button type="button" role="tab" data-fuel="B7_PREMIUM" onclick="setPetrolFuel('B7_PREMIUM')">Premium Diesel</button>
+                    </div>
+                    <select id="petrol-radius" class="petrol-radius" onchange="setPetrolRadius(this.value)" aria-label="How far">
+                        <option value="2">2 miles</option>
+                        <option value="5">5 miles</option>
+                        <option value="10">10 miles</option>
+                        <option value="20">20 miles</option>
+                    </select>
+                    <button type="button" class="btn-control btn-small" onclick="locatePetrol(true)"
+                        title="Find where this device is again">Locate</button>
+                    <button type="button" class="btn-control btn-small" onclick="openFuelFinderSettings()"
+                        title="Set the Fuel Finder client id and secret">Fuel Finder Login</button>
+                </div>
             </div>
-            <div id="calendar-status" class="calendar-status"></div>
-            <div class="calendar-body">
-                <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
-                    <h3 id="calendar-sidebar-cals-heading">Calendars</h3>
-                    <div id="calendar-sidebar-list" class="calendar-sidebar-list"></div>
-                    <h3 id="calendar-sidebar-tags-heading" class="calendar-sidebar-tags-heading" hidden>Tags</h3>
-                    <div id="calendar-sidebar-tags" class="calendar-sidebar-list"></div>
-                </aside>
-                <div id="calendar-grid" class="calendar-grid" onclick="onCalendarGridClick(event)"></div>
+            <div id="petrol-status" class="smarthome-status"></div>
+            <div id="petrol-body" class="petrol-body" hidden>
+                <div id="petrol-map" class="petrol-map"></div>
+                <div class="petrol-side">
+                    <div id="petrol-summary" class="petrol-summary"></div>
+                    <div id="petrol-list" class="petrol-list"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Alarms tab: countdown timers and alarms at a time of day (built by timers.js) -->
+        <section id="alarms-view" class="alarms-view" hidden>
+            <div class="alarms-side">
+                <div class="smarthome-header"><h2>Timers</h2></div>
+                <div id="timer-hero" class="timer-hero"></div>
+                <div id="timer-shortcuts" class="timer-shortcuts"></div>
+                <form class="alarms-form" onsubmit="event.preventDefault(); startTimerFromForm()">
+                    <input type="number" id="timer-minutes" class="alarms-input" min="1" max="1440" step="any"
+                        placeholder="Minutes" inputmode="numeric" required>
+                    <span class="alarms-about">minutes</span>
+                    <button type="submit" class="btn-control primary">Go</button>
+                </form>
+                <div id="timer-list" class="alarms-list"></div>
+            </div>
+            <div class="alarms-side">
+                <div class="smarthome-header"><h2>Alarms</h2></div>
+                <form class="alarms-form" onsubmit="event.preventDefault(); addAlarmFromForm()">
+                    <input type="time" id="alarm-time" class="alarms-input" required>
+                    <button type="submit" class="btn-control primary">Set</button>
+                </form>
+                <div id="alarm-list" class="alarms-list"></div>
+            </div>
+        </section>
+
+        <!-- Games tab: a daily five-letter word game (built by app.js) -->
+        <section id="games-view" class="games-view" hidden>
+            <div class="smarthome-header">
+                <h2>Daily Word <span id="word-number" class="word-number"></span></h2>
+                <div id="word-stats" class="word-stats"></div>
+            </div>
+            <div id="game-players" class="game-players"></div>
+            <div id="word-message" class="word-message" role="status" aria-live="polite"></div>
+            <div class="word-board-area"><div id="word-board" class="word-board"></div></div>
+            <div id="word-keyboard" class="word-keyboard"></div>
+        </section>
+
+        <!-- Passwords tab: name, username, password, website and notes (built by passwords.js) -->
+        <section id="passwords-view" class="smarthome-view passwords-view" hidden>
+            <div class="smarthome-header">
+                <h2>Passwords</h2>
+                <div class="smarthome-actions">
+                    <input type="search" id="passwords-search" class="alarms-input passwords-search" placeholder="Search"
+                        oninput="renderPasswords()" aria-label="Search the passwords">
+                    <button type="button" class="btn-control primary" onclick="editPassword(null)">Add</button>
+                </div>
+            </div>
+            <form id="password-form" class="password-form" hidden onsubmit="event.preventDefault(); savePasswordForm()">
+                <div class="password-form-fields">
+                    <label>Name<input type="text" id="password-name" class="alarms-input" maxlength="200" required></label>
+                    <label>Username<input type="text" id="password-username" class="alarms-input" maxlength="200"
+                        autocomplete="off"></label>
+                    <label>Password
+                        <span class="password-input-row">
+                            <input type="password" id="password-password" class="alarms-input" maxlength="1000"
+                                autocomplete="new-password">
+                            <button type="button" class="btn-control btn-small" onclick="togglePasswordField()"
+                                id="password-show-btn">Show</button>
+                            <button type="button" class="btn-control btn-small" onclick="generatePassword()"
+                                title="Make a strong random password">Generate</button>
+                        </span>
+                    </label>
+                    <label>Website<input type="text" id="password-url" class="alarms-input" maxlength="2000"
+                        placeholder="example.com"></label>
+                    <label class="password-notes-field">Notes<textarea id="password-notes" class="alarms-input" rows="3"
+                        maxlength="10000"></textarea></label>
+                </div>
+                <div class="password-form-actions">
+                    <button type="submit" class="btn-control primary">Save</button>
+                    <button type="button" class="btn-control" onclick="closePasswordForm()">Cancel</button>
+                </div>
+            </form>
+            <div class="passwords-table-wrap">
+                <table class="passwords-table">
+                    <thead>
+                        <tr><th>Name</th><th>Username</th><th>Password</th><th>Website</th><th></th></tr>
+                    </thead>
+                    <tbody id="passwords-body"></tbody>
+                </table>
+                <div id="passwords-empty" class="passwords-empty" hidden></div>
+            </div>
+            <div class="passwords-email-to">
+                <label for="passwords-email-input">Email entries to</label>
+                <input type="email" id="passwords-email-input" class="alarms-input" placeholder="you@example.com"
+                    onchange="savePasswordsEmail()">
+            </div>
+        </section>
+
+        <section id="calendar-view" class="calendar-view" hidden>
+            <!-- Shared with the Meals tab's Calendar, which moves this panel there and shows only meals -->
+            <div id="calendar-panel" class="calendar-panel">
+                <div class="calendar-header">
+                    <button type="button" id="calendar-prev-btn" class="btn-control" onclick="changeCalendarMonth(-1)" title="Previous month">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="15 18 9 12 15 6"></polyline>
+                        </svg>
+                    </button>
+                    <h2 id="calendar-title" class="calendar-title"></h2>
+                    <button type="button" id="calendar-next-btn" class="btn-control" onclick="changeCalendarMonth(1)" title="Next month">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="9 18 15 12 9 6"></polyline>
+                        </svg>
+                    </button>
+                    <button type="button" class="btn-control calendar-today-btn" onclick="changeCalendarMonth(0)"
+                        title="Go to the current month">Today</button>
+                    <select id="calendar-range-select" class="calendar-range-select" onchange="setCalendarRange(this.value)"
+                        title="How much of the calendar to show">
+                        <option value="month">Month</option>
+                        <option value="weeks">3 weeks</option>
+                    </select>
+                </div>
+                <!-- Meals calendar only: whose meals are showing -->
+                <div id="calendar-meals-family" class="nutrition-sources meal-stats-family" role="group" aria-label="Whose food" hidden></div>
+                <div id="calendar-status" class="calendar-status"></div>
+                <div class="calendar-body">
+                    <aside id="calendar-sidebar" class="calendar-sidebar" hidden>
+                        <h3 id="calendar-sidebar-cals-heading">Calendars</h3>
+                        <div id="calendar-sidebar-list" class="calendar-sidebar-list"></div>
+                        <h3 id="calendar-sidebar-tags-heading" class="calendar-sidebar-tags-heading" hidden>Tags</h3>
+                        <div id="calendar-sidebar-tags" class="calendar-sidebar-list"></div>
+                    </aside>
+                    <div id="calendar-grid" class="calendar-grid" onclick="onCalendarGridClick(event)"></div>
+                </div>
             </div>
         </section>
 
@@ -712,6 +925,28 @@
         </div>
     </div>
 
+    <!-- Energy tab: the last 12 months' use priced on the current tariff and on one typed in (built by app.js) -->
+    <div id="tariff-test-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeTariffTest()">
+        <div class="modal-content" style="max-width: 620px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Test a Tariff</h2>
+                    <p class="modal-subtitle">Your last 12 months' use, on your current charges and on new ones</p>
+                </div>
+                <button class="btn-close" onclick="closeTariffTest()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="tariff-test-body" class="tariff-test"></div>
+            </div>
+        </div>
+    </div>
+
     <div id="plug-timers-modal" class="modal-overlay" style="display: none;"
         onclick="if(event.target===this)closePlugTimers()">
         <div class="modal-content" style="max-width: 460px;">
@@ -733,15 +968,15 @@
         </div>
     </div>
 
-    <div id="import-library-data-modal" class="modal-overlay" style="display: none;"
-        onclick="if(event.target===this)closeLibraryDataImport()">
-        <div class="modal-content" style="max-width: 440px;">
+    <div id="plug-scenes-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closePlugScenes()">
+        <div class="modal-content" style="max-width: 520px;">
             <div class="modal-header">
                 <div class="modal-title-group">
-                    <h2>Import</h2>
-                    <p class="modal-subtitle" id="import-library-data-file"></p>
+                    <h2>Scenes</h2>
+                    <p class="modal-subtitle" id="plug-scenes-name"></p>
                 </div>
-                <button class="btn-close" onclick="closeLibraryDataImport()">
+                <button class="btn-close" onclick="closePlugScenes()">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="18" y1="6" x2="6" y2="18"></line>
                         <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -749,37 +984,91 @@
                 </button>
             </div>
             <div class="modal-body">
-            <div class="settings-group">
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-favourites" onchange="updateLibraryDataImportButton()">
-                    <span>Favourites <span class="settings-hint" id="import-count-favourites"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-deleted" onchange="updateLibraryDataImportButton()">
-                    <span>Deleted photos <span class="settings-hint" id="import-count-deleted"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-tags" onchange="updateLibraryDataImportButton()">
-                    <span>Tags <span class="settings-hint" id="import-count-tags"></span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-ingredients" onchange="updateLibraryDataImportButton()">
-                    <span>Ingredients <span class="settings-hint" id="import-count-ingredients"></span>
-                        <span class="settings-hint">New ones are added; existing ones are kept, with any missing
-                            quantity filled in.</span></span>
-                </label>
-                <label class="settings-check">
-                    <input type="checkbox" id="import-include-meals" onchange="updateLibraryDataImportButton()">
-                    <span>Meals <span class="settings-hint" id="import-count-meals"></span>
-                        <span class="settings-hint">Meals with a name already here are skipped, not
-                            overwritten.</span></span>
-                </label>
-                <div id="import-library-data-status" class="calendar-status"></div>
-                <div style="display:flex; justify-content:flex-end; gap:0.75rem; margin-top: 0.5rem;">
-                    <button class="btn-control ghost" onclick="closeLibraryDataImport()">Cancel</button>
-                    <button class="btn-control primary" id="import-library-data-btn" onclick="runLibraryDataImport()">Import</button>
-                </div>
+                <div id="plug-scenes-body" class="plug-timers"></div>
             </div>
+        </div>
+    </div>
+
+    <!-- Recipes tab: calories, protein, carbs and fat for one ingredient, looked up from the UK food
+         tables, Open Food Facts or USDA FoodData Central, or typed in -->
+    <div id="nutrition-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeNutritionDialog()">
+        <div class="modal-content" style="max-width: 520px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Calories</h2>
+                    <p class="modal-subtitle" id="nutrition-ingredient-name"></p>
+                </div>
+                <button class="btn-close" onclick="closeNutritionDialog()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <!-- Stays put while the results and form below scroll, so it's always clear where they're from -->
+            <div class="settings-group nutrition-search-bar">
+                <div id="nutrition-sources" class="nutrition-sources" role="tablist" aria-label="Where to look">
+                    <button type="button" role="tab" data-source="cofid" onclick="setNutritionSearchSource('cofid')">UK foods</button>
+                    <button type="button" role="tab" data-source="off" onclick="setNutritionSearchSource('off')">UK products</button>
+                    <button type="button" role="tab" data-source="usda" onclick="setNutritionSearchSource('usda')">USDA</button>
+                </div>
+                <p id="nutrition-source-hint" class="settings-hint"></p>
+                <div class="nutrition-search-row">
+                    <input type="search" id="nutrition-search-input" autocomplete="off" aria-label="Search for a food"
+                        onkeydown="if(event.key==='Enter') { event.preventDefault(); searchNutrition(); }">
+                    <button class="btn-control btn-small primary" onclick="searchNutrition()">Search</button>
+                </div>
+                <label class="settings-check" id="nutrition-branded-option">
+                    <input type="checkbox" id="nutrition-branded" onchange="searchNutrition()">
+                    <span>Include branded products</span>
+                </label>
+            </div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <p id="nutrition-reference" class="nutrition-reference" hidden></p>
+                    <div id="nutrition-results" class="nutrition-results"></div>
+                </div>
+                <div class="settings-group">
+                    <p id="nutrition-source" class="settings-hint"></p>
+                    <label for="nutrition-kcal">Calories per 100 g</label>
+                    <input type="number" id="nutrition-kcal" min="0" max="1000" step="any" placeholder="e.g. 40"
+                        oninput="updateNutritionPreview()">
+                    <div class="nutrition-macros">
+                        <div>
+                            <label for="nutrition-protein">Protein (g)</label>
+                            <input type="number" id="nutrition-protein" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                        <div>
+                            <label for="nutrition-carbs">Carbs (g)</label>
+                            <input type="number" id="nutrition-carbs" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                        <div>
+                            <label for="nutrition-fat">Fat (g)</label>
+                            <input type="number" id="nutrition-fat" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                        <div>
+                            <label for="nutrition-alcohol">Alcohol (g)</label>
+                            <input type="number" id="nutrition-alcohol" min="0" max="100" step="any" oninput="updateNutritionPreview()">
+                        </div>
+                    </div>
+                    <p class="settings-hint">Protein, carbs, fat and alcohol are per 100 g too, and can be left empty.
+                        Alcohol is grams, not % ABV: a 5% beer has about 4 g per 100 ml.</p>
+                    <div id="nutrition-unit-group" class="settings-group" style="padding: 0;">
+                        <label for="nutrition-unit-grams" id="nutrition-unit-label"></label>
+                        <input type="number" id="nutrition-unit-grams" min="0" step="any" oninput="updateNutritionPreview()">
+                        <p id="nutrition-unit-hint" class="settings-hint"></p>
+                    </div>
+                    <p id="nutrition-preview" class="nutrition-preview"></p>
+                    <div id="nutrition-status" class="calendar-status"></div>
+                    <div style="display:flex; gap:0.75rem; margin-top: 0.5rem;">
+                        <button id="nutrition-remove-btn" class="btn-control ghost calendar-entry-delete"
+                            onclick="removeNutrition()">Remove</button>
+                        <span style="flex: 1;"></span>
+                        <button class="btn-control ghost" onclick="closeNutritionDialog()">Cancel</button>
+                        <button id="nutrition-save-btn" class="btn-control primary" onclick="saveNutrition()">Save</button>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -835,13 +1124,18 @@
                     </svg>
                 </button>
             </div>
-            <div class="settings-tabs">
+            <div class="settings-side-layout">
+            <div class="settings-tabs settings-tabs-side">
                 <button class="settings-tab active" onclick="switchSettingsTab('general', this)">General</button>
+                <button class="settings-tab" onclick="switchSettingsTab('slideshow', this)">Slideshow</button>
+                <button class="settings-tab" onclick="switchSettingsTab('shopping', this)">Shopping</button>
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
+                <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
+                <button class="settings-tab" onclick="switchSettingsTab('startup', this)">Startup</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-general" class="settings-panel active">
@@ -858,17 +1152,64 @@
                     <div class="manage-section">
                         <h3>Secure Access (HTTPS)</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Voice commands only work when the app is opened over HTTPS.
-                                Use one of these addresses:</p>
+                            <p class="settings-hint">Open the app over HTTPS: voice commands and the microphone only
+                                work there. The first address is this server's name with <b>.local</b> on the end,
+                                which phones and computers on this network find by themselves, and it follows the name
+                                when you change it. The others work too.</p>
                             <div id="https-urls" class="settings-hint">Loading...</div>
-                            <p class="settings-hint">The certificate is made by this app, so browsers warn that
-                                the connection isn't private until you trust it. To remove the warning for good,
-                                download the certificate below on each phone or PC and install it as a trusted
-                                root certificate.</p>
-                            <div style="display:flex; gap:0.75rem;">
+                            <p class="settings-hint">The certificate is made by this app and named after this server
+                                (<b class="https-ca-name">AMMUI Local CA</b>), so browsers warn that the connection isn't
+                                private until you trust it. Install it once on each phone or PC below to remove the warning
+                                for good. Renaming the server makes a new certificate, which needs installing again.</p>
+                            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                                <a id="https-trust-windows" class="btn-control btn-seek" href="/api/https/trust-ammui.cmd"
+                                    download="trust-ammui.cmd" style="text-decoration:none; display:none;">Install on this PC</a>
+                                <a id="https-trust-ios" class="btn-control btn-seek" href="/api/https/ammui.mobileconfig"
+                                    style="text-decoration:none; display:none;">Install on this iPhone / iPad</a>
+                                <a id="https-trust-mac" class="btn-control btn-seek" href="/api/https/ammui.mobileconfig"
+                                    download="ammui.mobileconfig" style="text-decoration:none; display:none;">Install on this Mac</a>
                                 <a class="btn-control btn-seek" href="/api/https/ca.crt" download="ammui-ca.crt"
                                     style="text-decoration:none;">Download Certificate</a>
                             </div>
+                            <div id="https-trust-mac-hint" class="settings-hint" style="display:none;">
+                                <ol style="margin:0.25rem 0; padding-left:1.25rem;">
+                                    <li>Press <b>Install on this Mac</b> and open the downloaded <b>ammui.mobileconfig</b>.</li>
+                                    <li>Open System Settings, search for <b>Profiles</b>, double-click <b>AMMUI</b>, choose
+                                        <b>Install</b> and enter your password.</li>
+                                    <li>Restart the browser.</li>
+                                </ol>
+                            </div>
+                            <div id="https-trust-ios-hint" class="settings-hint" style="display:none;">
+                                <p id="https-trust-ios-safari" style="display:none;"><b>Open this page in Safari first</b>:
+                                    other browsers can't install the certificate.</p>
+                                <ol style="margin:0.25rem 0; padding-left:1.25rem;">
+                                    <li>Press <b>Install on this iPhone / iPad</b> and choose <b>Allow</b>.</li>
+                                    <li>Open the Settings app, tap <b>Profile Downloaded</b> near the top, then
+                                        <b>Install</b> (it says "Not Verified": that's expected).</li>
+                                    <li>Go to Settings &rarr; General &rarr; About &rarr; <b>Certificate Trust Settings</b>
+                                        and turn on <b class="https-ca-name">AMMUI Local CA</b>. Without this step the warning stays.</li>
+                                </ol>
+                            </div>
+                            <p id="https-trust-windows-hint" class="settings-hint" style="display:none;">
+                                On Windows, press <b>Install on this PC</b>, open the downloaded file, and choose
+                                <b>Yes</b> when Windows asks to install the certificate. If Windows says it protected
+                                your PC, choose <b>More info</b> &rarr; <b>Run anyway</b>. Then restart the browser.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="http-port-input">Ports (HTTP, HTTPS)</label>
+                            <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap;">
+                                <input type="number" id="http-port-input" min="1" max="65535" step="1" style="width:8rem;"
+                                    aria-label="HTTP port" title="HTTP port">
+                                <input type="number" id="https-port-input" min="1" max="65535" step="1" style="width:8rem;"
+                                    aria-label="HTTPS port" title="HTTPS port">
+                                <button type="button" class="btn-control btn-seek" onclick="savePorts()">Save &amp; Restart</button>
+                            </div>
+                            <p id="port-error" class="settings-hint" style="display:none; color:#f87171;"></p>
+                            <p class="settings-hint">HTTPS (usually 443) is what browsers use; on 443 the addresses above
+                                need no port number. Plain HTTP (usually 80) is what players (DLNA, Sonos, AirPlay) fetch
+                                music and photos from, and a browser opening it is sent on to HTTPS. After a change,
+                                players may need finding again, and bookmarks and the kiosk shortcut need the new
+                                address. The certificate stays trusted.</p>
                         </div>
                     </div>
                     <div class="manage-section">
@@ -877,22 +1218,120 @@
                             <span class="settings-hint">Loading...</span>
                         </div>
                     </div>
+                </div>
+                <div id="settings-slideshow" class="settings-panel">
                     <div class="manage-section">
-                        <h3>Export &amp; Import</h3>
+                        <h3>Slideshow</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Export your favourites, deleted (hidden from slideshow) photos,
-                                file tags, ingredients and meals to one file, or import a file exported from another
-                                instance of this app. On import you can choose which of them to bring in.</p>
-                            <div id="library-data-counts" class="local-stats-grid">
-                                <span class="settings-hint">Loading...</span>
+                            <label for="slideshow-idle-input">Start after idle (seconds)</label>
+                            <input type="number" id="slideshow-idle-input" min="0" max="86400" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">How long the app sits untouched before the slideshow starts.
+                                It doesn't start while a game is being played. 0 means it only starts when you
+                                start it.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-photo-input">Show each photo for (seconds)</label>
+                            <input type="number" id="slideshow-photo-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">0 keeps each photo up until you move to the next one.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-videos-input" onchange="saveSlideshowSettings()">
+                                <span>Include videos
+                                    <span class="settings-hint">Videos in the slideshow's photo folder, such as
+                                        iPhone Live Photos. Importing files puts a Live Photo's video beside its
+                                        photo, and the slideshow plays it in the photo's place.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="slideshow-video-seconds-input">Play each video for up to (seconds)</label>
+                            <input type="number" id="slideshow-video-seconds-input" min="0" max="3600" step="1"
+                                onchange="saveSlideshowSettings()">
+                            <p class="settings-hint">A shorter video plays once and stays on its last frame for
+                                the rest of the photo time. 0 plays every video to its end.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="slideshow-video-sound-input" onchange="saveSlideshowSettings()">
+                                <span>Play video sound
+                                    <span class="settings-hint">Off, videos play silently over any music.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div id="slideshow-sky-options">
+                            <p class="settings-hint">The slideshow's <b>Sky</b> button switches between the photos and
+                                the sky: the stars, planets and Moon as they are now, seen from the place below, by day
+                                as well as night. Drag it to look round, or let it turn slowly with its <b>Turn</b> button.
+                                Left on the sky, the next slideshow starts on it too.</p>
+                            <div class="settings-group">
+                                <label for="slideshow-sky-sunset-input">Show the sky after sunset for (minutes)</label>
+                                <input type="number" id="slideshow-sky-sunset-input" min="0" max="720" step="1"
+                                    onchange="saveSlideshowSettings()">
+                                <p class="settings-hint">The slideshow switches from the photos to the sky at sunset, and
+                                    back to the photos after this long (30 is half an hour). 0 never switches.</p>
                             </div>
-                            <div style="display:flex; gap:0.75rem;">
-                                <button class="btn-control btn-seek" onclick="exportLibraryData()">Export</button>
-                                <button class="btn-control btn-seek"
-                                    onclick="document.getElementById('import-library-data-input').click()">Import</button>
+                            <div class="settings-group" id="slideshow-sky-facing-group">
+                                <label for="slideshow-sky-facing-input">Starts looking</label>
+                                <select id="slideshow-sky-facing-input" class="slideshow-sky-select" onchange="saveSlideshowSettings()">
+                                    <option value="0">North</option>
+                                    <option value="45">North-east</option>
+                                    <option value="90">East</option>
+                                    <option value="135">South-east</option>
+                                    <option value="180">South</option>
+                                    <option value="225">South-west</option>
+                                    <option value="270">West</option>
+                                    <option value="315">North-west</option>
+                                </select>
                             </div>
-                            <input type="file" id="import-library-data-input" accept="application/json"
-                                style="display:none" onchange="openLibraryDataImport(event)">
+                            <div class="settings-group">
+                                <label for="slideshow-sky-lat-input">Seen from (latitude, longitude)</label>
+                                <div class="slideshow-sky-location">
+                                    <input type="number" id="slideshow-sky-lat-input" step="any" min="-90" max="90"
+                                        placeholder="Latitude" onchange="saveSlideshowSettings()">
+                                    <input type="number" id="slideshow-sky-lon-input" step="any" min="-180" max="180"
+                                        placeholder="Longitude" onchange="saveSlideshowSettings()">
+                                    <button type="button" class="btn-control btn-small"
+                                        onclick="useDeviceSkyLocation()">Use this device's location</button>
+                                </div>
+                                <p class="settings-hint">In degrees: north and east are positive.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="settings-shopping" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Shopping List</h3>
+                        <div class="settings-group">
+                            <label for="supermarket-select">Supermarket</label>
+                            <select id="supermarket-select" class="key-source-select" onchange="saveSupermarket()">
+                                <option value="">Any</option>
+                            </select>
+                            <p class="settings-hint">Each item on the Meals tab's shopping list shows a picture of a
+                                matching product from Open Food Facts. Pick a supermarket to prefer its own-brand
+                                products where it has a close match, and to link each item in the emailed list to
+                                its search on that supermarket's website.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="shopping-email-input">Email The List To</label>
+                            <input type="email" id="shopping-email-input" placeholder="e.g. you@example.com"
+                                autocomplete="email" onchange="saveShoppingEmail()">
+                            <p class="settings-hint">The Email button on the shopping list sends it here. It's sent
+                                through the mail server set in <b>Integrations</b>.</p>
+                        </div>
+                        <div class="settings-group">
+                            <label for="speech-voice-select">Spoken Confirmation Voice</label>
+                            <div class="slideshow-sky-location">
+                                <select id="speech-voice-select" class="key-source-select" onchange="saveSpeechVoice()">
+                                    <option value="off">Off</option>
+                                    <option value="">Default</option>
+                                </select>
+                                <button type="button" class="btn-control btn-small" onclick="testSpeechVoice()">Test</button>
+                            </div>
+                            <p class="settings-hint">The voice that reads back what's added to the list by voice, or
+                                <b>Off</b> for none. Each device has its own voices, so this is chosen on each one.</p>
                         </div>
                     </div>
                 </div>
@@ -907,8 +1346,8 @@
                                 </select>
                                 <button id="key-import-btn" class="btn-control btn-small primary" onclick="importKeysFromDevice()" disabled>Get Keys</button>
                             </div>
-                            <p class="settings-hint">Fetches the Discogs, AcoustID and YouTube keys, the S3 connection
-                                details and the TP-Link and Bright logins from another AMMUI on this network. Keys that device has replace the ones here; any
+                            <p class="settings-hint">Fetches the Discogs, AcoustID, YouTube and USDA keys, the S3 connection
+                                details, the mail server and the TP-Link, Bright and Fuel Finder logins from another AMMUI on this network. Keys that device has replace the ones here; any
                                 it doesn't have are left as they are. S3 sync and mirror settings aren't copied.</p>
                             <label class="settings-check" style="margin-top: 0.5rem;">
                                 <input type="checkbox" id="key-sharing-allow" onchange="saveKeySharing()">
@@ -963,6 +1402,78 @@
                                 <code>yt-dlp</code> tool is installed on the server, those still play locally
                                 (extracted on the fly, not cached); otherwise they open on youtube.com instead.</p>
                         </div>
+
+                        <div class="settings-group" style="margin-top: 1.5rem;">
+                            <label for="usda-key-input">USDA FoodData Central API Key</label>
+                            <div class="input-with-button">
+                                <input type="password" id="usda-key-input"
+                                    placeholder="Enter your api.data.gov key"
+                                    autocomplete="off">
+                                <button class="btn-control btn-small primary" onclick="saveUsdaKey()">Save</button>
+                            </div>
+                            <p class="settings-hint">Optional. Adds US foods to the places the Meals tab can look up
+                                ingredient calories; UK foods and UK products work without a key. <a href="https://fdc.nal.usda.gov/api-key-signup"
+                                    target="_blank" rel="noopener">Get a free key here</a>.</p>
+                        </div>
+
+                        <div class="settings-group" id="fuel-finder-settings" style="margin-top: 1.5rem;">
+                            <label for="fuel-finder-client-id">Fuel Finder (UK Petrol Prices)</label>
+                            <input type="text" id="fuel-finder-client-id" placeholder="Client ID" autocomplete="off" spellcheck="false">
+                            <input type="password" id="fuel-finder-client-secret" placeholder="Client secret" autocomplete="new-password"
+                                style="margin-top: 0.5rem;">
+                            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-top: 0.5rem;">
+                                <button class="btn-control btn-small primary" onclick="saveFuelFinderAccount(this)">Save &amp; Connect</button>
+                                <span id="fuel-finder-status" class="settings-hint" style="margin:0;"></span>
+                            </div>
+                            <p class="settings-hint">Shows the pump prices of petrol stations near this device on the
+                                Petrol tab, from the government's Fuel Finder scheme, which every UK forecourt has to keep
+                                up to date. Sign in with GOV.UK One Login on the <a
+                                    href="https://www.developer.fuel-finder.service.gov.uk/fuel-finder/public-api"
+                                    target="_blank" rel="noopener">Fuel Finder developer site</a> to get a free client ID
+                                and secret. It only answers from UK internet connections.</p>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Email (Outgoing Mail Server)</h3>
+                        <p class="settings-hint">Used to email the shopping list. Your email provider lists these
+                            as its SMTP settings; Gmail and Outlook need an app password rather than your normal one.</p>
+                        <div class="settings-group">
+                            <label for="email-host-input">SMTP Server</label>
+                            <input type="text" id="email-host-input" placeholder="e.g. smtp.gmail.com" autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-port-input">Port</label>
+                            <input type="number" id="email-port-input" min="1" max="65535" placeholder="587">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-security-select">Security</label>
+                            <select id="email-security-select" class="key-source-select" onchange="emailSecurityChanged()">
+                                <option value="starttls">STARTTLS (usually port 587)</option>
+                                <option value="ssl">SSL/TLS (usually port 465)</option>
+                                <option value="none">None</option>
+                            </select>
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-username-input">Username</label>
+                            <input type="text" id="email-username-input" placeholder="Usually your email address"
+                                autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-password-input">Password</label>
+                            <input type="password" id="email-password-input" autocomplete="new-password">
+                        </div>
+                        <div class="settings-group">
+                            <label for="email-from-input">From Address</label>
+                            <input type="email" id="email-from-input" placeholder="Leave empty to use the username"
+                                autocomplete="off">
+                        </div>
+                        <div class="settings-group">
+                            <div style="display:flex; gap:0.75rem; flex-wrap:wrap;">
+                                <button class="btn-control btn-small primary" onclick="saveEmailSettings()">Save</button>
+                                <button class="btn-control btn-small" onclick="testEmailSettings()">Test Connection</button>
+                            </div>
+                            <div id="email-settings-status" class="calendar-status"></div>
+                        </div>
                     </div>
                 </div>
                 <div id="settings-calendars" class="settings-panel">
@@ -1001,13 +1512,31 @@
                         </div>
                     </div>
                 </div>
+                <div id="settings-games" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Family</h3>
+                        <p class="settings-hint">The people who play the games and eat the meals planned on the Meals
+                            tab. Each has their own game and stats, the same on every device. Removing someone deletes
+                            their games and stats, and takes them off planned meals.</p>
+                        <div id="game-players-list" class="calendar-settings-list">
+                            <span class="settings-hint">Loading...</span>
+                        </div>
+                        <div class="tag-input-wrapper game-player-add"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); addGamePlayer(); }">
+                            <input type="text" id="game-player-add-name" placeholder="Name" maxlength="40"
+                                autocomplete="off" aria-label="New family member's name">
+                            <button type="button" class="btn-control btn-small primary" onclick="addGamePlayer()">Add</button>
+                        </div>
+                        <div id="game-players-status" class="calendar-status"></div>
+                    </div>
+                </div>
                 <div id="settings-backup" class="settings-panel">
                     <div class="manage-section">
                         <h3>S3 Connection</h3>
                         <div class="settings-group">
-                            <p class="settings-hint">Back up the local music, photos and videos to an S3 compatible
-                                bucket (AWS, Wasabi, Backblaze, Cloudflare R2...), or restore them from one. Enter the
-                                bucket details and test them first.</p>
+                            <p class="settings-hint">Back up the local music, photos and videos, and everything else
+                                (meals, tags, settings...), to an S3 compatible bucket (AWS, Wasabi, Backblaze,
+                                Cloudflare R2...), or restore them from one. Enter the bucket details and test them first.</p>
                             <div class="s3-settings-grid">
                                 <div class="input-group">
                                     <label for="s3-endpoint">Endpoint</label>
@@ -1047,12 +1576,24 @@
                         <div class="manage-section" style="margin-top: 1.5rem;">
                             <h3>Backup</h3>
                             <div class="settings-group">
-                                <p class="settings-hint">Uploads this server's library into a folder named after the
-                                    server. Files already backed up are skipped.</p>
+                                <p class="settings-hint">Uploads this server's library, and a copy of its data, into the
+                                    folder below. Files already backed up are skipped.</p>
+                                <div style="margin-bottom: 0.75rem;">
+                                    <label for="s3-folder">Backup Folder</label>
+                                    <input type="text" id="s3-folder" style="max-width: 20em;" onchange="changeS3Folder()">
+                                    <p class="settings-hint">The folder in the bucket. It stays the same when the server is
+                                        renamed. Changed, the backup already there can be moved along with it.</p>
+                                </div>
                                 <label class="settings-check">
                                     <input type="checkbox" id="s3-enabled" onchange="saveS3Settings()">
                                     <span>Back up automatically every day</span>
                                 </label>
+                                <div class="settings-hint" style="display:flex; align-items:center; gap:0.5rem; margin:0.5rem 0 0 1.6rem;">
+                                    <label for="s3-time">At</label>
+                                    <input type="time" id="s3-time" value="03:00"
+                                        style="padding:0.3rem 0.5rem;" onchange="saveS3Settings()">
+                                    <span>If this computer is off then, the backup runs when it's next on.</span>
+                                </div>
                                 <div>
                                     <label class="settings-check">
                                         <input type="checkbox" id="s3-mirror" onchange="saveS3Settings()">
@@ -1078,12 +1619,16 @@
                         <div class="manage-section" style="margin-top: 1.5rem;">
                             <h3>Restore</h3>
                             <div class="settings-group">
-                                <p class="settings-hint">Downloads every file in a bucket folder into this server's
-                                    library. Files already here with the same size are skipped.</p>
+                                <p class="settings-hint">Brings back what you tick from a server's backup. Files already
+                                    here with the same size are skipped; the data ticked replaces what's here, and the
+                                    app restarts to load it. This server keeps its own name and S3 connection.</p>
                                 <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
-                                    <select id="s3-restore-folder" style="min-width:12em;"></select>
+                                    <select id="s3-restore-folder" style="min-width:12em;" onchange="loadS3RestoreOptions()"></select>
                                     <button id="btn-s3-restore-refresh" onclick="loadS3RestoreFolders()"
                                         class="btn-control ghost btn-small" title="Reload folder list">Refresh</button>
+                                </div>
+                                <div id="s3-restore-options" class="s3-restore-options"></div>
+                                <div>
                                     <button id="btn-s3-restore-start" onclick="startS3Restore()"
                                         class="btn-control btn-small primary">Restore</button>
                                 </div>
@@ -1106,6 +1651,8 @@
                                 <div id="s3-sync-file" class="sync-current-file"></div>
                             </div>
                             <div class="sync-actions" style="margin-top: 0.5rem;">
+                                <button id="btn-s3-cancel" onclick="cancelS3Sync()"
+                                    class="btn-control btn-small" style="display: none;">Cancel</button>
                                 <button id="btn-s3-view-log" onclick="openS3SyncLogModal()"
                                     class="btn-control ghost btn-small">View Log</button>
                                 <span id="s3-last-sync" class="last-sync-time"></span>
@@ -1152,6 +1699,39 @@
                         </div>
                     </div>
                 </div>
+                <div id="settings-startup" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Run When the Server Starts</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Runs a command on the machine running the server once the server
+                                is ready, for example to open the app in a browser on a wall tablet or a TV.</p>
+                            <div id="startup-browser-options" class="startup-browser-options">
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="none" onchange="onStartupBrowserChange()"><span>None</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="chrome" onchange="onStartupBrowserChange()"><span>Chrome</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="edge" onchange="onStartupBrowserChange()"><span>Edge</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="firefox" onchange="onStartupBrowserChange()"><span>Firefox</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="safari" onchange="onStartupBrowserChange()"><span>Safari</span></label>
+                                <label class="settings-check"><input type="radio" name="startup-browser" value="manual" onchange="onStartupBrowserChange()"><span>Manual</span></label>
+                            </div>
+                            <label class="settings-check" style="margin-top: 0.75rem;">
+                                <input type="checkbox" id="startup-kiosk" onchange="onStartupBrowserChange()">
+                                <span>Kiosk mode
+                                    <span class="settings-hint">Full screen with no address bar or tabs. Close it with
+                                        Alt+F4 (Cmd+Q on a Mac). Safari has no kiosk mode.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="startup-command-input">Command</label>
+                            <input type="text" id="startup-command-input" disabled spellcheck="false"
+                                onchange="saveStartupSettings()">
+                            <p id="startup-command-hint" class="settings-hint"></p>
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-seek" onclick="runStartupCommandNow()">Run Now</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div id="settings-tools" class="settings-panel">
                     <div class="manage-section">
                         <h3>External Programs</h3>
@@ -1169,6 +1749,7 @@
                         </div>
                     </div>
                 </div>
+            </div>
             </div>
         </div>
     </div>
@@ -1191,7 +1772,7 @@
                 <button class="settings-tab active" onclick="switchSettingsTab('servers', this)">Servers</button>
                 <button class="settings-tab" onclick="switchSettingsTab('players', this)">Players</button>
                 <button class="settings-tab" onclick="switchSettingsTab('airplay', this)">AirPlay</button>
-                <button class="settings-tab" data-tab="smarthome" onclick="switchSettingsTab('smarthome', this)">Smart Home</button>
+                <button class="settings-tab" data-tab="smarthome" onclick="switchSettingsTab('smarthome', this)">Controls</button>
             </div>
             <div class="manage-list-container">
                 <div id="settings-servers" class="settings-panel active">
@@ -1294,6 +1875,14 @@
                             <button id="btn-glow-save" class="btn-control primary" onclick="saveGlowAccount(this)">Save &amp; Connect</button>
                             <span id="glow-status" class="settings-hint" style="margin:0;"></span>
                         </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Heating (tado°)</h3>
+                        <p class="settings-hint">Shows your tado° rooms on the Controls tab, to see their
+                            temperatures and change what they're heating to until the next scheduled change. tado° has
+                            no local control, so this goes through tado's servers, which limit how often they can be
+                            asked: room temperatures are refreshed every few minutes.</p>
+                        <div id="tado-account" class="tado-account"></div>
                     </div>
                 </div>
             </div>
@@ -1417,7 +2006,40 @@
 
 
 
-    <!-- Calendar Entry Modal (Calendar tab: click a day to add, an entry to edit) -->
+    <!-- A timer or alarm going off: it beeps until Stop is pressed -->
+    <div id="alarm-ring-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content alarm-ring-content" role="alertdialog" aria-labelledby="alarm-ring-title">
+            <h2 id="alarm-ring-title">Time's up</h2>
+            <div id="alarm-ring-list" class="alarm-ring-list"></div>
+            <button type="button" class="btn-control primary alarm-stop-btn" onclick="stopRinging()">Stop</button>
+        </div>
+    </div>
+
+    <!-- Calendar Entry Modal (Calendar tab and the Meals tab's calendar: click a day to add, an entry to edit) -->
+    <!-- Meals calendar: one day's meals, their items and the totals per person -->
+    <div id="meal-day-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeMealDayView()">
+        <div class="modal-content meal-day-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2 id="meal-day-heading"></h2>
+                </div>
+                <div class="item-builder-header-actions">
+                    <button type="button" class="btn-control primary" onclick="openCalendarEntryModal(mealDayDate)">+ Add Meal</button>
+                    <button class="btn-close" onclick="closeMealDayView()" title="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <!-- Whose food to show: everyone's, or one family member's -->
+            <div id="meal-day-family" class="nutrition-sources meal-day-family" role="group" aria-label="Whose food" hidden></div>
+            <div id="meal-day-body" class="modal-body meal-day-body"></div>
+        </div>
+    </div>
+
     <div id="calendar-entry-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 480px;">
             <div class="modal-header">
@@ -1425,37 +2047,42 @@
                     <h2 id="calendar-entry-heading">New Entry</h2>
                     <div id="calendar-entry-date-label" class="settings-hint" style="margin: 0;"></div>
                 </div>
-                <button class="btn-close" onclick="closeCalendarEntryModal()">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="calendar-entry-form">
-                <div class="calendar-entry-kind" role="tablist" aria-label="Entry type">
-                    <button type="button" class="calendar-entry-kind-btn" data-kind="entry" role="tab"
-                        onclick="setCalendarEntryKind('entry')">Entry</button>
-                    <button type="button" class="calendar-entry-kind-btn" data-kind="recipe" role="tab"
-                        onclick="setCalendarEntryKind('recipe')">Meal</button>
+                <!-- Save stays up here, in reach however long the form below gets -->
+                <div class="item-builder-header-actions">
+                    <button id="calendar-entry-save-btn" class="btn-control primary" onclick="saveCalendarEntry()">Save</button>
+                    <button class="btn-close" onclick="closeCalendarEntryModal()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
                 </div>
-                <div id="calendar-entry-recipe-fields" class="settings-group">
-                    <label for="calendar-entry-recipe">Meal</label>
-                    <div class="calendar-entry-repeat">
-                        <select id="calendar-entry-recipe" class="calendar-entry-recipe-select" onchange="updateCalendarEntryRecipeUI()">
-                            <option value="">Choose a meal…</option>
-                        </select>
-                        <button type="button" id="calendar-entry-open-recipe" class="btn-control ghost btn-small"
-                            onclick="openRecipeFromEntry()">Open Meal</button>
+            </div>
+            <div id="calendar-entry-status" class="calendar-status item-builder-status"></div>
+            <div class="calendar-entry-form">
+                <div id="calendar-entry-scope" class="calendar-entry-kind" role="tablist" aria-label="Which occurrences">
+                    <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="one" role="tab"
+                        onclick="setCalendarEntryScope('one')">This occurrence</button>
+                    <button type="button" class="calendar-entry-scope-btn calendar-entry-kind-btn" data-scope="all" role="tab"
+                        onclick="setCalendarEntryScope('all')">Every occurrence</button>
+                </div>
+                <!-- A meal: its one item (made or changed in the item dialog) and the family it's for -->
+                <div id="calendar-entry-meal-fields" class="calendar-entry-normal-fields">
+                    <div class="settings-group">
+                        <label for="calendar-entry-part-search">Item <span class="calendar-entry-tags-hint">— for a meal of several things, an item made of others</span></label>
+                        <ol id="calendar-entry-parts" class="calendar-entry-parts"></ol>
+                        <!-- Type to find an item to add; the matches list under the box -->
+                        <input type="text" id="calendar-entry-part-search" autocomplete="off" role="combobox"
+                            aria-controls="calendar-entry-part-results" aria-autocomplete="list"
+                            oninput="renderMealItemPicker(true, true)" onclick="renderMealItemPicker(true)"
+                            onkeydown="mealItemPickerKeydown(event)" onblur="closeMealItemPicker()">
+                        <ul id="calendar-entry-part-results" class="meal-item-results" role="listbox" hidden
+                            onmousedown="event.preventDefault()" onclick="pickMealItemAt(event)"></ul>
                     </div>
-                    <div class="calendar-entry-repeat">
-                        <span class="calendar-entry-repeat-word">For</span>
-                        <input type="number" id="calendar-entry-people" min="1" max="10" step="1" value="1"
-                            aria-label="Number of people">
-                        <label for="calendar-entry-people" class="calendar-entry-repeat-word">people</label>
+                    <div id="calendar-entry-family-group" class="settings-group">
+                        <label>For <span class="calendar-entry-tags-hint">— who's eating</span></label>
+                        <div id="calendar-entry-family" class="calendar-entry-tag-choices"></div>
                     </div>
-                    <p id="calendar-entry-no-recipes" class="settings-hint" style="margin: 0;">No meals yet. Add them
-                        on the Meals tab.</p>
                 </div>
                 <div id="calendar-entry-normal-fields" class="calendar-entry-normal-fields">
                     <div class="settings-group">
@@ -1468,13 +2095,13 @@
                         <textarea id="calendar-entry-description" rows="4" maxlength="10000"></textarea>
                     </div>
                 </div>
-                <div class="settings-group">
+                <div id="calendar-entry-date-group" class="settings-group">
                     <label for="calendar-entry-date" id="calendar-entry-date-heading">Date</label>
                     <div class="calendar-entry-repeat">
                         <input type="date" id="calendar-entry-date" required>
                     </div>
                 </div>
-                <div class="settings-group">
+                <div id="calendar-entry-repeat-group" class="settings-group">
                     <label for="calendar-entry-repeat-unit">Repeat</label>
                     <div class="calendar-entry-repeat">
                         <span class="calendar-entry-repeat-word calendar-entry-repeat-on">Every</span>
@@ -1484,17 +2111,17 @@
                             <option value="">Doesn't repeat</option>
                             <option value="day">day(s)</option>
                             <option value="week">week(s)</option>
-                            <option value="month">month(s)</option>
+                            <option value="month" id="calendar-entry-repeat-month">month(s)</option>
                         </select>
                     </div>
-                    <div class="calendar-entry-repeat calendar-entry-repeat-on">
+                    <div id="calendar-entry-repeat-until-row" class="calendar-entry-repeat calendar-entry-repeat-on">
                         <span class="calendar-entry-repeat-word">Until</span>
                         <input type="date" id="calendar-entry-repeat-until" aria-label="Repeat until">
                         <span class="settings-hint" style="margin: 0;">Leave blank to repeat forever</span>
                     </div>
-                    <p id="calendar-entry-series-note" class="settings-hint" style="margin: 0;"></p>
                 </div>
-                <div class="settings-group">
+                <p id="calendar-entry-series-note" class="settings-hint" style="margin: 0;"></p>
+                <div id="calendar-entry-tags-group" class="settings-group">
                     <label for="calendar-entry-tag-input">Tags <span class="calendar-entry-tags-hint">— pick at least one</span></label>
                     <div id="calendar-entry-tags" class="calendar-entry-tag-choices"></div>
                     <div class="tag-input-wrapper">
@@ -1504,13 +2131,11 @@
                         <button class="btn-control ghost btn-small" onclick="addCalendarEntryTag()">Add</button>
                     </div>
                 </div>
-                <div id="calendar-entry-status" class="calendar-status"></div>
                 <div class="calendar-entry-actions">
                     <button id="calendar-entry-delete-btn" class="btn-control ghost calendar-entry-delete"
                         onclick="deleteCalendarEntry()">Delete</button>
                     <span style="flex: 1;"></span>
                     <button class="btn-control ghost" onclick="closeCalendarEntryModal()">Cancel</button>
-                    <button id="calendar-entry-save-btn" class="btn-control primary" onclick="saveCalendarEntry()">Save</button>
                 </div>
             </div>
         </div>
@@ -1813,6 +2438,31 @@
     <div id="screensaver-overlay" class="screensaver-overlay" style="display: none;">
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
+        <video id="screensaver-video" class="screensaver-video" playsinline muted preload="auto" style="display: none;"></video>
+        <!-- The night sky slide, shown between photos when it's on in the settings (drawn by sky.js) -->
+        <div id="screensaver-sky" class="screensaver-sky" hidden></div>
+        <!-- While the sky fills the screen, its only controls: start or stop it turning, and back to the photos -->
+        <div class="ss-sky-buttons">
+            <button id="ss-sky-turn" class="ss-sky-button" onclick="event.stopPropagation(); toggleSkyTurning();"
+                ontouchend="event.stopPropagation(); toggleSkyTurning(); event.preventDefault();" title="Turn slowly round the horizon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-3-6.7" />
+                    <path d="M21 3v6h-6" />
+                </svg>
+                <span>Turn</span>
+            </button>
+            <button id="ss-sky-back" class="ss-sky-button" onclick="event.stopPropagation(); toggleSlideshowSky();"
+                ontouchend="event.stopPropagation(); toggleSlideshowSky(); event.preventDefault();" title="Back to the photos">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                </svg>
+                <span>Photos</span>
+            </button>
+        </div>
         <!-- Landscape screens: the column right of the photo, holding these from top to bottom (see style.css).
              Elsewhere it has no box of its own and they sit over the photo. -->
         <div id="ss-side-panel" class="ss-side-panel">
@@ -1868,6 +2518,22 @@
                     </svg>
                 </button>
                 </div>
+                <!-- Always shown, as it can start music when none is queued. Fired on touchend: browsers
+                     only count touchend as the user gesture that's allowed to start the microphone. -->
+                <button id="btn-ss-voice" class="btn-ss-music btn-ss-voice" onclick="slideshowMusicVoice()"
+                    ontouchend="slideshowMusicVoice(); event.preventDefault();"
+                    title="Music by voice: &quot;play &lt;song&gt; by &lt;artist&gt;&quot;, &quot;next&quot;, &quot;volume 30&quot;"
+                    aria-label="Music by voice">
+                    <!-- A microphone with a music note, as it's for the music -->
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="4" y="2" width="6" height="11" rx="3"></rect>
+                        <path d="M1 10v1a6 6 0 0 0 12 0v-1"></path>
+                        <line x1="7" y1="17" x2="7" y2="21"></line>
+                        <path d="M20 15V4l3 1.5"></path>
+                        <circle cx="17.5" cy="15.5" r="2.5" fill="currentColor" stroke="none"></circle>
+                    </svg>
+                </button>
                 <button class="btn-ss-music btn-ss-exit" onclick="event.stopPropagation(); stopSlideshow();"
                     ontouchend="event.stopPropagation(); stopSlideshow(); event.preventDefault();"
                     title="Exit Slideshow">
@@ -1878,19 +2544,24 @@
                     </svg>
                 </button>
             </div>
-            <!-- Today's calendar, in the side panel (filled by slideshow.js) -->
-            <div id="ss-agenda" class="ss-agenda"></div>
+            <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
+            <!-- The next sunrise and sunset, above the calendar (filled by slideshow.js from the night sky's location) -->
+            <div id="ss-sun" class="ss-sun"></div>
+            <!-- Today's and tomorrow's calendar, in the side panel (filled by slideshow.js); a tap goes to the Calendar tab -->
+            <div id="ss-agenda" class="ss-agenda" onclick="event.stopPropagation(); stopSlideshow(); showCalendar();"></div>
             <div class="screensaver-info" id="screensaver-info"></div>
             <div id="ss-lyrics-panel" class="ss-lyrics-panel" style="display:none;">
                 <div id="ss-lyrics-content" class="ss-lyrics-content"></div>
             </div>
+            <!-- The shopping list, under the lyrics' place in the side panel (filled by slideshow.js); a tap opens it to change -->
+            <div id="ss-shopping" class="ss-shopping" onclick="event.stopPropagation(); openShoppingModal();"></div>
             <div id="ss-map-window" class="ss-map-window" style="display:none;">
                 <div id="ss-map" class="ss-map"></div>
             </div>
             <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
                 ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
                 onmouseup="event.stopPropagation()">
-                <div class="ss-control-item" onclick="rotateSlideshow(-90)"
+                <div class="ss-control-item" id="ss-rotate-item" onclick="rotateSlideshow(-90)"
                     ontouchstart="rotateSlideshow(-90); event.preventDefault();"
                     ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
                     <button class="btn-ss-rotate" title="Rotate Left">
@@ -1912,6 +2583,20 @@
                     <div class="ss-control-label">Mode</div>
                 </div>
 
+                <!-- Switches between the photos and the sky; shown when the sky is on in the settings -->
+                <div class="ss-control-item" id="ss-sky-item" style="display: none;" onclick="toggleSlideshowSky()"
+                    ontouchstart="event.preventDefault();"
+                    ontouchend="toggleSlideshowSky(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
+                    <button class="btn-ss-rotate btn-ss-sky" title="Switch between the photos and the sky">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+                            <path d="M17 3v4M15 5h4" />
+                        </svg>
+                    </button>
+                    <div class="ss-control-label">Sky</div>
+                </div>
+
                 <div class="ss-control-item" onclick="toggleFavouriteCurrentPhoto()"
                     ontouchstart="toggleFavouriteCurrentPhoto(); event.preventDefault();"
                     ontouchend="if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
@@ -1924,22 +2609,6 @@
                         </svg>
                     </button>
                     <div class="ss-control-label">Fav</div>
-                </div>
-
-                <!-- Fired on touchend rather than touchstart: browsers only count touchend as the user
-                     gesture that's allowed to start the microphone. -->
-                <div class="ss-control-item" id="ss-voice-item" onclick="toggleVoiceCommand()"
-                    ontouchstart="event.preventDefault();"
-                    ontouchend="toggleVoiceCommand(); if(slideshow) slideshow.resetButtonStates(); event.preventDefault();">
-                    <button id="btn-ss-voice" class="btn-ss-voice" title="Voice command">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round">
-                            <rect x="9" y="2" width="6" height="12" rx="3"></rect>
-                            <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
-                            <line x1="12" y1="18" x2="12" y2="22"></line>
-                        </svg>
-                    </button>
-                    <div class="ss-control-label">Voice</div>
                 </div>
 
                 <div class="ss-control-item" id="ss-browse-item" style="display: none;" onclick="openSlideshowBrowser()"
@@ -1963,18 +2632,17 @@
                     <button class="btn-ss-delete" title="Hide Photo (Don't show again)">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                             stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18" />
-                            <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                            <line x1="10" y1="11" x2="10" y2="17" />
-                            <line x1="14" y1="11" x2="14" y2="17" />
+                            <!-- Eye with a slash through it, as on the slideshow browser's hide button -->
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                            <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                            <path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" />
+                            <line x1="1" y1="1" x2="23" y2="23" />
                         </svg>
                     </button>
                     <div class="ss-control-label">Hide</div>
                 </div>
             </div>
         </div>
-        <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
 
 
 
@@ -2007,6 +2675,11 @@
             onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
             <div class="ss-browser-header">
                 <h2><span id="ss-browser-title"></span> <span id="ss-browser-count" class="hidden-photos-count"></span></h2>
+                <div id="ss-browser-selection" class="ss-browser-selection" style="display: none;">
+                    <button class="ss-browser-clear" onclick="slideshow.clearBrowserSelection()" title="Clear selection">Clear</button>
+                    <button id="ss-browser-hide-selected" class="btn-delete" onclick="slideshow.hideSelectedFromBrowser()"
+                        title="Hide the selected photos from the slideshow">Hide (0)</button>
+                </div>
                 <button class="btn-close" onclick="closeSlideshowBrowser()" title="Back to slideshow">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                         stroke-linecap="round" stroke-linejoin="round">
@@ -2084,7 +2757,168 @@
         </svg>
         <span id="nav-btn-label" class="nav-btn-label">Player</span>
     </button>
-    <div id="toast-container" class="toast-container"></div>
+
+    <!-- The shopping list, opened from the Meals tab and from the slideshow's shopping list -->
+    <div id="shopping-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeShoppingModal()">
+        <div class="modal-content shopping-modal-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Shopping List</h2>
+                </div>
+                <div class="shopping-header-actions">
+                    <button type="button" class="btn-control ghost btn-small" onclick="renameShoppingList()">Rename</button>
+                    <button type="button" id="btn-shopping-delete" class="btn-control ghost btn-small" onclick="deleteShoppingList()">Delete</button>
+                    <button type="button" id="btn-shopping-email" class="btn-control ghost btn-small" onclick="emailShoppingList()"
+                        title="Email the list to the address set in Server Settings → Shopping">Email</button>
+                    <button type="button" class="btn-control ghost btn-small" onclick="clearShoppingList()">Clear</button>
+                    <button class="btn-close" onclick="closeShoppingModal()">&#x2715;</button>
+                </div>
+            </div>
+            <div class="modal-body shopping-modal-body">
+                <!-- A tab per list (the slideshow's copy has the same tabs), and + for a new one -->
+                <div class="shopping-tabs" role="tablist" aria-label="Shopping lists">
+                    <div id="shopping-tabs" class="shopping-tabs-list"></div>
+                    <button type="button" class="shopping-tab shopping-tab-new" onclick="createShoppingList()"
+                        title="New list" aria-label="New list">+</button>
+                </div>
+                <!-- One item per line, saved as you type. Lines don't wrap, so each has a picture beside it. -->
+                <div class="shopping-list-wrap">
+                    <textarea id="shopping-list" class="shopping-list" spellcheck="true" maxlength="20000" wrap="off"
+                        aria-label="Shopping list"
+                        oninput="shoppingListEdited()" onkeydown="shoppingListKeydown(event)"
+                        onblur="hideShoppingSuggestions(); saveShoppingListNow()" onscroll="scrollShoppingThumbs(); hideShoppingSuggestions()"></textarea>
+                    <div class="shopping-thumbs" aria-hidden="true"><div id="shopping-thumbs"></div></div>
+                    <!-- A delete button per line, to cross items off one by one while shopping -->
+                    <div id="shopping-deletes-layer" class="shopping-deletes"><div id="shopping-deletes"></div></div>
+                    <!-- Saved ingredients matching the line being typed -->
+                    <div id="shopping-suggest" class="shopping-suggest" hidden></div>
+                </div>
+                <button type="button" id="btn-shopping-voice" class="btn-control" onclick="toggleShoppingVoice()"
+                    title="Voice: &quot;add milk&quot;, &quot;remove eggs&quot;">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.25" stroke-linecap="round">
+                        <rect x="9" y="2" width="6" height="12" rx="3"></rect>
+                        <path d="M5 10v1a7 7 0 0 0 14 0v-1"></path>
+                        <line x1="12" y1="18" x2="12" y2="22"></line>
+                    </svg>
+                    Say "add ..." or "remove ..."
+                </button>
+                <div id="shopping-status" class="calendar-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Meals tab: choosing a shopping list item's picture (opened by clicking it) -->
+    <!-- Meals tab: makes or changes an item, either a single item (found by searching products for its
+         name and picture) or one made of other items (found by searching the items) -->
+    <div id="item-builder-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeItemBuilder()">
+        <div class="modal-content item-builder-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2 id="item-builder-heading">New Item</h2>
+                </div>
+                <!-- Save stays up here, in reach however long the search results below get -->
+                <div class="item-builder-header-actions">
+                    <button type="button" id="item-builder-save-btn" class="btn-control primary" onclick="saveItemBuilder()">Save</button>
+                    <button class="btn-close" onclick="closeItemBuilder()" title="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="item-builder-status" class="calendar-status item-builder-status"></div>
+            <div class="modal-body">
+                <div class="settings-group">
+                    <label for="item-builder-name">Name</label>
+                    <div class="recipe-name-row">
+                        <input type="text" id="item-builder-name" class="recipe-name-input" maxlength="300" autocomplete="off"
+                            placeholder="e.g. Peas, or Sunday roast" oninput="onItemBuilderNameInput(); scheduleItemBuilderLookup()"
+                            onkeydown="if(event.key==='Enter') { event.preventDefault(); saveItemBuilder(); }">
+                        <label class="recipe-confirmed">
+                            <input type="checkbox" id="item-builder-confirmed"> Confirmed
+                        </label>
+                    </div>
+                    <p id="item-builder-name-note" class="settings-hint" hidden></p>
+                </div>
+                <div id="item-builder-kinds" class="nutrition-sources item-builder-kinds" role="tablist" aria-label="Kind of item">
+                    <button type="button" role="tab" data-kind="single" onclick="setItemBuilderKind('single')">Single item</button>
+                    <button type="button" role="tab" data-kind="group" onclick="setItemBuilderKind('group')">Made of other items</button>
+                </div>
+                <!-- A single item is looked up by its name as it's typed: UK foods for the calories, then
+                     products for the picture (and their calories) -->
+                <div id="item-builder-single" class="item-builder-section">
+                    <div class="settings-group">
+                        <label>Calories <span class="calendar-entry-tags-hint">— pick the closest UK food</span></label>
+                        <div id="item-builder-foods" class="item-builder-foods"></div>
+                    </div>
+                    <div class="item-builder-single-row">
+                        <div class="item-builder-quantity">
+                            <label for="item-builder-amount">Quantity for one person</label>
+                            <div class="item-builder-quantity-row">
+                                <input type="text" id="item-builder-amount" maxlength="20" placeholder="Amount" autocomplete="off"
+                                    aria-label="Amount for one person" oninput="renderItemBuilderCalories()">
+                                <input type="text" id="item-builder-unit" maxlength="40" placeholder="Unit" list="recipe-units"
+                                    autocomplete="off" aria-label="Unit" oninput="renderItemBuilderCalories()">
+                            </div>
+                        </div>
+                        <button type="button" id="item-builder-kcal" class="recipe-kcal item-builder-kcal"
+                            onclick="openItemBuilderNutrition()"></button>
+                    </div>
+                    <div class="settings-group">
+                        <label>Picture <span class="calendar-entry-tags-hint">— a product also gives its calories</span></label>
+                        <div class="item-builder-picture-row">
+                            <button type="button" id="item-builder-pic" class="ingredient-pic item-builder-pic"
+                                onclick="searchItemBuilderProducts()" title="The picture chosen. Click to look again."></button>
+                            <div id="item-builder-products" class="shopping-picker-results item-builder-products"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="item-builder-group" class="item-builder-section" hidden>
+                    <ol id="item-builder-parts" class="item-builder-parts"></ol>
+                    <div class="settings-group">
+                        <input type="search" id="item-builder-part-search" autocomplete="off" placeholder="Search items to add..."
+                            aria-label="Search items to add" oninput="renderItemBuilderPartResults()"
+                            onkeydown="onItemBuilderPartSearchKey(event)">
+                        <div id="item-builder-part-results" class="item-builder-results"></div>
+                    </div>
+                    <p id="item-builder-total" class="recipe-kcal-total"></p>
+                </div>
+                <div class="item-builder-actions">
+                    <button type="button" id="item-builder-delete-btn" class="btn-control ghost calendar-entry-delete"
+                        onclick="deleteItemBuilderItem()">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="shopping-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeShoppingPicker()">
+        <div class="modal-content shopping-picker-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Choose a Picture</h2>
+                    <p id="shopping-picker-item" class="subtitle"></p>
+                </div>
+                <button class="btn-close" onclick="closeShoppingPicker()">&#x2715;</button>
+            </div>
+            <div class="modal-body shopping-picker-body">
+                <div class="shopping-picker-search">
+                    <input type="text" id="shopping-picker-search" placeholder="Search products, e.g. a brand"
+                        aria-label="Search products" autocomplete="off"
+                        onkeydown="if(event.key==='Enter')searchShoppingPicker()">
+                    <button type="button" class="btn-control btn-small primary" onclick="searchShoppingPicker()">Search</button>
+                </div>
+                <div id="shopping-picker-results" class="shopping-picker-results"></div>
+                <div class="shopping-picker-actions">
+                    <button type="button" class="btn-control ghost" onclick="chooseShoppingProduct(-1)">No Picture</button>
+                    <button type="button" id="shopping-picker-auto" class="btn-control ghost" onclick="resetShoppingProduct()"
+                        title="Forget the chosen picture and use the one found automatically">Automatic</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <div id="art-search-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeArtSearchModal()">
         <div class="modal-content" style="max-width:480px;width:90vw;">
@@ -2121,8 +2955,16 @@
         </div>
     </div>
 
-    <script src="app.js?v=52"></script>
-    <script src="slideshow.js?v=5"></script>
+    <!-- Shopping list line parsing, shared with the server -->
+    <script type="module">
+        import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
+        Object.assign(window, { splitShoppingLine, shoppingItemKey });
+    </script>
+    <script src="app.js?v=77"></script>
+    <script src="slideshow.js?v=16"></script>
+    <script src="timers.js?v=2"></script>
+    <script src="passwords.js?v=2"></script>
+    <script src="sky.js?v=15"></script>
 </body>
 
 </html>

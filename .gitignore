@@ -15,6 +15,8 @@ local/
 cache/
 # HTTPS certificate authority and server keys (generated per machine)
 certs/
+# Key for the Passwords tab's stored passwords (never committed or backed up)
+passwords.key
 
 # JSON settings and data
 devices.json
@@ -36,3 +38,7 @@ logs/
 /ffplay.exe
 /yt-dlp.exe
 /fpcalc.exe
+/ffmpeg
+/ffprobe
+/yt-dlp
+/fpcalc

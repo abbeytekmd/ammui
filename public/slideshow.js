@@ -43,6 +43,15 @@ class Slideshow {
         // UI binds
         this.overlay = document.getElementById('screensaver-overlay');
         this.img = document.getElementById('screensaver-img');
+        this.video = document.getElementById('screensaver-video');
+        this.videoMaxSeconds = 60; // longest a video slide plays (0 = to its end)
+        this.videoSound = false;
+        this.sky = null; // the sky's settings (slideshowSky): the Sky button switches between it and the photos
+        this.skyShowing = false;
+        this.skyAfterSunset = false; // the sky is up because it's just after sunset, and goes when that's over
+        this.sunsetHandled = null; // the sunset the sky has been put up for already (so switching it off sticks)
+        this.videoShowing = false; // the video element is up instead of the photo
+        this.slideIsVideo = false; // the slide being shown (or faded to) is a video
         this.bg = document.getElementById('screensaver-bg');
         this.info = document.getElementById('screensaver-info');
         this.favBtn = document.getElementById('btn-ss-favourite');
@@ -65,18 +74,154 @@ class Slideshow {
         });
         this.resetIdleTimer();
         this.updateModeUI();
+
+        // Holding a Live Photo plays its clip again, with sound, as on an iPhone; tapping it (or its
+        // clip while it plays) runs the clip again from the start. Tapping any other photo zooms in on
+        // the tapped spot, and tapping again zooms back out.
+        let holdTimer = null, held = false;
+        this.img.addEventListener('pointerdown', () => {
+            clearTimeout(holdTimer);
+            held = false;
+            holdTimer = setTimeout(() => { held = true; this.playLive(this.currentPhotoData, true); }, 400);
+        });
+        ['pointerup', 'pointerleave', 'pointercancel'].forEach(name => this.img.addEventListener(name, () => clearTimeout(holdTimer)));
+        this.img.addEventListener('contextmenu', (e) => { if (this.currentPhotoData?.liveVideo) e.preventDefault(); });
+        // A zoomed-in photo can be dragged around; only a tap that didn't drag zooms back out
+        let drag = null, dragged = false;
+        this.img.addEventListener('dragstart', (e) => e.preventDefault());
+        this.img.addEventListener('pointerdown', (e) => {
+            dragged = false;
+            if (!this.zoomed) return;
+            drag = { id: e.pointerId, x: e.clientX, y: e.clientY, tx: this.zoomPan.x, ty: this.zoomPan.y };
+        });
+        this.img.addEventListener('pointermove', (e) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+            if (!dragged) {
+                if (Math.hypot(dx, dy) < 8) return;
+                dragged = true;
+                clearTimeout(holdTimer);
+                this.img.setPointerCapture(e.pointerId);
+                this.img.classList.add('dragging');
+            }
+            this.setZoomPan(drag.tx + dx, drag.ty + dy);
+        });
+        ['pointerup', 'pointercancel'].forEach(name => this.img.addEventListener(name, (e) => {
+            if (!drag || e.pointerId !== drag.id) return;
+            drag = null;
+            this.img.classList.remove('dragging');
+        }));
+        this.img.addEventListener('click', (e) => {
+            if (held || dragged) return;
+            if (this.currentPhotoData?.liveVideo) this.playLive(this.currentPhotoData);
+            else this.toggleZoom(e.clientX, e.clientY);
+        });
+        this.video.addEventListener('click', () => {
+            if (this.videoShowing && !this.slideIsVideo) this.playLive(this.currentPhotoData, !this.video.muted);
+        });
     }
 
     resetIdleTimer(e) {
         clearTimeout(this.timer);
-        if (!this.isActive && !document.hidden) {
+        if (!this.isActive && !document.hidden && this.idleTimeout > 0 && !gameInProgress()) {
             const isVideoVisible = document.getElementById('video-modal')?.style.display === 'flex';
             if (!isVideoVisible) {
                 this.timer = setTimeout(() => {
-                    this.start();
+                    if (!gameInProgress()) this.start();
                 }, this.idleTimeout);
             }
         }
+    }
+
+    // Seconds from the General settings. 0 = never start when idle / never auto-advance.
+    setTimings(idleSeconds, photoSeconds) {
+        if (idleSeconds >= 0) this.idleTimeout = idleSeconds * 1000;
+        if (photoSeconds >= 0) this.duration = photoSeconds * 1000;
+        if (this.isActive) this.resetInterval();
+        else this.resetIdleTimer();
+    }
+
+    // From the General settings: how long videos play and whether they're heard
+    setVideoOptions({ maxSeconds, sound }) {
+        if (maxSeconds >= 0) this.videoMaxSeconds = maxSeconds;
+        this.videoSound = !!sound;
+        if (this.videoShowing) this.video.muted = !this.videoSound;
+    }
+
+    // From the General settings: the sky (slideshowSky)
+    setSkyOptions(sky) {
+        this.sky = sky;
+        if (this.skyShowing && !skySlideAvailable(sky)) this.hideSky(false, true);
+        else if (this.skyShowing) showSkySlide(sky); // looking another way, or turning now
+        this.updateSkyButton();
+        if (this.isActive) { this.loadSun(); this.checkSunsetSky(); }
+    }
+
+    // For the set time after sunset the sky shows instead of the photos, and then they come back.
+    // Switched back to the photos meanwhile, they stay; the next slideshow in that time starts on the sky again.
+    checkSunsetSky() {
+        if (!this.isActive) return;
+        const minutes = this.sky?.afterSunsetMinutes || 0;
+        let sunset = null;
+        if (minutes > 0 && skySlideAvailable(this.sky)) {
+            const now = Date.now();
+            const set = skyNextSunriseSunset(now - minutes * 60000, this.sky).set; // the sunset in the last `minutes`, if any
+            if (set !== null && set <= now) sunset = set;
+        }
+        if (sunset !== null) {
+            if (this.sunsetHandled === sunset) return;
+            this.sunsetHandled = sunset;
+            if (this.skyShowing || this.browserOpen) return;
+            this.showSky();
+            this.skyAfterSunset = true;
+            this.resetInterval();
+        } else if (this.skyAfterSunset && this.skyShowing) {
+            this.hideSky(false, true);
+            this.resetInterval();
+        }
+    }
+
+    // The Sky button: switches between the sky and the photos. The choice is remembered, so the
+    // next slideshow starts the same way.
+    toggleSky() {
+        if (this.skyShowing) this.hideSky(false, true);
+        else if (skySlideAvailable(this.sky)) this.showSky();
+        try { localStorage.setItem('slideshowSkyOn', this.skyShowing ? '1' : ''); } catch { }
+        this.resetInterval();
+    }
+
+    // Shown once the sky has a place to be seen from, lit while the sky is up
+    updateSkyButton() {
+        const item = document.getElementById('ss-sky-item');
+        if (!item) return;
+        item.style.display = skySlideAvailable(this.sky) ? '' : 'none';
+        item.querySelector('button')?.classList.toggle('is-on', this.skyShowing); // not 'active', which resetButtonStates clears
+    }
+
+    // The sky in place of the photos, which wait under it until it's switched off. It fills the
+    // screen, with the side panel and the other controls put away and just a button back to the photos.
+    showSky() {
+        this.skyShowing = true;
+        this.overlay?.classList.add('sky-mode'); // first, so the sky is drawn the size of the whole screen
+        this.clearZoom();
+        this.stopVideo();
+        if (this.info) this.info.style.opacity = 0;
+        this.hideMap();
+        showSkySlide(this.sky);
+        this.updateSkyButton();
+    }
+
+    // Takes the sky down; `uncover` brings back the details of the photo under it, when that's what shows next
+    hideSky(now = false, uncover = false) {
+        if (!this.skyShowing) return;
+        this.skyShowing = false;
+        this.skyAfterSunset = false;
+        this.overlay?.classList.remove('sky-mode');
+        hideSkySlide(now);
+        this.updateSkyButton();
+        if (!uncover || !this.currentPhotoData) return;
+        if (this.info) this.info.style.opacity = 1;
+        this.updateMapUI(this.currentPhotoData);
     }
 
     async start(items = null, index = -1) {
@@ -115,10 +260,14 @@ class Slideshow {
             setTimeout(() => this.overlay.classList.add('active'), 0);
         }
 
-        // 15-minutely, which also moves it on to the new day after midnight
+        // 15-minutely, which also moves the calendar on to the new day after midnight
         this.loadAgenda();
+        this.loadShopping();
         clearInterval(this._agendaTimer);
-        this._agendaTimer = setInterval(() => this.loadAgenda(), 15 * 60 * 1000);
+        this._agendaTimer = setInterval(() => { this.loadAgenda(); this.loadShopping(); }, 15 * 60 * 1000);
+        this.loadSun();
+        clearInterval(this._sunTimer);
+        this._sunTimer = setInterval(() => { this.loadSun(); this.checkSunsetSky(); }, 60 * 1000);
 
         if (this.info) {
             this.info.style.cursor = 'pointer';
@@ -129,16 +278,31 @@ class Slideshow {
         }
 
         await this.next();
+        // Left on the sky last time: back to it (photos picked from the library are shown instead)
+        let skyOn = false;
+        try { skyOn = localStorage.getItem('slideshowSkyOn') === '1'; } catch { }
+        if (skyOn && !items && this.isActive && !this.skyShowing && skySlideAvailable(this.sky)) {
+            this.showSky();
+            this.resetInterval();
+        }
+        this.checkSunsetSky();
+        this.updateSkyButton();
     }
 
     stop() {
         if (!this.isActive) return;
         clearTimeout(this._modeRetryTimer);
         clearInterval(this._agendaTimer);
+        clearInterval(this._sunTimer);
         console.log('[SLIDESHOW] Stopping...');
         this._browserCurrentHidden = false;
         this.closeBrowser();
         this.isActive = false;
+        this.hideSky(true);
+        this.sunsetHandled = null;
+        this.clearZoom();
+        this.stopVideo();
+        this.slideIsVideo = false;
         if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
         if ((this.mode === 'onThisDay' || this.mode === 'recent' || this.mode === 'favourites') && this.items.length > 0 && this.index >= 0) {
             const currentItem = this.items[this.index];
@@ -173,14 +337,15 @@ class Slideshow {
         this.resetIdleTimer();
     }
 
-    // Today's and tomorrow's entries (from the Calendar tab) and events (from subscribed calendars) in
-    // the side panel, which only shows on landscape screens. A day with nothing on is left out, and the
-    // panel is left empty, and so hidden, when neither has anything.
+    // Today's and tomorrow's entries (from the Calendar tab, not meals) and events (from subscribed
+    // calendars) in the side panel, which only shows on landscape screens and scrolls when they don't
+    // fit. A day with nothing on is left out, and the panel is left empty, and so hidden, when neither has anything.
     async loadAgenda() {
         const el = document.getElementById('ss-agenda');
         if (!el) return;
         const now = new Date();
-        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2))}`;
+        const AGENDA_DAYS = 2;
+        const range = `start=${calendarDateKey(now)}&end=${calendarDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + AGENDA_DAYS))}`;
         try {
             const [cals, entryData, tagData, feedData] = await Promise.all([
                 fetch('/api/calendars').then(r => r.json()),
@@ -189,9 +354,10 @@ class Slideshow {
                 fetch(`/api/calendars/events?${range}`).then(r => r.ok ? r.json() : { events: [] }),
             ]);
             const calsById = Object.fromEntries(cals.map(c => [c.id, c]));
-            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes from
-            const entries = (entryData.entries || []).map(e => ({
-                title: e.recipe ? e.recipe.name : e.title, allDay: true, startKey: e.date, endKey: e.date,
+            // This app's entries aren't in a calendar, so they're labelled with the tag their colour comes
+            // from. Meals stay on the Meals tab.
+            const entries = (entryData.entries || []).filter(e => !e.meal).map(e => ({
+                title: e.title, allDay: true, startKey: e.date, endKey: e.date,
                 source: e.tags?.[0] || '', color: tagData.colors?.[e.tags?.[0]],
             }));
             // All-day events carry date keys with an exclusive end; timed ones carry ISO times
@@ -203,9 +369,10 @@ class Slideshow {
             }));
             const all = [...entries, ...events];
             const time = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            // Each day lists what overlaps it (so a multi-day event shows on both), all-day first, then by time
-            const days = [['Today', 0], ['Tomorrow', 1]].map(([label, offset]) => {
+            // Each day lists what overlaps it (so a multi-day event shows on each), all-day first, then by time
+            const days = Array.from({ length: AGENDA_DAYS }, (_, offset) => {
                 const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
+                const label = offset === 0 ? 'Today' : 'Tomorrow';
                 const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset + 1);
                 const key = calendarDateKey(dayStart);
                 const items = all.filter(it => it.allDay
@@ -216,6 +383,7 @@ class Slideshow {
             }).filter(d => d.items.length);
             if (!days.length) {
                 el.innerHTML = '';
+                if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
                 return;
             }
             el.innerHTML = days.map(({ label, items }) => `<div class="ss-agenda-title">${label}</div><ul class="ss-agenda-list">${items.map(it => `
@@ -225,14 +393,80 @@ class Slideshow {
                     <span class="ss-agenda-text">${escapeHtml(it.title)}</span>
                     ${it.source ? `<span class="ss-agenda-source" style="color:${it.color || 'var(--accent)'}">${escapeHtml(it.source)}</span>` : ''}
                 </li>`).join('')}</ul>`).join('');
+            if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
         } catch (err) {
             console.warn('[SLIDESHOW] Calendar load failed:', err.message);
         }
     }
 
+    // The next sunrise and sunset above the calendar, soonest first, from the night sky's location
+    // (whether or not the sky itself is on); left empty, and so hidden, without a location
+    loadSun() {
+        const el = document.getElementById('ss-sun');
+        if (!el) return;
+        const loc = this.sky;
+        if (loc?.lat == null || loc?.lon == null) { el.innerHTML = ''; return; }
+        const now = Date.now();
+        const { rise, set } = skyNextSunriseSunset(now, loc);
+        // A sun on the horizon with an arrow: up for sunrise, down for sunset
+        const icon = up => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 18a5 5 0 0 0-10 0"/>
+            <line x1="2" y1="22" x2="22" y2="22"/><path d="${up ? 'M12 2v7M9 5l3-3 3 3' : 'M12 9V2M9 6l3 3 3-3'}"/></svg>`;
+        const time = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        const event = (t, up) => `<span class="ss-sun-event">${icon(up)}<span class="ss-sun-label">${up ? 'Sunrise' : 'Sunset'}</span>
+            <b>${time(t)}</b></span>`;
+        el.innerHTML = [[rise, true], [set, false]].filter(([t]) => t !== null).sort((a, b) => a[0] - b[0])
+            .map(([t, up]) => event(t, up)).join('');
+    }
+
+    // The shopping list in the side panel, one item per line, left empty (and so hidden) when there's
+    // nothing on any list. With more than one list, a tab for each switches between them.
+    async loadShopping() {
+        if (!document.getElementById('ss-shopping')) return;
+        try {
+            const res = await fetch('/api/shopping-lists');
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Failed to load the shopping lists');
+            this.shoppingLists = data.lists;
+            this.renderShopping();
+        } catch (err) {
+            console.warn('[SLIDESHOW] Shopping list load failed:', err.message);
+        }
+    }
+
+    renderShopping() {
+        const el = document.getElementById('ss-shopping');
+        const lists = this.shoppingLists || [];
+        const linesOf = list => list.text.split('\n').map(l => l.trim()).filter(Boolean);
+        if (!lists.some(l => linesOf(l).length)) {
+            el.innerHTML = '';
+            if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
+            return;
+        }
+        const current = currentShoppingList(lists);
+        const lines = linesOf(current);
+        const header = lists.length < 2 ? `<div class="ss-agenda-title">${escapeHtml(current.name)}</div>`
+            : `<div class="ss-shopping-tabs" role="tablist">${lists.map(l => `
+                <button type="button" role="tab" class="ss-shopping-tab${l === current ? ' active' : ''}" aria-selected="${l === current}"
+                    onclick="event.stopPropagation(); slideshow.showShoppingList('${escapeHtml(l.id)}')">${escapeHtml(l.name)}</button>`).join('')}</div>`;
+        el.innerHTML = header + (lines.length ? `<ul class="ss-shopping-list">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+            : '<div class="ss-shopping-empty">Nothing on this list</div>');
+        if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility(); // more or less beside the lyrics
+    }
+
+    // A tab's list, which the shopping list dialog then opens on too
+    showShoppingList(id) {
+        setShoppingListId(id);
+        this.renderShopping();
+        loadShoppingList();
+    }
+
     resetInterval() {
         if (this.interval) clearInterval(this.interval);
-        if (this.isActive) {
+        // A playing video moves the slideshow on itself, when it ends or runs out of time
+        const videoPlaying = this.slideIsVideo && this.videoShowing && !this.video.ended;
+        // A zoomed-in photo stays up until it's tapped back out, and the photos wait while the sky is up
+        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed && !this.skyShowing) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }
@@ -242,6 +476,12 @@ class Slideshow {
         if (!this.isActive || (typeof document !== 'undefined' && document.hidden)) {
             this.resetInterval();
             return;
+        }
+
+        // Moving on from the sky goes back to the photos
+        if (this.skyShowing) {
+            this.hideSky();
+            try { localStorage.setItem('slideshowSkyOn', ''); } catch { }
         }
 
         try {
@@ -262,13 +502,15 @@ class Slideshow {
                     camera: item.camera || '',
                     tags: item.tags || [],
                     key: item.key,
+                    isVideo: !!item.isVideo,
+                    liveVideo: item.liveVideo || null,
                     manualRotation: manualRotations[item.key || originalUrl] || 0,
                     folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                     folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
                 };
 
                 // Proxy if remote
-                if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+                if (!data.isVideo && data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
                     data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
                 }
             } else if (this.mode === 'nowPlaying') {
@@ -400,6 +642,11 @@ class Slideshow {
     }
 
     async previous() {
+        // Back from the sky is the photo still under it
+        if (this.skyShowing) {
+            this.toggleSky();
+            return;
+        }
         if (this.items.length > 0) {
             this.index = (this.index - 1 + this.items.length) % this.items.length;
             const item = this.items[this.index];
@@ -415,11 +662,13 @@ class Slideshow {
                 camera: item.camera || '',
                 tags: item.tags || [],
                 key: item.key,
+                isVideo: !!item.isVideo,
+                liveVideo: item.liveVideo || null,
                 manualRotation: manualRotations[item.key || originalUrl] || 0,
                 folderId: item.folderId || (browsePath.length > 0 ? browsePath[browsePath.length - 1].id : '0'),
                 folderTitle: item.folderTitle || (browsePath.length > 0 ? browsePath[browsePath.length - 1].title : 'Library')
             };
-            if (data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
+            if (!data.isVideo && data.url && data.url.startsWith('http') && !data.url.includes(window.location.host)) {
                 data.url = `/api/proxy-image?url=${encodeURIComponent(data.url)}`;
             }
             this.renderPhoto(data);
@@ -473,14 +722,66 @@ class Slideshow {
         });
     }
 
+    // Zooms the photo in on a screen point (kept under the finger), or back out if it's zoomed.
+    // Uses the scale/translate properties, which sit outside the transform that the rotation,
+    // transitions and panorama pan own; a uniform scale about the centre commutes with the rotation.
+    toggleZoom(x, y) {
+        if (this.zoomed) {
+            this.clearZoom();
+            this.resetInterval();
+            return;
+        }
+        if (this.slideIsVideo || this.img.classList.contains('panorama')) return;
+        const r = this.img.getBoundingClientRect();
+        const s = 3.5;
+        // Clamped to the photo's box, so a tap in the margin doesn't zoom into black
+        const dx = Math.min(Math.max(x, r.left), r.right) - (r.left + r.width / 2);
+        const dy = Math.min(Math.max(y, r.top), r.bottom) - (r.top + r.height / 2);
+        this.zoomed = true;
+        // Dragging stops at the photo's edges, so it always fills the space it had before zooming.
+        // The element is the whole screen (object-fit: contain), so work out the photo's own size in it.
+        const bw = this.img.offsetWidth, bh = this.img.offsetHeight;
+        const fit = Math.min(bw / (this.img.naturalWidth || bw), bh / (this.img.naturalHeight || bh));
+        let pw = (this.img.naturalWidth || bw) * fit, ph = (this.img.naturalHeight || bh) * fit;
+        if (this.rotation % 180) [pw, ph] = [ph, pw];
+        this.zoomLimit = { x: (s - 1) * pw / 2, y: (s - 1) * ph / 2 };
+        this.img.classList.add('zoomed');
+        // Rotating would leave the zoom and its drag limits the wrong way round
+        document.getElementById('ss-rotate-item')?.classList.add('disabled');
+        this.img.style.scale = s;
+        this.setZoomPan((1 - s) * dx, (1 - s) * dy);
+        this.resetInterval();
+    }
+
+    setZoomPan(x, y) {
+        const clamp = (v, max) => Math.min(Math.max(v, -max), max);
+        this.zoomPan = { x: clamp(x, this.zoomLimit.x), y: clamp(y, this.zoomLimit.y) };
+        this.img.style.translate = `${this.zoomPan.x}px ${this.zoomPan.y}px`;
+    }
+
+    clearZoom() {
+        this.zoomed = false;
+        this.img.classList.remove('zoomed', 'dragging');
+        document.getElementById('ss-rotate-item')?.classList.remove('disabled');
+        this.img.style.scale = '';
+        this.img.style.translate = '';
+    }
+
     renderPhoto(data) {
+        // Moving on (or off) a photo zooms it back out first
+        if (data.url !== this.currentPhoto) this.clearZoom();
+        if (data.isVideo) return this.renderVideo(data);
         if (data.url === this.currentPhoto && this.img.style.opacity == 1) {
             if (this.mode === 'nowPlaying') this.updateInfoUI(data);
             return;
         }
+        this.slideIsVideo = false;
+        this._videoToken = null; // a video still fading in gives way to this photo
 
         const doTransition = (naturalWidth, naturalHeight) => {
             const fx = this.pickTransition();
+            // Coming from a video: fade it out while the transition's exit runs
+            if (this.videoShowing) this.video.style.opacity = 0;
             // A panning panorama's transform belongs to its CSS animation, so only fade it out
             this.animateImg(this.img.classList.contains('panorama') ? SS_TRANSITIONS.fade : fx, 'out');
             this.img.style.opacity = 0;
@@ -494,6 +795,7 @@ class Slideshow {
                         data: this.currentPhotoData
                     };
                 }
+                this.stopVideo();
 
                 if (this.bg) {
                     this.bg.style.opacity = 0;
@@ -551,6 +853,7 @@ class Slideshow {
                 } else {
                     this.img.onload = () => applyDisplay(this.img.naturalWidth, this.img.naturalHeight);
                 }
+                if (data.liveVideo) setTimeout(() => this.playLive(data), fx.inMs);
             }, fx.outMs);
         };
 
@@ -559,6 +862,120 @@ class Slideshow {
         preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight);
         preload.onerror = () => doTransition(0, 1);
         preload.src = mediaUrl(data.url);
+    }
+
+    // A video slide (usually a Live Photo) fades in once it's playing, muted unless video sound is
+    // on, and plays once. With photos moving on by themselves it stays up for the photo time,
+    // holding on its last frame if it's shorter, and a longer one is cut short at the video limit.
+    renderVideo(data) {
+        this.slideIsVideo = true;
+        const fx = SS_TRANSITIONS.fade;
+        if (this.videoShowing) this.video.style.opacity = 0;
+        else {
+            this.animateImg(this.img.classList.contains('panorama') ? fx : this.pickTransition(), 'out');
+            this.img.style.opacity = 0;
+        }
+        if (this.info) this.info.style.opacity = 0;
+        const token = this._videoToken = {};
+
+        setTimeout(() => {
+            if (this._videoToken !== token || !this.isActive) return;
+            if (this.currentPhoto) {
+                this.previousPhoto = { url: this.currentPhoto, rotation: this.rotation, data: this.currentPhotoData };
+            }
+            this.stopVideo();
+            this.img.style.display = 'none';
+            this.img.classList.remove('panorama');
+            this.img.style.animation = '';
+
+            const src = data.originalUrl || data.url;
+            if (this.bg) {
+                const thumb = photoGridThumbUrl(src);
+                this.bg.style.backgroundImage = thumb ? `url("${thumb.replace(/"/g, '%22')}")` : 'none';
+            }
+            this.currentPhoto = data.url;
+            this.originalUrl = src;
+            this.currentPhotoData = data;
+            this.rotation = data.manualRotation || 0;
+            if (this.favBtn) this.favBtn.classList.toggle('is-favourite', !!data.tags?.includes('fav'));
+            this.updateInfoUI(data);
+
+            const v = this.video;
+            const autoAdvance = this.duration > 0;
+            this.videoShowing = true;
+            if (this.interval) clearInterval(this.interval);
+            v.style.display = '';
+            v.style.opacity = 0;
+            v.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+            v.muted = !this.videoSound;
+            let startedAt = 0;
+            v.onplaying = () => {
+                v.onplaying = null;
+                startedAt = Date.now();
+                v.style.opacity = 1;
+                if (this.info) this.info.style.opacity = 1;
+                if (!autoAdvance) return;
+                // Up for at least the photo time, and cut short at the video limit
+                this._videoTimer = setTimeout(() => { if (v.ended) this.next(); }, this.duration);
+                if (this.videoMaxSeconds > 0) {
+                    this._videoMaxTimer = setTimeout(() => this.next(), Math.max(this.videoMaxSeconds * 1000, this.duration));
+                }
+            };
+            v.onended = () => { if (autoAdvance && Date.now() - startedAt >= this.duration) this.next(); };
+            v.onerror = () => {
+                console.warn('[SLIDESHOW] Video failed to play:', src);
+                if (autoAdvance) this._videoTimer = setTimeout(() => this.next(), 3000);
+            };
+            v.src = mediaUrl(browserPlayableVideoUrl(src));
+            // Browsers can refuse to start a video with sound until the page has been used; play it silently then
+            v.play().catch(() => {
+                if (v.muted) return;
+                v.muted = true;
+                v.play().catch(() => { });
+            });
+        }, fx.outMs);
+    }
+
+    // A Live Photo's clip, played once in place of its photo and then back to the still: when the
+    // photo comes up (heard only with video sound on), and again when it's held down
+    playLive(data, withSound = this.videoSound) {
+        if (!data?.liveVideo || this.currentPhotoData !== data || this.slideIsVideo || !this.isActive) return;
+        this.stopVideo();
+        const v = this.video;
+        this.videoShowing = true;
+        v.muted = !withSound;
+        // Swapped in at once rather than faded, so the photo doesn't dip to black
+        v.style.transition = 'none';
+        v.style.opacity = 1;
+        v.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+        v.onplaying = () => {
+            v.onplaying = null;
+            this.img.style.display = 'none';
+            v.style.display = '';
+        };
+        v.onended = v.onerror = () => this.stopVideo();
+        v.src = mediaUrl(browserPlayableVideoUrl(data.liveVideo));
+        v.play().catch(() => {
+            if (v.muted) return this.stopVideo();
+            v.muted = true;
+            v.play().catch(() => this.stopVideo());
+        });
+    }
+
+    // Takes down the video slide (or Live Photo clip), if one is up, and puts the photo back in its place
+    stopVideo() {
+        clearTimeout(this._videoTimer);
+        clearTimeout(this._videoMaxTimer);
+        if (!this.videoShowing) return;
+        this.videoShowing = false;
+        const v = this.video;
+        v.onplaying = v.onended = v.onerror = null;
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        v.style.display = 'none';
+        v.style.transition = '';
+        this.img.style.display = '';
     }
 
     updateInfoUI(data) {
@@ -633,7 +1050,8 @@ class Slideshow {
 
     fetchMetadataFallback(data) {
         const rawUrl = this.currentPhoto;
-        if (!rawUrl) {
+        // Videos have no photo metadata to read
+        if (!rawUrl || data.isVideo) {
             this.hideMap();
             return;
         }
@@ -775,10 +1193,11 @@ class Slideshow {
     }
 
     async rotate(delta) {
-        if (!this.currentPhoto) return;
+        if (!this.currentPhoto || this.zoomed) return;
         this.rotation = (this.rotation + delta) % 360;
         if (this.rotation < 0) this.rotation += 360;
         this.img.style.setProperty('--ss-rotation', `${this.rotation}deg`);
+        if (this.videoShowing) this.video.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
 
         const urlForSave = this.originalUrl || this.currentPhoto;
         try {
@@ -942,18 +1361,30 @@ class Slideshow {
         if (!this.isActive || this.items.length === 0 || this.browserOpen) return;
         this.browserOpen = true;
         this._browserCurrentHidden = false;
+        this.browserSelection = new Set(); // items (not indices, which shift as photos are hidden)
+        this._browserLastPicked = null;
+        this.updateBrowserSelectionUI();
         if (this.interval) clearInterval(this.interval); // paused while browsing
+        if (this.videoShowing) this.video.pause();
 
         const labels = { onThisDay: 'Day', recent: 'Recent', favourites: 'Favs', custom: 'Custom' };
         document.getElementById('ss-browser-title').textContent = labels[this.mode] || 'Slideshow';
         this.browserGrid = document.getElementById('ss-browser-grid');
         this.browserGrid.innerHTML = '';
+        this.attachBrowserLongPress();
         this.browserRendered = 0;
         this.updateBrowserCount();
         do this.renderBrowserBatch(); while (this.browserRendered <= this.index && this.browserRendered < this.items.length);
 
         document.getElementById('ss-browser').style.display = 'flex';
-        this.browserGrid.querySelector('.photo-tile.current')?.scrollIntoView({ block: 'center' });
+        // Scroll only the grid's own body: scrollIntoView would also scroll the slideshow overlay and page
+        // (even overflow:hidden ones), pushing the header with the close/quit controls off the top
+        const body = document.getElementById('ss-browser-body');
+        const tile = this.browserGrid.querySelector('.photo-tile.current');
+        if (tile) {
+            const offset = tile.getBoundingClientRect().top - body.getBoundingClientRect().top;
+            body.scrollTop += offset - (body.clientHeight - tile.offsetHeight) / 2;
+        }
 
         // Add the next batch of tiles as the bottom of the grid scrolls into view
         this._browserObserver = new IntersectionObserver(entries => {
@@ -961,7 +1392,12 @@ class Slideshow {
         }, { root: document.getElementById('ss-browser-body'), rootMargin: '600px' });
         this._browserObserver.observe(document.getElementById('ss-browser-more'));
 
-        this._browserKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); this.closeBrowser(); } };
+        this._browserKey = (e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            if (this.browserSelection.size > 0) this.clearBrowserSelection();
+            else this.closeBrowser();
+        };
         document.addEventListener('keydown', this._browserKey);
     }
 
@@ -972,10 +1408,14 @@ class Slideshow {
         this._browserObserver?.disconnect();
         document.removeEventListener('keydown', this._browserKey);
         this.browserGrid.innerHTML = '';
+        this.browserSelection.clear();
         if (!this.isActive) return;
         // The photo that was on screen got hidden: move on to the one that took its place
         if (this._browserCurrentHidden) this.next();
-        else this.resetInterval();
+        else {
+            if (this.videoShowing && !this.video.ended) this.video.play().catch(() => { });
+            this.resetInterval();
+        }
     }
 
     // Carry on the slideshow from the chosen photo
@@ -1004,8 +1444,12 @@ class Slideshow {
             const img = thumb
                 ? `<img src="${escAttr(thumb)}" loading="lazy" decoding="async" alt=""${rot ? ` style="transform: rotate(${rot}deg)"` : ''} onerror="onPhotoGridThumbError(this)">`
                 : '<span class="photo-tile-missing">Unavailable</span>';
-            html += `<div class="photo-tile${i === this.index ? ' current' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
-                <button class="photo-tile-view" onclick="slideshow.jumpTo(+this.parentElement.dataset.index)">${img}</button>
+            const selected = this.browserSelection.has(item);
+            html += `<div class="photo-tile${i === this.index ? ' current' : ''}${selected ? ' selected' : ''}${item.isVideo ? ' video' : ''}" data-index="${i}" title="${escAttr(item.title || '')}">
+                <button class="photo-tile-view" onclick="slideshow.onBrowserTileClick(+this.parentElement.dataset.index, event)">${img}</button>
+                <button class="photo-tile-select" onclick="slideshow.toggleBrowserSelection(+this.parentElement.dataset.index, event.shiftKey)" title="Select (shift-click for a range)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                </button>
                 <div class="photo-tile-actions">
                     <button class="danger" onclick="slideshow.hideFromBrowser(+this.closest('.photo-tile').dataset.index)" title="Hide from slideshow">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>
@@ -1017,36 +1461,136 @@ class Slideshow {
         this.browserRendered = end;
     }
 
-    async hideFromBrowser(i) {
+    // Touch: holding a tile selects it, the way phone galleries start a selection
+    attachBrowserLongPress() {
+        const grid = this.browserGrid;
+        if (grid._longPress) return;
+        grid._longPress = true;
+        let timer = null, startX = 0, startY = 0, suppressClick = false;
+        const cancel = () => { clearTimeout(timer); timer = null; };
+
+        grid.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse' || e.target.closest('.photo-tile-select, .photo-tile-actions')) return;
+            const tile = e.target.closest('.photo-tile');
+            if (!tile) return;
+            suppressClick = false;
+            startX = e.clientX; startY = e.clientY;
+            cancel();
+            timer = setTimeout(() => {
+                timer = null;
+                suppressClick = true;
+                navigator.vibrate?.(30);
+                const i = +tile.dataset.index;
+                if (!this.browserSelection.has(this.items[i])) this.toggleBrowserSelection(i);
+            }, 500);
+        });
+        grid.addEventListener('pointermove', (e) => {
+            if (timer && Math.hypot(e.clientX - startX, e.clientY - startY) > 10) cancel();
+        });
+        grid.addEventListener('pointerup', cancel);
+        grid.addEventListener('pointercancel', cancel);
+        // The tap that ends a long-press mustn't also toggle/jump
+        grid.addEventListener('click', (e) => {
+            if (!suppressClick) return;
+            suppressClick = false;
+            e.stopPropagation();
+            e.preventDefault();
+        }, true);
+        grid.addEventListener('contextmenu', (e) => {
+            if (e.pointerType !== 'mouse' && (timer || suppressClick)) e.preventDefault();
+        });
+    }
+
+    // Once anything is selected, tapping a tile adds to the selection instead of leaving the browser
+    onBrowserTileClick(i, e) {
+        if (this.browserSelection.size > 0 || e.shiftKey || e.ctrlKey || e.metaKey) this.toggleBrowserSelection(i, e.shiftKey);
+        else this.jumpTo(i);
+    }
+
+    // Shift selects every tile from the last one picked up to this one
+    toggleBrowserSelection(i, range = false) {
         const item = this.items[i];
         if (!item) return;
+        const last = range && this._browserLastPicked ? this.items.indexOf(this._browserLastPicked) : -1;
+        if (last >= 0) {
+            const [from, to] = last < i ? [last, i] : [i, last];
+            for (let t = from; t <= to; t++) this.browserSelection.add(this.items[t]);
+        } else if (this.browserSelection.has(item)) {
+            this.browserSelection.delete(item);
+        } else {
+            this.browserSelection.add(item);
+        }
+        this._browserLastPicked = item;
+        this.refreshBrowserSelectionTiles();
+    }
+
+    clearBrowserSelection() {
+        this.browserSelection.clear();
+        this._browserLastPicked = null;
+        this.refreshBrowserSelectionTiles();
+    }
+
+    refreshBrowserSelectionTiles() {
+        this.browserGrid?.querySelectorAll('.photo-tile').forEach(tile => {
+            tile.classList.toggle('selected', this.browserSelection.has(this.items[+tile.dataset.index]));
+        });
+        this.updateBrowserSelectionUI();
+    }
+
+    updateBrowserSelectionUI() {
+        const count = this.browserSelection.size;
+        document.getElementById('ss-browser-selection').style.display = count > 0 ? '' : 'none';
+        document.getElementById('ss-browser-hide-selected').textContent = `Hide (${count})`;
+        document.getElementById('ss-browser').classList.toggle('selecting', count > 0);
+    }
+
+    hideFromBrowser(i) {
+        const item = this.items[i];
+        if (item) this.hideBrowserItems([item]);
+    }
+
+    hideSelectedFromBrowser() {
+        const items = [...this.browserSelection];
+        if (items.length === 0 || !confirm(`Hide ${items.length} photo${items.length > 1 ? 's' : ''} from the slideshow?`)) return;
+        this.hideBrowserItems(items);
+    }
+
+    async hideBrowserItems(items) {
         try {
             const res = await fetch('/api/slideshow/delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: item.uri || item.res })
+                body: JSON.stringify({ urls: items.map(item => item.uri || item.res) })
             });
             if (!res.ok) throw new Error(res.statusText);
         } catch (e) {
             showToast('Failed to hide: ' + e.message, 'error', 4000);
             return;
         }
-        showToast('Photo hidden', 'success', 2000);
+        showToast(items.length > 1 ? `${items.length} photos hidden` : 'Photo hidden', 'success', 2000);
 
-        const pos = this.items.indexOf(item); // list may have changed while the request was out
-        if (pos < 0) return;
-        this.items.splice(pos, 1);
-        if (pos < this.index) this.index--;
-        else if (pos === this.index) { this.index--; this._browserCurrentHidden = true; }
+        // The list may have changed while the request was out, so work from the items themselves
+        const gone = new Set(items);
+        const oldItems = this.items;
+        const current = this.items[this.index];
+        const before = this.items.slice(0, Math.max(this.index, 0)).filter(item => gone.has(item)).length;
+        this.items = this.items.filter(item => !gone.has(item));
+        if (gone.has(current)) { this.index -= before + 1; this._browserCurrentHidden = true; }
+        else this.index -= before;
+        for (const item of items) this.browserSelection.delete(item);
 
         if (!this.browserOpen) return;
+        if (this.items.length === 0) { this.closeBrowser(); return; }
         const tiles = this.browserGrid.querySelectorAll('.photo-tile');
-        tiles[pos]?.remove();
-        for (let t = pos + 1; t < tiles.length; t++) tiles[t].dataset.index = t - 1;
-        this.browserRendered = tiles[pos] ? tiles.length - 1 : tiles.length;
+        let n = 0;
+        tiles.forEach(tile => {
+            if (gone.has(oldItems[+tile.dataset.index])) tile.remove();
+            else tile.dataset.index = n++;
+        });
+        this.browserRendered = n;
         this.updateBrowserCount();
+        this.updateBrowserSelectionUI();
         this.renderBrowserBatch();
-        if (this.items.length === 0) this.closeBrowser();
     }
 
     resetButtonStates() {
@@ -1073,5 +1617,6 @@ function rotateSlideshow(delta) { if (slideshow) slideshow.rotate(delta); }
 function toggleSlideshowMode() { if (slideshow) slideshow.toggleMode(); }
 function toggleFavouriteCurrentPhoto() { if (slideshow) slideshow.toggleFavourite(); }
 function deleteCurrentPhoto() { if (slideshow) slideshow.delete(); }
+function toggleSlideshowSky() { if (slideshow) slideshow.toggleSky(); }
 function openSlideshowBrowser() { if (slideshow) slideshow.openBrowser(); }
 function closeSlideshowBrowser() { if (slideshow) slideshow.closeBrowser(); }

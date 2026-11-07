@@ -605,14 +605,14 @@ p.subtitle {
     }
 }
 
-/* Stop After Track button */
+/* Stop After Track button: like the other buttons, dimmed only while the player is offline */
 .btn-stop-after {
-    opacity: 0.45;
     transition: opacity 0.2s, box-shadow 0.2s, color 0.2s;
 }
 
-.btn-stop-after:hover {
-    opacity: 0.85;
+.btn-stop-after:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .btn-stop-after.armed {
@@ -900,7 +900,8 @@ p.subtitle {
 /* Voice: the one filled, glowing button in the toolbar, so it's the first thing you see.
    A slow halo "breathes" while idle; it turns red and pulses fast while listening. */
 #btn-voice,
-#btn-smarthome-voice {
+#btn-smarthome-voice,
+#btn-shopping-voice {
     position: relative;
     color: #fff;
     background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 55%, #6366f1 100%);
@@ -910,7 +911,8 @@ p.subtitle {
 }
 
 #btn-voice:hover,
-#btn-smarthome-voice:hover {
+#btn-smarthome-voice:hover,
+#btn-shopping-voice:hover {
     color: #fff;
     background: linear-gradient(135deg, #f472b6 0%, #a78bfa 55%, #818cf8 100%);
     border-color: rgba(255, 255, 255, 0.4);
@@ -919,7 +921,8 @@ p.subtitle {
 }
 
 #btn-voice.listening,
-#btn-smarthome-voice.listening {
+#btn-smarthome-voice.listening,
+#btn-shopping-voice.listening {
     background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
     border-color: rgba(255, 255, 255, 0.35);
     animation: voice-pulse 1s ease-out infinite;
@@ -937,7 +940,8 @@ p.subtitle {
 
 @media (prefers-reduced-motion: reduce) {
     #btn-voice, #btn-voice.listening,
-    #btn-smarthome-voice, #btn-smarthome-voice.listening { animation: none; }
+    #btn-smarthome-voice, #btn-smarthome-voice.listening,
+    #btn-shopping-voice, #btn-shopping-voice.listening { animation: none; }
 }
 
 .play-btn,
@@ -1546,17 +1550,22 @@ p.subtitle {
 
 .playlist-items.grid-view .item-actions {
     display: flex;
+    align-items: center;
     position: absolute;
     top: 0.75rem;
     right: 0.75rem;
     gap: 0.35rem;
-    opacity: 0;
-    transition: all 0.2s ease;
     z-index: 20;
     pointer-events: auto;
 }
 
-.playlist-items.grid-view .browser-item:hover .item-actions {
+/* The buttons appear on hover; a favourite's heart is always there */
+.playlist-items.grid-view .item-actions .btn-control {
+    opacity: 0;
+    transition: all 0.2s ease;
+}
+
+.playlist-items.grid-view .browser-item:hover .item-actions .btn-control {
     opacity: 1;
 }
 
@@ -1580,7 +1589,7 @@ p.subtitle {
 }
 
 
-.playlist-items.grid-view .browser-item.photo-selected .item-actions {
+.playlist-items.grid-view .browser-item.photo-selected .item-actions .btn-control {
     opacity: 1;
 }
 
@@ -1679,6 +1688,20 @@ p.subtitle {
     margin-left: auto;
 }
 
+/* A favourite, beside its info button in the file browser */
+.browser-fav-heart {
+    display: flex;
+    align-items: center;
+    color: #ec4899;
+    flex-shrink: 0;
+}
+
+.playlist-items.grid-view .browser-fav-heart {
+    padding: 0.3rem;
+    border-radius: 50%;
+    background: rgba(15, 23, 42, 0.8);
+}
+
 .browser-item:hover .queue-btn,
 .browser-item:hover .info-btn,
 .playlist-item:hover .info-btn {
@@ -1692,6 +1715,14 @@ p.subtitle {
 
     .queue-btn,
     .play-btn {
+        opacity: 0.9;
+    }
+}
+
+/* Touchscreens can't hover, so keep the queue button visible at any width
+   (any-pointer catches touch laptops whose primary pointer is a mouse). */
+@media (hover: none), (any-pointer: coarse) {
+    .queue-btn {
         opacity: 0.9;
     }
 }
@@ -1730,10 +1761,12 @@ p.subtitle {
 /* Scrolls sideways when the tabs don't all fit (phones), with no scrollbar showing */
 .library-mode-tabs {
     display: flex;
-    gap: 0.25rem;
+    align-items: flex-end;
+    gap: 0.3rem;
     flex: 1;
     min-width: 0;
-    margin-bottom: -1px;
+    padding-top: 0.4rem;
+    margin-bottom: -1px;   /* the tabs sit on the top bar's bottom line, so the active one can cut through it */
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -1763,31 +1796,80 @@ p.subtitle {
     gap: 0.4rem;
     flex-shrink: 0;
     padding: 0.5rem 0.9rem;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
+    /* Folder tabs: soft glass buttons with rounded tops, standing on the top bar's bottom line */
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: none;
+    border-radius: 12px 12px 0 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
     color: var(--text-muted);
     font-family: inherit;
     font-size: 0.85rem;
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
 }
+
+/* Each tab's icon has its own colour; the label keeps the muted / active colour */
+.library-mode-tabs .lib-tab svg {
+    flex-shrink: 0;
+}
+
+.library-mode-tabs .lib-tab[data-mode="music"] svg { color: #f472b6; }
+.library-mode-tabs .lib-tab[data-mode="photo"] svg { color: #38bdf8; }
+.library-mode-tabs .lib-tab[data-mode="video"] svg { color: #a78bfa; }
+.library-mode-tabs .lib-tab[data-mode="calendar"] svg { color: #f87171; }
+.library-mode-tabs .lib-tab[data-mode="recipes"] svg { color: #fb923c; }
+.library-mode-tabs .lib-tab[data-mode="smarthome"] svg { color: #34d399; }
+.library-mode-tabs .lib-tab[data-mode="energy"] svg { color: #facc15; }
+.library-mode-tabs .lib-tab[data-mode="games"] svg { color: #2dd4bf; }
+.library-mode-tabs .lib-tab[data-mode="alarms"] svg { color: #60a5fa; }
 
 .library-mode-tabs .lib-tab:hover {
     color: var(--text);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.06));
+    border-color: rgba(255, 255, 255, 0.14);
 }
 
-.library-mode-tabs .lib-tab.active {
-    color: var(--primary);
-    border-bottom-color: var(--primary);
+.library-mode-tabs .lib-tab:active {
+    background: rgba(255, 255, 255, 0.05);
 }
+
+/* The open tab: taller, a coloured strip along its top, and the page's colour at its foot so it
+   covers the line underneath and joins the page below */
+.library-mode-tabs .lib-tab.active {
+    color: var(--text);
+    padding-top: calc(0.5rem + 4px);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 28%, var(--bg)), var(--bg));
+    border-color: color-mix(in srgb, var(--primary) 55%, transparent);
+    box-shadow: inset 0 3px 0 var(--primary), 0 -2px 8px var(--primary-glow);
+}
+
 
 @media (max-width: 600px) {
     .library-mode-tabs .lib-tab {
         justify-content: center;
         padding: 0.5rem 0.6rem;
+    }
+}
+
+/* Larger tabs on tablets and desktops, where there's room and they're easier to hit */
+@media (min-width: 601px) {
+    .library-mode-tabs .lib-tab {
+        gap: 0.5rem;
+        padding: 0.75rem 1.2rem;
+        font-size: 1rem;
+    }
+
+    .library-mode-tabs .lib-tab.active {
+        padding-top: calc(0.75rem + 4px);
+    }
+
+    .library-mode-tabs .lib-tab svg {
+        width: 20px;
+        height: 20px;
     }
 }
 
@@ -1803,6 +1885,16 @@ p.subtitle {
 
 .calendar-view[hidden] {
     display: none;
+}
+
+/* The calendar itself; the Meals tab borrows it for its Calendar */
+.calendar-panel {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
 }
 
 /* !important: the phone layout forces .main-layout to display: flex !important */
@@ -2112,11 +2204,14 @@ p.subtitle {
     filter: brightness(1.2);
 }
 
+/* Scrolls under the header (and its Save) once it's taller than the dialog */
 .calendar-entry-form {
     padding: 1.25rem 1.5rem 1.5rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .calendar-entry-form .settings-group {
@@ -2219,18 +2314,397 @@ p.subtitle {
 }
 
 .calendar-entry-normal-fields[hidden],
-#calendar-entry-recipe-fields[hidden],
-#calendar-entry-no-recipes[hidden] {
+#calendar-entry-no-recipes[hidden],
+#calendar-entry-scope[hidden],
+#calendar-entry-repeat-group[hidden] {
     display: none;
 }
 
-.calendar-entry-form .calendar-entry-recipe-select {
+/* Finding an item to add to a meal: the matches list under the search box */
+.meal-item-results {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0.3rem;
+    max-height: 15rem;
+    overflow-y: auto;
+    background: var(--bg);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+}
+
+.meal-item-results[hidden] {
+    display: none;
+}
+
+.meal-item-result {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.45rem 0.7rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+
+.meal-item-result:hover,
+.meal-item-result.active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.meal-item-result-name {
     flex: 1;
     min-width: 0;
 }
 
-.calendar-event-recipe {
-    margin-right: 0.2rem;
+.meal-item-result-kind {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.meal-item-result-new {
+    color: var(--primary);
+    font-weight: 600;
+}
+
+.meal-item-result-note,
+.meal-item-result-note:hover {
+    color: var(--text-muted);
+    cursor: default;
+    background: none;
+}
+
+/* A meal's parts, in order */
+.calendar-entry-parts {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.calendar-entry-parts:empty {
+    display: none;
+}
+
+.calendar-entry-part {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.4rem 0.3rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+
+/* Meals calendar day view: a big table of the day's meals */
+.modal-content.meal-day-content {
+    max-width: min(1100px, 96vw);
+    width: 96vw;
+    max-height: 90vh;
+}
+
+.nutrition-sources.meal-day-family {
+    flex-shrink: 0;
+    margin: 0 2rem 1rem;
+    overflow-x: auto;
+}
+
+.nutrition-sources.meal-day-family[hidden] {
+    display: none;
+}
+
+.nutrition-sources.meal-day-family button {
+    flex: 1 0 auto;
+    padding: 0.55rem 1rem;
+    font-size: 0.95rem;
+    white-space: nowrap;
+}
+
+.meal-day-scroll {
+    overflow-x: auto;
+}
+
+.meal-day-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.meal-day-table th,
+.meal-day-table td {
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+    vertical-align: middle;
+}
+
+.meal-day-table thead th {
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+
+.meal-day-table .num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.meal-day-table .muted {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+/* A meal per row, divided by a line; an open one has the line under its items instead */
+.meal-day-table tbody .meal-day-meal td,
+.meal-day-table tbody .meal-day-item-row.last td {
+    border-bottom: 1px solid var(--card-border);
+}
+
+.meal-day-table tbody .meal-day-meal td {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.meal-day-table tbody .meal-day-meal.open td {
+    border-bottom-color: transparent;
+}
+
+/* A meal's arrow, turned down while its items show */
+.meal-day-chevron {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 0.35rem;
+    color: var(--text-muted);
+    transition: transform 0.15s;
+}
+
+.meal-day-meal.open .meal-day-chevron {
+    transform: rotate(90deg);
+}
+
+/* An open meal's items, under it: compact, and in from the meal's name */
+.meal-day-table tbody .meal-day-item-row td {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+    font-size: 0.88rem;
+}
+
+.meal-day-item-row .meal-day-meal-cell {
+    padding-left: 1.6rem;
+}
+
+.meal-day-item-row .meal-day-qty-row {
+    margin-left: 0.6rem;
+    color: var(--text-muted);
+}
+
+.meal-day-item-row .ingredient-pic.meal-day-pic {
+    width: 1.9rem;
+    height: 1.9rem;
+    flex-basis: 1.9rem;
+}
+
+.meal-day-item-row .meal-day-pic-cell {
+    text-align: right;
+}
+
+.meal-day-count-cell {
+    width: 1px;
+    white-space: nowrap;
+}
+
+.meal-day-count-cell .meal-day-count {
+    margin-right: 0;
+}
+
+.meal-day-meal-name {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.meal-day-meal-about {
+    margin-left: 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.meal-day-meal.planned {
+    font-style: italic;
+    opacity: 0.75;
+}
+
+.meal-day-table tbody tr:hover td {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.meal-day-pic-cell {
+    width: 3rem;
+}
+
+.meal-day-table td.meal-day-pic-cell {
+    padding-right: 0;
+}
+
+.ingredient-pic.meal-day-pic {
+    width: 2.6rem;
+}
+
+.meal-day-sub .ingredient-pic.meal-day-pic {
+    width: 1.9rem;
+    height: 1.9rem;
+    flex-basis: 1.9rem;
+    margin-left: 0.7rem;
+}
+
+.meal-day-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+/* What an item made of others is made of, under it */
+.meal-day-sub td {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.meal-day-sub .meal-day-item {
+    padding-left: 0.75rem;
+}
+
+.meal-day-own {
+    font-weight: 700;
+}
+
+.meal-day-qty-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+/* How many of an item: - 2 x + */
+.meal-day-count {
+    display: inline-flex;
+    vertical-align: middle;
+    margin-right: 0.6rem;
+    align-items: center;
+    gap: 0.1rem;
+    padding: 0.05rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+
+.meal-day-count .recipe-ingredient-btn {
+    opacity: 1;
+    font-size: 1rem;
+}
+
+.meal-day-count .recipe-ingredient-btn:disabled {
+    visibility: visible;
+    opacity: 0.3;
+    cursor: default;
+}
+
+.meal-day-times {
+    min-width: 2.2rem;
+    text-align: center;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.meal-day-more {
+    margin-left: 0.15rem;
+    color: var(--text-muted);
+    cursor: help;
+}
+
+.meal-day-table tfoot td {
+    padding-top: 0.9rem;
+    font-weight: 800;
+    font-size: 1rem;
+    border-top: 2px solid var(--card-border);
+}
+
+.meal-day-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Items, Edit and Delete side by side as icons */
+.meal-day-actions-row {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.meal-day-actions .meal-day-icon-btn {
+    padding: 0.3rem;
+}
+
+/* A click on a meal's row shows its items */
+.meal-day-table tr.meal-day-meal {
+    cursor: pointer;
+}
+
+/* A meal on one line: its name, then who it's for and how it repeats, cut short if need be */
+.meal-day-meal-cell {
+    white-space: nowrap;
+}
+
+.meal-day-meal-cell .meal-day-meal-name,
+.meal-day-meal-cell .meal-day-meal-about {
+    display: inline-block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+}
+
+.meal-day-meal-cell .meal-day-meal-name {
+    max-width: 16rem;
+}
+
+.meal-day-meal-cell .meal-day-meal-about {
+    max-width: 20rem;
+}
+
+.meal-day-empty {
+    padding: 2rem 0;
+    text-align: center;
+}
+
+/* A meal's item: its name, then what it is, cut short if need be */
+.calendar-entry-part-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.calendar-entry-part-name .meal-item-result-kind {
+    margin-left: 0.5rem;
+}
+
+.calendar-entry-part .meal-day-count {
+    flex-shrink: 0;
+    margin-right: 0;
+}
+
+.recipe-per-person {
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: var(--text-muted);
 }
 
 .calendar-entry-form #calendar-entry-repeat-interval,
@@ -2303,13 +2777,359 @@ p.subtitle {
     display: none;
 }
 
-.recipes-list-panel {
-    width: 18rem;
+/* Calendar | Meals | Ingredients, down the left of the Meals tab */
+.meals-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
     flex-shrink: 0;
+}
+
+.meals-tab {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.9rem;
+    border: 1px solid transparent;
+    border-radius: 0.6rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.meals-tab:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.meals-tab.active {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+}
+
+.meals-tab svg {
+    flex-shrink: 0;
+    color: #fb923c;
+}
+
+/* The selected tab's content, between the tabs and the shopping list */
+.meals-pane {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+}
+
+.meals-pane[hidden] {
+    display: none;
+}
+
+/* Meals tab's Stats: averages, then a bar chart per measure with lines at the recommended amounts */
+.meal-stats-period {
+    flex: 0 0 auto;
+}
+
+.meal-stats-period button {
+    padding: 0.45rem 1rem;
+}
+
+.meal-stats-family {
+    flex-shrink: 0;
+    overflow-x: auto;
+}
+
+.meal-stats-family[hidden] {
+    display: none;
+}
+
+.meal-stats-family button {
+    flex: 1 0 auto;
+    white-space: nowrap;
+}
+
+/* The Everyone icon at the start of a family bar: as small as it can be, the names share the rest */
+.nutrition-sources.meal-stats-family button.family-everyone,
+.nutrition-sources.meal-day-family button.family-everyone {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+}
+
+/* Some picked but not everyone: outlined in the colour it's filled with when everyone is */
+.nutrition-sources button.family-everyone.partial {
+    color: var(--primary);
+    box-shadow: inset 0 0 0 1.5px var(--primary);
+}
+
+.meal-stats-body {
+    position: relative;
+    flex: 1;
     min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding-bottom: 1rem;
+}
+
+.meal-stats-body > .settings-hint {
+    margin: 0;
+}
+
+.meal-stats-empty {
+    padding: 2rem 1rem;
+    text-align: center;
+}
+
+.meal-stats-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+    gap: 0.6rem;
+}
+
+.meal-stats-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding: 0.75rem 0.9rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+}
+
+.meal-stats-tile-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.meal-stats-tile-value {
+    font-size: 1.35rem;
+    font-weight: 600;
+}
+
+.meal-stats-tile-value.muted {
+    color: var(--text-muted);
+}
+
+.meal-stats-tile-guide {
+    font-size: 0.72rem;
+    line-height: 1.3;
+    color: var(--text-muted);
+}
+
+.meal-stats-charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+    gap: 0.75rem;
+}
+
+.meal-stats-chart {
+    margin: 0;
+    padding: 0.75rem 0.9rem 0.6rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+}
+
+.meal-stats-chart figcaption {
+    margin-bottom: 0.5rem;
+}
+
+.meal-stats-chart-title {
+    font-weight: 600;
+}
+
+.meal-stats-chart-unit {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.meal-stats-plot {
+    position: relative;
+    height: 8.5rem;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.meal-stats-top {
+    position: absolute;
+    top: -0.1rem;
+    left: 0;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    line-height: 1;
+}
+
+.meal-stats-bars,
+.meal-stats-xaxis {
+    display: flex;
+    gap: 2px;
+}
+
+.meal-stats-bars {
+    position: absolute;
+    inset: 0.9rem 0 0 0;
+}
+
+/* The whole column is the hover target, so thin bars are easy to point at */
+.meal-stats-col {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    border-radius: 4px 4px 0 0;
+    cursor: default;
+}
+
+.meal-stats-col:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.meal-stats-bar {
+    width: 100%;
+    max-width: 24px;
+    min-height: 2px;
+    background: var(--primary);
+    border-radius: 4px 4px 0 0;
+}
+
+/* Recommended amounts: above the bars, so they show where a bar passes them */
+.meal-stats-guide {
+    position: absolute;
+    left: 0;
+    right: 0;
+    border-top: 1.5px dashed var(--text-muted);
+    pointer-events: none;
+}
+
+.meal-stats-guide span {
+    position: absolute;
+    right: 0;
+    bottom: 2px;
+    padding: 0 0.3rem;
+    border-radius: 0.3rem;
+    background: rgba(15, 23, 42, 0.85);
+    font-size: 0.68rem;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.meal-stats-guide.left span {
+    right: auto;
+    left: 0;
+}
+
+.meal-stats-xaxis {
+    margin-top: 0.3rem;
+}
+
+.meal-stats-xaxis span {
+    flex: 1;
+    text-align: center;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.meal-stats-table summary {
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.meal-stats-table .meal-day-scroll {
+    margin-top: 0.5rem;
+}
+
+.meal-stats-tip {
+    position: absolute;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    padding: 0.35rem 0.6rem;
+    background: #1e293b;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.meal-stats-tip[hidden] {
+    display: none;
+}
+
+/* Meals tab's Meal Plan: the weeks of the plan, laid out like the calendar */
+.meal-plan-header {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.25rem;
+}
+
+.meal-plan-header h2 {
+    flex: 1;
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 800;
+}
+
+.meal-plan-setting {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.meal-plan-grid {
+    grid-auto-rows: minmax(5rem, 1fr);
+}
+
+.meal-plan-parts {
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    line-height: 1.3;
+    overflow: hidden;
+}
+
+/* Under a meal on the meal plan: its calories, protein, carbs and fat for one
+   person ("+": some items not counted) */
+.meal-nutrition {
+    padding-left: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    line-height: 1.3;
+}
+
+/* On the Meals calendar, a day's meal from the plan before it's been added */
+.calendar-event.all-day.planned {
+    background: transparent;
+    border: 1px dashed var(--event-color);
+    border-left: 3px solid var(--event-color);
+    color: var(--text-muted);
+    font-style: italic;
+    cursor: pointer;
+}
+
+.calendar-event.planned:hover {
+    color: var(--text);
 }
 
 .recipes-list-header {
@@ -2317,6 +3137,12 @@ p.subtitle {
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+}
+
+.shopping-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
 }
 
 .recipes-list-header h2 {
@@ -2336,156 +3162,38 @@ p.subtitle {
     font-size: 0.9rem;
 }
 
+.recipe-name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.recipe-name-row .recipe-name-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.recipe-confirmed {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.recipe-confirmed input {
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+}
+
 .recipes-filter:focus,
 .recipe-name-input:focus {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 2px var(--primary-glow);
-}
-
-.recipes-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-}
-
-.recipe-list-item {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    padding: 0.6rem 0.75rem;
-    border: 1px solid transparent;
-    border-radius: 0.6rem;
-    background: transparent;
-    color: var(--text);
-    font-family: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.recipe-list-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-}
-
-.recipe-list-item.active {
-    background: color-mix(in srgb, var(--primary) 18%, transparent);
-    border-color: color-mix(in srgb, var(--primary) 45%, transparent);
-}
-
-.recipe-list-name {
-    font-size: 0.9rem;
-    font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.recipe-list-meta {
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
-
-.recipes-list .settings-hint {
-    padding: 0.5rem 0.75rem;
-}
-
-.recipe-panel {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    overflow-y: auto;
-    background: var(--card-bg);
-    border: 1px solid var(--card-border);
-    border-radius: 12px;
-    padding: 1.25rem 1.5rem;
-}
-
-.recipe-empty {
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-}
-
-.recipe-empty[hidden],
-.recipe-editor[hidden] {
-    display: none;
-}
-
-.recipe-editor {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.recipe-name-input {
-    font-size: 1.25rem;
-    font-weight: 800;
-}
-
-.recipe-editor h3 {
-    margin: 0.5rem 0 0;
-    font-size: 0.75rem;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.recipe-ingredients {
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    counter-reset: ingredient;
-}
-
-.recipe-ingredients:empty::before {
-    content: 'No ingredients yet.';
-    font-size: 0.85rem;
-    color: var(--text-muted);
-}
-
-.recipe-ingredient {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    counter-increment: ingredient;
-}
-
-.recipe-ingredient::before {
-    content: counter(ingredient) '.';
-    width: 1.75rem;
-    flex-shrink: 0;
-    text-align: right;
-    font-size: 0.8rem;
-    color: var(--text-muted);
-}
-
-/* Each ingredient can be corrected in place; it only looks like an input on hover/focus */
-.recipe-ingredient input {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 0.4rem;
-    padding: 0.35rem 0.5rem;
-    color: var(--text);
-    font-family: inherit;
-    font-size: 0.9rem;
-}
-
-.recipe-ingredient input:hover,
-.recipe-ingredient input:focus {
-    outline: none;
-    border-color: var(--card-border);
-    background: rgba(255, 255, 255, 0.05);
 }
 
 .recipe-ingredient-btn {
@@ -2504,11 +3212,6 @@ p.subtitle {
     transition: opacity 0.15s;
 }
 
-.recipe-ingredient:hover .recipe-ingredient-btn,
-.recipe-ingredient:focus-within .recipe-ingredient-btn {
-    opacity: 1;
-}
-
 .recipe-ingredient-btn:hover {
     background: rgba(255, 255, 255, 0.08);
     color: var(--text);
@@ -2518,38 +3221,345 @@ p.subtitle {
     visibility: hidden;
 }
 
-.recipe-add-ingredient {
-    margin-left: 2.25rem;
+/* Shopping list — a modal from the Meals tab and the slideshow; one item per line */
+.shopping-modal-content {
+    max-width: 44rem;
+    width: 92vw;
+    height: 80vh;
 }
 
-/* Amount and unit sit in narrow columns before the ingredient */
-.recipe-ingredient input.recipe-amount,
-.tag-input-wrapper input.recipe-amount {
-    flex: 0 0 5rem;
-    width: 5rem;
-}
-
-.recipe-ingredient input.recipe-unit,
-.tag-input-wrapper input.recipe-unit {
-    flex: 0 0 6.5rem;
-    width: 6.5rem;
-}
-
-.recipe-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-top: 0.5rem;
-}
-
-/* Saved ingredients — a third column beside the meal editor */
-.ingredients-panel {
-    width: 24rem;
-    flex-shrink: 0;
+.shopping-modal-body {
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
     min-height: 0;
+}
+
+.shopping-header-actions .btn-close {
+    margin-left: 0.5rem;
+}
+
+/* A tab per list, scrolling sideways when there are many, with + for a new one */
+.shopping-tabs {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.shopping-tabs-list {
+    display: flex;
+    gap: 0.25rem;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.shopping-tab {
+    flex-shrink: 0;
+    max-width: 14rem;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid transparent;
+    border-radius: 0.6rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.shopping-tab:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.shopping-tab.active {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+}
+
+.shopping-tab-new {
+    font-size: 1.15rem;
+    line-height: 1;
+    padding: 0.35rem 0.7rem;
+}
+
+.shopping-list-wrap {
+    position: relative;
+    flex: 1;
+    display: flex;
+    min-height: 12rem;
+}
+
+/* Lines don't wrap (a long one scrolls sideways), so line n is always row n of the pictures.
+   Rows are tall enough for a picture; the left padding is where the pictures go. */
+.shopping-list {
+    flex: 1;
+    min-height: 12rem;
+    resize: none;
+    padding: 0.5rem 4rem 0.5rem 4.5rem; /* the right padding is where the delete buttons go */
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    color: inherit;
+    font: inherit;
+    font-size: 1.95rem;   /* large, for easy reading */
+    line-height: 1.75;    /* still a row tall enough for a picture */
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+}
+
+/* Over the list's left padding; the inner layer moves with the list's scrolling */
+.shopping-thumbs {
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    bottom: 1px;
+    width: 4rem;
+    overflow: hidden;
+    pointer-events: none;
+    border-radius: 1rem 0 0 1rem;
+}
+
+.shopping-thumb {
+    position: absolute;
+    left: 0.55rem;
+    width: 2.9rem;
+    height: 2.9rem;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 0.4rem;
+    pointer-events: auto; /* the layer lets clicks through to the list; the pictures open the chooser */
+    cursor: pointer;
+}
+
+/* Saved ingredients offered under the line being typed */
+.shopping-suggest {
+    position: absolute;
+    z-index: 5;
+    min-width: 14rem;
+    max-width: calc(100% - 5rem);
+    display: flex;
+    flex-direction: column;
+    padding: 0.3rem;
+    background: var(--bg);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.shopping-suggest[hidden] {
+    display: none;
+}
+
+.shopping-suggestion {
+    padding: 0.55rem 0.8rem;
+    background: none;
+    border: none;
+    border-radius: 0.5rem;
+    color: inherit;
+    font: inherit;
+    font-size: 1.65rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.shopping-suggestion:hover,
+.shopping-suggestion.active {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.shopping-list:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-glow);
+}
+
+/* Over the list's right padding (JS keeps it clear of the scrollbar): a delete button per line */
+.shopping-deletes {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    width: 3.5rem;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.shopping-delete {
+    position: absolute;
+    right: 0.5rem;
+    width: 2.6rem;
+    height: 2.6rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    pointer-events: auto;
+    opacity: 0.7;
+}
+
+.shopping-delete:hover,
+.shopping-delete:focus-visible {
+    opacity: 1;
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.5);
+    background: rgba(239, 68, 68, 0.1);
+}
+
+/* A line with no picture: a "+" to choose one */
+.shopping-thumb-empty {
+    padding: 0;
+    background: transparent;
+    border: 1px dashed var(--card-border);
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 1.3rem;
+    line-height: 1;
+    opacity: 0.6;
+}
+
+.shopping-thumb-empty:hover {
+    opacity: 1;
+    border-color: var(--primary);
+}
+
+/* Choosing a shopping list item's picture */
+.shopping-picker-content {
+    max-width: 720px;
+    width: 92vw;
+    height: 80vh;
+}
+
+.shopping-picker-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    flex: 1;
+}
+
+.shopping-picker-search {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.shopping-picker-search input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.6rem 0.9rem;
+    color: inherit;
+    font: inherit;
+}
+
+.shopping-picker-results {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+    align-content: start;
+    gap: 0.6rem;
+}
+
+.shopping-picker-message {
+    grid-column: 1 / -1;
+    padding: 1rem;
+    text-align: center;
+}
+
+.shopping-picker-option {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.5rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 2px solid transparent;
+    border-radius: 0.75rem;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+    text-align: center;
+}
+
+.shopping-picker-option:hover {
+    background: rgba(255, 255, 255, 0.09);
+}
+
+.shopping-picker-option.selected {
+    border-color: var(--primary);
+}
+
+.shopping-picker-option img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 0.5rem;
+}
+
+.shopping-picker-name {
+    font-size: 0.8rem;
+    line-height: 1.2;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.shopping-picker-brand {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.shopping-picker-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}
+
+.shopping-picker-actions [hidden] {
+    display: none;
+}
+
+/* Big, under the list; colours come from the shared voice button style */
+#btn-shopping-voice {
+    width: 100%;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 1rem 1.25rem;
+    border-radius: 1rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+/* Saved ingredients — opened from the Meals list's Ingredients button */
+.ingredients-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 1rem 1.25rem;
 }
 
 .ingredients-hint {
@@ -2571,14 +3581,531 @@ p.subtitle {
     padding: 0.5rem 0.75rem;
 }
 
-/* Rows reuse the meal editor's in-place inputs, minus its numbering */
-.ingredient-row::before {
-    content: none;
+/* The product picture (as on the shopping list); click to choose another */
+.ingredient-pic {
+    flex: 0 0 2.6rem;
+    height: 2.6rem;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 1.1rem;
+    cursor: pointer;
 }
 
-.ingredient-add input:not(.recipe-amount):not(.recipe-unit) {
+.ingredient-pic img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #fff;
+}
+
+.ingredient-pic.empty {
+    border: 1px dashed var(--card-border);
+    opacity: 0.6;
+}
+
+.ingredient-pic.empty:hover {
+    opacity: 1;
+    border-color: var(--primary);
+}
+
+/* Items list: one row per item; click to open it in the item builder */
+.item-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+
+.item-row:hover,
+.item-row:focus-visible {
+    outline: none;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* After the name of an item that's confirmed, along with everything it's made of */
+.item-confirmed {
+    margin-left: 0.3em;
+    font-size: 0.7em;
+    color: #f5c518;
+    vertical-align: 0.15em;
+}
+
+.item-row-text {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.item-row-name,
+.item-row-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.item-row-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.item-row-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+/* Where a single item's picture would be, an item made of others shows a stack */
+.ingredient-pic.item-group-pic {
+    cursor: inherit;
+    color: var(--primary);
+}
+
+/* The item builder */
+.item-builder-content {
+    max-width: 640px;
+}
+
+.item-builder-content .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.item-builder-content .settings-group {
+    margin: 0;
+}
+
+.item-builder-section {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.item-builder-section[hidden] {
+    display: none;
+}
+
+.item-builder-single-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.ingredient-pic.item-builder-pic {
+    flex: 0 0 4.5rem;
+    height: 4.5rem;
+    font-size: 1.5rem;
+}
+
+.item-builder-quantity {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+}
+
+.item-builder-quantity-row {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.item-builder-quantity-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.recipe-kcal.item-builder-kcal {
+    flex: 0 0 auto;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+}
+
+.item-builder-picture-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+}
+
+.item-builder-products {
+    flex: 1;
+    min-width: 0;
+    max-height: 18rem;
+    overflow-y: auto;
+}
+
+.item-builder-products:empty,
+.item-builder-foods:empty {
+    display: none;
+}
+
+/* UK food table matches, as chips above the products */
+.item-builder-foods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.item-builder-no-pic {
+    align-self: center;
+}
+
+.item-builder-parts {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.item-builder-parts:empty::before {
+    content: 'Nothing yet. Search below for the items it is made of.';
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.item-builder-part {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0.25rem;
+    border-radius: 0.4rem;
+}
+
+/* Amount and unit can be corrected in place; they only look like inputs on hover/focus */
+.item-builder-part input {
+    min-width: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.item-builder-part input:hover,
+.item-builder-part input:focus {
+    outline: none;
+    border-color: var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.item-builder-part input.recipe-amount {
+    flex: 0 0 4.5rem;
+    width: 4.5rem;
+}
+
+.item-builder-part input.recipe-unit {
+    flex: 0 0 5.5rem;
+    width: 5.5rem;
+}
+
+.item-builder-times {
+    flex: 0 0 5.5rem;
+    color: var(--text-muted);
+}
+
+.item-builder-part-name,
+.item-builder-result-name {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9rem;
+}
+
+.item-builder-part-name svg,
+.item-builder-result-name svg {
+    flex-shrink: 0;
+    width: 15px;
+    height: 15px;
+    color: var(--primary);
+}
+
+.item-builder-part:hover .recipe-ingredient-btn,
+.item-builder-part:focus-within .recipe-ingredient-btn {
+    opacity: 1;
+}
+
+.item-builder-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    margin-top: 0.4rem;
+}
+
+.item-builder-result {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.item-builder-result:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.item-builder-result-meta {
+    flex: 0 1 45%;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.item-builder-create {
+    color: var(--primary);
+    font-size: 0.9rem;
+}
+
+/* A button that reads as a link, inside a line of text */
+.link-button {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.item-builder-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Under the header, beside Save, so what went wrong is in view */
+.item-builder-status {
+    padding: 0 2rem;
+    flex-shrink: 0;
+}
+
+.item-builder-status:empty {
+    display: none;
+}
+
+.item-builder-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+/* Calories for a row's amount; click to look them up or change them */
+.recipe-kcal {
+    flex: 0 0 4.5rem;
+    padding: 0.35rem 0.4rem;
+    border: none;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.8rem;
+    text-align: right;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.recipe-kcal:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.recipe-kcal.unset {
+    color: var(--text-muted);
+}
+
+.recipe-kcal:disabled {
+    cursor: default;
+}
+
+.recipe-kcal-total {
+    margin: 0;
+    padding-left: 2.25rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.recipe-kcal-total:empty {
+    display: none;
+}
+
+/* Calories dialog: the source tabs and search box stay above the scrolling results */
+.nutrition-search-bar {
+    flex-shrink: 0;
+    padding: 0 2rem 0.75rem;
+}
+
+.nutrition-search-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.nutrition-search-row input {
+    flex: 1;
+    min-width: 0;
+}
+
+/* For UK products: what the UK food tables say, to compare the labels against */
+.nutrition-reference {
+    margin: 0;
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.04);
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.nutrition-reference button {
+    margin-left: 0.4rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    cursor: pointer;
+}
+
+.nutrition-reference[hidden] {
+    display: none;
+}
+
+.nutrition-result-doubt {
+    display: block;
+    font-size: 0.75rem;
+    color: #f59e0b;
+}
+
+/* Calories dialog: where to look (UK foods / UK products / USDA) */
+.nutrition-sources {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.2rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.nutrition-sources button {
+    flex: 1;
+    padding: 0.45rem 0.5rem;
+    border: none;
+    border-radius: 0.45rem;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+}
+
+.nutrition-sources button:hover {
+    color: var(--text);
+}
+
+.nutrition-sources button.active {
+    background: var(--primary);
+    color: white;
+}
+
+/* Their display: flex would otherwise beat the hidden attribute */
+.settings-check[hidden],
+.settings-group[hidden] {
+    display: none;
+}
+
+/* Calories dialog: search results */
+.nutrition-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.nutrition-result {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid transparent;
+    border-radius: 0.4rem;
+    background: transparent;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.nutrition-result:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.nutrition-result.active {
+    border-color: var(--primary);
+    background: rgba(99, 102, 241, 0.12);
+}
+
+.nutrition-result-name {
+    flex: 1;
+    min-width: 0;
+}
+
+.nutrition-result-type,
+.nutrition-result-kcal {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Calories dialog: protein, carbs, fat and alcohol side by side */
+.nutrition-macros {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+
+.nutrition-macros > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.nutrition-preview {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+.nutrition-preview:empty {
+    display: none;
 }
 
 @media (hover: none) {
@@ -2587,21 +4114,15 @@ p.subtitle {
     }
 }
 
-/* Not enough room for three columns: ingredients go full width underneath */
+/* Not enough room for three columns: the shopping list goes full width underneath */
 @media (max-width: 1300px) {
     .recipes-view {
         flex-wrap: wrap;
         overflow-y: auto;
     }
 
-    .recipes-list-panel,
-    .recipe-panel {
-        max-height: 60vh;
-    }
-
-    .ingredients-panel {
-        width: 100%;
-        max-height: 50vh;
+    .meals-pane {
+        min-height: 60vh;
     }
 }
 
@@ -2612,21 +4133,13 @@ p.subtitle {
         gap: 1rem;
     }
 
-    .recipes-list-panel {
-        width: auto;
-        max-height: 35vh;
+    .meals-tabs {
+        flex-direction: row;
+        overflow-x: auto;
     }
 
-    .ingredients-panel {
-        flex-shrink: 0;
-    }
-
-    .recipe-panel {
-        padding: 1rem;
-    }
-
-    .recipe-add-ingredient {
-        margin-left: 0;
+    .recipe-kcal-total {
+        padding-left: 0;
     }
 }
 
@@ -3061,6 +4574,59 @@ p.subtitle {
     opacity: 1;
 }
 
+/* Live Photo tag on photo thumbnails, as on an iPhone: top left, grid view only */
+.live-badge {
+    display: none;
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    align-items: center;
+    gap: 3px;
+    padding: 3px 6px 3px 4px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    pointer-events: none;
+}
+
+.playlist-items.grid-view .item-icon .live-badge {
+    display: flex;
+}
+
+/* Badge icons keep their own size, not the big faint one grid tiles give a lone icon */
+.playlist-items.grid-view .item-icon .live-badge svg,
+.playlist-items.grid-view .item-icon .pano-badge svg {
+    width: 12px;
+    height: 12px;
+    opacity: 1;
+}
+
+.playlist-items.grid-view .item-icon .pano-badge svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Hovering a Live Photo's tile plays its clip over the thumbnail (see playLiveHover in app.js) */
+.live-hover-video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 0.6rem;
+    opacity: 0;
+    transition: opacity 0.2s;
+    pointer-events: none;
+}
+
+.live-hover-video.playing {
+    opacity: 1;
+}
+
 /* Panorama tag on photo thumbnails — grid view only, tiny list icons are too
    small for it to read. A labeled pill in the accent color, not just a small
    dim icon, so it actually stands out against a busy photo thumbnail. */
@@ -3117,11 +4683,6 @@ p.subtitle {
     justify-content: center;
     z-index: 20000;
     animation: fadeIn 0.3s ease;
-}
-
-/* Opened from inside Server Settings, which comes later in the DOM at the same z-index */
-#import-library-data-modal {
-    z-index: 20001;
 }
 
 .modal-content {
@@ -3612,6 +5173,61 @@ p.subtitle {
     box-shadow: 0 4px 12px var(--primary-glow);
 }
 
+/* Server Settings: tabs in a column down the left, the open panel beside them */
+.settings-side-layout {
+    display: flex;
+    gap: 1.25rem;
+    flex: 1;
+    min-height: 0;
+    padding: 0 0 0 2rem;
+}
+
+.settings-tabs-side {
+    flex-direction: column;
+    flex-shrink: 0;
+    width: 10.5rem;
+    margin: 0 0 2rem;
+    align-self: flex-start;
+}
+
+.settings-tabs-side .settings-tab {
+    flex: none;
+    text-align: left;
+    padding: 0.65rem 0.9rem;
+}
+
+.settings-side-layout .manage-list-container {
+    flex: 1;
+    min-width: 0;
+    padding-left: 0;
+}
+
+/* Wider than the other manage modals so the panel keeps its width beside the tabs */
+#server-settings-modal .manage-modal-content {
+    max-width: 1000px;
+}
+
+/* Too narrow for a column: back to a row of tabs above the panel, scrolling sideways */
+@media (max-width: 700px) {
+    .settings-side-layout {
+        flex-direction: column;
+        gap: 0;
+        padding: 0;
+    }
+
+    .settings-tabs-side {
+        flex-direction: row;
+        width: auto;
+        align-self: stretch;
+        overflow-x: auto;
+        margin: 0 0 1rem;
+    }
+
+    .settings-tabs-side .settings-tab {
+        white-space: nowrap;
+    }
+}
+
 .settings-panel {
     display: none;
 }
@@ -3973,6 +5589,17 @@ p.subtitle {
 
 .manage-name-input:focus {
     box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+/* Plug settings: ask before switching this plug */
+.plug-confirm-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    white-space: nowrap;
 }
 
 .btn-toggle {
@@ -4778,13 +6405,30 @@ p.subtitle {
     cursor: pointer;
 }
 
-.settings-group .settings-check input[type="checkbox"] {
+.settings-group .settings-check input[type="checkbox"],
+.settings-group .settings-check input[type="radio"] {
     width: 1rem;
     height: 1rem;
     flex: none;
     margin: 0.1rem 0 0;
     padding: 0;
     accent-color: var(--primary);
+}
+
+.startup-browser-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.25rem;
+}
+
+.settings-check:has(input:disabled) {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.settings-group input[type="text"]:disabled {
+    opacity: 0.7;
+    cursor: default;
 }
 
 .settings-check .settings-hint {
@@ -5830,6 +7474,25 @@ input:checked+.slider:before {
     flex-wrap: wrap;
 }
 
+/* What to restore from a backup: a tick per library folder and per group of data */
+.s3-restore-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.75rem 0;
+}
+
+.s3-restore-options h4 {
+    margin: 0.5rem 0 0.1rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.s3-restore-options .settings-hint {
+    margin: 0;
+}
+
 .s3-test-result {
     font-size: 0.8rem;
     line-height: 1.4;
@@ -6009,6 +7672,31 @@ input:checked+.slider:before {
     z-index: 10001;
     position: relative;
     box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+    /* Tap-to-zoom sets scale/translate (see toggleZoom in slideshow.js) */
+    transition: scale 0.4s ease, translate 0.4s ease;
+}
+
+/* Zoomed in, a drag pans the photo rather than scrolling or zooming the page */
+.screensaver-img.zoomed {
+    touch-action: none;
+    cursor: grab;
+}
+
+.screensaver-img.dragging {
+    cursor: grabbing;
+    transition: none;
+}
+
+/* A video slide: placed like a photo, fading in once it starts playing (see renderVideo in slideshow.js) */
+.screensaver-video {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    z-index: 10001;
+    position: relative;
+    opacity: 0;
+    transition: opacity 0.6s ease-in-out;
+    box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
 }
 
 /*
@@ -6072,7 +7760,7 @@ input:checked+.slider:before {
 /* Slideshow mini-map */
 .ss-map-window {
     position: absolute;
-    top: calc(70px + env(safe-area-inset-top));
+    top: calc(56px + env(safe-area-inset-top));   /* just under the now-playing label (landscape moves both) */
     left: 20px;
     width: 220px;
     height: 160px;
@@ -6328,7 +8016,7 @@ input:checked+.slider:before {
 }
 
 .btn-ss-music.btn-ss-exit:hover {
-    background: rgba(220, 50, 50, 0.7);
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.6), rgba(220, 38, 38, 0.4));
 }
 
 .screensaver-controls {
@@ -6415,22 +8103,37 @@ input:checked+.slider:before {
     background: rgba(0, 0, 0, 0.6);
 }
 
+/* Soft glass buttons: a faint top-lit gradient, a hairline highlight along the top edge */
 .btn-ss-music {
-    background: transparent;
-    border: none;
-    color: white;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: rgba(255, 255, 255, 0.92);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 8px;
+    padding: 12px;
     border-radius: 50%;
-    transition: all 0.2s ease;
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, color 0.2s ease, opacity 0.2s ease;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
 }
 
 .btn-ss-music:hover {
-    background: rgba(255, 255, 255, 0.1);
-    transform: scale(1.1);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+    color: #fff;
+}
+
+.btn-ss-music:active {
+    transform: scale(0.94);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.btn-ss-music.btn-ss-exit {
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.32), rgba(239, 68, 68, 0.16));
+    border-color: rgba(248, 113, 113, 0.28);
 }
 
 .ss-volume-container {
@@ -6552,6 +8255,12 @@ input:checked+.slider:before {
     transform: scale(0.95) !important;
 }
 
+/* Rotate while a photo is zoomed in (see toggleZoom in slideshow.js) */
+.ss-control-item.disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
 /* Buttons inside ss-control-item are visual-only; parent div handles all interaction */
 .ss-control-item button {
     -webkit-tap-highlight-color: transparent;
@@ -6571,7 +8280,7 @@ input:checked+.slider:before {
 }
 
 #ss-mode-label {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 800;
     line-height: 1.1;
     display: block;
@@ -6581,7 +8290,7 @@ input:checked+.slider:before {
 
 /* Longer labels (Music, Recent, Custom) need to be smaller to fit inside the circle */
 #ss-mode-label.long {
-    font-size: 8px;
+    font-size: 9.5px;
 }
 
 .btn-ss-favourite {
@@ -6619,33 +8328,82 @@ input:checked+.slider:before {
     height: 22px;
 }
 
-.btn-ss-voice {
-    background: linear-gradient(135deg, rgba(236, 72, 153, 0.7) 0%, rgba(139, 92, 246, 0.7) 55%, rgba(99, 102, 241, 0.7) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 50%;
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-    cursor: pointer;
-    backdrop-filter: blur(5px);
-    transition: all 0.2s ease;
+/* In the music bar: a .btn-ss-music with a purple tint */
+.btn-ss-music.btn-ss-voice {
+    background: linear-gradient(180deg, rgba(168, 85, 247, 0.38), rgba(99, 102, 241, 0.2));
+    border-color: rgba(196, 181, 253, 0.3);
 }
 
-.btn-ss-voice svg {
-    width: 22px;
-    height: 22px;
+.btn-ss-music.btn-ss-voice:hover {
+    background: linear-gradient(180deg, rgba(168, 85, 247, 0.55), rgba(99, 102, 241, 0.32));
 }
 
-.btn-ss-voice.listening {
-    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+.btn-ss-music.btn-ss-voice.listening {
+    background: linear-gradient(180deg, #ef4444, #dc2626);
     animation: voice-pulse 1s ease-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
     .btn-ss-voice.listening { animation: none; }
+}
+
+/* The photo controls share the music bar's soft glass look (see .btn-ss-music). Their buttons
+   ignore the pointer, so hover and press are read from the item around each one. */
+.screensaver-controls .ss-control-item button {
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border-radius: 50%;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.06));
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 2px 8px rgba(0, 0, 0, 0.25);
+    color: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(8px);
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, color 0.2s ease;
+}
+
+.screensaver-controls .ss-control-item:hover button {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.1));
+    color: #fff;
+    transform: none;
+}
+
+.screensaver-controls .ss-control-item:active button {
+    transform: scale(0.94) !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.screensaver-controls .ss-control-item button svg {
+    width: 24px;
+    height: 24px;
+}
+
+.screensaver-controls .ss-control-item .btn-ss-sky.is-on {
+    background: linear-gradient(180deg, rgba(252, 211, 77, 0.32), rgba(252, 211, 77, 0.16));
+    border-color: rgba(252, 211, 77, 0.4);
+    color: #fcd34d;
+}
+
+.screensaver-controls .ss-control-item .btn-ss-favourite.is-favourite {
+    background: linear-gradient(180deg, rgba(244, 63, 94, 0.32), rgba(244, 63, 94, 0.16));
+    border-color: rgba(251, 113, 133, 0.35);
+    color: #fb7185;
+}
+
+.screensaver-controls .ss-control-item:hover .btn-ss-delete {
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.5), rgba(220, 38, 38, 0.3));
+    color: #fff;
+}
+
+.screensaver-controls .ss-control-label {
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.75);
 }
 
 /*
@@ -6661,8 +8419,36 @@ input:checked+.slider:before {
     display: contents;
 }
 
-.ss-agenda {
+.ss-sun,
+.ss-agenda,
+.ss-shopping {
     display: none;
+}
+
+.ss-sun-event {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    white-space: nowrap;
+}
+
+/* Sized with the text, so it shrinks with it */
+.ss-sun-event svg {
+    width: 1.25em;
+    height: 1.25em;
+    color: #fcd34d;
+    flex: none;
+}
+
+.ss-sun-event b {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Short of room, the arrows on the icons say which is which */
+@container ss-sun (max-width: 300px) {
+    .ss-sun-label {
+        display: none;
+    }
 }
 
 @media (orientation: landscape) and (min-height: 480px) {
@@ -6686,7 +8472,8 @@ input:checked+.slider:before {
         z-index: 10002;
     }
 
-    .screensaver-img {
+    .screensaver-img,
+    .screensaver-video {
         grid-column: 1;
         grid-row: 1;
         min-width: 0;
@@ -6707,68 +8494,131 @@ input:checked+.slider:before {
         position: static;
         flex-wrap: wrap;
         justify-content: center;
-        gap: 6px;
+        gap: 10px;
         margin: calc(20px + env(safe-area-inset-top)) 16px 0;
-        padding: 8px;
+        padding: 0;
+        /* The panel is already dark, so the buttons stand on their own without a box around them */
+        background: none;
+        backdrop-filter: none;
+        border: none;
+        box-shadow: none;
+    }
+
+    .screensaver-music-bar:hover {
+        background: none;
+    }
+
+    /* The bar spans the panel, so the buttons share its width as big rounded-square targets */
+    .ss-music-controls {
+        flex: 4 1 0;   /* four music buttons usually showing, so voice and exit get an equal share */
+        gap: 10px;
+    }
+
+    .screensaver-music-bar .btn-ss-music {
+        flex: 1 1 0;
+        min-width: 48px;
+        height: 56px;
+        padding: 0;
         border-radius: 16px;
     }
 
-    .ss-music-controls {
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 6px;
+    .screensaver-music-bar .btn-ss-music svg {
+        width: 26px;
+        height: 26px;
     }
 
-    /* Pushed down to sit above the lyrics or map (or the controls), leaving any spare room above it */
+    /* Bottom left over the photo, as in portrait, kept clear of the panel */
     .screensaver-info {
-        position: static;
-        max-width: none;
-        margin: auto 16px 0;
-        padding-top: 12px;   /* a gap under the calendar when space is tight */
+        max-width: calc(100% - var(--ss-panel-w) - 80px);
         z-index: 10003;
         overflow-wrap: anywhere;
+    }
+
+    /* The photo details sit over the photo, so this spacer (after the music bar and calendar)
+       pushes the lyrics or map and the controls down, leaving any spare room above them */
+    .ss-side-panel::before {
+        content: '';
+        flex: 1 1 0;
+    }
+
+    .screensaver-music-bar,
+    .ss-sun,
+    .ss-agenda {
+        order: -1;
+    }
+
+    /* The next sunrise and sunset, a line of its own above the calendar */
+    .ss-sun:not(:empty) {
+        display: flex;
+        flex-wrap: wrap;   /* the two side by side, or one above the other when even that's too wide */
+        justify-content: center;
+        gap: 4px clamp(10px, 1.5vw, 24px);
+        flex-shrink: 0;
+        margin: 16px 8px 0;
+        min-width: 0;
+        color: #fff;
+        font-size: clamp(13px, 1.1vw, 20px);
+        z-index: 10003;
+        container: ss-sun / inline-size;
     }
 
     .ss-track-title { font-size: clamp(20px, 1.6vw, 32px); }
     .ss-date { font-size: clamp(18px, 1.4vw, 28px); }
 
+    /* Laid out like the music bar: rounded squares sharing the panel's width */
     .screensaver-controls {
         position: static;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 14px 12px;
-        padding: 20px 12px calc(28px + env(safe-area-inset-bottom));
+        flex-wrap: wrap;   /* only on the narrowest panels */
+        gap: 12px 10px;
+        padding: 20px 16px calc(28px + env(safe-area-inset-bottom));
     }
+
+    .screensaver-controls .ss-control-item {
+        flex: 1 1 0;
+        min-width: 44px;
+        gap: 6px;
+    }
+
+    .screensaver-controls .ss-control-item button {
+        width: 100%;
+        height: 56px;
+        border-radius: 16px;
+    }
+
+    .screensaver-controls .ss-control-item button svg {
+        width: 26px;
+        height: 26px;
+    }
+
+    /* The rounded-square button is wider than the circle, so the mode name can be bigger */
+    #ss-mode-label { font-size: 14px; }
+    #ss-mode-label.long { font-size: 11px; }
 
     .ss-nav-next { right: calc(var(--ss-panel-w) + 16px); }
 
+    /* In the panel just under the music bar, which frees the photo's top left for the map */
     .ss-now-playing-label {
-        max-width: calc(100% - var(--ss-panel-w) - 40px);
+        position: static;
+        order: -1;
+        max-width: calc(100% - 32px);   /* the panel's width, less its side margins */
+        /* Wrap onto more lines rather than cutting the title and artist off at the panel's edge */
+        white-space: normal;
+        overflow-wrap: anywhere;
+        margin: 12px 16px 0;
+        align-self: flex-start;
+        font-size: clamp(16px, 1.3vw, 22px);
     }
 
-    /* The map fills the panel's width */
-    .ss-side-panel > .ss-map-window {
-        flex: 0 1 auto;
-        min-height: 0;
+    .ss-now-playing-label .ss-np-label {
+        font-size: clamp(12px, 1vw, 16px);
     }
 
     .ss-map-window {
-        position: static;
-        width: auto;
-        height: auto;
-        aspect-ratio: 4 / 3;
-        max-height: 40vh;
-        margin: 16px 16px 0;
+        top: calc(20px + env(safe-area-inset-top));
     }
 
-    .ss-map-window.expanded {
-        width: auto;
-        height: auto;
-        aspect-ratio: 1;
-        max-height: 60vh;
-    }
-
-    /* Lyrics take the map's place in the panel (the map gives way if a photo has a location) */
+    /* The map floats over the photo at the top left, as in portrait, and the shopping list takes its
+       place in the panel. Lyrics go above the shopping list while they're up. */
     .ss-side-panel > .ss-lyrics-panel {
         flex: 0 1 40vh;
         min-height: 0;
@@ -6787,8 +8637,33 @@ input:checked+.slider:before {
         mask-image: none;
     }
 
-    .screensaver-overlay.has-lyrics .ss-map-window {
-        display: none !important;
+    .ss-side-panel > .ss-shopping {
+        flex: 0 1 auto;
+        min-height: 0;
+    }
+
+    .ss-shopping:not(:empty) {
+        display: block;
+        margin: 16px 16px 0;
+        padding: 10px 10px;
+        max-height: 40vh;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+        z-index: 10003;
+        color: #fff;
+        cursor: pointer;
+        /* The same card as the calendar's */
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 14px;
+    }
+
+    /* Given way to the lyrics when they'd squeeze them (fitSsLyrics in app.js) */
+    .screensaver-overlay.lyrics-hide-shopping .ss-shopping:not(:empty),
+    .screensaver-overlay.lyrics-hide-agenda .ss-agenda:not(:empty) {
+        display: none;
     }
 
     .ss-lyrics-content {
@@ -6807,23 +8682,29 @@ input:checked+.slider:before {
         font-size: clamp(18px, 1.5vw, 27px);
     }
 
-    /* Today's calendar, under the music bar; it takes no space when there's nothing on */
+    /* Today's and tomorrow's calendar, under the music bar; it takes no space when there's nothing on, and
+       scrolls when there's more than fits */
     .ss-agenda:not(:empty) {
         display: block;
+        flex-shrink: 0;
         margin: 16px 8px 0;
         padding: 10px 10px;
         max-height: 30vh;
-        overflow: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
         z-index: 10003;
         color: #fff;
-        /* A card like the map's, so it reads apart from the photo details below */
+        cursor: pointer;   /* a tap goes to the Calendar tab */
+        /* A card like the map's */
         background: rgba(255, 255, 255, 0.05);
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 14px;
     }
 }
 
-/* Today's calendar in the slideshow's side panel (placed in the landscape rules above) */
+/* Today's and tomorrow's calendar in the slideshow's side panel (placed in the landscape rules above) */
 .ss-agenda-title {
     font-size: clamp(13px, 1vw, 18px);
     font-weight: 700;
@@ -6837,6 +8718,59 @@ input:checked+.slider:before {
     list-style: none;
     margin: 0;
     padding: 0;
+}
+
+.ss-shopping-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.ss-shopping-list li {
+    padding: 3px 0;
+    font-size: clamp(14px, 1.1vw, 20px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* With more than one list, their names as tabs in place of the title */
+.ss-shopping-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.ss-shopping-tab {
+    max-width: 100%;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.6);
+    font-family: inherit;
+    font-size: clamp(12px, 0.9vw, 16px);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.ss-shopping-tab.active {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.18);
+}
+
+.ss-shopping-empty {
+    padding: 3px 0;
+    font-size: clamp(14px, 1.1vw, 20px);
+    color: rgba(255, 255, 255, 0.5);
 }
 
 .ss-agenda-list + .ss-agenda-title {
@@ -7144,7 +9078,7 @@ input:checked+.slider:before {
     bottom: 2rem;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 10000;
+    z-index: 30000; /* above .modal-overlay (20000) so errors show over dialogs */
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
@@ -7831,6 +9765,20 @@ input:checked+.slider:before {
     outline-offset: -3px;
 }
 
+/* A video among the slideshow's photos: a play mark over its thumbnail */
+.photo-tile.video .photo-tile-view::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 2.2rem;
+    height: 2.2rem;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 7l9 5-9 5z' fill='white'/%3E%3C/svg%3E") center / 60% no-repeat;
+    pointer-events: none;
+}
+
 /* Slideshow browser: grid of the current Day/Recent/Favs list, over the paused slideshow */
 .ss-browser {
     position: absolute;
@@ -7855,6 +9803,106 @@ input:checked+.slider:before {
 .ss-browser-header h2 {
     margin: 0;
     font-size: 1.25rem;
+    margin-right: auto;
+}
+
+.ss-browser-selection {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.ss-browser-clear {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.ss-browser-clear:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+/* Bigger tiles in the slideshow browser than in the hidden-photos grid */
+#ss-browser-grid {
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+#ss-browser-grid .photo-tile {
+    contain-intrinsic-size: auto 150px;
+}
+
+/* Select toggle in each tile's top-left corner */
+.photo-tile-select {
+    position: absolute;
+    left: 4px;
+    top: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.4);
+    color: transparent;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.photo-tile.selected .photo-tile-select {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+.photo-tile.selected {
+    outline: 3px solid var(--primary);
+    outline-offset: -3px;
+}
+
+.photo-tile.selected .photo-tile-view img {
+    opacity: 0.75;
+}
+
+/* While selecting, a tap on a tile toggles it rather than jumping to it */
+.ss-browser.selecting .photo-tile-view {
+    cursor: pointer;
+}
+
+@media (hover: hover) {
+    .ss-browser:not(.selecting) .photo-tile:not(:hover) .photo-tile-select {
+        opacity: 0;
+    }
+}
+
+/* Any touchscreen (even one that also has a mouse) keeps the tile buttons showing, with bigger targets */
+@media (any-pointer: coarse) {
+    .photo-tile-actions,
+    .ss-browser:not(.selecting) .photo-tile:not(:hover) .photo-tile-select {
+        opacity: 1;
+    }
+
+    .photo-tile-select {
+        width: 32px;
+        height: 32px;
+    }
+
+    .photo-tile-actions button {
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Long-press selects a tile, so keep the browser's own long-press menu out of the way */
+    .ss-browser .photo-tile {
+        -webkit-touch-callout: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
 }
 
 .ss-browser-body {
@@ -7939,7 +9987,118 @@ input:checked+.slider:before {
     align-items: start;
 }
 
-/* Each fuel's card holds the week and the month side by side, stacking when there isn't room */
+/* Each fuel's card holds today and this week side by side, stacking when there isn't room */
+/* Test a Tariff: a section per fuel, with its charges to type in and the year priced both ways */
+.tariff-test {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.tariff-test-fuel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.tariff-test-head h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.2rem;
+    font-size: 1.05rem;
+}
+
+.tariff-test-inputs {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.75rem;
+}
+
+.tariff-test-inputs label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+}
+
+.tariff-test-inputs input {
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    color: inherit;
+    font: inherit;
+    font-size: 1rem;
+}
+
+.tariff-test-inputs input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.tariff-test-fuel .settings-hint {
+    margin: 0;
+}
+
+.tariff-test-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.tariff-test-table th,
+.tariff-test-table td {
+    padding: 0.3rem 0.4rem;
+    text-align: left;
+}
+
+.tariff-test-table th {
+    font-weight: 500;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.tariff-test-table .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.tariff-test-table tr.total td {
+    font-weight: 600;
+    border-top: 1px solid var(--card-border);
+}
+
+.tariff-test-diff {
+    display: inline-block;
+    margin-top: 0.4rem;
+    font-weight: 600;
+}
+
+.tariff-test-diff.cheaper { color: #22c55e; }
+.tariff-test-diff.dearer { color: #ef4444; }
+
+.tariff-test-total {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+/* The meter's tariff, between a fuel card's heading and its charts */
+.energy-tariff {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem 0.8rem;
+    margin-bottom: 0.9rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: rgba(255, 255, 255, 0.03);
+}
+
 .energy-panes {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -7951,6 +10110,11 @@ input:checked+.slider:before {
     display: flex;
     flex-direction: column;
     gap: 0.9rem;
+}
+
+/* Last month runs across the bottom of the card, under today and this week */
+.energy-pane.wide {
+    grid-column: 1 / -1;
 }
 
 .energy-pane-title {
@@ -8166,7 +10330,7 @@ input:checked+.slider:before {
 
 .energy-totals {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
     gap: 0.75rem;
     font-size: 0.85rem;
     color: var(--text-muted);
@@ -8474,6 +10638,135 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
+/* Scenes: a button on Twinkly cards naming what's showing, opening the scenes dialog */
+.plug-scene {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.55rem 0.9rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.plug-scene:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+}
+
+.plug-scene:disabled {
+    cursor: default;
+}
+
+.plug-scene svg {
+    flex: none;
+}
+
+.plug-scene-name {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.scene-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.5rem;
+    width: 100%;
+}
+
+.scene-option {
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+
+.scene-option:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.scene-option.current {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+}
+
+.scene-option:disabled {
+    cursor: default;
+    opacity: 0.7;
+}
+
+.scene-colours {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.scene-swatch {
+    position: relative;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 50%;
+    border: 2px solid var(--card-border);
+    padding: 0;
+    cursor: pointer;
+}
+
+.scene-swatch.current {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
+.scene-swatch:disabled {
+    cursor: default;
+}
+
+/* The "any colour" swatch is a colour picker under a rainbow ring */
+.scene-custom {
+    border-color: transparent;
+}
+
+.scene-custom::before {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    padding: 2px;
+    background: conic-gradient(#f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+}
+
+.scene-custom input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+}
+
 /* Timers: a clock button on each card opening the countdown/schedule dialog */
 .plug-card-timers {
     flex: none;
@@ -8689,4 +10982,1303 @@ input:checked+.slider:before {
 
 .manage-item-host.plug-state.ok {
     color: #34d399;
+}
+
+/* ─── Word tab ────────────────────────────────────────────────────────── */
+.games-view {
+    --word-correct: #16a34a;
+    --word-present: #ca8a04;
+    --word-absent: #334155;
+    --word-key-height: clamp(3.2rem, 8dvh, 4.75rem);
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding-top: 1rem;
+    overflow-y: auto;
+    user-select: none;
+}
+
+.games-view[hidden] {
+    display: none;
+}
+
+.games-view .smarthome-header {
+    align-self: stretch;
+    flex-wrap: wrap;
+}
+
+.word-number {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.word-stats {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.game-players {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.game-players-label {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.game-player {
+    padding: 0.45rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.game-player:hover {
+    border-color: var(--text-muted);
+}
+
+.game-player.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+}
+
+/* No player picked: the board and keys show, but greyed out */
+.games-view.no-player .word-board,
+.games-view.no-player .word-keyboard {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+.game-player-name {
+    flex: 1;
+    font-weight: 600;
+}
+
+.game-player-add {
+    margin-top: 0.75rem;
+}
+
+.word-message {
+    min-height: 1.4em;
+    font-weight: 600;
+    text-align: center;
+}
+
+/* Takes whatever height the header and keyboard leave, and the tiles grow or shrink to fill it */
+.word-board-area {
+    flex: 1;
+    min-height: 12rem;
+    align-self: stretch;
+    container-type: size;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.word-board {
+    --word-tile: max(1.75rem, min(4.25rem, calc((100cqh - 1.75rem) / 6), calc((100cqw - 1.4rem) / 5)));
+    display: grid;
+    gap: 0.35rem;
+}
+
+.word-row {
+    display: grid;
+    grid-template-columns: repeat(5, var(--word-tile));
+    gap: 0.35rem;
+}
+
+.word-row.shake {
+    animation: word-shake 0.4s;
+}
+
+@keyframes word-shake {
+    20%, 60% { transform: translateX(-6px); }
+    40%, 80% { transform: translateX(6px); }
+}
+
+.word-tile {
+    width: var(--word-tile);
+    height: var(--word-tile);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--card-border);
+    border-radius: 6px;
+    font-size: calc(var(--word-tile) * 0.55);
+    font-weight: 800;
+    text-transform: uppercase;
+    color: var(--text);
+}
+
+.word-tile.filled {
+    border-color: var(--text-muted);
+}
+
+.word-tile.correct,
+.word-tile.present,
+.word-tile.absent {
+    border-color: transparent;
+    color: #fff;
+}
+
+.word-tile.correct { background: var(--word-correct); }
+.word-tile.present { background: var(--word-present); }
+.word-tile.absent { background: var(--word-absent); }
+
+/* Flips over from the plain tile to its colour, one tile after another */
+.word-tile.reveal {
+    animation: word-flip 0.5s ease-in-out backwards;
+}
+
+@keyframes word-flip {
+    0% { transform: rotateX(0); background: transparent; border-color: var(--text-muted); color: var(--text); }
+    49% { transform: rotateX(90deg); background: transparent; border-color: var(--text-muted); color: var(--text); }
+    50% { transform: rotateX(90deg); }
+    100% { transform: rotateX(0); }
+}
+
+.word-keyboard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    width: min(100%, 46rem);
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+}
+
+.word-key-row {
+    display: flex;
+    justify-content: center;
+    gap: 0.35rem;
+}
+
+.word-key {
+    flex: 1;
+    max-width: 4.2rem;
+    height: var(--word-key-height);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: #64748b;
+    color: #fff;
+    font-family: inherit;
+    font-size: clamp(1rem, 2.6dvh, 1.4rem);
+    font-weight: 700;
+    text-transform: uppercase;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.word-key.wide {
+    flex: 1.5;
+    max-width: 6.5rem;
+    font-size: clamp(0.75rem, 1.9dvh, 1rem);
+}
+
+.word-key:active {
+    filter: brightness(1.2);
+}
+
+.word-key.correct { background: var(--word-correct); }
+.word-key.present { background: var(--word-present); }
+.word-key.absent { background: var(--word-absent); color: var(--text-muted); }
+
+/* Bigger slideshow and logo menu buttons in the top bar, easier to tap (phones keep the smaller size) */
+@media (min-width: 601px) {
+    .header-logo {
+        width: 34px;
+        height: 34px;
+    }
+
+    .logo-btn,
+    .top-bar-icon-btn {
+        padding: 0.5rem;
+    }
+
+    .top-bar-icon-btn {
+        min-width: calc(34px + 1rem + 2px);
+        min-height: calc(34px + 1rem + 2px);
+    }
+
+    .top-bar-icon-btn svg {
+        width: 30px;
+        height: 30px;
+    }
+}
+
+/* Energy tab: shown while the first meter readings are on their way */
+.energy-loading {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem 0;
+    color: var(--text-muted);
+    font-size: 1rem;
+}
+
+.energy-loading .spinner {
+    width: 22px;
+    height: 22px;
+    border-width: 3px;
+    flex-shrink: 0;
+}
+
+/* ─── Alarms tab ──────────────────────────────────────────────────────── */
+.alarms-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 1.5rem;
+    padding-top: 1rem;
+    overflow-y: auto;
+}
+
+.alarms-view[hidden] {
+    display: none;
+}
+
+.alarms-side {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+/* The big countdown dial: a ring that drains as the first timer runs down */
+.timer-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1.25rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1.5rem;
+    background: radial-gradient(circle at 50% 40%, rgba(99, 102, 241, 0.14), transparent 70%), var(--card-bg);
+}
+
+.countdown-dial {
+    position: relative;
+    width: min(20rem, 100%);
+    aspect-ratio: 1;
+    container-type: inline-size;
+}
+
+.countdown-ring {
+    display: block;
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg); /* start the ring at 12 o'clock */
+}
+
+.countdown-track {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.08);
+    stroke-width: 6;
+}
+
+.countdown-progress {
+    fill: none;
+    stroke: var(--primary);
+    stroke-width: 6;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 4px var(--primary-glow));
+    transition: stroke-dashoffset 1s linear, stroke 0.4s;
+}
+
+.countdown-face {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    text-align: center;
+}
+
+.countdown-time {
+    font-size: 24cqw;
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    transition: color 0.4s;
+}
+
+.countdown-time.long {
+    font-size: 17cqw;
+}
+
+.countdown-label {
+    color: var(--text);
+    font-size: 5.5cqw;
+    font-weight: 600;
+}
+
+.countdown-ends {
+    color: var(--text-muted);
+    font-size: 4.5cqw;
+}
+
+.countdown-dial.idle .countdown-time,
+.countdown-dial.idle .countdown-label {
+    color: var(--text-muted);
+}
+
+/* The last minute: red, and the dial pulses */
+.ending .countdown-progress {
+    stroke: var(--accent);
+    filter: drop-shadow(0 0 5px rgba(244, 63, 94, 0.5));
+}
+
+.ending .countdown-time {
+    color: var(--accent);
+}
+
+.countdown-dial.ending {
+    animation: countdown-pulse 1s ease-in-out infinite;
+}
+
+@keyframes countdown-pulse {
+    50% { transform: scale(1.03); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .countdown-dial.ending { animation: none; }
+}
+
+.countdown-mini {
+    flex-shrink: 0;
+    width: 2.4rem;
+    height: 2.4rem;
+}
+
+.countdown-mini .countdown-track,
+.countdown-mini .countdown-progress {
+    stroke-width: 10;
+}
+
+.timer-shortcuts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr));
+    gap: 0.6rem;
+}
+
+.timer-shortcut {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0.75rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.6rem;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.timer-shortcut span {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.timer-shortcut:hover {
+    border-color: var(--text-muted);
+}
+
+.timer-shortcut:active {
+    background: var(--primary);
+    border-color: var(--primary);
+}
+
+.alarms-form {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.alarms-input {
+    width: 8rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.1rem;
+    color-scheme: dark;
+}
+
+.alarms-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.alarms-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    background: var(--card-bg);
+}
+
+.alarms-row.off .alarms-big {
+    color: var(--text-muted);
+}
+
+.alarms-row.ending .alarms-big {
+    color: var(--accent);
+}
+
+.alarms-big {
+    min-width: 5.5rem;
+    font-size: 1.8rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.alarms-about {
+    flex: 1;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.alarms-form .alarms-about {
+    flex: none;
+}
+
+.alarms-empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.alarm-ring-content {
+    align-items: center;
+    gap: 1rem;
+    padding: 2rem;
+    max-width: 420px;
+    text-align: center;
+}
+
+.alarm-ring-content h2 {
+    margin: 0;
+    font-size: 2rem;
+}
+
+.alarm-ring-list {
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.alarm-stop-btn {
+    width: 100%;
+    padding: 1.1rem;
+    font-size: 1.4rem;
+    justify-content: center;
+}
+
+@media (max-width: 800px) {
+    .alarms-view {
+        flex-direction: column;
+    }
+}
+
+/* --- Slideshow night sky (sky.js): in place of the photo, fading in and out --- */
+.screensaver-sky {
+    position: absolute;
+    inset: 0;
+    z-index: 10001;
+    overflow: hidden;
+    background: #03050f;
+    opacity: 0;
+    transition: opacity 1s ease-in-out;
+}
+
+.screensaver-sky[hidden] {
+    display: none;
+}
+
+.screensaver-sky.showing {
+    opacity: 1;
+}
+
+/* Dragged left and right to look round (see showSkySlide) */
+.screensaver-sky {
+    touch-action: none;
+    cursor: grab;
+    user-select: none;
+}
+
+.screensaver-sky.dragging {
+    cursor: grabbing;
+}
+
+/* Landscape screens: just the photo's column, left of the side panel, laid out like the photo */
+@media (orientation: landscape) and (min-height: 480px) {
+    .screensaver-sky {
+        position: relative;
+        inset: auto;
+        grid-column: 1;
+        grid-row: 1;
+        align-self: stretch;
+        justify-self: stretch;
+        min-width: 0;
+        min-height: 0;
+    }
+}
+
+.screensaver-sky .sky-svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* Showing the sky: it fills the screen, with everything else put away but its own buttons */
+.ss-sky-buttons {
+    display: none;
+}
+
+.screensaver-overlay.sky-mode .ss-sky-buttons {
+    position: absolute;
+    top: calc(20px + env(safe-area-inset-top));
+    right: calc(20px + env(safe-area-inset-right));
+    z-index: 10005;
+    display: flex;
+    gap: 10px;
+}
+
+.ss-sky-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    color: #fff;
+    font: inherit;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* Lit while it's turning */
+.ss-sky-button.is-on {
+    background: rgba(252, 211, 77, 0.25);
+    border-color: rgba(252, 211, 77, 0.6);
+    color: #fcd34d;
+}
+
+.screensaver-overlay.sky-mode .ss-side-panel,
+.screensaver-overlay.sky-mode .ss-nav-prev,
+.screensaver-overlay.sky-mode .ss-nav-next,
+.screensaver-overlay.sky-mode .screensaver-info {
+    display: none !important;
+}
+
+/* Landscape: one column instead of the photo and the panel */
+@media (orientation: landscape) and (min-height: 480px) {
+    .screensaver-overlay.active.sky-mode {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.slideshow-sky-location {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.settings-group .slideshow-sky-location input {
+    width: 9rem;
+}
+
+.settings-group select.slideshow-sky-select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.settings-group select.slideshow-sky-select option {
+    background: var(--bg);
+}
+
+.settings-group[hidden] {
+    display: none;
+}
+
+.sky-svg {
+    display: block;
+    font-family: inherit;
+}
+
+.sky-grid {
+    fill: none;
+    stroke: rgba(148, 163, 184, 0.14);
+    stroke-width: 1;
+}
+
+/* Filled from sky.js, tinted with the sky */
+.sky-ground {
+    stroke: rgba(148, 163, 184, 0.35);
+    stroke-width: 1.5;
+}
+
+.sky-tick {
+    stroke: rgba(148, 163, 184, 0.6);
+    stroke-width: 2;
+}
+
+.sky-compass {
+    fill: #94a3b8;
+    font-size: 26px;
+    font-weight: 800;
+    text-anchor: middle;
+    dominant-baseline: middle;
+}
+
+.sky-compass.minor {
+    font-size: 17px;
+    font-weight: 600;
+    opacity: 0.75;
+}
+
+.sky-ecliptic {
+    fill: none;
+    stroke: rgba(253, 224, 71, 0.28);
+    stroke-width: 1.5;
+    stroke-dasharray: 6 8;
+}
+
+.sky-figure {
+    fill: none;
+    stroke: rgba(125, 160, 220, 0.35);
+    stroke-width: 1.5;
+    opacity: var(--sky-fade);
+}
+
+/* Against a pale sky the lines need to be darker than it, not lighter */
+.sky-light .sky-figure {
+    stroke: rgba(15, 30, 70, 0.35);
+}
+
+.sky-con-name {
+    fill: rgba(190, 206, 235, 0.9);
+    font-size: 15px;
+    letter-spacing: 0.04em;
+    opacity: var(--sky-label-fade, 1);
+}
+
+/* Every label has a soft dark edge behind it, so it reads against a pale daytime sky as well as
+   a dark one */
+.sky-con-name,
+.sky-star-name,
+.sky-deep-name,
+.sky-planet-name {
+    paint-order: stroke;
+    stroke: rgba(6, 12, 30, 0.55);
+    stroke-width: 3.5px;
+    stroke-linejoin: round;
+}
+
+.sky-star-name,
+.sky-deep-name {
+    fill: rgba(226, 232, 240, 0.8);
+    font-size: 16px;
+}
+
+.sky-deep {
+    fill: rgba(196, 181, 253, 0.25);
+    stroke: rgba(196, 181, 253, 0.7);
+    stroke-width: 1.2;
+}
+
+.sky-deep-name {
+    fill: rgba(196, 181, 253, 0.8);
+    font-size: 13px;
+}
+
+.sky-planet {
+    stroke: #0b1020;
+    stroke-width: 2;
+}
+
+.sky-planet-name {
+    fill: #fef3c7;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+/* --- Passwords tab --- */
+.passwords-view .smarthome-actions {
+    gap: 0.5rem;
+}
+
+.passwords-search {
+    width: 14rem;
+    font-size: 1rem;
+}
+
+.password-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+}
+
+.password-form[hidden] {
+    display: none;
+}
+
+.password-form-fields {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.75rem 1rem;
+}
+
+.password-form-fields label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.password-form-fields .alarms-input {
+    width: 100%;
+    font-size: 1rem;
+}
+
+.password-form-fields .password-notes-field {
+    grid-column: 1 / -1;
+}
+
+.password-form-fields textarea {
+    resize: vertical;
+}
+
+.password-input-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.password-input-row .alarms-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.password-form-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+/* Scrolls sideways on a narrow screen rather than squashing the columns */
+.passwords-table-wrap {
+    overflow-x: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+}
+
+.passwords-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+.passwords-table th {
+    text-align: left;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 0.7rem 0.75rem;
+    border-bottom: 1px solid var(--card-border);
+    white-space: nowrap;
+}
+
+.passwords-table td {
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    vertical-align: middle;
+}
+
+.passwords-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.passwords-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.passwords-table .pw-name {
+    font-weight: 600;
+}
+
+.passwords-table a {
+    color: var(--primary);
+    text-decoration: none;
+    word-break: break-all;
+}
+
+.passwords-table a:hover {
+    text-decoration: underline;
+}
+
+.pw-secret-cell {
+    white-space: nowrap;
+}
+
+.pw-secret {
+    font-family: ui-monospace, Consolas, monospace;
+    letter-spacing: 0.08em;
+    margin-right: 0.3rem;
+}
+
+.pw-secret.shown {
+    letter-spacing: 0;
+    color: #fcd34d;
+}
+
+.pw-actions {
+    white-space: nowrap;
+    text-align: right;
+}
+
+.pw-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 0.5rem;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.pw-icon-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+}
+
+.pw-icon-btn.pw-delete:hover {
+    color: #f87171;
+}
+
+.pw-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.passwords-empty {
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.passwords-email-to {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+.passwords-email-to .alarms-input {
+    width: 20rem;
+    max-width: 100%;
+    font-size: 1rem;
+}
+
+/* Heating (tado°): radiators along the banner, with heat rising off them while any room is heating */
+.heating-banner .radiator-fin,
+.heating-banner .radiator-pipe {
+    fill: var(--text-muted);
+    fill-opacity: 0.14;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.4;
+}
+
+.heating-banner .heat-wave {
+    fill: none;
+    stroke: #f97316;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.heating-banner.on .radiator-fin {
+    fill: #f97316;
+    fill-opacity: 0.25;
+}
+
+.heating-banner.on .heat-wave {
+    animation: heat-rise 2.4s ease-in-out infinite;
+}
+
+@keyframes heat-rise {
+    0% { opacity: 0; transform: translateY(3px); }
+    40% { opacity: 0.8; }
+    100% { opacity: 0; transform: translateY(-3px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .heating-banner.on .heat-wave {
+        animation: none;
+        opacity: 0.6;
+    }
+}
+
+.heat-card.on {
+    border-color: rgba(249, 115, 22, 0.5);
+    box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.25);
+}
+
+.heat-card.on .plug-card-icon {
+    background: #f97316;
+}
+
+.heat-card .plug-card-title {
+    flex: 1;
+}
+
+.heat-now {
+    flex: none;
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.heat-target {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.heat-step {
+    flex: none;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.heat-step:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.heat-step:disabled {
+    cursor: default;
+}
+
+.heat-target-value {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 1.8rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1;
+}
+
+.heat-target-value.off {
+    color: var(--text-muted);
+}
+
+.heat-target-value span {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.heat-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.heat-plan {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.tado-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.tado-buttons a.btn-control {
+    text-decoration: none;
+}
+
+.tado-code {
+    font-family: monospace;
+    font-size: 1.1em;
+    letter-spacing: 0.08em;
+}
+
+/* ─── Petrol tab ──────────────────────────────────────────────────────── */
+.petrol-view {
+    overflow: hidden;
+}
+
+.petrol-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.petrol-actions .nutrition-sources button {
+    flex: none;
+    white-space: nowrap;
+}
+
+.petrol-radius {
+    padding: 0.4rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+}
+
+.petrol-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 20rem;
+    gap: 1rem;
+}
+
+.petrol-body[hidden] {
+    display: none;
+}
+
+.petrol-map {
+    min-height: 20rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    overflow: hidden;
+}
+
+.petrol-side {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+}
+
+.petrol-summary {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.petrol-summary-price {
+    color: #22c55e;
+    font-size: 1.75rem;
+    font-weight: 800;
+}
+
+.petrol-summary-updated {
+    margin-top: 0.35rem;
+    font-size: 0.75rem;
+}
+
+.petrol-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.petrol-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.petrol-row:hover {
+    border-color: var(--primary);
+}
+
+.petrol-row-price {
+    min-width: 4.2rem;
+    font-size: 1.1rem;
+    font-weight: 800;
+}
+
+.petrol-row-price.cheap { color: #22c55e; }
+.petrol-row-price.mid { color: #f59e0b; }
+.petrol-row-price.dear { color: #f43f5e; }
+
+.petrol-row-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.petrol-row-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.petrol-row-meta {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.petrol-view .stale {
+    color: #f59e0b;
+}
+
+/* The price pins: the marker's point is at the bottom middle of the label */
+.petrol-pin-icon {
+    background: none;
+    border: none;
+}
+
+.petrol-pin {
+    position: absolute;
+    transform: translate(-50%, calc(-100% - 6px));
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.4rem;
+    color: white;
+    font-size: 0.8rem;
+    font-weight: 800;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.petrol-pin::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: -6px;
+    margin-left: -6px;
+    border: 6px solid transparent;
+    border-bottom: none;
+    border-top-color: inherit;
+}
+
+.petrol-pin.cheap { background: #16a34a; border-color: #16a34a; }
+.petrol-pin.mid { background: #d97706; border-color: #d97706; }
+.petrol-pin.dear { background: #e11d48; border-color: #e11d48; }
+
+.petrol-popup {
+    color: #0f172a;
+    font-family: inherit;
+    font-size: 0.85rem;
+    line-height: 1.35;
+}
+
+.petrol-popup-address {
+    color: #475569;
+    margin: 0.2rem 0 0.4rem;
+}
+
+.petrol-popup table {
+    border-collapse: collapse;
+}
+
+.petrol-popup td {
+    padding: 0.1rem 0.75rem 0.1rem 0;
+}
+
+.petrol-popup tr.current td {
+    font-weight: 800;
+}
+
+.petrol-popup td.stale {
+    color: #b45309;
+}
+
+.petrol-popup-foot {
+    margin-top: 0.4rem;
+    color: #475569;
+}
+
+@media (max-width: 800px) {
+    .petrol-view {
+        overflow-y: auto;
+    }
+
+    .petrol-body {
+        grid-template-columns: 1fr;
+        grid-template-rows: 22rem auto;
+    }
+
+    .petrol-list {
+        overflow: visible;
+    }
 }

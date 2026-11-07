@@ -173,30 +173,35 @@ function setRendererOffline(state, caller = 'unknown') {
 
     renderDevices();
     updateTransportControls();
+    updateStopAfterTrackButton();
 }
 
 async function handleRetry() {
     if (!selectedRendererUdn) return;
     console.log(`[OFFLINE-SYNC] Manual retry initiated for ${selectedRendererUdn}`);
+    if (!await tryRendererOnline('HandleRetrySuccess')) showToast('Device still unreachable', 'error', 2000);
+}
 
-    // Clear failure count
+// Instead of immediately turning green, we try to fetch status first; if it succeeds, THEN we turn
+// green. Used by the Retry button and, quietly, by the status poll while the renderer is offline
+// (a player can drop out briefly, e.g. while the server its music came from goes away).
+async function tryRendererOnline(caller) {
+    const udn = selectedRendererUdn;
     rendererFailureCount = 0;
-
-    // Instead of immediately turning green, we try to fetch status first.
-    // If it succeeds, THEN we turn green.
     try {
-        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/status`);
-        if (response.ok) {
-            setRendererOffline(false, 'HandleRetrySuccess');
-            fetchPlaylist(selectedRendererUdn);
-            fetchVolume();
-        } else {
+        const response = await fetch(`/api/playlist/${encodeURIComponent(udn)}/status`);
+        if (!response.ok) {
             console.warn(`[OFFLINE-SYNC] Retry failed: Status endpoint returned ${response.status}`);
-            showToast('Device still unreachable', 'error', 2000);
+            return false;
         }
+        if (udn !== selectedRendererUdn || !isRendererOffline) return true;
+        setRendererOffline(false, caller);
+        fetchPlaylist(udn);
+        fetchVolume();
+        return true;
     } catch (err) {
         console.error(`[OFFLINE-SYNC] Retry failed: ${err.message}`);
-        showToast('Device still unreachable', 'error', 2000);
+        return false;
     }
 }
 let stopAfterTrack = false; // When true, stop playback after current track ends
@@ -1649,6 +1654,7 @@ function updateStopAfterTrackButton() {
         const btn = document.getElementById(id);
         if (!btn) return;
         btn.title = label;
+        btn.disabled = isRendererOffline;
         if (stopAfterTrack) {
             btn.classList.add('armed');
         } else {
@@ -1848,9 +1854,51 @@ async function executeBrowserFind() {
 const SpeechRecognitionImpl = window.SpeechRecognition || window.webkitSpeechRecognition;
 let voiceRecognition = null;
 // No speech recognition in this browser (e.g. Firefox): don't offer the slideshow's or Smart Home's mic at all.
-if (!SpeechRecognitionImpl) ['ss-voice-item', 'btn-smarthome-voice'].forEach(id => document.getElementById(id)?.remove());
+if (!SpeechRecognitionImpl) ['btn-ss-voice','btn-smarthome-voice', 'btn-shopping-voice'].forEach(id => document.getElementById(id)?.remove());
 
 function toggleVoiceCommand() {
+    // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
+    toggleListening(['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'],
+        appView === 'smarthome'
+            ? 'Listening... e.g. "turn on <device>", "turn off all the lights", "set <device> to 50 percent"'
+            : appView === 'recipes'
+                ? 'Listening... e.g. "add milk", "remove eggs", "play <song> by <artist>", "turn on <device>"'
+                : 'Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "volume 30", "turn on <device>"',
+        runVoiceCommand);
+}
+
+// The slideshow's mic, which is for the music: the same commands, but only music ones suggested
+function slideshowMusicVoice() {
+    toggleListening(['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'],
+        'Listening for music... e.g. "play <song> by <artist>", "queue <album>", "next", "pause", "volume 30"',
+        runVoiceCommand);
+}
+
+// Listens once (or stops listening if already) and passes the recogniser's guesses to onResult.
+// buttonIds show the listening state while it lasts.
+let listeningChimeAudio = null;
+
+// Two quick rising notes, soft enough not to be heard as speech
+function playListeningChime() {
+    const ctx = listeningChimeAudio;
+    if (!ctx) return;
+    const start = ctx.currentTime;
+    [660, 990].forEach((freq, k) => {
+        const t = start + k * 0.11;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.25, t + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.15);
+    });
+}
+
+function toggleListening(buttonIds, hint, onResult) {
     if (voiceRecognition) {
         voiceRecognition.abort();
         return;
@@ -1867,14 +1915,13 @@ Switch to ${secureUrl} ?`)) {
         return;
     }
 
-    // The same handler serves the header mic, the slideshow's and the Smart Home tab's, so all show the listening state.
-    const btns = ['btn-voice', 'btn-ss-voice', 'btn-smarthome-voice'].map(id => document.getElementById(id)).filter(Boolean);
+    const btns = buttonIds.map(id => document.getElementById(id)).filter(Boolean);
     const rec = new SpeechRecognitionImpl();
     rec.lang = navigator.language || 'en-GB';
     rec.interimResults = false;
     rec.maxAlternatives = 3;
 
-    rec.onresult = (e) => runVoiceCommand(Array.from(e.results[0]).map(alt => alt.transcript));
+    rec.onresult = (e) => onResult(Array.from(e.results[0]).map(alt => alt.transcript));
     rec.onerror = (e) => {
         if (e.error === 'aborted') return; // the user pressed the button again
         if (e.error === 'no-speech') showToast("Didn't catch that.", 'info', 2500);
@@ -1885,12 +1932,18 @@ Switch to ${secureUrl} ?`)) {
         voiceRecognition = null;
         btns.forEach(b => b.classList.remove('listening'));
     };
+    // "Go ahead": a chime once the microphone is actually on
+    rec.onstart = playListeningChime;
+
+    // Readied now, within the press: browsers only allow sound that a press started
+    try {
+        listeningChimeAudio ||= new (window.AudioContext || window.webkitAudioContext)();
+        if (listeningChimeAudio.state === 'suspended') listeningChimeAudio.resume();
+    } catch (e) { }
 
     voiceRecognition = rec;
     btns.forEach(b => b.classList.add('listening'));
-    showToast(appView === 'smarthome'
-        ? 'Listening... e.g. "turn on <device>", "turn off all the lights", "set <device> to 50 percent"'
-        : 'Listening... e.g. "play <song> by <artist>", "queue <album>", "next", "volume 30", "turn on <device>"', 'info', 4000);
+    showToast(hint, 'info', 4000);
     rec.start();
 }
 
@@ -1950,6 +2003,8 @@ async function runVoiceCommand(transcripts) {
 
     let lastError = 'No match found.';
     try {
+        // On the Meals tab, "add milk" / "remove eggs" go to the shopping list
+        if (appView === 'recipes' && await runShoppingVoice(transcripts, true)) return;
         // Smart home first: "turn on the curtain" needs no media server or player
         const home = await runSmartHomeVoice(transcripts);
         if (home === true) return;
@@ -2147,14 +2202,85 @@ function browserSortTitle(item) {
     return currentBrowserMode === 'music' ? title.replace(/^the\s+(?=\S)/i, '') : title;
 }
 
+// iPhone Live Photos: a photo with a video of the same name beside it gets that video as its
+// `liveVideo`, shown by a LIVE badge and played when the photo is opened (see playLive in slideshow.js)
+function livePhotoStem(item) {
+    try {
+        const name = decodeURIComponent(new URL(item.uri, window.location.href).pathname.split('/').pop()).toLowerCase();
+        const dot = name.lastIndexOf('.');
+        return dot > 0 ? name.slice(0, dot) : name;
+    } catch (e) {
+        return null;
+    }
+}
+
+function markLivePhotos(items) {
+    const videos = new Map(items.filter(isVideoItem).map(v => [livePhotoStem(v), v.uri]));
+    if (!videos.size) return;
+    for (const item of items) {
+        if (isImageItem(item) && videos.has(livePhotoStem(item))) item.liveVideo = videos.get(livePhotoStem(item));
+    }
+}
+
+// Resting the mouse on a Live Photo's tile in the grid plays its clip once over the thumbnail,
+// muted; moving off stops it. Touchscreens have no hover, so they're left out.
+let liveHover = null; // { tile, timer, video }
+
+function stopLiveHover() {
+    if (!liveHover) return;
+    clearTimeout(liveHover.timer);
+    if (liveHover.video) {
+        liveHover.video.pause();
+        liveHover.video.removeAttribute('src');
+        liveHover.video.load();
+        liveHover.video.remove();
+    }
+    liveHover = null;
+}
+
+function playLiveHover(tile) {
+    const item = currentBrowserItems[+tile.dataset.itemIndex];
+    const icon = tile.querySelector('.item-icon');
+    if (!item?.liveVideo || !icon || !browserItems.classList.contains('grid-view')) return;
+    const state = liveHover = { tile, video: null, timer: null };
+    // A short wait, so sweeping the mouse across the grid doesn't start every clip it passes
+    state.timer = setTimeout(() => {
+        if (liveHover !== state) return;
+        const v = state.video = document.createElement('video');
+        v.className = 'live-hover-video';
+        v.muted = true;
+        v.playsInline = true;
+        const thumb = icon.querySelector('img');
+        if (thumb?.style.transform) v.style.transform = thumb.style.transform;
+        v.onplaying = () => v.classList.add('playing');
+        v.onended = v.onerror = () => { if (liveHover === state) stopLiveHover(); };
+        v.src = mediaUrl(browserPlayableVideoUrl(item.liveVideo));
+        icon.appendChild(v);
+        v.play().catch(() => { if (liveHover === state) stopLiveHover(); });
+    }, 250);
+}
+
+browserItems.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const tile = e.target.closest('.browser-item');
+    if (tile === liveHover?.tile) return;
+    stopLiveHover();
+    if (tile) playLiveHover(tile);
+});
+browserItems.addEventListener('pointerout', (e) => {
+    if (liveHover && !liveHover.tile.contains(e.relatedTarget)) stopLiveHover();
+});
+
 function renderBrowser(items) {
     const renderSeq = ++browserRenderSeq;
+    stopLiveHover();
     selectedPhotos.clear();
     updatePhotoSelectionUI();
 
     // Each library category shows only its own media type (plus folders for navigation).
     // Music: audio only · Photos: images only · Videos: videos only.
     if (currentBrowserMode === 'photo') {
+        markLivePhotos(items);
         items = items.filter(i => i.type === 'container' || isImageItem(i));
     } else if (currentBrowserMode === 'video') {
         items = items.filter(i => i.type === 'container' || isVideoItem(i));
@@ -2322,6 +2448,7 @@ function renderBrowser(items) {
             icon = `<img src="${escThumb}" loading="lazy" decoding="async" alt="" data-thumb-url="${escThumb}"${rotStyle}${onErr}${onLoad}>`;
             if (isContainer) icon += '<svg class="folder-art-fallback" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>';
             if (isVideo) icon += '<span class="video-badge" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"></path></svg></span>';
+            if (isImage && item.liveVideo) icon += '<span class="live-badge" title="Live Photo"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3" fill="currentColor"></circle><circle cx="12" cy="12" r="6.5"></circle><circle cx="12" cy="12" r="10" stroke-dasharray="2 2.2"></circle></svg>LIVE</span>';
             if (isImage) icon += '<span class="pano-badge" aria-hidden="true" title="Panorama" hidden><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M7 12h10M7 12l2-2M7 12l2 2M17 12l-2-2M17 12l-2 2"></path></svg><span class="pano-badge-label">PANO</span></span>';
         }
 
@@ -2372,6 +2499,7 @@ function renderBrowser(items) {
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
+                    ${item.fav ? FAV_HEART_HTML : ''}
                     <button class="btn-control ghost info-btn${detectFolderMismatch(item) ? ' info-btn-conflict' : ''}" onclick="event.stopPropagation(); showFileInfoFromBrowser(${index})" title="View file information">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <circle cx="12" cy="12" r="10"></circle>
@@ -3459,6 +3587,112 @@ async function saveYoutubeKey() {
     }
 }
 
+async function loadUsdaKey() {
+    try {
+        const res = await fetch('/api/settings/usda');
+        if (res.ok) {
+            const data = await res.json();
+            const keyInput = document.getElementById('usda-key-input');
+            if (keyInput) {
+                keyInput.value = data.maskedKey || '';
+                keyInput.dataset.loaded = '1';
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to load USDA key status:', e);
+    }
+}
+
+async function saveUsdaKey() {
+    const keyInput = document.getElementById('usda-key-input');
+    if (!keyInput) return;
+    const key = keyInput.value.trim();
+    // The masked placeholder loaded from the server means nothing changed
+    if (key.includes('****')) return;
+
+    try {
+        const response = await fetch('/api/settings/usda', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key })
+        });
+
+        if (response.ok) {
+            showToast(key ? 'USDA key saved' : 'USDA key removed', 'success', 2000);
+            await loadUsdaKey();
+        } else {
+            throw new Error('Failed to save key');
+        }
+    } catch (err) {
+        console.error('Save settings error:', err);
+        showToast('Failed to save settings to server');
+    }
+}
+
+// --- Outgoing mail server (Integrations), used to email the shopping list ---
+const EMAIL_FIELDS = { host: 'email-host-input', port: 'email-port-input', security: 'email-security-select', username: 'email-username-input', password: 'email-password-input', from: 'email-from-input' };
+const EMAIL_DEFAULT_PORTS = { starttls: 587, ssl: 465, none: 25 };
+
+function emailSettingsFromForm() {
+    return Object.fromEntries(Object.entries(EMAIL_FIELDS).map(([k, id]) => [k, document.getElementById(id).value.trim()]));
+}
+
+async function loadEmailSettings() {
+    try {
+        const res = await fetch('/api/settings/email');
+        if (!res.ok) return;
+        const data = await res.json();
+        for (const [k, id] of Object.entries(EMAIL_FIELDS)) {
+            const el = document.getElementById(id);
+            if (el) el.value = data[k] ?? '';
+        }
+        setCalendarSettingsStatus('email-settings-status', '');
+    } catch (e) {
+        console.warn('Failed to load the mail server settings:', e);
+    }
+}
+
+// Picking a security type moves the port to its usual one, unless a different port was typed
+function emailSecurityChanged() {
+    const port = document.getElementById('email-port-input');
+    const security = document.getElementById('email-security-select').value;
+    if (!port.value || Object.values(EMAIL_DEFAULT_PORTS).includes(Number(port.value))) {
+        port.value = EMAIL_DEFAULT_PORTS[security];
+    }
+}
+
+async function saveEmailSettings() {
+    try {
+        const res = await fetch('/api/settings/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(emailSettingsFromForm())
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        showToast('Mail server saved', 'success', 2000);
+        await loadEmailSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('email-settings-status', `Couldn't save: ${err.message}`, true);
+    }
+}
+
+async function testEmailSettings() {
+    setCalendarSettingsStatus('email-settings-status', 'Connecting…');
+    try {
+        const res = await fetch('/api/settings/email/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(emailSettingsFromForm())
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        setCalendarSettingsStatus('email-settings-status', 'Connected and logged in. Remember to save.');
+    } catch (err) {
+        setCalendarSettingsStatus('email-settings-status', `Couldn't connect: ${err.message}`, true);
+    }
+}
+
 async function loadKeySharing() {
     const box = document.getElementById('key-sharing-allow');
     if (!box) return;
@@ -3514,12 +3748,12 @@ async function importKeysFromDevice() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to get keys');
-        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', s3: 'S3', tplinkAccount: 'TP-Link login', glowAccount: 'Bright login' };
+        const labels = { discogsToken: 'Discogs', acoustidKey: 'AcoustID', youtubeApiKey: 'YouTube', usdaApiKey: 'USDA', s3: 'S3', tplinkAccount: 'TP-Link login', glowAccount: 'Bright login', fuelFinderAccount: 'Fuel Finder login' };
         showToast(data.imported.length
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
         if (data.s3Verified === false) showToast(`The S3 details from ${data.source} were copied but the connection test failed here`, 'error');
-        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), fetchS3Settings()]);
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadFuelFinderAccount(), loadEmailSettings(), fetchS3Settings()]);
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -4286,12 +4520,15 @@ function openServerSettingsModal() {
         loadDiscogsToken();
         loadAcoustidKey();
         loadYoutubeKey();
+        loadUsdaKey();
+        loadFuelFinderAccount();
+        loadEmailSettings();
         loadKeySources();
         loadKeySharing();
         loadCalendarSettings();
+        loadGamePlayerSettings();
         startS3StatusPolling();
         loadLocalStats();
-        loadLibraryDataCounts();
         checkForUpdates();
     }
 }
@@ -4300,6 +4537,7 @@ function closeServerSettingsModal() {
     if (serverSettingsModal) {
         serverSettingsModal.style.display = 'none';
         stopS3StatusPolling();
+        if (appView === 'games') showGames(); // players may have been added or removed
     }
 }
 
@@ -4479,7 +4717,89 @@ function switchSettingsTab(tab, btnEl) {
     }
 
     if (tab.toLowerCase() === 'tools') loadToolsStatus();
+    if (tab.toLowerCase() === 'startup') loadStartupSettings();
     if (tab.toLowerCase() === 'smarthome') loadPlugSettings();
+}
+
+// Settings → Startup: a command the server runs once it's up, usually opening a browser.
+// Picking a browser fills in the command the server builds for its OS; Manual lets you type one.
+let startupPresets = {};
+let startupAppUrl = '';
+
+function applyStartupSettings({ browser, kiosk, command, presets, url }) {
+    startupAppUrl = url || '';
+    startupPresets = presets || {};
+    document.querySelectorAll('input[name="startup-browser"]').forEach(radio => {
+        const preset = startupPresets[radio.value];
+        radio.disabled = !!preset && !preset.normal; // a browser this OS doesn't have
+        radio.checked = radio.value === browser;
+    });
+    document.getElementById('startup-kiosk').checked = !!kiosk;
+    document.getElementById('startup-command-input').value = command || '';
+    updateStartupControls();
+}
+
+function updateStartupControls() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    const preset = startupPresets[browser];
+    document.getElementById('startup-kiosk').disabled = !preset || !preset.kiosk || preset.kiosk === preset.normal;
+    document.getElementById('startup-command-input').disabled = browser !== 'manual';
+    document.getElementById('startup-command-hint').textContent = browser === 'manual'
+        ? `Runs in the server's shell (cmd on Windows, sh elsewhere). The app is at ${startupAppUrl}.`
+        : browser === 'none' ? 'Nothing runs when the server starts.' : '';
+}
+
+async function loadStartupSettings() {
+    try {
+        applyStartupSettings(await (await fetch('/api/settings/startup')).json());
+    } catch (err) {
+        console.error('Failed to load startup settings:', err);
+    }
+}
+
+function onStartupBrowserChange() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    const input = document.getElementById('startup-command-input');
+    const preset = startupPresets[browser];
+    if (preset) input.value = (document.getElementById('startup-kiosk').checked && preset.kiosk) || preset.normal;
+    else if (browser === 'none') input.value = '';
+    // Switching to Manual keeps the command shown, ready to be edited
+    updateStartupControls();
+    if (browser === 'manual') input.focus();
+    saveStartupSettings();
+}
+
+async function saveStartupSettings() {
+    const browser = document.querySelector('input[name="startup-browser"]:checked')?.value || 'none';
+    try {
+        const response = await fetch('/api/settings/startup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                browser,
+                kiosk: document.getElementById('startup-kiosk').checked,
+                command: document.getElementById('startup-command-input').value
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        applyStartupSettings(data);
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save startup settings:', err);
+        showToast(`Failed to save settings: ${err.message}`);
+    }
+}
+
+async function runStartupCommandNow() {
+    try {
+        const response = await fetch('/api/settings/startup/run', { method: 'POST' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        showToast('Startup command run', 'success', 2000);
+    } catch (err) {
+        showToast(err.message);
+    }
 }
 
 // Settings → Tools: which external programs (ffmpeg, yt-dlp, ...) the server can run.
@@ -4788,6 +5108,7 @@ function escapeHtml(str) {
 window.addEventListener('resize', () => {
     const panel = document.getElementById('ss-lyrics-panel');
     if (panel && panel.style.display !== 'none') {
+        fitSsLyrics(panel);
         syncLyricsSpacerPadding(panel);
         updateLyricsHighlight(currentPositionSeconds, true);
     }
@@ -4881,14 +5202,30 @@ function clearLyrics() {
 function updateSsLyricsVisibility() {
     const panel = document.getElementById('ss-lyrics-panel');
     if (!panel) return;
-    // Landscape screens put the lyrics where the map goes, so the map hides while they're up
-    document.getElementById('screensaver-overlay')?.classList.toggle('has-lyrics', isLyricsDisplayActive());
     if (isLyricsDisplayActive()) {
         panel.style.display = 'block';
+        fitSsLyrics(panel);
         syncLyricsSpacerPadding(panel);
         updateLyricsHighlight(currentPositionSeconds, true);
     } else {
         panel.style.display = 'none';
+        fitSsLyrics(panel);
+    }
+}
+
+// On landscape screens the lyrics share the side panel with the calendar and shopping list, which
+// stay while the lyrics still get their full height (40vh). When they'd squeeze the lyrics, the
+// shopping list gives way first, then the calendar.
+function fitSsLyrics(panel) {
+    const overlay = document.getElementById('screensaver-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('lyrics-hide-shopping', 'lyrics-hide-agenda');
+    // Only in the side panel; in portrait the lyrics float over the photo and the others aren't shown
+    if (!isLyricsDisplayActive() || getComputedStyle(panel).position !== 'static') return;
+    const full = window.innerHeight * 0.4 - 1;
+    for (const cls of ['lyrics-hide-shopping', 'lyrics-hide-agenda']) {
+        if (panel.clientHeight >= full) return;
+        overlay.classList.add(cls);
     }
 }
 
@@ -5500,7 +5837,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
 
 function setAppView(view) {
     appView = view;
@@ -5508,6 +5845,7 @@ function setAppView(view) {
     document.querySelector('.main-layout').hidden = !!view;
     if (floatingBtn) floatingBtn.style.visibility = view ? 'hidden' : '';
     updateBrowserModeTabs();
+    if (slideshow) slideshow.resetIdleTimer(); // the slideshow waits while a game is being played
 }
 
 // Calendar tab: a month view, or three weeks from the current one
@@ -5525,12 +5863,31 @@ function startOfCalendarWeek(d) {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate() - (d.getDay() + 6) % 7);
 }
 
+// Calendar tab: entries and subscribed calendars, but no meals.
+// Meals tab's Calendar: only meal entries, without tags or subscribed calendars.
+// There's one calendar panel, moved into whichever tab is showing it.
+let calendarMeals = false;
+const MEAL_ENTRY_COLOR = '#f59e0b';
+
+// A meal shows its name, or else its item, with any portion other than the item's own: "Mince & Gravy (1.5×)"
+const mealPartTitle = p => `${p.name}${(p.times || 1) !== 1 ? ` (${Number(p.times.toFixed(2))}×)` : ''}`;
+const mealEntryTitle = meal => `${(meal.times || 1) !== 1 ? `${Number(meal.times.toFixed(2))} × ` : ''}${meal.name || meal.parts.map(mealPartTitle).join(', ') || 'Meal'}`;
+
 function showCalendar() {
+    openCalendarView(false);
+    setAppView('calendar');
+}
+
+function openCalendarView(meals) {
     const now = new Date();
+    calendarMeals = meals;
     calendarMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     calendarWeekStart = startOfCalendarWeek(now);
+    document.getElementById(meals ? 'meals-pane-calendar' : 'calendar-view')
+        .appendChild(document.getElementById('calendar-panel'));
+    renderCalendarMealsFamily();
     renderCalendar();
-    setAppView('calendar');
+    if (meals) loadMealDayFamily();
 }
 
 const calendarDateKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -5693,22 +6050,24 @@ function drawCalendarEvents() {
     const hidden = getHiddenCalendars();
     const colors = Object.fromEntries(cals.map(c => [c.id, c.color]));
     const names = Object.fromEntries(cals.map(c => [c.id, c.name]));
-    // An entry stays visible while at least one of its tags is ticked
+    // An entry stays visible while at least one of its tags is ticked (meals have no tag filter)
     const hiddenTags = getHiddenCalendarTags();
-    const visible = ev => ev.entry ? ev.entry.tags.some(t => !hiddenTags.has(t)) : !hidden.has(ev.calendarId);
+    const visible = ev => calendarMeals ? mealDayForPerson(ev) : (ev.entry ? ev.entry.tags.some(t => !hiddenTags.has(t)) : !hidden.has(ev.calendarId));
     const byDay = groupCalendarEvents(events.filter(visible), gridStart, gridEnd);
     const timeFmt = { hour: '2-digit', minute: '2-digit' };
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
-        const list = byDay.get(cell.dataset.date) || [];
+        const dayEvents = byDay.get(cell.dataset.date) || [];
+        const list = calendarMeals ? mealCalendarPersonEvents(dayEvents) : dayEvents;
         cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
         const maxEvents = calendarMaxEventsPerDay();
         const shown = list.length > maxEvents + 1 ? maxEvents : list.length;
         list.slice(0, shown).forEach(ev => {
             const el = document.createElement('div');
-            el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '');
-            el.style.setProperty('--event-color', ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
+            el.className = 'calendar-event' + (ev.allDay ? ' all-day' : '') + (ev.planned ? ' planned' : '');
+            el.style.setProperty('--event-color', ev.mealPerson || ev.entry?.meal || ev.planned ? MEAL_ENTRY_COLOR
+                : ev.entry ? entryColor(ev.entry, hiddenTags) : (colors[ev.calendarId] || 'var(--primary)'));
             const time = ev.allDay ? '' : new Date(ev.start).toLocaleTimeString(undefined, timeFmt);
             if (time) {
                 const t = document.createElement('span');
@@ -5717,17 +6076,21 @@ function drawCalendarEvents() {
                 el.appendChild(t);
             }
             el.appendChild(document.createTextNode(ev.title));
-            if (ev.entry) {
+            if (ev.mealPerson) {
+                el.title = ev.tooltip;
+            } else if (ev.entry) {
                 el.classList.add('local-entry');
                 el.dataset.entryId = ev.entry.id;
                 if (ev.entry.repeat) el.classList.add('repeating');
-                if (ev.entry.recipe) {
-                    const icon = document.createElement('span');
-                    icon.className = 'calendar-event-recipe';
-                    icon.textContent = '🍽';
-                    el.insertBefore(icon, el.firstChild);
-                }
-                el.title = [ev.title, ev.entry.recipe ? `Meal: ${ev.entry.recipe.name}${ev.entry.people ? ` for ${ev.entry.people}` : ''}` : '', ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+                const meal = ev.entry.meal;
+                el.title = meal
+                    ? [ev.title, meal.name ? meal.parts.map(p => p.name).join(', ') : '',
+                        meal.family.length ? `For ${meal.family.map(f => f.name).join(', ')}` : ev.entry.people ? `For ${ev.entry.people}` : '',
+                        describeCalendarRepeat(ev.entry.repeat)].filter(Boolean).join('\n')
+                    : [ev.title, ev.entry.description, describeCalendarRepeat(ev.entry.repeat), ev.entry.tags.map(t => `#${t}`).join(' ')].filter(Boolean).join('\n');
+            } else if (ev.planned) {
+                el.title = [ev.title, ev.planned.name ? ev.planned.parts.map(p => p.name).join(', ') : '',
+                    `From the meal plan (day ${ev.planned.day + 1}). Click the day to add it.`].filter(Boolean).join('\n');
             } else {
                 el.title = [ev.title, ev.allDay ? 'All day' : time, ev.location, names[ev.calendarId]].filter(Boolean).join('\n');
             }
@@ -5741,13 +6104,85 @@ function drawCalendarEvents() {
             cell.appendChild(more);
         }
     });
+    if (mealDayDate) renderMealDayView();
+}
+
+// A day on the Meals calendar: one row per person, with the calories of all their meals that day
+// (the meals are in its tooltip and the day view). A meal not set for anyone counts for everyone
+// picked; with no family set up, it's shown under who it says it's for, or Everyone.
+function mealCalendarPersonEvents(list) {
+    const picked = mealDayFamily.filter(f => !mealDayPeople || mealDayPeople.has(f.id));
+    const people = new Map(); // key -> { name, rows, meals, planned }
+    const add = (key, name, ev, rows) => {
+        if (!people.has(key)) people.set(key, { name, rows: [], meals: [], planned: true });
+        const p = people.get(key);
+        p.rows.push(...rows);
+        p.meals.push(mealDayAbout(ev).name);
+        if (!ev.planned) p.planned = false;
+    };
+    for (const ev of list) {
+        const meal = ev.entry?.meal || ev.planned;
+        const rows = mealDayRows(meal);
+        const forWhom = meal.family?.length
+            ? meal.family.filter(f => !mealDayPeople || mealDayPeople.has(f.id))
+            : picked;
+        if (forWhom.length) forWhom.forEach(f => add(f.id, f.name, ev, rows));
+        else { const who = ev.entry?.people || 'Everyone'; add(`name:${who}`, who, ev, rows); }
+    }
+    // In the family's order, then anyone else
+    const order = id => { const i = mealDayFamily.findIndex(f => f.id === id); return i < 0 ? Infinity : i; };
+    return [...people.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([, p]) => {
+        const t = sumNutrition(p.rows);
+        const label = t.counted ? `${p.name} · ${Math.round(t.kcal).toLocaleString()} kcal` : p.name;
+        return { allDay: true, planned: p.planned, mealPerson: true, title: label,
+            tooltip: [label, ...p.meals, p.planned ? 'From the meal plan. Click the day to add it.' : ''].filter(Boolean).join('\n') };
+    });
+}
+
+function entryToCalendarEvent(entry) {
+    const [y, m, d] = entry.date.split('-').map(Number);
+    return { calendarId: null, title: entry.meal ? mealEntryTitle(entry.meal) : entry.title, allDay: true, start: entry.date, end: calendarDateKey(new Date(y, m - 1, d + 1)), entry };
+}
+
+// From today on, a day with no meal yet shows the meal plan's meal for it, faded
+function plannedMealEvents(mealEvents, gridStart, gridEnd) {
+    if (!mealPlan?.startDate || !mealPlan.days.length) return [];
+    const taken = new Set(mealEvents.map(ev => ev.start));
+    const today = calendarDateKey(new Date());
+    const out = [];
+    for (const d = new Date(gridStart); d < gridEnd; d.setDate(d.getDate() + 1)) {
+        const key = calendarDateKey(d);
+        const planned = key >= today && !taken.has(key) && mealPlanDayFor(key);
+        if (planned) out.push({ calendarId: null, title: mealEntryTitle(planned), allDay: true, start: key,
+            end: calendarDateKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)), planned });
+    }
+    return out;
 }
 
 async function loadCalendarEvents(gridStart, gridEnd, token) {
     const statusEl = document.getElementById('calendar-status');
     calendarLoaded = null;
     const range = `start=${calendarDateKey(gridStart)}&end=${calendarDateKey(gridEnd)}`;
+    const meals = calendarMeals;
     try {
+        if (meals) {
+            const [entryData, plan] = await Promise.all([
+                fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
+                fetch('/api/meal-plan').then(r => r.json()).catch(() => null),
+                loadMealNutritionData()
+            ]);
+            if (token !== calendarRenderToken) return;
+            mealPlan = plan;
+            document.getElementById('calendar-sidebar').hidden = true;
+            const mealEvents = (entryData.entries || []).filter(entry => entry.meal).map(entryToCalendarEvent);
+            calendarLoaded = { cals: [], events: [...mealEvents, ...plannedMealEvents(mealEvents, gridStart, gridEnd)], gridStart, gridEnd };
+            drawCalendarEvents();
+            statusEl.className = 'calendar-status';
+            statusEl.textContent = mealPlan?.startDate && mealPlan.days.length
+                ? 'Click a day to see its meals and plan more. Faded meals are from the Meal Plan.'
+                : 'Click a day to see its meals and plan more.';
+            return;
+        }
         const [cals, entryData, tagData] = await Promise.all([
             fetch('/api/calendars').then(r => r.json()),
             fetch(`/api/calendar-entries?${range}`).then(r => r.json()),
@@ -5757,11 +6192,8 @@ async function loadCalendarEvents(gridStart, gridEnd, token) {
         calendarTagColors = tagData.colors || {};
         renderCalendarSidebar(cals, tagData.tags || []);
 
-        // This app's entries go first, so they aren't the ones pushed into "+N more"
-        const entryEvents = (entryData.entries || []).map(entry => {
-            const [y, m, d] = entry.date.split('-').map(Number);
-            return { calendarId: null, title: entry.recipe ? entry.recipe.name : entry.title, allDay: true, start: entry.date, end: calendarDateKey(new Date(y, m - 1, d + 1)), entry };
-        });
+        // This app's entries go first, so they aren't the ones pushed into "+N more". Meals are on the Meals tab.
+        const entryEvents = (entryData.entries || []).filter(entry => !entry.meal).map(entryToCalendarEvent);
         calendarLoaded = { cals, events: entryEvents, gridStart, gridEnd };
         drawCalendarEvents();
 
@@ -5822,7 +6254,7 @@ function renderCalendar() {
     document.getElementById('calendar-range-select').value = calendarRange;
     document.getElementById('calendar-prev-btn').title = `Previous ${unit}`;
     document.getElementById('calendar-next-btn').title = `Next ${unit}`;
-    document.querySelector('#calendar-view .calendar-today-btn').title = `Go to the current ${unit}`;
+    document.querySelector('#calendar-panel .calendar-today-btn').title = `Go to the current ${unit}`;
 
     let gridStart, cellCount, month;
     if (weeks) {
@@ -5874,6 +6306,12 @@ let calendarEntryEditing = null; // { id|null, date, tags: [] }
 let calendarEntryTagOptions = [];
 
 function onCalendarGridClick(event) {
+    // On the Meals calendar a click anywhere in a day opens that day
+    if (calendarMeals) {
+        const cell = event.target.closest('.calendar-day');
+        if (cell) openMealDayView(cell.dataset.date);
+        return;
+    }
     const entryEl = event.target.closest('.calendar-event.local-entry');
     if (entryEl) {
         const ev = calendarLoaded?.events.find(e => e.entry && e.entry.id === entryEl.dataset.entryId);
@@ -5881,7 +6319,7 @@ function onCalendarGridClick(event) {
         return;
     }
     // Google events and "+N more" aren't editable, so clicks on them do nothing
-    if (event.target.closest('.calendar-event, .calendar-more')) return;
+    if (event.target.closest('.calendar-event:not(.planned), .calendar-more')) return;
     const cell = event.target.closest('.calendar-day');
     if (cell) openCalendarEntryModal(cell.dataset.date);
 }
@@ -5903,93 +6341,303 @@ function updateCalendarEntryRepeatUI() {
     const repeating = !!document.getElementById('calendar-entry-repeat-unit').value;
     document.querySelectorAll('#calendar-entry-modal .calendar-entry-repeat-on').forEach(el => { el.hidden = !repeating; });
     document.getElementById('calendar-entry-date-heading').textContent = repeating ? 'Starts' : 'Date';
+    // A meal plan repeat runs within the plan, so it has no end date
+    if (calendarEntryEditing?.planDay != null) document.getElementById('calendar-entry-repeat-until-row').hidden = true;
 }
 
-// --- Entry | Recipe: a normal entry has a title and description; a recipe entry just names a recipe ---
-let calendarEntryKind = 'entry';
+// --- This occurrence | Every occurrence, for a repeating entry opened from one of its dates ---
+// 'one' edits or deletes just that date (it becomes an entry of its own); 'all' changes the series
+function setCalendarEntryScope(scope) {
+    const editing = calendarEntryEditing;
+    if (editing?.planDay != null) return setMealPlanScope(scope);
+    if (!editing?.occurrence) return;
+    // Keep whatever date was typed for the scope being left
+    const dateInput = document.getElementById('calendar-entry-date');
+    if (editing.scope === 'one') editing.occurrenceDate = dateInput.value;
+    else if (editing.scope === 'all') editing.date = dateInput.value;
+    editing.scope = scope;
 
-function setCalendarEntryKind(kind) {
-    calendarEntryKind = kind;
-    document.querySelectorAll('#calendar-entry-modal .calendar-entry-kind-btn').forEach(btn => {
-        const on = btn.dataset.kind === kind;
+    const one = scope === 'one';
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-scope-btn').forEach(btn => {
+        const on = btn.dataset.scope === scope;
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-selected', on);
     });
-    document.getElementById('calendar-entry-normal-fields').hidden = kind !== 'entry';
-    document.getElementById('calendar-entry-recipe-fields').hidden = kind !== 'recipe';
+    dateInput.value = one ? editing.occurrenceDate : editing.date;
+    document.getElementById('calendar-entry-repeat-group').hidden = one;
+    document.getElementById('calendar-entry-date-heading').textContent = one ? 'Date' : 'Starts';
+    document.getElementById('calendar-entry-series-note').textContent = one
+        ? 'Only this date changes. The other occurrences stay as they are.'
+        : 'Changes apply to every occurrence.';
+    document.getElementById('calendar-entry-delete-btn').textContent = one ? 'Delete This One' : 'Delete All';
     setCalendarSettingsStatus('calendar-entry-status', '', false);
 }
 
-// Fills the Recipe dropdown. A linked recipe missing from the list still shows, so it isn't lost.
-async function loadCalendarEntryRecipeOptions(selectedId, linked) {
-    const select = document.getElementById('calendar-entry-recipe');
-    let recipes = [];
-    try {
-        recipes = (await (await fetch('/api/recipes')).json()).recipes || [];
-    } catch (e) { }
-    if (linked && !recipes.some(r => r.id === linked.id)) recipes.push(linked);
-    select.innerHTML = '<option value="">Choose a meal…</option>' +
-        recipes.map(r => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.name)}</option>`).join('');
-    select.value = selectedId || '';
-    document.getElementById('calendar-entry-no-recipes').hidden = recipes.length > 0;
-    updateCalendarEntryRecipeUI();
+// --- Entry or meal: a normal entry (Calendar tab) has a title, description and tags; a meal
+// (the Meals tab's calendar) has an optional name, one or more items and the family it's for ---
+let calendarEntryKind = 'entry';
+let calendarFamilyOptions = [];    // every family member: [{ id, name }]
+
+function setCalendarEntryKind(kind) {
+    calendarEntryKind = kind;
+    document.getElementById('calendar-entry-normal-fields').hidden = kind !== 'entry';
+    document.getElementById('calendar-entry-tags-group').hidden = kind !== 'entry';
+    document.getElementById('calendar-entry-meal-fields').hidden = kind !== 'meal';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
 }
 
-function selectedCalendarEntryRecipeName() {
-    const select = document.getElementById('calendar-entry-recipe');
-    return select.value ? select.options[select.selectedIndex].textContent : '';
+// The items (into ingredientList) and family to choose from. A person on the meal who's missing
+// from the list still shows, so they aren't lost.
+async function loadCalendarEntryMealOptions(meal) {
+    const [family, items] = await Promise.all([
+        fetch('/api/games/players').then(r => r.json()).catch(() => []),
+        fetch('/api/ingredients').then(r => r.json()).then(d => d.ingredients).catch(() => null)
+    ]);
+    calendarFamilyOptions = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+    if (items) ingredientList = items;
+    for (const f of meal?.family || []) if (!calendarFamilyOptions.some(o => o.id === f.id)) calendarFamilyOptions.push(f);
 }
 
-function updateCalendarEntryRecipeUI() {
-    document.getElementById('calendar-entry-open-recipe').style.display =
-        document.getElementById('calendar-entry-recipe').value ? '' : 'none';
+// The meal's one item, what it is, its portion (- 1.5 × +, for a bigger or smaller serving than the
+// item's own) and Edit to change the item in the item dialog; the search box under it picks another
+const MEAL_PORTION_STEP = 0.25;
+const MEAL_PORTION_MAX = 10;
+
+function renderCalendarEntryParts() {
+    const editing = calendarEntryEditing;
+    const list = document.getElementById('calendar-entry-parts');
+    list.innerHTML = editing.parts.map((p, i) => {
+        const item = itemById(p.id);
+        const summary = item ? itemSummary(item) : '';
+        const portion = mealPartTimes(p, item);
+        return `
+        <li class="calendar-entry-part" data-i="${i}">
+            <span class="calendar-entry-part-name">${item?.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(item?.name || p.name)}${confirmedStar(item)}
+                ${summary ? `<span class="meal-item-result-kind">${escapeHtml(summary)}</span>` : ''}</span>
+            <span class="meal-day-count" title="Portion: bigger or smaller than the item's own serving">
+                <button type="button" class="recipe-ingredient-btn" data-step="-1" title="Smaller" ${portion <= MEAL_PORTION_STEP ? 'disabled' : ''}>−</button>
+                <span class="meal-day-times">${formatTimes(portion)}</span>
+                <button type="button" class="recipe-ingredient-btn" data-step="1" title="Bigger" ${portion >= MEAL_PORTION_MAX ? 'disabled' : ''}>+</button>
+            </span>
+            ${item ? '<button type="button" class="btn-control ghost btn-small" data-act="open" title="Edit this item">Edit</button>' : ''}
+        </li>`;
+    }).join('');
+    list.querySelectorAll('.calendar-entry-part').forEach(row => {
+        const part = editing.parts[Number(row.dataset.i)];
+        const open = row.querySelector('[data-act="open"]');
+        if (open) open.onclick = () => openMealPartFromEntry(part);
+        row.querySelectorAll('[data-step]').forEach(btn => {
+            btn.onclick = () => {
+                const item = itemById(part.id);
+                // To the next quarter up or down; one made of others keeps how many of it here, not in its amount
+                const current = mealPartTimes(part, item);
+                const next = Number(btn.dataset.step) > 0
+                    ? Math.floor(current / MEAL_PORTION_STEP + 1e-9) * MEAL_PORTION_STEP + MEAL_PORTION_STEP
+                    : Math.ceil(current / MEAL_PORTION_STEP - 1e-9) * MEAL_PORTION_STEP - MEAL_PORTION_STEP;
+                if (item?.parts) part.amount = '';
+                part.times = Math.max(MEAL_PORTION_STEP, Math.min(MEAL_PORTION_MAX, next));
+                renderCalendarEntryParts();
+            };
+        });
+    });
+    document.getElementById('calendar-entry-part-search').placeholder =
+        editing.parts.length ? 'Change the item — type to search…' : 'Choose an item — type to search…';
+    renderMealItemPicker();
 }
 
+// --- Finding an item to add to a meal: every word typed must be in its name (or the name of
+// something it's made of), names starting with what's typed first, then "+ New item" to make one ---
+let mealItemPickerRows = [];   // the item ids listed, then "new"
+let mealItemPickerIndex = 0;   // the one Enter takes, moved with the arrow keys
 
-async function openRecipeFromEntry() {
-    const id = document.getElementById('calendar-entry-recipe').value;
-    if (!id) return;
-    closeCalendarEntryModal();
-    await showRecipes();
-    await selectRecipe(id);
+// open: show the list if it's hidden; fromTyping: highlight the first match again
+function renderMealItemPicker(open = false, fromTyping = false) {
+    const editing = calendarEntryEditing;
+    const input = document.getElementById('calendar-entry-part-search');
+    const results = document.getElementById('calendar-entry-part-results');
+    if (open) results.hidden = false;
+    if (fromTyping) mealItemPickerIndex = 0;
+    if (results.hidden || !editing) return;
+    const typed = input.value.trim();
+    const query = typed.toLowerCase();
+    const words = query.split(/\s+/).filter(Boolean);
+    const text = i => [i.name, ...(i.parts || []).map(p => p.name)].join(' ').toLowerCase();
+    const found = ingredientList
+        .filter(i => !editing.parts.some(p => p.id === i.id) && words.every(w => text(i).includes(w)))
+        .sort((a, b) => b.name.toLowerCase().startsWith(query) - a.name.toLowerCase().startsWith(query));
+    // An item already called what's typed is offered (or noted as the meal's) instead of a new one
+    const same = typed ? findIngredientByName(typed) : undefined;
+    const sameOnMeal = same && editing.parts.some(p => p.id === same.id);
+    if (same && !sameOnMeal && !found.includes(same)) found.unshift(same);
+    mealItemPickerRows = [...found.map(i => i.id), ...(same ? [] : ['new'])];
+    mealItemPickerIndex = Math.max(0, Math.min(mealItemPickerIndex, mealItemPickerRows.length - 1));
+    results.innerHTML = found.map((i, n) => `
+        <li role="option" class="meal-item-result${n === mealItemPickerIndex ? ' active' : ''}" data-n="${n}">
+            <span class="meal-item-result-name">${escapeHtml(i.name)}${confirmedStar(i)}</span>
+            ${i.parts ? '<span class="meal-item-result-kind">made of others</span>' : ''}
+        </li>`).join('') + (sameOnMeal ? `
+        <li class="meal-item-result meal-item-result-note">${escapeHtml(same.name)} is this meal's item</li>` : same ? '' : `
+        <li role="option" class="meal-item-result meal-item-result-new${found.length === mealItemPickerIndex ? ' active' : ''}" data-n="${found.length}">
+            ${typed ? `+ New item “${escapeHtml(typed)}”` : '+ New item…'}
+        </li>`);
+    input.setAttribute('aria-expanded', 'true');
+    results.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
 }
 
+function closeMealItemPicker() {
+    document.getElementById('calendar-entry-part-results').hidden = true;
+    document.getElementById('calendar-entry-part-search').setAttribute('aria-expanded', 'false');
+}
 
-// date: the day clicked. For a repeating entry that's one occurrence; saving keeps the
-// series' own start date, and changes apply to every occurrence.
-async function openCalendarEntryModal(date, entry = null) {
-    const startDate = entry ? (entry.startDate || entry.date) : date;
-    calendarEntryEditing = { id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [] };
-    document.getElementById('calendar-entry-heading').textContent = entry ? 'Edit Entry' : 'New Entry';
-    // For a repeating entry, say which occurrence was clicked; the Date field holds the series start
-    document.getElementById('calendar-entry-date-label').textContent =
-        entry && entry.repeat && date !== startDate ? `Opened from ${formatCalendarDate(date)}` : '';
-    document.getElementById('calendar-entry-date').value = startDate;
-    const repeat = entry ? entry.repeat : null;
-    const recipeId = entry && entry.recipe ? entry.recipe.id : '';
-    await loadCalendarEntryRecipeOptions(recipeId, entry && entry.recipe);
-    // People: the entry's own count, else whatever the last saved meal entry used
-    let people = entry && entry.people;
-    if (!people) {
-        try { people = (await (await fetch('/api/calendar-entries/last-people')).json()).people; } catch (e) { }
+// Up and Down move through the list (opening it), Enter adds the highlighted one, Escape closes it
+function mealItemPickerKeydown(event) {
+    const results = document.getElementById('calendar-entry-part-results');
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (results.hidden) renderMealItemPicker(true, true);
+        else {
+            const n = mealItemPickerRows.length;
+            if (n) mealItemPickerIndex = (mealItemPickerIndex + (event.key === 'ArrowDown' ? 1 : n - 1)) % n;
+            renderMealItemPicker();
+        }
+    } else if (event.key === 'Enter') {
+        if (!results.hidden) pickMealItem(mealItemPickerRows[mealItemPickerIndex]);
+    } else if (event.key === 'Escape' && !results.hidden) {
+        closeMealItemPicker();
+        event.stopPropagation();
+    } else {
+        return;
     }
-    document.getElementById('calendar-entry-people').value = people || 1;
-    setCalendarEntryKind(entry && entry.recipe ? 'recipe' : 'entry');
+    event.preventDefault();
+}
+
+function pickMealItemAt(event) {
+    const row = event.target.closest('.meal-item-result');
+    if (row) pickMealItem(mealItemPickerRows[Number(row.dataset.n)]);
+}
+
+// Makes it the meal's item, empties the box and closes the list. "new" makes one in the item
+// builder, named as typed.
+function pickMealItem(id) {
+    if (!id) return;
+    const input = document.getElementById('calendar-entry-part-search');
+    const typed = input.value.trim();
+    input.value = '';
+    mealItemPickerIndex = 0;
+    closeMealItemPicker();
+    input.blur();
+    setCalendarEntryItem(id, typed);
+}
+
+// value: an item's id, or "new" to make one in the item builder (the meal's once saved), starting
+// with the name given
+function setCalendarEntryItem(value, name = '') {
+    if (!calendarEntryEditing || !value) return;
+    if (value === 'new') {
+        openItemBuilder(null, {
+            name,
+            onSaved: saved => {
+                if (!saved || !calendarEntryEditing) return;
+                calendarEntryEditing.parts = [{ id: saved.id, name: saved.name, amount: '', unit: '' }];
+                renderCalendarEntryParts();
+            }
+        });
+        return;
+    }
+    const item = itemById(value);
+    if (item && !calendarEntryEditing.parts.some(p => p.id === item.id)) calendarEntryEditing.parts = [{ id: item.id, name: item.name, amount: '', unit: '' }];
+    renderCalendarEntryParts();
+}
+
+// Each family member as a chip to click on/off
+function renderCalendarEntryFamily() {
+    const editing = calendarEntryEditing;
+    const container = document.getElementById('calendar-entry-family');
+    if (!calendarFamilyOptions.length) {
+        container.innerHTML = '<span class="settings-hint" style="margin: 0;">No family yet. Add them in Server Settings → Family.</span>';
+        return;
+    }
+    container.innerHTML = calendarFamilyOptions.map((f, i) => {
+        const on = editing.family.includes(f.id);
+        return `<button type="button" class="calendar-entry-tag-chip${on ? ' selected' : ''}" data-i="${i}" aria-pressed="${on}">${on ? '✓ ' : ''}${escapeHtml(f.name)}</button>`;
+    }).join('');
+    container.querySelectorAll('.calendar-entry-tag-chip').forEach(el => {
+        el.onclick = () => {
+            const id = calendarFamilyOptions[Number(el.dataset.i)].id;
+            editing.family = editing.family.includes(id) ? editing.family.filter(f => f !== id) : [...editing.family, id];
+            renderCalendarEntryFamily();
+        };
+    });
+}
+
+// Opens the item in the item builder over the meal; a change to it shows here, and deleting it
+// takes it out of the meal
+function openMealPartFromEntry(part) {
+    openItemBuilder(itemById(part.id), {
+        onSaved: saved => {
+            if (!calendarEntryEditing) return;
+            if (!saved) calendarEntryEditing.parts = calendarEntryEditing.parts.filter(p => p.id !== part.id);
+            else part.name = saved.name;
+            renderCalendarEntryParts();
+        }
+    });
+}
+
+
+// date: the day clicked. For a repeating entry that's one occurrence, and the dialog can change
+// or delete just it, or the whole series (which keeps its own start date). planned: a meal plan
+// meal to start a new meal as (Add to the Day), to change before saving if need be.
+async function openCalendarEntryModal(date, entry = null, planned = null) {
+    bringModalToFront('calendar-entry-modal');
+    const startDate = entry ? (entry.startDate || entry.date) : date;
+    const repeat = entry ? entry.repeat : null;
+    calendarEntryEditing = {
+        id: entry ? entry.id : null, date: startDate, tags: entry ? [...entry.tags] : [],
+        occurrence: repeat ? date : null, occurrenceDate: date, scope: null
+    };
+    const noun = calendarMeals ? 'Meal' : 'Entry';
+    document.getElementById('calendar-entry-heading').textContent = entry ? `Edit ${noun}` : `New ${noun}`;
+    document.getElementById('calendar-entry-date-label').textContent = repeat ? formatCalendarDate(date) : '';
+    document.getElementById('calendar-entry-date').value = startDate;
+    const meal = entry && entry.meal;
+    if (entry || !calendarMeals) planned = null;
+    showCalendarEntryDateFields(true);
+    if (calendarMeals) {
+        await loadCalendarEntryMealOptions(meal || planned);
+        calendarEntryEditing.parts = (meal ? meal.parts : planned ? planned.parts : []).map(p => ({ ...p }));
+        calendarEntryEditing.times = meal?.times || 1; // how many of the meal, changed in the day view
+        // Who it's for: the meal's own family, else the people the calendar's showing, else whoever
+        // the last saved meal was for
+        let family = meal ? meal.family.map(f => f.id) : [];
+        if (!meal && !familyEveryone(mealDayFamily, mealDayPeople)) family = [...mealDayPeople].filter(id => calendarFamilyOptions.some(f => f.id === id));
+        if (!family.length) {
+            try { family = (await (await fetch('/api/calendar-entries/last-family')).json()).family || []; } catch (e) { }
+            family = family.filter(id => calendarFamilyOptions.some(f => f.id === id));
+        }
+        calendarEntryEditing.family = family;
+        document.getElementById('calendar-entry-part-search').value = '';
+        closeMealItemPicker();
+        renderCalendarEntryParts();
+        renderCalendarEntryFamily();
+    }
+    setCalendarEntryKind(calendarMeals ? 'meal' : 'entry');
     document.getElementById('calendar-entry-repeat-unit').value = repeat ? repeat.unit : '';
     document.getElementById('calendar-entry-repeat-interval').value = repeat ? repeat.interval : 1;
     document.getElementById('calendar-entry-repeat-until').value = repeat && repeat.until ? repeat.until : '';
-    document.getElementById('calendar-entry-series-note').textContent = repeat
-        ? 'Changes apply to every occurrence.'
-        : '';
+    document.getElementById('calendar-entry-series-note').textContent = '';
+    document.getElementById('calendar-entry-repeat-group').hidden = false;
+    document.getElementById('calendar-entry-delete-btn').textContent = 'Delete';
     updateCalendarEntryRepeatUI();
-    document.getElementById('calendar-entry-title').value = entry && !entry.recipe ? entry.title : '';
-    document.getElementById('calendar-entry-description').value = entry && !entry.recipe ? entry.description : '';
+    document.getElementById('calendar-entry-scope').hidden = !repeat;
+    if (repeat) setCalendarEntryScope('one');
+    document.getElementById('calendar-entry-title').value = entry && !meal ? entry.title : '';
+    document.getElementById('calendar-entry-description').value = entry && !meal ? entry.description : '';
     document.getElementById('calendar-entry-tag-input').value = '';
     document.getElementById('calendar-entry-delete-btn').style.display = entry ? '' : 'none';
     setCalendarSettingsStatus('calendar-entry-status', '', false);
+    if (planned) document.getElementById('calendar-entry-series-note').textContent = `From the meal plan (day ${planned.day + 1}).`;
     renderCalendarEntryTags();
     document.getElementById('calendar-entry-modal').style.display = 'flex';
-    document.getElementById(calendarEntryKind === 'recipe' ? 'calendar-entry-recipe' : 'calendar-entry-title').focus();
+    document.getElementById(calendarEntryKind === 'meal' ? 'calendar-entry-part-search' : 'calendar-entry-title').focus();
 
     try {
         const data = await (await fetch('/api/calendar-entries/tags')).json();
@@ -6006,11 +6654,11 @@ function closeCalendarEntryModal() {
     calendarEntryEditing = null;
 }
 
-// Save stays disabled until a tag is selected (a tag typed but not yet added also counts)
+// Save stays disabled until a tag is selected (a tag typed but not yet added also counts). Meals don't need one.
 function updateCalendarEntrySaveButton() {
     const typed = document.getElementById('calendar-entry-tag-input').value.trim();
     document.getElementById('calendar-entry-save-btn').disabled =
-        !calendarEntryEditing || (!calendarEntryEditing.tags.length && !typed);
+        !calendarEntryEditing || (calendarEntryKind !== 'meal' && !calendarEntryEditing.tags.length && !typed);
 }
 
 // Every existing tag as a chip to click on/off, plus any new ones added in this edit
@@ -6054,25 +6702,30 @@ function addCalendarEntryTag() {
 
 async function saveCalendarEntry() {
     if (!calendarEntryEditing) return;
+    if (calendarEntryEditing.planDay != null) return saveMealPlanDay();
     const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
+    // A meal has its one item and family, and no title (it's its item's), description or tags
+    const isMeal = calendarEntryKind === 'meal';
     // A tag typed but not yet added still counts
-    if (document.getElementById('calendar-entry-tag-input').value.trim()) addCalendarEntryTag();
-    // A recipe entry takes its title from the recipe and has no description
-    const isRecipe = calendarEntryKind === 'recipe';
-    const recipeId = isRecipe ? document.getElementById('calendar-entry-recipe').value : null;
-    if (isRecipe && !recipeId) { setStatus('Choose a meal.', true); return; }
-    const people = isRecipe ? Number(document.getElementById('calendar-entry-people').value) : null;
-    if (isRecipe && (!Number.isInteger(people) || people < 1 || people > 10)) { setStatus('People must be a whole number from 1 to 10.', true); return; }
-    const title = isRecipe ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim();
-    const description = isRecipe ? '' : document.getElementById('calendar-entry-description').value.trim();
-    if (!title) { setStatus('Enter a title.', true); return; }
-    if (!calendarEntryEditing.tags.length) { setStatus('Select at least one tag.', true); return; }
+    if (!isMeal && document.getElementById('calendar-entry-tag-input').value.trim()) addCalendarEntryTag();
+    let meal = null;
+    if (isMeal) {
+        const { parts, family } = calendarEntryEditing;
+        if (!parts.length) { setStatus('Choose an item.', true); return; }
+        if (calendarFamilyOptions.length && !family.length) { setStatus('Choose who it\'s for.', true); return; }
+        meal = { parts: parts.map(mealPartOut), family, times: calendarEntryEditing.times || 1 };
+    }
+    const title = isMeal ? '' : document.getElementById('calendar-entry-title').value.trim();
+    const description = isMeal ? '' : document.getElementById('calendar-entry-description').value.trim();
+    if (!title && !isMeal) { setStatus('Enter a title.', true); return; }
+    if (!isMeal && !calendarEntryEditing.tags.length) { setStatus('Select at least one tag.', true); return; }
 
     const date = document.getElementById('calendar-entry-date').value;
     if (!date) { setStatus('Choose a date.', true); return; }
-    calendarEntryEditing.date = date;
+    const justOne = calendarEntryEditing.scope === 'one';
+    if (!justOne) calendarEntryEditing.date = date;
 
-    const unit = document.getElementById('calendar-entry-repeat-unit').value;
+    const unit = justOne ? '' : document.getElementById('calendar-entry-repeat-unit').value;
     let repeat = null;
     if (unit) {
         const interval = Number(document.getElementById('calendar-entry-repeat-interval').value);
@@ -6085,11 +6738,14 @@ async function saveCalendarEntry() {
     const btn = document.getElementById('calendar-entry-save-btn');
     btn.disabled = true;
     try {
-        const { id, tags } = calendarEntryEditing;
-        const res = await fetch(id ? `/api/calendar-entries/${encodeURIComponent(id)}` : '/api/calendar-entries', {
+        const { id, tags, occurrence } = calendarEntryEditing;
+        const url = !id ? '/api/calendar-entries'
+            : justOne ? `/api/calendar-entries/${encodeURIComponent(id)}/occurrences/${occurrence}`
+            : `/api/calendar-entries/${encodeURIComponent(id)}`;
+        const res = await fetch(url, {
             method: id ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ date, title, description, repeat, recipeId, people, tags })
+            body: JSON.stringify({ date, title, description, repeat, meal, tags: isMeal ? [] : tags })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save');
@@ -6103,14 +6759,628 @@ async function saveCalendarEntry() {
 }
 
 async function deleteCalendarEntry() {
+    if (calendarEntryEditing?.planDay != null) return clearMealPlanDay();
     if (!calendarEntryEditing?.id) return;
-    const title = (calendarEntryKind === 'recipe' ? selectedCalendarEntryRecipeName() : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
-    if (!confirm(`Delete "${title}"?`)) return;
+    const title = (calendarEntryKind === 'meal'
+        ? calendarEntryEditing.parts.map(p => p.name).join(', ')
+        : document.getElementById('calendar-entry-title').value.trim()) || 'this entry';
+    const { id, scope, occurrence } = calendarEntryEditing;
+    const question = scope === 'one' ? `Delete "${title}" on ${formatCalendarDate(occurrence)} only?`
+        : scope === 'all' ? `Delete every occurrence of "${title}"?`
+        : `Delete "${title}"?`;
+    if (!confirm(question)) return;
     try {
-        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(calendarEntryEditing.id)}`, { method: 'DELETE' });
+        const url = `/api/calendar-entries/${encodeURIComponent(id)}` + (scope === 'one' ? `/occurrences/${occurrence}` : '');
+        const res = await fetch(url, { method: 'DELETE' });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
         closeCalendarEntryModal();
         renderCalendar();
+    } catch (err) {
+        setCalendarSettingsStatus('calendar-entry-status', err.message, true);
+    }
+}
+
+// The meal plan dialog is the meal dialog without a date or family, and repeats in days or weeks only
+function showCalendarEntryDateFields(show) {
+    for (const id of ['calendar-entry-family-group', 'calendar-entry-date-group']) {
+        document.getElementById(id).hidden = !show;
+    }
+    const month = document.getElementById('calendar-entry-repeat-month');
+    month.hidden = month.disabled = !show;
+}
+
+// --- Meals tab's Meal Plan: a meal for each day of a block of weeks. From its start date it
+// repeats on the Meals calendar, where a new meal starts as the plan's meal for that day.
+// A day's meal can repeat every so many days or weeks within the plan ---
+let mealPlan = null; // { weeks, startDate, days: [{ day, name, parts: [{ id, name }], repeat, skipped }] }
+
+const ymdToUtcDays = ymd => { const [y, m, d] = ymd.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+
+// The plan's day (0-based) a date falls on, or null with no start date
+function mealPlanDayIndex(ymd) {
+    if (!mealPlan?.startDate) return null;
+    const length = mealPlan.weeks * 7;
+    return (((ymdToUtcDays(ymd) - ymdToUtcDays(mealPlan.startDate)) % length) + length) % length;
+}
+
+// The meal on a day of the plan: its own, else the one from the nearest earlier day whose repeat
+// lands on it. { day, sourceDay (the day it was planned on), name, parts, repeat }, or null (also
+// for a day left out of a repeat).
+function mealPlanMealOn(day) {
+    if (!mealPlan) return null;
+    const own = mealPlan.days.find(d => d.day === day);
+    if (own) return own.skipped ? null : { ...own, sourceDay: day };
+    const step = d => d.repeat.interval * (d.repeat.unit === 'week' ? 7 : 1);
+    const source = mealPlan.days
+        .filter(d => d.repeat && d.day < day && (day - d.day) % step(d) === 0)
+        .reduce((best, d) => !best || d.day > best.day ? d : best, null);
+    return source ? { ...source, day, sourceDay: source.day } : null;
+}
+
+// The planned meal for a date, or null
+function mealPlanDayFor(ymd) {
+    const day = mealPlanDayIndex(ymd);
+    return day == null ? null : mealPlanMealOn(day);
+}
+
+// The date day 0 falls on, else this week's Monday so the columns still have weekday names
+function mealPlanBaseDate() {
+    if (mealPlan?.startDate) {
+        const [y, m, d] = mealPlan.startDate.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+    return startOfCalendarWeek(new Date());
+}
+
+// The saved items, for the per-person totals on the meal plan and Meals calendar. A failure just
+// leaves them out.
+async function loadMealNutritionData() {
+    const data = await fetch('/api/ingredients').then(r => r.json()).catch(() => null);
+    if (data?.ingredients) ingredientList = data.ingredients;
+}
+
+// How many of a meal's item there are. For one made of others that's its only quantity (one saved
+// before counts were kept has it as its amount).
+const mealPartTimes = (part, item) => (item?.parts ? partTimes(part.amount) : 1) * (part.times || 1);
+
+// A meal's part as saved: its item, any quantity of its own and how many of it. An item made of
+// others keeps just the how many.
+function mealPartOut(p) {
+    const item = itemById(p.id);
+    if (item?.parts) return { id: p.id, amount: '', unit: '', times: mealPartTimes(p, item) };
+    return { id: p.id, amount: (p.amount || '').trim(), unit: (p.unit || '').trim(), times: p.times || 1 };
+}
+
+// One of a meal's items for one person: at the meal's own quantity where it has one (an amount
+// typed without a unit keeps the item's unit), else the item's, times how many of it
+function mealPartRows(part) {
+    const item = itemById(part.id);
+    if (!item) return [];
+    const amount = (part.amount || '').trim();
+    const times = part.times || 1;
+    if (item.parts) return itemNutritionRows(item, '', '', partTimes(amount) * times);
+    return itemNutritionRows(item, amount || item.amount, (part.unit || '').trim() || item.unit, times);
+}
+
+// A meal's calories, protein, carbs and fat for one person
+const mealNutrition = parts => sumNutrition(parts.flatMap(mealPartRows));
+
+// --- Meals calendar: a day's meals in a table, one row each with its nutrition per person, and a
+// total for the day. Items opens a meal's own table of its items. Meals and items are added,
+// changed and deleted from here, in their own dialogs over it. ---
+let mealDayDate = null; // the day showing (YYYY-MM-DD), or null
+let mealDayFamily = [];  // the family, as tabs along the top: [{ id, name }]
+let mealDayPeople = null; // the family members whose food is showing: a Set of ids, or null for everyone (kept between days, and the Meals calendar's too)
+let mealDayOpen = new Set(); // the meals showing their items, by mealDayKey (kept while the day's open)
+
+// A meal's key, to find it again once the day's redrawn: the day's own meal by its entry, a planned one by its plan day and name
+const mealDayKey = ev => ev.entry ? `entry:${ev.entry.id}` : `planned:${ev.planned.day}:${ev.planned.name || ''}`;
+
+function openMealDayView(date) {
+    mealDayDate = date;
+    mealDayOpen = new Set();
+    document.getElementById('meal-day-heading').textContent = formatCalendarDate(date);
+    renderMealDayView();
+    bringModalToFront('meal-day-modal');
+    document.getElementById('meal-day-modal').style.display = 'flex';
+    loadMealDayFamily();
+}
+
+// The family, for the Meals calendar's tabs and a day's
+function loadMealDayFamily() {
+    fetch('/api/games/players').then(r => r.json()).then(family => {
+        mealDayFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+        mealDayPeople = familyStillThere(mealDayPeople, mealDayFamily);
+        renderCalendarMealsFamily();
+        if (calendarMeals) drawCalendarEvents(); // redraws the day too
+        else if (mealDayDate) renderMealDayView();
+    }).catch(() => { });
+}
+
+// Choosing people on the calendar or a day shows just their meals on both
+function setMealDayPeople(people) {
+    mealDayPeople = people;
+    renderCalendarMealsFamily();
+    if (calendarMeals) drawCalendarEvents();
+    else if (mealDayDate) renderMealDayView();
+}
+
+// Above the Meals calendar (hidden on the Calendar tab)
+function renderCalendarMealsFamily() {
+    const el = document.getElementById('calendar-meals-family');
+    renderFamilyBar(el, mealDayFamily, mealDayPeople, setMealDayPeople);
+    if (!calendarMeals) el.hidden = true;
+}
+
+function renderMealDayFamily() {
+    renderFamilyBar(document.getElementById('meal-day-family'), mealDayFamily, mealDayPeople, setMealDayPeople);
+}
+
+// --- The family bars over the Meals calendar, a day and Stats: an Everyone icon, then each family
+// member to click on or off. people is a Set of the ids picked, or null for everyone (as it starts).
+// The icon is on while everyone's picked, half on while some are, and off for no one; clicking it
+// picks everyone, or no one if everyone was. ---
+const FAMILY_EVERYONE_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+    <circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>`;
+
+function renderFamilyBar(el, family, people, onChange) {
+    el.hidden = !family.length;
+    const everyone = familyEveryone(family, people);
+    const some = !everyone && people.size > 0;
+    const picked = id => !people || people.has(id);
+    el.innerHTML = `<button type="button" class="family-everyone${everyone ? ' active' : some ? ' partial' : ''}"
+            aria-pressed="${everyone ? 'true' : some ? 'mixed' : 'false'}"
+            title="${everyone ? 'Pick no one' : 'Pick everyone'}" aria-label="Everyone">${FAMILY_EVERYONE_ICON}</button>`
+        + family.map(f => `<button type="button" class="${picked(f.id) ? 'active' : ''}" aria-pressed="${picked(f.id)}"
+            data-id="${escapeAttr(f.id)}">${escapeHtml(f.name)}</button>`).join('');
+    el.querySelector('.family-everyone').onclick = () => onChange(everyone ? new Set() : null);
+    el.querySelectorAll('[data-id]').forEach(btn => {
+        btn.onclick = () => {
+            const next = new Set(people || family.map(f => f.id));
+            next.has(btn.dataset.id) ? next.delete(btn.dataset.id) : next.add(btn.dataset.id);
+            onChange(familyEveryone(family, next) ? null : next);
+        };
+    });
+}
+
+const familyEveryone = (family, people) => !people || family.every(f => people.has(f.id));
+
+// The people picked who are still in the family (everyone stays everyone)
+const familyStillThere = (people, family) => people && new Set([...people].filter(id => family.some(f => f.id === id)));
+
+// Whether a meal for these family members ([{ id }]) is for the people picked: it's for one of
+// them, or not set for anyone (as a planned meal isn't) while anyone's picked
+const mealForPeople = (people, mealFamily) => !people || (mealFamily?.length ? mealFamily.some(f => people.has(f.id)) : people.size > 0);
+
+// "Alex, Sam", for the people picked; '' for everyone
+const familyNames = (family, people) => familyEveryone(family, people) ? '' : family.filter(f => people.has(f.id)).map(f => f.name).join(', ');
+
+const mealDayForPerson = ev => mealForPeople(mealDayPeople, ev.entry?.meal.family);
+
+function closeMealDayView() {
+    document.getElementById('meal-day-modal').style.display = 'none';
+    mealDayDate = null;
+}
+
+// The day's meals as loaded for the calendar: its own, else the meal plan's (faded)
+const mealDayEvents = date => (calendarLoaded?.events || []).filter(ev => ev.start === date && (ev.entry?.meal || ev.planned));
+
+// How much of an item a meal part is per person, as shown, and whether it's the meal's own
+function mealPartQuantity(part, item) {
+    const own = !!((part.amount || '').trim() || (part.unit || '').trim());
+    if (!item) return { text: '', own };
+    if (item.parts) return { text: '', own: false }; // its count is how much of it
+    const amount = (part.amount || '').trim() || item.amount;
+    const unit = (part.unit || '').trim() || item.unit;
+    return { text: [amount, unit].filter(Boolean).join(' '), own };
+}
+
+// The nutrition cells of a row: kcal, protein, carbs, fat, alcohol units ('+' where some of it
+// isn't counted; protein, carbs and fat left empty while nothing counted has them)
+function mealDayCells(t) {
+    if (!t.counted) return '<td class="num muted" colspan="5">' + (t.missing.length ? 'No calories set' : '') + '</td>';
+    const macros = t.noMacros.length < t.counted;
+    const more = t.missing.length ? '<span class="meal-day-more" title="Not counted: ' + escapeAttr(t.missing.join(', ')) + '">+</span>' : '';
+    return `<td class="num">${Math.round(t.kcal).toLocaleString()}${more}</td>`
+        + MACROS.map(([m]) => `<td class="num">${macros ? formatGrams(t[m]) : ''}</td>`).join('')
+        + `<td class="num">${t.alcohol > 0 ? formatAlcohol(t.alcohol).replace(' alcohol', '') : ''}</td>`;
+}
+
+// A row's picture: a single item's product picture (click for others), or the stack for one made of others
+function mealDayPicture(item) {
+    if (!item) return '';
+    if (item.parts) return `<span class="ingredient-pic item-group-pic meal-day-pic" title="Made of other items">${ITEM_GROUP_ICON}</span>`;
+    return `<button type="button" class="ingredient-pic meal-day-pic" data-pic="${escapeAttr(item.name)}" title="Choose a picture"></button>`;
+}
+
+// The single items the day view shows, for looking their pictures up
+function mealDayPictureNames() {
+    const names = [];
+    for (const ev of mealDayEvents(mealDayDate)) {
+        for (const part of (ev.entry?.meal || ev.planned).parts) {
+            const item = itemById(part.id);
+            if (!item) continue;
+            if (!item.parts) names.push(item.name);
+            else for (const p of item.parts) if (!itemById(p.itemId)?.parts) names.push(p.name);
+        }
+    }
+    return names;
+}
+
+function renderMealDayPictures() {
+    document.querySelectorAll('#meal-day-body [data-pic]').forEach(btn => {
+        setPictureButton(btn, shoppingProducts.get(shoppingLineKey(btn.dataset.pic)));
+    });
+}
+
+// A meal's name, and who it's for and how it repeats (or that it's from the meal plan)
+function mealDayAbout(ev) {
+    const meal = ev.entry?.meal || ev.planned;
+    const who = ev.entry ? (meal.family.length ? `For ${meal.family.map(f => f.name).join(', ')}` : ev.entry.people ? `For ${ev.entry.people}` : '') : '';
+    return {
+        name: meal.name || mealEntryTitle({ ...meal, times: 1 }),
+        about: [who, ev.entry ? describeCalendarRepeat(ev.entry.repeat) : `From the meal plan (day ${ev.planned.day + 1})`].filter(Boolean).join(' · '),
+    };
+}
+
+// Every item of a meal, times how many of the meal there are
+function mealDayRows(meal) {
+    const mealTimes = meal.times || 1;
+    return meal.parts.flatMap(mealPartRows).map(r => ({ name: r.name, result: scaleNutrition(r.result, mealTimes) }));
+}
+
+// A meal row's buttons: edit and delete, and the arrow that turns when a click on the row shows its items
+const MEAL_DAY_ICON_SVG = (paths, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const MEAL_DAY_CHEVRON_ICON = MEAL_DAY_ICON_SVG('<polyline points="9 18 15 12 9 6"></polyline>', 14);
+const MEAL_DAY_EDIT_ICON = MEAL_DAY_ICON_SVG('<path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>');
+const MEAL_DAY_DELETE_ICON = MEAL_DAY_ICON_SVG('<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>');
+
+function renderMealDayView() {
+    const date = mealDayDate;
+    const body = document.getElementById('meal-day-body');
+    renderMealDayFamily();
+    const who = familyNames(mealDayFamily, mealDayPeople); // '' for everyone
+    const events = mealDayEvents(date).filter(mealDayForPerson);
+    const planned = events.some(ev => ev.planned);
+    const dayRows = []; // every item of every meal, times how many of its meal
+    const rows = events.map((ev, i) => {
+        const meal = ev.entry?.meal || ev.planned;
+        const mealTimes = meal.times || 1;
+        const mealRows = mealDayRows(meal);
+        dayRows.push(...mealRows);
+        // How many of the meal: - and + on the day's own meals (a planned one is added first)
+        const mealCount = ev.entry ? `<span class="meal-day-count" title="How many of this meal">
+                <button type="button" class="recipe-ingredient-btn" data-act="meal-count" data-i="${i}" data-step="-1"
+                    title="One fewer" ${mealTimes <= 1 ? 'disabled' : ''}>−</button>
+                <span class="meal-day-times">${formatTimes(mealTimes)}</span>
+                <button type="button" class="recipe-ingredient-btn" data-act="meal-count" data-i="${i}" data-step="1" title="One more">+</button>
+            </span>` : '';
+        const { name, about } = mealDayAbout(ev);
+        const actions = ev.entry
+            ? `<button type="button" class="btn-control ghost meal-day-icon-btn" data-act="edit-meal" data-i="${i}" title="Edit" aria-label="Edit">${MEAL_DAY_EDIT_ICON}</button>
+               <button type="button" class="btn-control ghost meal-day-icon-btn calendar-entry-delete" data-act="delete-meal" data-i="${i}" title="Delete" aria-label="Delete">${MEAL_DAY_DELETE_ICON}</button>`
+            : `<button type="button" class="btn-control primary btn-small" data-act="add-planned" data-i="${i}">Add to the Day</button>`;
+        const open = mealDayOpen.has(mealDayKey(ev));
+        return `
+            <tr class="meal-day-meal${ev.planned ? ' planned' : ''}${open ? ' open' : ''}" data-i="${i}" aria-expanded="${open}"
+                title="${open ? 'Click to hide its items' : "Click to see each item's figures"}">
+                <td class="meal-day-count-cell">${mealCount}</td>
+                <td class="meal-day-meal-cell">
+                    <span class="meal-day-chevron" aria-hidden="true">${MEAL_DAY_CHEVRON_ICON}</span>
+                    <span class="meal-day-meal-name">${escapeHtml(name)}</span>
+                    ${about ? `<span class="meal-day-meal-about">${escapeHtml(about)}</span>` : ''}
+                </td>
+                ${mealDayCells(sumNutrition(mealRows))}
+                <td class="meal-day-actions"><div class="meal-day-actions-row">${actions}</div></td>
+            </tr>${open ? mealDayItemRows(meal) : ''}`;
+    }).join('');
+    body.innerHTML = !events.length
+        ? `<p class="settings-hint meal-day-empty">${mealDayPeople?.size === 0 ? 'No one is picked. Pick someone above to see their meals.'
+            : `Nothing planned${who ? ` for ${escapeHtml(who)}` : ''} on this day. Press + Add Meal to plan one.`}</p>`
+        : `<div class="meal-day-scroll"><table class="meal-day-table">
+            <thead><tr><th></th><th>Meal</th><th class="num">kcal</th><th class="num">Protein</th><th class="num">Carbs</th>
+                <th class="num">Fat</th><th class="num">Alcohol</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr><td colspan="2">${mealDayPeople?.size === 1 ? `Day total for ${escapeHtml(who)}` : 'Day total per person'}${planned ? ' <span class="meal-day-meal-about">(with the planned meal)</span>' : ''}</td>
+                ${mealDayCells(sumNutrition(dayRows))}<td></td></tr></tfoot>
+        </table></div>`;
+    // A click on a meal's row, other than on its buttons, shows or hides its items under it
+    body.querySelectorAll('tr.meal-day-meal').forEach(row => {
+        row.onclick = e => {
+            if (e.target.closest('button')) return;
+            const key = mealDayKey(events[Number(row.dataset.i)]);
+            mealDayOpen.has(key) ? mealDayOpen.delete(key) : mealDayOpen.add(key);
+            renderMealDayView();
+        };
+    });
+    body.querySelectorAll('[data-act]').forEach(btn => {
+        const ev = events[Number(btn.dataset.i)];
+        btn.onclick = () => {
+            const act = btn.dataset.act;
+            if (act === 'edit-meal') openCalendarEntryModal(date, ev.entry);
+            else if (act === 'add-planned') openCalendarEntryModal(date, null, ev.planned);
+            else if (act === 'delete-meal') deleteMealFromDay(ev.entry);
+            else if (act === 'meal-count') changeMealDayCount(ev.entry, Number(btn.dataset.step));
+            else if (act === 'edit-item') openItemBuilder(itemById(btn.dataset.id), { onSaved: () => renderCalendar() });
+        };
+    });
+    body.querySelectorAll('[data-pic]').forEach(btn => {
+        btn.onclick = () => openProductPicker(btn.dataset.pic);
+    });
+    if (mealDayOpen.size) {
+        renderMealDayPictures();
+        showShoppingPictures();
+    }
+}
+
+// An open meal's items, under its row: each with its picture, quantity and figures per person
+// (times how many of the meal there are, as the meal's row). One made of others lists what one
+// of it is made of underneath, as the item has it.
+function mealDayItemRows(meal) {
+    const mealTimes = meal.times || 1;
+    const rows = [];
+    for (const part of meal.parts) {
+        const item = itemById(part.id);
+        const qty = mealPartQuantity(part, item);
+        const times = mealPartTimes(part, item);
+        const count = times !== 1 ? `<span class="meal-day-times">${formatTimes(times)}</span>` : '';
+        rows.push(`
+            <tr class="meal-day-item-row">
+                <td class="meal-day-pic-cell">${mealDayPicture(item)}</td>
+                <td class="meal-day-meal-cell"><span class="meal-day-item">${escapeHtml(item?.name || part.name)}${confirmedStar(item)}</span>
+                    <span class="meal-day-qty-row">${count}<span class="${qty.own ? 'meal-day-own' : ''}"
+                        title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</span></span></td>
+                ${mealDayCells(sumNutrition(mealPartRows(part).map(r => ({ name: r.name, result: scaleNutrition(r.result, mealTimes) }))))}
+                <td class="meal-day-actions"><div class="meal-day-actions-row">${item ? `<button type="button" class="btn-control ghost meal-day-icon-btn"
+                    data-act="edit-item" data-id="${escapeAttr(item.id)}" title="Edit item" aria-label="Edit item">${MEAL_DAY_EDIT_ICON}</button>` : ''}</div></td>
+            </tr>`);
+        for (const p of item?.parts || []) {
+            const child = itemById(p.itemId);
+            const childQty = child?.parts ? '' : [p.amount, p.unit].filter(Boolean).join(' ');
+            rows.push(`
+            <tr class="meal-day-item-row meal-day-sub">
+                <td class="meal-day-pic-cell">${mealDayPicture(child)}</td>
+                <td class="meal-day-meal-cell"><span class="meal-day-item">${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
+                    <span class="meal-day-qty-row">${escapeHtml(childQty)}</span></td>
+                <td colspan="5"></td>
+                <td></td>
+            </tr>`);
+        }
+    }
+    // The last one closes the meal off with the line a meal's row has
+    if (rows.length) rows[rows.length - 1] = rows[rows.length - 1].replace('meal-day-item-row', 'meal-day-item-row last');
+    return rows.join('');
+}
+
+// "2 ×", "1.5 ×"
+const formatTimes = n => `${Number(n.toFixed(2))} ×`;
+
+// One more or fewer of a meal (never below one; Delete removes it), saved straight away. A
+// repeating meal changes on this day only, as its own meal from then on.
+async function changeMealDayCount(entry, step) {
+    const current = entry.meal.times || 1;
+    const times = Math.max(1, Math.min(99, current + step));
+    if (times === current) return;
+    const parts = entry.meal.parts.map(mealPartOut);
+    const date = mealDayDate;
+    const justOne = !!entry.repeat;
+    document.querySelectorAll('#meal-day-body [data-act="meal-count"]').forEach(btn => { btn.disabled = true; });
+    try {
+        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(entry.id)}` + (justOne ? `/occurrences/${date}` : ''), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                date: justOne ? date : entry.startDate || entry.date, title: entry.meal.name, description: '',
+                repeat: justOne ? null : entry.repeat, tags: [],
+                meal: { parts, family: entry.meal.family.map(f => f.id), times },
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+    } catch (err) {
+        showToast(`Couldn't change it: ${err.message}`, 'error', 4000);
+    }
+    renderCalendar(); // redraws this day too
+}
+
+// A repeating meal is deleted on this day only (the meal dialog can delete every occurrence)
+async function deleteMealFromDay(entry) {
+    const title = mealEntryTitle(entry.meal);
+    const date = mealDayDate;
+    const justOne = !!entry.repeat;
+    if (!confirm(justOne ? `Delete "${title}" on ${formatCalendarDate(date)} only?` : `Delete "${title}"?`)) return;
+    try {
+        const res = await fetch(`/api/calendar-entries/${encodeURIComponent(entry.id)}` + (justOne ? `/occurrences/${date}` : ''), { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
+        renderCalendar();
+    } catch (err) {
+        showToast(`Couldn't delete: ${err.message}`, 'error', 4000);
+    }
+}
+
+// The line under a meal: its total per person (with "+" if some items aren't counted), or null if
+// none of it has calories
+function mealNutritionElement(parts) {
+    const t = mealNutrition(parts);
+    if (!t.counted) return null;
+    const el = document.createElement('div');
+    el.className = 'meal-nutrition';
+    el.textContent = formatNutritionTotal(t) + (t.missing.length ? ' +' : '');
+    el.title = [`About ${formatNutritionTotal(t)} per person`, ...nutritionTotalNotes(t)].join('\n');
+    return el;
+}
+
+async function loadMealPlan() {
+    try {
+        const [res] = await Promise.all([fetch('/api/meal-plan'), loadMealNutritionData()]);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load the meal plan');
+        mealPlan = data;
+        renderMealPlan();
+    } catch (err) {
+        setCalendarSettingsStatus('meal-plan-status', `Couldn't load the meal plan: ${err.message}`, true);
+    }
+}
+
+function renderMealPlan() {
+    if (!mealPlan) return;
+    document.getElementById('meal-plan-weeks').value = mealPlan.weeks;
+    document.getElementById('meal-plan-start').value = mealPlan.startDate || '';
+    const status = document.getElementById('meal-plan-status');
+    status.className = 'calendar-status';
+    status.textContent = mealPlan.startDate
+        ? `Click a day to plan its meal. The plan repeats every ${mealPlan.weeks === 1 ? 'week' : `${mealPlan.weeks} weeks`} on the Calendar, where it's filled in when you add a meal.`
+        : 'Click a day to plan its meal. Choose the date Day 1 falls on to use the plan on the Calendar.';
+
+    const base = mealPlanBaseDate();
+    const todayDay = mealPlanDayIndex(calendarDateKey(new Date()));
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+        html += `<div class="calendar-weekday">${d.toLocaleDateString(undefined, { weekday: 'short' })}</div>`;
+    }
+    for (let day = 0; day < mealPlan.weeks * 7; day++) {
+        const planned = mealPlanMealOn(day);
+        const label = day % 7 === 0 ? `Week ${day / 7 + 1} · Day ${day + 1}` : `Day ${day + 1}`;
+        const title = planned ? mealEntryTitle(planned) : '';
+        const parts = planned?.name ? planned.parts.map(p => p.name).join(', ') : '';
+        const repeatNote = !planned?.repeat ? ''
+            : planned.sourceDay === day ? describeCalendarRepeat(planned.repeat)
+            : `${describeCalendarRepeat(planned.repeat)} from day ${planned.sourceDay + 1}`;
+        html += `<div class="calendar-day${day === todayDay ? ' today' : ''}" data-day="${day}">
+            <span class="calendar-day-num">${label}</span>
+            ${planned ? `<div class="calendar-event all-day local-entry${planned.repeat ? ' repeating' : ''}" style="--event-color: ${MEAL_ENTRY_COLOR}"
+                title="${escapeHtml([title, parts, repeatNote].filter(Boolean).join('\n'))}">${escapeHtml(title)}</div>` : ''}
+            ${parts ? `<div class="meal-plan-parts">${escapeHtml(parts)}</div>` : ''}
+            ${planned ? mealNutritionElement(planned.parts)?.outerHTML || '' : ''}
+        </div>`;
+    }
+    document.getElementById('meal-plan-grid').innerHTML = html;
+}
+
+async function saveMealPlanSettings() {
+    const weeks = Number(document.getElementById('meal-plan-weeks').value);
+    const startDate = document.getElementById('meal-plan-start').value || null;
+    try {
+        const res = await fetch('/api/meal-plan', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weeks, startDate })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to save');
+        mealPlan = data;
+        renderMealPlan();
+    } catch (err) {
+        setCalendarSettingsStatus('meal-plan-status', `Couldn't save the meal plan: ${err.message}`, true);
+    }
+}
+
+function onMealPlanGridClick(event) {
+    const cell = event.target.closest('.calendar-day');
+    if (cell) openMealPlanDayModal(Number(cell.dataset.day));
+}
+
+function mealPlanDayHeading(day) {
+    const base = mealPlanBaseDate();
+    const weekday = new Date(base.getFullYear(), base.getMonth(), base.getDate() + day).toLocaleDateString(undefined, { weekday: 'long' });
+    return `Week ${Math.floor(day / 7) + 1}, Day ${day + 1} · ${weekday}`;
+}
+
+// A day filled by another day's repeat can change just itself, or the repeat (from the day it starts)
+async function openMealPlanDayModal(day) {
+    const planned = mealPlanMealOn(day);
+    const copy = !!planned && planned.sourceDay !== day;
+    calendarEntryEditing = {
+        planDay: day, sourceDay: planned ? planned.sourceDay : day, copy, scope: null,
+        tags: [], family: [], parts: planned ? [...planned.parts] : []
+    };
+    document.getElementById('calendar-entry-heading').textContent = planned ? 'Edit Planned Meal' : 'Plan a Meal';
+    document.getElementById('calendar-entry-date-label').textContent = mealPlanDayHeading(day);
+    await loadCalendarEntryMealOptions(planned);
+    document.getElementById('calendar-entry-part-search').value = '';
+    closeMealItemPicker();
+    renderCalendarEntryParts();
+    setCalendarEntryKind('meal');
+    showCalendarEntryDateFields(false);
+    document.getElementById('calendar-entry-repeat-unit').value = planned?.repeat ? planned.repeat.unit : '';
+    document.getElementById('calendar-entry-repeat-interval').value = planned?.repeat ? planned.repeat.interval : 1;
+    document.getElementById('calendar-entry-repeat-group').hidden = false;
+    updateCalendarEntryRepeatUI();
+    document.getElementById('calendar-entry-scope').hidden = !copy;
+    document.getElementById('calendar-entry-series-note').textContent = '';
+    document.getElementById('calendar-entry-delete-btn').textContent = planned?.repeat ? 'Clear All' : 'Clear';
+    document.getElementById('calendar-entry-delete-btn').style.display = planned ? '' : 'none';
+    if (copy) setMealPlanScope('one');
+    updateCalendarEntrySaveButton();
+    document.getElementById('calendar-entry-modal').style.display = 'flex';
+    document.getElementById('calendar-entry-part-search').focus();
+}
+
+function setMealPlanScope(scope) {
+    const editing = calendarEntryEditing;
+    editing.scope = scope;
+    const one = scope === 'one';
+    document.querySelectorAll('#calendar-entry-modal .calendar-entry-scope-btn').forEach(btn => {
+        const on = btn.dataset.scope === scope;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    document.getElementById('calendar-entry-repeat-group').hidden = one;
+    document.getElementById('calendar-entry-series-note').textContent = one
+        ? `Only day ${editing.planDay + 1} changes. The rest of the repeat from day ${editing.sourceDay + 1} stays as it is.`
+        : `Changes apply to every repeat, from day ${editing.sourceDay + 1}.`;
+    document.getElementById('calendar-entry-delete-btn').textContent = one ? 'Clear This One' : 'Clear All';
+    setCalendarSettingsStatus('calendar-entry-status', '', false);
+}
+
+async function putMealPlanDay(day, body) {
+    const res = await fetch(`/api/meal-plan/days/${day}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save');
+    mealPlan = data;
+    closeCalendarEntryModal();
+    renderMealPlan();
+}
+
+async function saveMealPlanDay() {
+    const { planDay, sourceDay, scope, parts } = calendarEntryEditing;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('calendar-entry-status', text, isError);
+    if (!parts.length) { setStatus('Choose an item.', true); return; }
+    // "This occurrence" gives the day a meal of its own; otherwise the day the meal is planned on changes
+    const justOne = scope === 'one';
+    let repeat = null;
+    const unit = justOne ? '' : document.getElementById('calendar-entry-repeat-unit').value;
+    if (unit) {
+        const interval = Number(document.getElementById('calendar-entry-repeat-interval').value);
+        if (!Number.isInteger(interval) || interval < 1 || interval > 56) { setStatus('Repeat every must be a whole number from 1 to 56.', true); return; }
+        repeat = { unit, interval };
+    }
+    const btn = document.getElementById('calendar-entry-save-btn');
+    btn.disabled = true;
+    try {
+        await putMealPlanDay(justOne ? planDay : sourceDay,
+            { parts: parts.map(mealPartOut), repeat });
+    } catch (err) {
+        setStatus(err.message, true);
+    } finally {
+        updateCalendarEntrySaveButton();
+    }
+}
+
+// "This occurrence" leaves just that day empty; otherwise the meal goes, with every repeat of it
+async function clearMealPlanDay() {
+    const { planDay, sourceDay, scope } = calendarEntryEditing;
+    const justOne = scope === 'one';
+    const repeats = !!mealPlan.days.find(d => d.day === sourceDay)?.repeat;
+    const question = justOne ? `Leave day ${planDay + 1} empty? The rest of the repeat stays as it is.`
+        : repeats ? `Clear the meal planned for day ${sourceDay + 1} and every repeat of it?`
+        : `Clear the meal planned for day ${sourceDay + 1}?`;
+    if (!confirm(question)) return;
+    try {
+        await putMealPlanDay(justOne ? planDay : sourceDay, justOne ? { skipped: true } : { parts: [] });
     } catch (err) {
         setCalendarSettingsStatus('calendar-entry-status', err.message, true);
     }
@@ -6208,232 +7478,898 @@ async function removeCalendar(id, btn) {
     }
 }
 
-// --- Recipes tab: recipe list on the left, the selected recipe's ingredients on the right ---
-let recipeList = [];       // [{ id, name, ingredientCount }]
-let recipeDraft = null;    // the recipe being shown/edited: { id|null, name, ingredients: [{ ingredientId|null, name, amount, unit }] }
-let recipeSavedJson = '';  // recipeDraft as last loaded/saved, to tell whether there are unsaved changes
-
-const recipeIsDirty = () => !!recipeDraft && JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients }) !== recipeSavedJson;
-
-function setRecipeStatus(text, isError) {
-    setCalendarSettingsStatus('recipe-status', text, isError);
-}
-
-// Keeps whatever is open (including unsaved edits) when returning to the tab
-async function showRecipes() {
+// tab: which of Calendar | Meal Plan | Items to show, else the one last used
+async function showRecipes(tab) {
     setAppView('recipes');
-    await Promise.all([loadRecipes(), loadIngredients()]);
-    if (!recipeDraft) renderRecipeEditor();
+    setMealsTab(tab || mealsTab);
+    await Promise.all([loadIngredients(), loadShoppingList()]);
 }
 
-async function loadRecipes() {
+// --- Meals tab: Calendar | Meal Plan | Items down the left; the shopping list stays beside each ---
+const MEALS_TABS = ['calendar', 'plan', 'ingredients', 'stats'];
+let mealsTab = 'ingredients';
+try { if (MEALS_TABS.includes(localStorage.getItem('mealsTab'))) mealsTab = localStorage.getItem('mealsTab'); } catch (e) { }
+
+function setMealsTab(tab) {
+    if (!MEALS_TABS.includes(tab)) tab = 'ingredients';
+    mealsTab = tab;
+    try { localStorage.setItem('mealsTab', tab); } catch (e) { }
+    document.querySelectorAll('#recipes-view .meals-tab').forEach(btn => {
+        const on = btn.dataset.tab === tab;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    for (const name of MEALS_TABS) document.getElementById(`meals-pane-${name}`).hidden = name !== tab;
+    if (tab === 'calendar') openCalendarView(true);
+    if (tab === 'plan') loadMealPlan();
+    // Items get their pictures while their list is showing
+    if (tab === 'ingredients') renderIngredientList();
+    if (tab === 'stats') loadMealStats();
+}
+
+// --- Meals tab: Stats. Each day's food over the last week or month, from the meals on the calendar
+// (the meal plan only fills days from today on, so it isn't counted), against UK guidance for an
+// adult: the NHS's 2,000 / 2,500 kcal for women and men, the reference intakes on food labels, and
+// the Chief Medical Officers' 14 units of alcohol a week (2 a day on average).
+const MEAL_STATS_MEASURES = [
+    { key: 'kcal', label: 'Calories', unit: 'kcal a day', guides: [{ value: 2000, label: '2,000 women' }, { value: 2500, label: '2,500 men' }],
+        about: 'NHS: about 2,000 kcal a day for women, 2,500 for men' },
+    { key: 'protein', label: 'Protein', unit: 'g a day', guides: [{ value: 50, label: '50 g' }], about: 'Reference intake: 50 g a day' },
+    { key: 'carbs', label: 'Carbs', unit: 'g a day', guides: [{ value: 260, label: '260 g' }], about: 'Reference intake: 260 g a day' },
+    { key: 'fat', label: 'Fat', unit: 'g a day', guides: [{ value: 70, label: '70 g' }], about: 'Reference intake: no more than 70 g a day' },
+    { key: 'units', label: 'Alcohol', unit: 'units a day', guides: [{ value: 2, label: '2 (14 a week)' }],
+        about: 'No more than 14 units a week, spread over 3 or more days' },
+];
+let mealStatsDays = 7; // 7 or 30, the days up to and including today
+try { if (localStorage.getItem('mealStatsDays') === '30') mealStatsDays = 30; } catch (e) { }
+let mealStatsEntries = null; // the last 30 days' meals from the calendar, or null until loaded
+let mealStatsFamily = []; // [{ id, name }]
+let mealStatsPeople = null; // whose food is showing: a Set of ids, or null for everyone
+let mealStatsDayRows = []; // the days drawn, for the hover tooltip
+let mealStatsToken = 0;
+
+async function loadMealStats() {
+    const token = ++mealStatsToken;
+    const today = new Date();
+    const start = calendarDateKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 29));
+    const end = calendarDateKey(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+    renderMealStats();
     try {
-        const res = await fetch('/api/recipes');
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load meals');
-        recipeList = data.recipes || [];
+        const [entryData, family] = await Promise.all([
+            fetch(`/api/calendar-entries?start=${start}&end=${end}`).then(r => r.json()),
+            fetch('/api/games/players').then(r => r.json()).catch(() => []),
+            loadMealNutritionData()
+        ]);
+        if (token !== mealStatsToken) return;
+        if (!entryData.entries) throw new Error(entryData.error || 'Failed to load the meals');
+        mealStatsEntries = entryData.entries.filter(entry => entry.meal);
+        mealStatsFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
+        mealStatsPeople = familyStillThere(mealStatsPeople, mealStatsFamily);
+        renderMealStats();
     } catch (err) {
-        recipeList = [];
-        document.getElementById('recipes-list').innerHTML = `<p class="settings-hint">Couldn't load meals: ${escapeHtml(err.message)}</p>`;
-        return;
+        if (token !== mealStatsToken) return;
+        document.getElementById('meal-stats-body').innerHTML = `<p class="settings-hint meal-stats-empty">Couldn't load the meals: ${escapeHtml(err.message)}</p>`;
     }
-    renderRecipeList();
 }
 
-function renderRecipeList() {
-    const listEl = document.getElementById('recipes-list');
-    const filter = document.getElementById('recipes-filter').value.trim().toLowerCase();
-    const shown = recipeList.filter(r => !filter || r.name.toLowerCase().includes(filter));
-    if (!recipeList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No meals yet. Click + New to add one.</p>';
-        return;
-    }
-    if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No meals match.</p>';
-        return;
-    }
-    listEl.innerHTML = shown.map(r => `
-        <button type="button" class="recipe-list-item${recipeDraft && recipeDraft.id === r.id ? ' active' : ''}" data-id="${escapeHtml(r.id)}">
-            <span class="recipe-list-name">${escapeHtml(r.name)}</span>
-            <span class="recipe-list-meta">${r.ingredientCount} ingredient${r.ingredientCount === 1 ? '' : 's'}</span>
-        </button>`).join('');
-    listEl.querySelectorAll('.recipe-list-item').forEach(btn => {
-        btn.onclick = () => selectRecipe(btn.dataset.id);
+function setMealStatsDays(days) {
+    mealStatsDays = days;
+    try { localStorage.setItem('mealStatsDays', String(days)); } catch (e) { }
+    renderMealStats();
+}
+
+function setMealStatsPeople(people) {
+    mealStatsPeople = people;
+    renderMealStats();
+}
+
+// As on a day's view: a meal counts if it's for one of the people picked or not set for anyone
+const mealStatsForPerson = entry => mealForPeople(mealStatsPeople, entry.meal.family);
+
+// The period's days, oldest first: { date, d, logged (any meals), t (sumNutrition of them) }
+function mealStatsDayList() {
+    const today = new Date();
+    return Array.from({ length: mealStatsDays }, (_, i) => {
+        const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (mealStatsDays - 1 - i));
+        const date = calendarDateKey(d);
+        const meals = mealStatsEntries.filter(entry => entry.date === date && mealStatsForPerson(entry));
+        return { date, d, logged: meals.length > 0, t: sumNutrition(meals.flatMap(entry => mealDayRows(entry.meal))) };
     });
 }
 
-function confirmDiscardRecipe() {
-    return !recipeIsDirty() || confirm('Discard the unsaved changes to this meal?');
+// A day's figure for a measure, or null if it has none (no meals, nothing with calories set, or
+// protein, carbs and fat set on none of what's counted)
+function mealStatsValue(day, key) {
+    const t = day.t;
+    if (!day.logged || !t.counted) return null;
+    if (key === 'kcal') return t.kcal;
+    if (key === 'units') return t.alcohol / ALCOHOL_GRAMS_PER_UNIT;
+    return t.noMacros.length < t.counted ? t[key] : null;
 }
 
-function openRecipeDraft(recipe) {
-    recipeDraft = { id: recipe.id || null, name: recipe.name || '', ingredients: (recipe.ingredients || []).map(i => ({ ingredientId: i.ingredientId || null, name: i.name || '', amount: i.amount || '', unit: i.unit || '' })) };
-    recipeSavedJson = JSON.stringify({ name: recipeDraft.name, ingredients: recipeDraft.ingredients });
-    setRecipeStatus('', false);
-    for (const f of ['amount', 'unit', 'ingredient']) document.getElementById(`recipe-${f}-input`).value = '';
-    renderRecipeEditor();
-    renderRecipeList();
+function formatMealStat(key, value) {
+    if (key === 'kcal') return formatKcal(value);
+    if (key === 'units') {
+        const units = Math.round(value * 10) / 10;
+        return `${units} unit${units === 1 ? '' : 's'}`;
+    }
+    return formatGrams(value);
 }
 
-async function selectRecipe(id) {
-    if (recipeDraft && recipeDraft.id === id) return;
-    if (!confirmDiscardRecipe()) return;
+// The smallest round number (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6 or 8 times a power of ten) that's at
+// least v, for the top of a chart
+function niceCeil(v) {
+    if (!(v > 0)) return 1;
+    const pow = 10 ** Math.floor(Math.log10(v));
+    return [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].map(m => m * pow).find(n => n >= v - 1e-9);
+}
+
+function renderMealStatsFamily() {
+    renderFamilyBar(document.getElementById('meal-stats-family'), mealStatsFamily, mealStatsPeople, setMealStatsPeople);
+}
+
+// The average of a measure over the days that have it: a day's for most, a week's for alcohol
+function mealStatsTile(m, days) {
+    const values = days.map(d => mealStatsValue(d, m.key)).filter(v => v != null);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const value = !values.length ? '–'
+        : m.key === 'units' ? `${Math.round(avg * 7 * 10) / 10} a week` : formatMealStat(m.key, avg).replace(' kcal', '');
+    return `
+        <div class="meal-stats-tile">
+            <span class="meal-stats-tile-label">${m.label}${m.key === 'kcal' && values.length ? ' (kcal)' : ''}</span>
+            <span class="meal-stats-tile-value${values.length ? '' : ' muted'}">${escapeHtml(value)}</span>
+            <span class="meal-stats-tile-guide">${values.length ? escapeHtml(m.about) : 'No figures set'}</span>
+        </div>`;
+}
+
+// A bar for each day, with a dashed line at each recommended amount
+function mealStatsChart(m, days) {
+    const values = days.map(d => mealStatsValue(d, m.key));
+    const top = niceCeil(Math.max(...values.filter(v => v != null), ...m.guides.map(g => g.value)) * 1.08);
+    const pct = v => `${Math.min(100, v / top * 100).toFixed(2)}%`;
+    const month = days.length > 7;
+    const bars = values.map((v, i) => `
+        <div class="meal-stats-col" data-key="${m.key}" data-i="${i}">
+            ${v > 0 ? `<span class="meal-stats-bar" style="height:${pct(v)}"></span>` : ''}
+        </div>`).join('');
+    // Labels at alternate ends, so two lines close together don't have theirs on top of each other
+    const guides = m.guides.map((g, i) => `
+        <div class="meal-stats-guide${i % 2 ? ' left' : ''}" style="bottom:${pct(g.value)}"><span>${escapeHtml(g.label)}</span></div>`).join('');
+    const xLabels = days.map((d, i) => `<span>${month
+        ? (i === 0 || d.d.getDate() % 5 === 0 ? d.d.getDate() : '')
+        : d.d.toLocaleDateString(undefined, { weekday: 'short' })}</span>`).join('');
+    return `
+        <figure class="meal-stats-chart">
+            <figcaption><span class="meal-stats-chart-title">${m.label}</span> <span class="meal-stats-chart-unit">${m.unit}</span></figcaption>
+            <div class="meal-stats-plot">
+                <span class="meal-stats-top">${top.toLocaleString()}</span>
+                <div class="meal-stats-bars">${bars}${guides}</div>
+            </div>
+            <div class="meal-stats-xaxis">${xLabels}</div>
+        </figure>`;
+}
+
+function renderMealStats() {
+    document.querySelectorAll('#meal-stats-period button').forEach(btn => {
+        const on = Number(btn.dataset.days) === mealStatsDays;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on);
+    });
+    renderMealStatsFamily();
+    const body = document.getElementById('meal-stats-body');
+    if (!mealStatsEntries) {
+        body.innerHTML = '<p class="settings-hint meal-stats-empty">Loading…</p>';
+        return;
+    }
+    const days = mealStatsDayRows = mealStatsDayList();
+    const logged = days.filter(d => d.logged).length;
+    const who = familyNames(mealStatsFamily, mealStatsPeople); // '' for everyone
+    const period = mealStatsDays === 7 ? 'week' : 'month';
+    if (!logged) {
+        body.innerHTML = mealStatsPeople?.size === 0 ? '<p class="settings-hint meal-stats-empty">No one is picked. Pick someone above to see their stats.</p>'
+            : `<p class="settings-hint meal-stats-empty">No meals on the calendar${who ? ` for ${escapeHtml(who)}` : ''}
+            in the last ${period}. Meals added to days on the Calendar tab are counted here.</p>`;
+        return;
+    }
+    const missing = [...new Set(days.flatMap(d => d.t.missing))];
+    const tableRows = days.map((d, i) => `
+        <tr><td>${escapeHtml(d.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
+            ${MEAL_STATS_MEASURES.map(m => {
+                const v = mealStatsValue(d, m.key);
+                return `<td class="num">${v == null ? '' : escapeHtml(formatMealStat(m.key, v))}</td>`;
+            }).join('')}</tr>`).join('');
+    body.innerHTML = `
+        <p class="settings-hint">Daily averages ${mealStatsPeople?.size === 1 ? `for ${escapeHtml(who)}` : 'per person'} over the
+            ${logged} day${logged === 1 ? '' : 's'} with meals on the calendar in the last ${period} (including today).
+            Days with no meals are left out. Lines show UK guidance for an adult.</p>
+        <div class="meal-stats-tiles">${MEAL_STATS_MEASURES.map(m => mealStatsTile(m, days)).join('')}</div>
+        <div class="meal-stats-charts">${MEAL_STATS_MEASURES.map(m => mealStatsChart(m, days)).join('')}</div>
+        ${missing.length ? `<p class="settings-hint">Not counted, as they have no calories set: ${escapeHtml(missing.join(', '))}</p>` : ''}
+        <details class="meal-stats-table">
+            <summary>Show as a table</summary>
+            <div class="meal-day-scroll"><table class="meal-day-table">
+                <thead><tr><th>Day</th>${MEAL_STATS_MEASURES.map(m => `<th class="num">${m.label}</th>`).join('')}</tr></thead>
+                <tbody>${tableRows}</tbody>
+            </table></div>
+        </details>
+        <div id="meal-stats-tip" class="meal-stats-tip" hidden></div>`;
+    body.querySelectorAll('.meal-stats-col').forEach(col => {
+        col.onpointerenter = () => showMealStatsTip(col);
+        col.onpointerleave = () => { document.getElementById('meal-stats-tip').hidden = true; };
+    });
+}
+
+// The day's figure over its bar
+function showMealStatsTip(col) {
+    const tip = document.getElementById('meal-stats-tip');
+    const day = mealStatsDayRows[Number(col.dataset.i)];
+    if (!tip || !day) return;
+    const v = mealStatsValue(day, col.dataset.key);
+    const what = v != null ? formatMealStat(col.dataset.key, v) : day.logged ? 'No figures set' : 'No meals on the calendar';
+    tip.innerHTML = `<b>${escapeHtml(day.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>${escapeHtml(what)}`;
+    tip.hidden = false;
+    const body = document.getElementById('meal-stats-body').getBoundingClientRect();
+    const rect = (col.querySelector('.meal-stats-bar') || col).getBoundingClientRect();
+    const left = Math.max(0, Math.min(body.width - tip.offsetWidth, rect.left - body.left + rect.width / 2 - tip.offsetWidth / 2));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${rect.top - body.top + document.getElementById('meal-stats-body').scrollTop - tip.offsetHeight - 6}px`;
+}
+
+// --- Meals tab: shopping lists, each free text with one item per line, saved shortly after each change ---
+let shoppingLists = [];       // [{ id, name, text }] as last loaded
+let shoppingSavedText = '';   // the list as the server last had it
+let shoppingSavedSkip = -1;   // the line being typed when it was saved, not yet made an ingredient
+let shoppingSaveTimer = null;
+
+// The list showing, here and in the slideshow, kept on this device; the first when it's gone
+const currentShoppingList = (lists = shoppingLists) =>
+    lists.find(l => l.id === localStorage.getItem('shoppingListId')) || lists[0];
+const setShoppingListId = id => localStorage.setItem('shoppingListId', id);
+
+// Leaves the box alone while someone is typing in it or a change is waiting to be saved
+async function loadShoppingList() {
+    const box = document.getElementById('shopping-list');
+    shoppingProductFailed.clear();
+    if (shoppingSaveTimer || document.activeElement === box) return;
     try {
-        const res = await fetch(`/api/recipes/${encodeURIComponent(id)}`);
+        const res = await fetch('/api/shopping-lists');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load meal');
-        openRecipeDraft(data);
+        if (!res.ok) throw new Error(data.error || 'Failed to load the shopping lists');
+        if (shoppingSaveTimer || document.activeElement === box) return;
+        shoppingLists = data.lists;
+        showShoppingList();
     } catch (err) {
-        showToast(`Couldn't open meal: ${err.message}`, 'error');
-        await loadRecipes();
+        setCalendarSettingsStatus('shopping-status', `Couldn't load the shopping list: ${err.message}`, true);
     }
 }
 
-function newRecipe() {
-    if (!confirmDiscardRecipe()) return;
-    openRecipeDraft({});
-    document.getElementById('recipe-name').focus();
+// Puts the current list in the box, with its tab picked
+function showShoppingList() {
+    const box = document.getElementById('shopping-list');
+    const list = currentShoppingList();
+    hideShoppingSuggestions();
+    shoppingSavedText = box.value = list?.text || '';
+    shoppingSavedSkip = -1;
+    if (box.dataset.listId !== list?.id) box.scrollTop = 0;
+    box.dataset.listId = list?.id || '';
+    renderShoppingTabs();
+    renderShoppingThumbs();
+    showShoppingPictures();
 }
 
-function renderRecipeEditor() {
-    const editor = document.getElementById('recipe-editor');
-    document.getElementById('recipe-empty').hidden = !!recipeDraft;
-    editor.hidden = !recipeDraft;
-    if (!recipeDraft) return;
-    document.getElementById('recipe-name').value = recipeDraft.name;
-    renderRecipeIngredients();
-    updateRecipeButtons();
+function renderShoppingTabs() {
+    const current = currentShoppingList();
+    document.getElementById('shopping-tabs').innerHTML = shoppingLists.map(l => `
+        <button type="button" role="tab" class="shopping-tab${l === current ? ' active' : ''}" aria-selected="${l === current}"
+            onclick="switchShoppingList('${escapeHtml(l.id)}')">${escapeHtml(l.name)}</button>`).join('');
+    document.getElementById('btn-shopping-delete').disabled = shoppingLists.length < 2;
 }
 
-function renderRecipeIngredients() {
-    const list = document.getElementById('recipe-ingredients');
-    const items = recipeDraft.ingredients;
-    list.innerHTML = items.map((ing, i) => `
-        <li class="recipe-ingredient" data-i="${i}">
-            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(ing.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount ${i + 1}">
-            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(ing.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit ${i + 1}">
-            <input type="text" data-field="name" value="${escapeAttr(ing.name)}" maxlength="300" list="ingredient-names" aria-label="Ingredient ${i + 1}">
-            <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
-            <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === items.length - 1 ? 'disabled' : ''}>▼</button>
-            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
-        </li>`).join('');
-    list.querySelectorAll('.recipe-ingredient').forEach(row => {
-        const i = Number(row.dataset.i);
-        const field = name => row.querySelector(`input[data-field="${name}"]`);
-        row.querySelectorAll('input').forEach(input => {
-            input.oninput = () => {
-                // Picking a saved ingredient fills an empty amount/unit with its one-person quantity
-                if (input.dataset.field === 'name' && fillIngredientQuantity(input, field('amount'), field('unit'))) {
-                    items[i].amount = field('amount').value;
-                    items[i].unit = field('unit').value;
-                }
-                items[i][input.dataset.field] = input.value;
-                if (input.dataset.field === 'name') items[i].ingredientId = findIngredientByName(input.value)?.id || null;
-                updateRecipeButtons();
-            };
-            // Enter in a row jumps to the "add" boxes, ready for the next ingredient
-            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('recipe-amount-input').focus(); } };
-        });
-        row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
-            btn.onclick = () => {
-                const act = btn.dataset.act;
-                if (act === 'remove') items.splice(i, 1);
-                else {
-                    const j = act === 'up' ? i - 1 : i + 1;
-                    [items[i], items[j]] = [items[j], items[i]];
-                }
-                renderRecipeIngredients();
-                updateRecipeButtons();
-            };
-        });
+// Saves what's typed on the list showing before moving to another
+async function switchShoppingList(id) {
+    if (id === currentShoppingList()?.id) return;
+    await saveShoppingListNow();
+    setShoppingListId(id);
+    showShoppingList();
+}
+
+async function shoppingListsRequest(url, method, body) {
+    const res = await fetch(url, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined
     });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
 }
 
-function markRecipeDirty() {
-    if (!recipeDraft) return;
-    recipeDraft.name = document.getElementById('recipe-name').value;
-    updateRecipeButtons();
+const shoppingListUrl = list => `/api/shopping-lists/${encodeURIComponent(list.id)}`;
+
+async function createShoppingList() {
+    const name = prompt('Name for the new list:', '')?.trim();
+    if (!name) return;
+    try {
+        await saveShoppingListNow();
+        const data = await shoppingListsRequest('/api/shopping-lists', 'POST', { name });
+        shoppingLists = data.lists;
+        setShoppingListId(data.list.id);
+        showShoppingList();
+        document.getElementById('shopping-list').focus();
+    } catch (err) {
+        showToast(`Couldn't add the list: ${err.message}`);
+    }
 }
 
-function updateRecipeButtons() {
-    const dirty = recipeIsDirty();
-    const isNew = !recipeDraft.id;
-    document.getElementById('recipe-save-btn').disabled = !dirty && !isNew;
-    document.getElementById('recipe-revert-btn').style.display = !dirty || isNew ? 'none' : '';
-    document.getElementById('recipe-delete-btn').textContent = isNew ? 'Cancel' : 'Delete';
+async function renameShoppingList() {
+    const list = currentShoppingList();
+    if (!list) return;
+    const name = prompt('Rename this list:', list.name)?.trim();
+    if (!name || name === list.name) return;
+    try {
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'PUT', { name });
+        list.name = data.list.name;
+        renderShoppingTabs();
+    } catch (err) {
+        showToast(`Couldn't rename the list: ${err.message}`);
+    }
 }
 
-function addRecipeIngredient() {
-    const [amount, unit, name] = ['amount', 'unit', 'ingredient'].map(f => {
-        const input = document.getElementById(`recipe-${f}-input`);
-        const value = input.value.trim();
-        input.value = '';
-        return value;
-    });
-    document.getElementById('recipe-amount-input').focus();
-    if (!name || !recipeDraft) return;
-    recipeDraft.ingredients.push({ ingredientId: findIngredientByName(name)?.id || null, name, amount, unit });
-    renderRecipeIngredients();
-    updateRecipeButtons();
+// Not the only one: there's always a list to put things on
+async function deleteShoppingList() {
+    const list = currentShoppingList();
+    if (!list || shoppingLists.length < 2) return;
+    const items = document.getElementById('shopping-list').value.split('\n').filter(l => l.trim()).length;
+    if (!confirm(`Delete the "${list.name}" list${items ? ` and the ${items} item${items === 1 ? '' : 's'} on it` : ''}?`)) return;
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = null;
+    try {
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'DELETE');
+        shoppingLists = data.lists;
+        showShoppingList();
+    } catch (err) {
+        showToast(`Couldn't delete the list: ${err.message}`);
+    }
 }
 
-function revertRecipe() {
-    if (!recipeDraft) return;
-    openRecipeDraft({ id: recipeDraft.id, ...JSON.parse(recipeSavedJson) });
+// --- Shopping list: the saved ingredients (the same list meals use) offered while typing a line ---
+let shoppingSuggestions = []; // ingredient names offered for the line being typed
+let shoppingSuggestIndex = -1; // the one picked with the arrow keys
+
+// The line the caret is on: { start, end, text, index }
+function shoppingCaretLine(box) {
+    const value = box.value;
+    const start = value.lastIndexOf('\n', box.selectionStart - 1) + 1;
+    const newline = value.indexOf('\n', box.selectionStart);
+    return { start, end: newline < 0 ? value.length : newline, text: value.slice(start, newline < 0 ? undefined : newline),
+        index: value.slice(0, start).split('\n').length - 1 };
 }
 
-async function saveRecipe() {
-    if (!recipeDraft) return;
-    // An ingredient typed but not yet added still counts
-    if (document.getElementById('recipe-ingredient-input').value.trim()) addRecipeIngredient();
-    const name = recipeDraft.name.trim();
-    if (!name) { setRecipeStatus('Enter a meal name.', true); document.getElementById('recipe-name').focus(); return; }
-    const ingredients = recipeDraft.ingredients
-        .map(i => ({ name: i.name.trim(), amount: i.amount.trim(), unit: i.unit.trim() }))
-        .filter(i => i.name);
+// While typing at the end of a line: saved ingredients whose name (or a word of it) starts with
+// what's typed after the amount ("2 pints of mi" offers "Milk")
+function updateShoppingSuggestions() {
+    const box = document.getElementById('shopping-list');
+    const line = shoppingCaretLine(box);
+    const typed = splitShoppingLine(line.text).item.trim().toLowerCase();
+    const atEnd = box.selectionStart === box.selectionEnd && box.selectionStart === line.end;
+    const wordStarts = name => name.toLowerCase().split(/[^\p{L}\p{N}]+/u).some(w => w.startsWith(typed));
+    shoppingSuggestions = !typed || !atEnd ? [] : ingredientList
+        .filter(i => !i.parts && i.name.toLowerCase() !== typed && wordStarts(i.name))
+        .sort((a, b) => b.name.toLowerCase().startsWith(typed) - a.name.toLowerCase().startsWith(typed))
+        .slice(0, 6).map(i => i.name);
+    shoppingSuggestIndex = -1;
+    renderShoppingSuggestions(line.index);
+}
 
-    const btn = document.getElementById('recipe-save-btn');
+function renderShoppingSuggestions(lineIndex) {
+    const menu = document.getElementById('shopping-suggest');
+    if (!shoppingSuggestions.length) {
+        menu.hidden = true;
+        return;
+    }
+    const box = document.getElementById('shopping-list');
+    const style = getComputedStyle(box);
+    if (lineIndex !== undefined) {
+        // Just under the line being typed
+        menu.style.top = `${box.offsetTop + parseFloat(style.paddingTop) + (lineIndex + 1) * parseFloat(style.lineHeight) - box.scrollTop}px`;
+        menu.style.left = `${box.offsetLeft + parseFloat(style.paddingLeft) - box.scrollLeft}px`;
+    }
+    menu.innerHTML = shoppingSuggestions.map((name, i) => `
+        <button type="button" class="shopping-suggestion${i === shoppingSuggestIndex ? ' active' : ''}"
+            onmousedown="event.preventDefault()" onclick="acceptShoppingSuggestion(${i})">${escapeHtml(name)}</button>`).join('');
+    menu.hidden = false;
+}
+
+function hideShoppingSuggestions() {
+    shoppingSuggestions = [];
+    document.getElementById('shopping-suggest').hidden = true;
+}
+
+// Arrow keys move through the suggestions, Tab or Enter takes one (Tab the first if none is picked;
+// Enter only a picked one, so it still starts a new line), Escape closes them
+function shoppingListKeydown(event) {
+    if (!shoppingSuggestions.length) return;
+    const n = shoppingSuggestions.length;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        shoppingSuggestIndex = event.key === 'ArrowDown' ? (shoppingSuggestIndex + 1) % n : (shoppingSuggestIndex - 1 + n) % n;
+        renderShoppingSuggestions();
+    } else if (event.key === 'Tab' || (event.key === 'Enter' && shoppingSuggestIndex >= 0)) {
+        acceptShoppingSuggestion(Math.max(shoppingSuggestIndex, 0));
+    } else if (event.key === 'Escape') {
+        hideShoppingSuggestions();
+    } else {
+        return;
+    }
+    event.preventDefault();
+}
+
+// Puts the ingredient's name in place of what was typed, keeping the amount
+function acceptShoppingSuggestion(i) {
+    const box = document.getElementById('shopping-list');
+    const line = shoppingCaretLine(box);
+    const { before, after } = splitShoppingLine(line.text);
+    const name = shoppingSuggestions[i];
+    box.value = box.value.slice(0, line.start) + before + name + after + box.value.slice(line.end);
+    box.selectionStart = box.selectionEnd = line.start + before.length + name.length;
+    hideShoppingSuggestions();
+    shoppingListEdited();
+}
+
+function shoppingListEdited() {
+    updateShoppingSuggestions();
+    renderShoppingThumbs(); // pictures follow their lines straight away; new lines get theirs once typing pauses
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = setTimeout(saveShoppingListNow, 800);
+}
+
+async function saveShoppingListNow() {
+    clearTimeout(shoppingSaveTimer);
+    shoppingSaveTimer = null;
+    const box = document.getElementById('shopping-list');
+    const text = box.value;
+    // A line still being typed isn't made an ingredient yet ("po" on the way to "Potatoes"); it is
+    // once the caret leaves it or the list loses focus
+    const skipLine = document.activeElement === box ? shoppingCaretLine(box).index : -1;
+    showShoppingPictures();
+    const list = currentShoppingList();
+    if (!list || (text === shoppingSavedText && skipLine === shoppingSavedSkip)) return;
+    try {
+        const data = await shoppingListsRequest(shoppingListUrl(list), 'PUT', { text, skipLine });
+        list.text = text;
+        shoppingSavedText = text;
+        shoppingSavedSkip = skipLine;
+        setCalendarSettingsStatus('shopping-status', '');
+        // New items were added to the ingredients, for meals to offer too
+        if (data.ingredientsAdded) loadIngredients();
+    } catch (err) {
+        setCalendarSettingsStatus('shopping-status', `Couldn't save the shopping list: ${err.message}`, true);
+    }
+}
+
+// Saves any unsaved typing first, so what's sent is what's on screen
+async function emailShoppingList() {
+    const btn = document.getElementById('btn-shopping-email');
+    if (!document.getElementById('shopping-list').value.trim()) {
+        showToast('The shopping list is empty');
+        return;
+    }
     btn.disabled = true;
     try {
-        const id = recipeDraft.id;
-        const res = await fetch(id ? `/api/recipes/${encodeURIComponent(id)}` : '/api/recipes', {
-            method: id ? 'PUT' : 'POST',
+        await saveShoppingListNow();
+        const list = currentShoppingList();
+        const data = await shoppingListsRequest(`${shoppingListUrl(list)}/email`, 'POST');
+        showToast(`${list.name} emailed to ${data.to}`, 'success', 3000);
+    } catch (err) {
+        showToast(err.message);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function clearShoppingList() {
+    const box = document.getElementById('shopping-list');
+    if (!box.value.trim() || !confirm(`Clear everything on the "${currentShoppingList()?.name}" list?`)) return;
+    box.value = '';
+    saveShoppingListNow();
+}
+
+// --- Shopping list pictures: a matching product (Open Food Facts, via the server) beside each line ---
+// Clicking one offers the alternatives; the one chosen is kept for that item from then on.
+const shoppingProducts = new Map(); // line (lowercased) -> { product: { code, name, brand, image } | null, picked }
+const shoppingProductStale = new Set(); // lines to look up again, still showing their old picture meanwhile
+const shoppingProductFailed = new Set(); // lines whose lookup failed; tried again when the list next loads
+let shoppingLookupRunning = false;
+
+const shoppingLineKey = line => line.trim().toLowerCase();
+
+// What needs a picture: the shopping list's lines, and the single items while their list or a
+// meal day is showing
+function shoppingPictureItems() {
+    const lines = document.getElementById('shopping-list').value.split('\n');
+    const showing = appView === 'recipes' && mealsTab === 'ingredients';
+    return [...lines, ...(showing ? ingredientList.filter(i => !i.parts).map(i => i.name) : []),
+        ...(mealDayDate ? mealDayPictureNames() : [])].map(shoppingLineKey);
+}
+
+function renderProductPictures() {
+    renderShoppingThumbs();
+    renderIngredientPictures();
+    renderItemBuilderPicture();
+    renderMealDayPictures();
+}
+
+// Draws the known pictures, then looks up the items that don't have one yet, one at a time
+async function showShoppingPictures() {
+    renderProductPictures();
+    if (shoppingLookupRunning) return;
+    shoppingLookupRunning = true;
+    try {
+        for (;;) {
+            const box = document.getElementById('shopping-list');
+            // Not the line still being typed ("po" on the way to "Potatoes")
+            const typing = document.activeElement === box ? shoppingLineKey(shoppingCaretLine(box).text) : null;
+            const line = shoppingPictureItems()
+                .find(l => l && l !== typing && (!shoppingProducts.has(l) || shoppingProductStale.has(l)) && !shoppingProductFailed.has(l));
+            if (!line) break;
+            shoppingProductStale.delete(line);
+            try {
+                const res = await fetch(`/api/shopping-list/product?item=${encodeURIComponent(line)}`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error);
+                shoppingProducts.set(line, data);
+            } catch (err) {
+                console.warn(`[Shopping] No picture for "${line}":`, err.message);
+                shoppingProductFailed.add(line);
+                // Rate-limited or offline: the rest would fail too
+                if (!navigator.onLine || /too many/i.test(err.message || '')) break;
+            }
+            renderProductPictures();
+        }
+    } finally {
+        shoppingLookupRunning = false;
+    }
+}
+
+// One picture per line, in the list's left padding, lined up with the line's row. A line with no
+// picture gets a "+" to choose one.
+function renderShoppingThumbs() {
+    const box = document.getElementById('shopping-list');
+    const layer = document.getElementById('shopping-thumbs');
+    if (!box || !layer) return;
+    const style = getComputedStyle(box);
+    const rowHeight = parseFloat(style.lineHeight);
+    const top = parseFloat(style.paddingTop);
+    const size = parseFloat(getComputedStyle(document.documentElement).fontSize) * 2.9; // .shopping-thumb's height
+    layer.innerHTML = box.value.split('\n').map((line, i) => {
+        const found = shoppingProducts.get(shoppingLineKey(line));
+        if (!found) return '';
+        const position = `style="top: ${top + i * rowHeight + (rowHeight - size) / 2}px" onclick="openShoppingPicker(${i})"`;
+        const { product } = found;
+        if (!product) return `<button type="button" class="shopping-thumb shopping-thumb-empty" ${position} title="Choose a picture">+</button>`;
+        const label = product.brand ? `${product.name} (${product.brand})` : product.name;
+        return `<img class="shopping-thumb" src="${escapeHtml(product.image)}" alt="${escapeHtml(label)}"
+            title="${escapeHtml(label)} - click for others" loading="lazy" ${position}>`;
+    }).join('');
+    renderShoppingDeletes(box, top, rowHeight);
+    scrollShoppingThumbs();
+}
+
+const SHOPPING_DELETE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+
+// A delete button beside each line with something on it, in the list's right padding
+function renderShoppingDeletes(box, top, rowHeight) {
+    const outer = document.getElementById('shopping-deletes-layer');
+    const layer = document.getElementById('shopping-deletes');
+    if (!outer || !layer) return;
+    // Clear of the list's vertical scrollbar, when it has one (offsetWidth - clientWidth is both borders plus it)
+    outer.style.right = `${box.offsetWidth - box.clientWidth - 1}px`;
+    const size = parseFloat(getComputedStyle(document.documentElement).fontSize) * 2.6; // .shopping-delete's height
+    layer.innerHTML = box.value.split('\n').map((line, i) => line.trim()
+        ? `<button type="button" class="shopping-delete" style="top: ${top + i * rowHeight + (rowHeight - size) / 2}px"
+            onmousedown="event.preventDefault()" onclick="deleteShoppingLine(${i})"
+            title="Remove ${escapeAttr(line.trim())}" aria-label="Remove ${escapeAttr(line.trim())}">${SHOPPING_DELETE_ICON}</button>`
+        : '').join('');
+}
+
+// Takes a line off the list (bought) and saves straight away
+function deleteShoppingLine(index) {
+    const box = document.getElementById('shopping-list');
+    const lines = box.value.split('\n');
+    if (index < 0 || index >= lines.length) return;
+    lines.splice(index, 1);
+    const scroll = box.scrollTop;
+    box.value = lines.join('\n');
+    box.scrollTop = scroll;
+    hideShoppingSuggestions();
+    renderShoppingThumbs();
+    saveShoppingListNow();
+}
+
+function scrollShoppingThumbs() {
+    const box = document.getElementById('shopping-list');
+    const shift = `translateY(${-box.scrollTop}px)`;
+    document.getElementById('shopping-thumbs').style.transform = shift;
+    const deletes = document.getElementById('shopping-deletes');
+    if (deletes) deletes.style.transform = shift;
+}
+
+// Looks every line up again (after the supermarket or a chosen picture changes), keeping the old
+// pictures up until the new ones arrive
+function refreshShoppingPictures() {
+    for (const line of shoppingProducts.keys()) shoppingProductStale.add(line);
+    shoppingProductFailed.clear();
+    if (appView === 'recipes') showShoppingPictures();
+}
+
+// --- Choosing a different picture for a line ---
+let shoppingPickerLine = '';
+let shoppingPickerResults = [];
+
+function openShoppingPicker(index) {
+    const line = document.getElementById('shopping-list').value.split('\n')[index]?.trim();
+    if (line) openProductPicker(line);
+}
+
+// For a shopping list line or an item's name; the choice shows in both places
+function openProductPicker(line) {
+    bringModalToFront('shopping-picker-modal');
+    shoppingPickerLine = line;
+    document.getElementById('shopping-picker-item').textContent = line;
+    document.getElementById('shopping-picker-search').value = line;
+    const picked = shoppingProducts.get(shoppingLineKey(line))?.picked;
+    document.getElementById('shopping-picker-auto').hidden = !picked;
+    document.getElementById('shopping-picker-modal').style.display = 'flex';
+    searchShoppingPicker();
+}
+
+function closeShoppingPicker() {
+    document.getElementById('shopping-picker-modal').style.display = 'none';
+    document.getElementById('shopping-picker-results').innerHTML = '';
+}
+
+async function searchShoppingPicker() {
+    const query = document.getElementById('shopping-picker-search').value.trim();
+    const results = document.getElementById('shopping-picker-results');
+    if (!query) return;
+    results.innerHTML = '<p class="settings-hint shopping-picker-message">Searching Open Food Facts...</p>';
+    try {
+        const params = new URLSearchParams({ item: shoppingPickerLine, q: query });
+        const res = await fetch(`/api/shopping-list/products?${params}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        shoppingPickerResults = data.products;
+        if (!data.products.length) {
+            results.innerHTML = '<p class="settings-hint shopping-picker-message">Nothing found. Try other words, such as a brand.</p>';
+            return;
+        }
+        const current = shoppingProducts.get(shoppingLineKey(shoppingPickerLine))?.product?.code;
+        results.innerHTML = data.products.map((p, i) => `
+            <button type="button" class="shopping-picker-option${p.code === current ? ' selected' : ''}" onclick="chooseShoppingProduct(${i})">
+                <img src="${escapeHtml(p.image)}" alt="" loading="lazy">
+                <span class="shopping-picker-name">${escapeHtml(p.name)}</span>
+                <span class="shopping-picker-brand">${escapeHtml(p.brand || '')}</span>
+            </button>`).join('');
+    } catch (err) {
+        results.innerHTML = `<p class="settings-hint shopping-picker-message">Couldn't search: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+// index into the results, or -1 for no picture
+async function chooseShoppingProduct(index) {
+    const product = index < 0 ? null : shoppingPickerResults[index];
+    await saveShoppingPick('PUT', { item: shoppingPickerLine, product });
+}
+
+// Back to the picture found automatically
+async function resetShoppingProduct() {
+    await saveShoppingPick('DELETE', { item: shoppingPickerLine });
+}
+
+async function saveShoppingPick(method, body) {
+    try {
+        const res = await fetch('/api/shopping-list/product', {
+            method,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, ingredients })
+            body: JSON.stringify(body)
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'Failed to save');
-        openRecipeDraft(data);
-        setRecipeStatus('Saved.', false);
-        // Saving adds any ingredient names not seen before to the ingredient list
-        await Promise.all([loadRecipes(), loadIngredients()]);
+        // Other lines for the same item ("2 pints of milk", "milk") follow on the refresh
+        shoppingProducts.set(shoppingLineKey(body.item), data);
+        closeShoppingPicker();
+        refreshShoppingPictures();
     } catch (err) {
-        setRecipeStatus(err.message, true);
-        updateRecipeButtons();
+        showToast(`Couldn't save the picture: ${err.message}`, 'error', 4000);
     }
 }
 
-// --- Recipes tab: saved ingredients, each with the preferred quantity for one person ---
-let ingredientList = []; // [{ id, name, amount, unit }] sorted by name
+// For matching a spoken item to a line: "Some Tomatoes." and "tomato" are the same thing
+const shoppingKey = (text) => text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').trim()
+    .replace(/^(?:some|a|an|the)\s+/, '').replace(/\s+/g, ' ').replace(/(?:es|s)$/, '');
+
+function toggleShoppingVoice() {
+    toggleListening(['btn-shopping-voice'], 'Listening... e.g. "add milk", "remove eggs"', transcripts => runShoppingVoice(transcripts));
+}
+
+// The shopping list modal, from the Meals tab and the slideshow (which carries on underneath). The
+// pictures are laid out against the list's rows, so they're placed again once it's showing.
+async function openShoppingModal() {
+    bringModalToFront('shopping-modal');
+    document.getElementById('shopping-modal').style.display = 'flex';
+    renderShoppingThumbs();
+    await Promise.all([loadIngredients(), loadShoppingList()]).catch(() => { });
+    renderShoppingThumbs();
+}
+
+async function closeShoppingModal() {
+    hideShoppingSuggestions();
+    document.getElementById('shopping-modal').style.display = 'none';
+    await saveShoppingListNow();
+    // The slideshow's copy shows what was just changed
+    if (slideshow?.isActive) slideshow.loadShopping();
+}
+
+// Acts on "add <item>" or "remove <item>" (optionally "... to/from the shopping list"). Returns
+// true if one of the guesses was such a command. Quietly returns false otherwise when `quiet`
+// (the header mic, which then tries music and smart home).
+async function runShoppingVoice(transcripts, quiet = false) {
+    const addRe = /^(?:please\s+)?(?:add|buy)\s+(.+?)(?:\s+(?:to|on|onto)\s+(?:the\s+|my\s+)?(?:shopping\s+)?list)?[.!]?$/i;
+    const removeRe = /^(?:please\s+)?(?:remove|delete|cross off)\s+(.+?)(?:\s+(?:from|off)\s+(?:the\s+|my\s+)?(?:shopping\s+)?list)?[.!]?$/i;
+
+    for (const transcript of transcripts) {
+        const text = transcript.trim();
+        const add = text.match(addRe);
+        const remove = !add && text.match(removeRe);
+        if (!add && !remove) continue;
+
+        const box = document.getElementById('shopping-list');
+        const lines = box.value.split('\n');
+        while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+        const item = (add || remove)[1].trim().replace(/^some\s+/i, '');
+        const key = shoppingKey(item);
+
+        if (add) {
+            if (lines.some(l => shoppingItemKey(l) === shoppingItemKey(item))) {
+                showToast(`${item} is already on the list.`, 'info', 2500);
+                return true;
+            }
+            // A saved ingredient goes on under its saved name ("add 2 pints of milk" -> "2 pints of Milk")
+            const { before, item: name, after } = splitShoppingLine(item);
+            const saved = ingredientList.find(i => shoppingItemKey(i.name) === shoppingItemKey(name));
+            const line = saved ? before + saved.name + after : item;
+            lines.push(line.charAt(0).toUpperCase() + line.slice(1));
+            showToast(`Added ${item}`, 'success', 2500);
+            speak(`Added ${item}`);
+        } else {
+            // An exact match first, then a line that mentions it ("2 pints of milk" for "milk")
+            let index = lines.findIndex(l => shoppingKey(l) === key);
+            if (index < 0) index = lines.findIndex(l => key && shoppingKey(l).includes(key));
+            if (index < 0) {
+                showToast(`${item} isn't on the list.`, 'info', 3000);
+                return true;
+            }
+            showToast(`Removed ${lines[index].trim()}`, 'success', 2500);
+            lines.splice(index, 1);
+        }
+        box.value = lines.join('\n');
+        if (add) {
+            // Show the new line at the bottom
+            box.scrollTop = box.scrollHeight;
+            scrollShoppingThumbs();
+        }
+        await saveShoppingListNow();
+        return true;
+    }
+    if (!quiet) showToast(`"${transcripts[0]}": say "add <item>" or "remove <item>".`, 'error', 4000);
+    return false;
+}
+
+// Reads a short confirmation aloud, where the browser can, in the voice chosen for this device
+// (or not at all, where it's switched off)
+function speak(text) {
+    if (!window.speechSynthesis || speechVoiceSetting() === 'off') return;
+    speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voice = chosenSpeechVoice();
+    if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+    }
+    speechSynthesis.speak(utterance);
+}
+
+// Settings > Shopping's voice, saved on this device as each has its own voices: a voice's URI,
+// 'off' for none, or '' for the default
+function speechVoiceSetting() {
+    try { return localStorage.getItem('speechVoice') || ''; } catch { return ''; }
+}
+
+// The voice picked (null = the default)
+function chosenSpeechVoice() {
+    const uri = speechVoiceSetting();
+    return uri && uri !== 'off' ? speechSynthesis.getVoices().find(v => v.voiceURI === uri) || null : null;
+}
+
+// Lists this device's English voices (or all of them, where it has none), by accent then name.
+// Browsers load their voices late, so it's filled again when they arrive.
+function fillSpeechVoices() {
+    const select = document.getElementById('speech-voice-select');
+    if (!select) return;
+    if (!window.speechSynthesis) {
+        select.disabled = true;
+        return;
+    }
+    const voices = speechSynthesis.getVoices();
+    const english = voices.filter(v => /^en([-_]|$)/i.test(v.lang));
+    const list = (english.length ? english : voices)
+        .sort((a, b) => a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
+    const saved = speechVoiceSetting();
+    select.innerHTML = '<option value="off">Off</option><option value="">Default</option>' + list
+        .map(v => `<option value="${escapeHtml(v.voiceURI)}">${escapeHtml(v.name)} (${escapeHtml(v.lang)})</option>`).join('');
+    select.value = saved === 'off' || list.some(v => v.voiceURI === saved) ? saved : '';
+}
+window.speechSynthesis?.addEventListener('voiceschanged', fillSpeechVoices);
+
+function saveSpeechVoice() {
+    const uri = document.getElementById('speech-voice-select').value;
+    try {
+        if (uri) localStorage.setItem('speechVoice', uri);
+        else localStorage.removeItem('speechVoice');
+    } catch { }
+    if (uri !== 'off') testSpeechVoice();
+}
+
+function testSpeechVoice() {
+    if (!window.speechSynthesis) {
+        showToast("This browser can't speak.", 'error', 3000);
+        return;
+    }
+    if (speechVoiceSetting() === 'off') {
+        showToast('The voice is off: pick one to hear it.', 'info', 3000);
+        return;
+    }
+    speak('Added milk');
+}
+
+// --- Meals tab: items. Each is a single item (a quantity for one person, calories, a picture) or
+// made of other items, each at the amount it uses. Meals are made of items. ---
+let ingredientList = []; // [{ id, name, amount, unit, confirmed, nutrition, parts: null | [{ itemId, name, amount, unit }] }] sorted by name
 
 // Safe inside a double-quoted attribute (escapeHtml leaves quotes alone)
 const escapeAttr = s => escapeHtml(s).replace(/"/g, '&quot;');
 
+const itemById = id => ingredientList.find(i => i.id === id);
+
+// The item with this name, or one the shopping list counts as the same ("Eggs" and "egg")
 const findIngredientByName = name => {
-    const key = (name || '').trim().toLowerCase();
-    return key ? ingredientList.find(i => i.name.toLowerCase() === key) : undefined;
+    const lower = (name || '').trim().toLowerCase();
+    if (!lower) return undefined;
+    const key = shoppingItemKey(lower);
+    return ingredientList.find(i => i.name.toLowerCase() === lower) || (key ? ingredientList.find(i => shoppingItemKey(i.name) === key) : undefined);
 };
 
-// When the ingredient box names a saved ingredient and amount/unit are still empty, fills them
-// with its one-person quantity. Returns whether anything was filled.
-function fillIngredientQuantity(textInput, amountInput, unitInput) {
-    const match = findIngredientByName(textInput.value);
-    if (!match || amountInput.value.trim() || unitInput.value.trim()) return false;
-    if (!match.amount && !match.unit) return false;
-    amountInput.value = match.amount;
-    unitInput.value = match.unit;
-    return true;
+// Whether an item, and everything it's made of, is ticked as confirmed
+function itemConfirmed(item, seen = new Set()) {
+    if (!item) return false;
+    if (seen.has(item.id)) return true;
+    if (!item.confirmed) return false;
+    seen.add(item.id);
+    return (item.parts || []).every(p => itemConfirmed(itemById(p.itemId), seen));
 }
+
+// A small star after a fully confirmed item's name, wherever it shows
+const confirmedStar = item => itemConfirmed(item) ? '<span class="item-confirmed" title="Confirmed">★</span>' : '';
+
+// Whether item is made of the item with this id, directly or further down
+function itemContains(item, id, seen = new Set()) {
+    if (!item?.parts || seen.has(item.id)) return false;
+    seen.add(item.id);
+    return item.parts.some(p => p.itemId === id || itemContains(itemById(p.itemId), id, seen));
+}
+
+// What an item is, under its name: its quantity, or what it's made of
+const itemSummary = item => item.parts ? item.parts.map(p => p.name).join(', ') : [item.amount, item.unit].filter(Boolean).join(' ');
 
 function setIngredientsStatus(text, isError) {
     setCalendarSettingsStatus('ingredients-status', text, isError);
@@ -6443,50 +8379,77 @@ async function loadIngredients() {
     try {
         const res = await fetch('/api/ingredients');
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Failed to load ingredients');
+        if (!res.ok) throw new Error(data.error || 'Failed to load items');
         ingredientList = data.ingredients || [];
     } catch (err) {
         ingredientList = [];
-        setIngredientsStatus(`Couldn't load ingredients: ${err.message}`, true);
+        setIngredientsStatus(`Couldn't load items: ${err.message}`, true);
     }
     renderIngredientList();
 }
 
-// Suggestions for the meal editor's ingredient boxes
-function renderIngredientNames() {
-    document.getElementById('ingredient-names').innerHTML =
-        ingredientList.map(i => `<option value="${escapeAttr(i.name)}">`).join('');
-}
+const ITEM_GROUP_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+    stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+    <polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`;
 
+// Every item, matching the search box (by its name, or the name of something it's made of). Click
+// one to open it in the item builder; a single item's picture and calories open their own dialogs.
 function renderIngredientList() {
-    renderIngredientNames();
-
     const listEl = document.getElementById('ingredients-list');
     const filter = document.getElementById('ingredients-filter').value.trim().toLowerCase();
-    const shown = ingredientList.filter(i => !filter || i.name.toLowerCase().includes(filter));
+    const matches = i => i.name.toLowerCase().includes(filter) || (i.parts || []).some(p => p.name.toLowerCase().includes(filter));
+    const shown = ingredientList.filter(i => !filter || matches(i));
     if (!ingredientList.length) {
-        listEl.innerHTML = '<p class="settings-hint">No ingredients yet. Add one below.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No items yet. Click + New Item to add one.</p>';
         return;
     }
     if (!shown.length) {
-        listEl.innerHTML = '<p class="settings-hint">No matching ingredients.</p>';
+        listEl.innerHTML = '<p class="settings-hint">No matching items.</p>';
         return;
     }
-    listEl.innerHTML = shown.map(i => `
-        <div class="recipe-ingredient ingredient-row" data-id="${escapeAttr(i.id)}">
-            <input type="text" data-field="name" value="${escapeAttr(i.name)}" maxlength="300" aria-label="Ingredient name">
-            <input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(i.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount for one person">
-            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(i.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">
-            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Delete">✕</button>
-        </div>`).join('');
-    listEl.querySelectorAll('.ingredient-row').forEach(row => {
-        const ingredient = ingredientList.find(i => i.id === row.dataset.id);
-        // Each edit is saved as soon as you leave the box (or press Enter)
-        row.querySelectorAll('input').forEach(input => {
-            input.onchange = () => updateIngredient(ingredient, row);
-            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } };
-        });
-        row.querySelector('[data-act="remove"]').onclick = () => removeIngredient(ingredient);
+    listEl.innerHTML = shown.map(i => {
+        const kcal = ingredientCaloriesButton(i);
+        const summary = itemSummary(i);
+        return `
+        <div class="item-row" data-id="${escapeAttr(i.id)}" role="button" tabindex="0" title="Click to change">
+            ${i.parts ? `<span class="ingredient-pic item-group-pic" title="Made of other items">${ITEM_GROUP_ICON}</span>`
+                : '<button type="button" class="ingredient-pic" data-act="pic" title="Choose a picture"></button>'}
+            <span class="item-row-text">
+                <span class="item-row-name">${escapeHtml(i.name)}${confirmedStar(i)}</span>
+                ${summary ? `<span class="item-row-meta">${escapeHtml(summary)}</span>` : ''}
+            </span>
+            <button type="button" class="recipe-kcal ${kcal.cls}" data-act="kcal" title="${escapeAttr(kcal.title)}">${escapeHtml(kcal.text)}</button>
+        </div>`;
+    }).join('');
+    listEl.querySelectorAll('.item-row').forEach(row => {
+        const item = itemById(row.dataset.id);
+        row.onclick = e => { if (!e.target.closest('[data-act]')) openItemBuilder(item); };
+        row.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); openItemBuilder(item); } };
+        row.querySelector('[data-act="kcal"]').onclick = () => item.parts ? openItemBuilder(item) : openNutritionDialog(item);
+        const pic = row.querySelector('[data-act="pic"]');
+        if (pic) pic.onclick = () => openProductPicker(item.name);
+    });
+    showShoppingPictures();
+}
+
+// The product picture shown on a picture button: { product, picked } as looked up, or undefined
+function setPictureButton(btn, found) {
+    const state = !found ? '' : found.product ? found.product.image : '+';
+    if (btn.dataset.state === state) return; // unchanged: don't reload the image
+    btn.dataset.state = state;
+    btn.classList.toggle('empty', state === '+' || state === '');
+    btn.innerHTML = found?.product ? `<img src="${escapeAttr(found.product.image)}" alt="" loading="lazy">` : '+';
+    btn.title = found?.product
+        ? `${found.product.name}${found.product.brand ? ` (${found.product.brand})` : ''} - click for others`
+        : 'Choose a picture';
+}
+
+// Each single item's product picture, the same one the shopping list shows for it; "+" for none
+function renderIngredientPictures() {
+    document.querySelectorAll('#ingredients-list .item-row').forEach(row => {
+        const ingredient = itemById(row.dataset.id);
+        const btn = row.querySelector('[data-act="pic"]');
+        if (btn && ingredient) setPictureButton(btn, shoppingProducts.get(shoppingLineKey(ingredient.name)));
     });
 }
 
@@ -6497,84 +8460,971 @@ async function sendIngredient(url, method, body) {
     return data;
 }
 
-async function addIngredient() {
-    const inputs = ['name', 'amount', 'unit'].map(f => document.getElementById(`ingredient-add-${f}`));
-    const [name, amount, unit] = inputs.map(input => input.value.trim());
-    if (!name) { inputs[0].focus(); return; }
-    try {
-        await sendIngredient('/api/ingredients', 'POST', { name, amount, unit });
-        inputs.forEach(input => { input.value = ''; });
-        inputs[0].focus();
-        setIngredientsStatus('', false);
-        await loadIngredients();
-    } catch (err) {
-        setIngredientsStatus(err.message, true);
+// A dialog closes when its backdrop is clicked. But a press that starts inside the dialog (selecting
+// text in a box, say) and is let go over the backdrop also counts as a click on the backdrop, which
+// closed the dialog by surprise. So a click on a backdrop only gets through when the press started
+// on that backdrop too.
+let modalPressStart = null;
+document.addEventListener('pointerdown', e => { modalPressStart = e.target; }, true);
+document.addEventListener('click', e => {
+    const started = modalPressStart;
+    modalPressStart = null;
+    if (e.target.classList?.contains('modal-overlay') && started && started !== e.target) e.stopPropagation();
+}, true);
+
+// Opens a dialog over any others already showing
+function bringModalToFront(id) {
+    document.body.appendChild(document.getElementById(id));
+}
+
+// --- The item builder: makes or changes one item, either a single item (name, quantity for one
+// person, picture and calories, found by searching products) or one made of other items (found by
+// searching the items) ---
+let itemBuilder = null; // { id|null, kind: 'single'|'group', nutrition, parts: [{ itemId, name, amount, unit }],
+                        //   product (a picture chosen here, null for none, undefined if unchanged), originalName, onSaved, savedJson }
+
+const itemBuilderField = name => document.getElementById(`item-builder-${name}`);
+
+// What would be saved, to tell whether anything has changed
+function itemBuilderSnapshot() {
+    const b = itemBuilder;
+    return JSON.stringify({
+        name: itemBuilderField('name').value.trim(), kind: b.kind, confirmed: itemBuilderField('confirmed').checked,
+        amount: itemBuilderField('amount').value.trim(), unit: itemBuilderField('unit').value.trim(),
+        nutrition: b.nutrition, parts: b.parts, product: b.product,
+    });
+}
+
+// Builders set aside while a new item is made from inside one (to be one of its parts), each with
+// what its fields held: [{ builder, fields, heading, productResults }]
+const itemBuilderStack = [];
+
+const ITEM_BUILDER_SAVED_FIELDS = ['name', 'confirmed', 'amount', 'unit', 'part-search', 'products', 'foods'];
+
+function pushItemBuilder() {
+    const fields = {};
+    for (const f of ITEM_BUILDER_SAVED_FIELDS) {
+        const el = itemBuilderField(f);
+        fields[f] = el.type === 'checkbox' ? el.checked : el.tagName === 'INPUT' ? el.value : el.innerHTML;
+    }
+    itemBuilderStack.push({ builder: itemBuilder, fields, heading: document.getElementById('item-builder-heading').textContent,
+        productResults: itemBuilderProductResults });
+    itemBuilder = null;
+}
+
+// Back to the builder set aside last, as it was
+function popItemBuilder() {
+    const { builder, fields, heading, productResults } = itemBuilderStack.pop();
+    itemBuilder = builder;
+    itemBuilderProductResults = productResults;
+    for (const f of ITEM_BUILDER_SAVED_FIELDS) {
+        const el = itemBuilderField(f);
+        if (el.type === 'checkbox') el.checked = fields[f];
+        else if (el.tagName === 'INPUT') el.value = fields[f];
+        else el.innerHTML = fields[f];
+    }
+    document.getElementById('item-builder-heading').textContent = heading;
+    itemBuilderField('delete-btn').style.display = builder.id ? '' : 'none';
+    setCalendarSettingsStatus('item-builder-status', '', false);
+    clearTimeout(itemBuilderLookupTimer);
+    setItemBuilderKind(builder.kind);
+    onItemBuilderNameInput();
+    document.getElementById('item-builder-modal').style.display = 'flex';
+}
+
+// item: the item to change, or null for a new one. options.name starts a new one with that name;
+// options.onSaved(saved) is called with the saved item, or null once it's deleted. options.nested
+// sets the open builder aside (kept as it is) until this one is closed.
+function openItemBuilder(item = null, options = {}) {
+    if (itemBuilder && options.nested) pushItemBuilder();
+    else if (itemBuilder && !confirmDiscardItemBuilder()) return;
+    itemBuilder = {
+        id: item?.id || null,
+        kind: item?.parts ? 'group' : 'single',
+        nutrition: item?.nutrition || null,
+        parts: (item?.parts || []).map(p => ({ ...p })),
+        product: undefined,
+        originalName: item?.name || '',
+        onSaved: options.onSaved || null,
+    };
+    const parent = itemBuilderStack.length ? itemBuilderStack[itemBuilderStack.length - 1].fields.name : '';
+    document.getElementById('item-builder-heading').textContent = (item ? 'Edit Item' : 'New Item') + (parent ? ` (in ${parent})` : '');
+    itemBuilderField('name').value = item?.name || options.name || '';
+    itemBuilderField('confirmed').checked = !!item?.confirmed;
+    itemBuilderField('amount').value = item?.amount || '';
+    itemBuilderField('unit').value = item ? item.unit || '' : 'g';
+    itemBuilderField('products').innerHTML = '';
+    itemBuilderField('foods').innerHTML = '';
+    clearTimeout(itemBuilderLookupTimer);
+    itemBuilderField('part-search').value = '';
+    itemBuilderField('delete-btn').style.display = item ? '' : 'none';
+    setCalendarSettingsStatus('item-builder-status', '', false);
+    itemBuilder.savedJson = itemBuilderSnapshot();
+    setItemBuilderKind(itemBuilder.kind);
+    onItemBuilderNameInput();
+    bringModalToFront('item-builder-modal');
+    document.getElementById('item-builder-modal').style.display = 'flex';
+    itemBuilderField('name').focus();
+}
+
+const itemBuilderDirty = () => !!itemBuilder && itemBuilderSnapshot() !== itemBuilder.savedJson;
+
+function confirmDiscardItemBuilder() {
+    return !itemBuilderDirty() || confirm('Discard the changes to this item?');
+}
+
+function closeItemBuilder(force = false) {
+    if (!itemBuilder || (!force && !confirmDiscardItemBuilder())) return;
+    document.getElementById('item-builder-modal').style.display = 'none';
+    itemBuilder = null;
+    if (itemBuilderStack.length) popItemBuilder();
+}
+
+function setItemBuilderKind(kind) {
+    itemBuilder.kind = kind;
+    document.querySelectorAll('#item-builder-kinds [data-kind]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.kind === kind);
+        btn.setAttribute('aria-selected', btn.dataset.kind === kind ? 'true' : 'false');
+    });
+    itemBuilderField('single').hidden = kind !== 'single';
+    itemBuilderField('group').hidden = kind !== 'group';
+    if (kind === 'single') {
+        renderItemBuilderPicture();
+        renderItemBuilderCalories();
+        // Looked up by the name it has (when opened, or after switching kind) if not already
+        if (!itemBuilderField('products').innerHTML) searchItemBuilderProducts();
+    } else {
+        renderItemBuilderParts();
+        renderItemBuilderPartResults();
     }
 }
 
-async function updateIngredient(ingredient, row) {
-    const value = f => row.querySelector(`input[data-field="${f}"]`).value.trim();
-    const body = { name: value('name'), amount: value('amount'), unit: value('unit') };
-    if (body.name === ingredient.name && body.amount === ingredient.amount && body.unit === ingredient.unit) return;
-    const renamed = body.name !== ingredient.name;
-    try {
-        Object.assign(ingredient, await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'PUT', body));
-        setIngredientsStatus('Saved.', false);
-        if (!renamed) return;
-        renameIngredientInDraft(ingredient);
-        ingredientList.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-        renderIngredientNames();
-        // Move it to its new place in the list, unless that would yank away a box being edited
-        if (!document.getElementById('ingredients-list').contains(document.activeElement)) renderIngredientList();
-    } catch (err) {
-        setIngredientsStatus(err.message, true);
-        renderIngredientList(); // put back the saved values
+// The name: another item already called that is offered to open instead (names are unique)
+function onItemBuilderNameInput() {
+    const b = itemBuilder;
+    const name = itemBuilderField('name').value.trim();
+    const same = findIngredientByName(name);
+    const note = itemBuilderField('name-note');
+    note.hidden = !same || same.id === b.id;
+    itemBuilderField('save-btn').disabled = !note.hidden; // never a second item with the same name
+    if (!note.hidden) {
+        note.innerHTML = `There's already an item called <b>${escapeHtml(same.name)}</b>. <button type="button" class="link-button">Edit it</button>`;
+        note.querySelector('button').onclick = () => {
+            if (!confirmDiscardItemBuilder()) return;
+            const onSaved = b.onSaved;
+            itemBuilder.savedJson = itemBuilderSnapshot(); // already confirmed
+            openItemBuilder(same, { onSaved });
+        };
+    }
+    if (b.kind === 'single') {
+        renderItemBuilderPicture();
+        renderItemBuilderCalories();
     }
 }
 
-// Meals refer to ingredients by id, so a rename already applies to every saved meal; bring the
-// open meal (and its saved snapshot, so it doesn't look edited) up to date as well.
-function renameIngredientInDraft(ingredient) {
-    if (!recipeDraft) return;
-    const rename = rows => rows.forEach(r => { if (r.ingredientId === ingredient.id) r.name = ingredient.name; });
-    rename(recipeDraft.ingredients);
-    const saved = JSON.parse(recipeSavedJson);
-    rename(saved.ingredients);
-    recipeSavedJson = JSON.stringify(saved);
-    renderRecipeIngredients();
-    updateRecipeButtons();
+// The single item's picture: one chosen here, else the one its name already has
+function renderItemBuilderPicture() {
+    if (!itemBuilder) return;
+    const btn = itemBuilderField('pic');
+    const name = itemBuilderField('name').value.trim();
+    const found = itemBuilder.product !== undefined ? { product: itemBuilder.product } : shoppingProducts.get(shoppingLineKey(name));
+    setPictureButton(btn, found || (name ? { product: null } : undefined));
 }
 
-async function removeIngredient(ingredient) {
-    if (!confirm(`Delete the ingredient "${ingredient.name}"?`)) return;
+let itemBuilderProductResults = [];
+let itemBuilderLookupTimer = null;
+
+// Typing a single item's name looks it up shortly after typing stops
+function scheduleItemBuilderLookup() {
+    clearTimeout(itemBuilderLookupTimer);
+    const name = itemBuilderField('name').value.trim();
+    if (name.length < 3) return;
+    itemBuilderLookupTimer = setTimeout(() => {
+        if (!itemBuilder || itemBuilder.kind !== 'single' || itemBuilderField('name').value.trim() !== name) return;
+        searchItemBuilderProducts();
+    }, 700);
+}
+
+// UK foods (for calories) and Open Food Facts products (with pictures, and calories) for the name
+async function searchItemBuilderProducts() {
+    const b = itemBuilder;
+    const query = itemBuilderField('name').value.trim();
+    const results = itemBuilderField('products');
+    if (!b || !query) return;
+    searchItemBuilderFoods(query);
+    results.innerHTML = '<p class="settings-hint shopping-picker-message">Searching Open Food Facts...</p>';
     try {
-        await sendIngredient(`/api/ingredients/${encodeURIComponent(ingredient.id)}`, 'DELETE');
-        setIngredientsStatus('', false);
-        await loadIngredients();
+        const res = await fetch(`/api/shopping-list/products?${new URLSearchParams({ q: query })}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        if (itemBuilder !== b || itemBuilderField('name').value.trim() !== query) return; // the name's changed since
+        itemBuilderProductResults = data.products;
+        const current = b.product !== undefined ? b.product?.code
+            : shoppingProducts.get(shoppingLineKey(itemBuilderField('name').value))?.product?.code;
+        results.innerHTML = (data.products.length ? data.products.map((p, i) => `
+            <button type="button" class="shopping-picker-option${p.code === current ? ' selected' : ''}" data-i="${i}">
+                <img src="${escapeAttr(p.image)}" alt="" loading="lazy">
+                <span class="shopping-picker-name">${escapeHtml(p.name)}</span>
+                <span class="shopping-picker-brand">${escapeHtml(p.brand || '')}</span>
+            </button>`).join('') : '<p class="settings-hint shopping-picker-message">No products found for this name.</p>')
+            + '<button type="button" class="btn-control ghost btn-small item-builder-no-pic" data-i="-1">No picture</button>';
+        results.querySelectorAll('[data-i]').forEach(btn => {
+            btn.onclick = () => chooseItemBuilderProduct(Number(btn.dataset.i));
+        });
     } catch (err) {
-        setIngredientsStatus(err.message, true);
+        if (itemBuilder === b) results.innerHTML = `<p class="settings-hint shopping-picker-message">Couldn't search: ${escapeHtml(err.message)}</p>`;
     }
 }
 
-// For a recipe not yet saved this button reads "Cancel" and just closes it
-async function deleteRecipe() {
-    if (!recipeDraft) return;
-    if (!recipeDraft.id) {
-        if (!confirmDiscardRecipe()) return;
-        recipeDraft = null;
-        renderRecipeEditor();
-        renderRecipeList();
+// The best few UK food table matches, as a line of chips with their calories per 100 g
+async function searchItemBuilderFoods(query) {
+    const b = itemBuilder;
+    const el = itemBuilderField('foods');
+    try {
+        const res = await fetch(`/api/nutrition/search?source=cofid&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        if (itemBuilder !== b || itemBuilderField('name').value.trim() !== query) return;
+        const foods = data.foods.slice(0, 6);
+        el.innerHTML = foods.map((f, i) => `
+            <button type="button" class="calendar-entry-tag-chip${b.nutrition?.source === 'cofid' && b.nutrition.sourceId === f.id ? ' selected' : ''}"
+                data-i="${i}" title="Use its calories (UK food tables)">${escapeHtml(f.name)} · ${Math.round(f.kcalPer100g)} kcal/100g</button>`).join('');
+        el.querySelectorAll('[data-i]').forEach(btn => {
+            btn.onclick = async () => {
+                if (await setItemBuilderNutritionFrom('cofid', foods[Number(btn.dataset.i)].id)) {
+                    el.querySelectorAll('[data-i]').forEach(other => other.classList.toggle('selected', other === btn));
+                }
+            };
+        });
+    } catch (err) {
+        if (itemBuilder === b) el.innerHTML = '';
+    }
+}
+
+// Sets the item's calories from a looked-up food (weights it already had are kept unless the food
+// lists its own). Returns whether it worked; quiet says nothing when the lookup fails.
+async function setItemBuilderNutritionFrom(source, id, quiet = false) {
+    const b = itemBuilder;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('item-builder-status', text, isError);
+    try {
+        const res = await fetch(`/api/nutrition/food/${source}/${encodeURIComponent(id)}`);
+        const food = await res.json();
+        if (!res.ok) throw new Error(food.error || 'Lookup failed');
+        if (itemBuilder !== b) return false;
+        b.nutrition = {
+            kcalPer100g: food.kcalPer100g, proteinPer100g: food.proteinPer100g ?? null, carbsPer100g: food.carbsPer100g ?? null,
+            fatPer100g: food.fatPer100g ?? null, alcoholPer100g: food.alcoholPer100g ?? null,
+            gramsPerUnit: { ...(b.nutrition?.gramsPerUnit || {}), ...food.gramsPerUnit },
+            source: food.source, sourceId: food.id, sourceName: food.name,
+        };
+        renderItemBuilderCalories();
+        setStatus(`Calories from ${food.name}.`, false);
+        return true;
+    } catch (err) {
+        if (!quiet && itemBuilder === b) setStatus(err.message, true);
+        return false;
+    }
+}
+
+// index into the results, or -1 for no picture. A product picked before a name is typed names it;
+// its calories come with it, where Open Food Facts has them.
+function chooseItemBuilderProduct(index) {
+    const b = itemBuilder;
+    const product = index < 0 ? null : itemBuilderProductResults[index];
+    b.product = product;
+    const name = itemBuilderField('name');
+    if (product && !name.value.trim()) {
+        name.value = product.name;
+        onItemBuilderNameInput();
+    }
+    itemBuilderField('products').querySelectorAll('.shopping-picker-option').forEach((btn, i) => btn.classList.toggle('selected', i === index));
+    renderItemBuilderPicture();
+    if (!product) return;
+    setItemBuilderNutritionFrom('off', product.code, true).then(ok => {
+        if (!ok && itemBuilder === b) setCalendarSettingsStatus('item-builder-status', 'Picture chosen. Open Food Facts has no calories for it.', false);
+    });
+}
+
+// The single item's calories for one person; click to look them up or type them in
+function renderItemBuilderCalories() {
+    const b = itemBuilder;
+    if (!b) return;
+    const btn = itemBuilderField('kcal');
+    const unit = itemBuilderField('unit').value;
+    const result = ingredientCalories(itemBuilderField('amount').value, unit, b.nutrition);
+    const name = itemBuilderField('name').value.trim() || 'this item';
+    btn.classList.toggle('unset', !('kcal' in result));
+    if ('kcal' in result) {
+        const macros = formatMacros(result);
+        btn.textContent = formatKcal(result.kcal);
+        btn.title = `About ${Math.round(result.grams)} g for one person${macros ? `: ${macros}` : ''}. Click to change.`;
+    } else {
+        btn.textContent = result.missing === 'nutrition' ? '+ kcal' : result.missing === 'unit' ? '? kcal' : `${Math.round(b.nutrition.kcalPer100g)}/100g`;
+        btn.title = result.missing === 'nutrition' ? 'Set calories' : result.missing === 'unit' ? `Set how much ${unitLabel(unit, name)} weighs` : 'Enter an amount to count its calories';
+    }
+}
+
+// The calories dialog works on the builder's copy, kept until the item is saved
+function openItemBuilderNutrition() {
+    const b = itemBuilder;
+    const draft = { id: b.id, name: itemBuilderField('name').value.trim() || 'New item', amount: itemBuilderField('amount').value.trim(),
+        unit: itemBuilderField('unit').value.trim(), nutrition: b.nutrition };
+    openNutritionDialog(draft, draft.unit, nutrition => {
+        if (itemBuilder !== b) return;
+        b.nutrition = nutrition;
+        renderItemBuilderCalories();
+    });
+}
+
+// The items this one is made of, in order, each at the amount it uses: a single item in its amount
+// and unit, one made of others as how many of it
+function renderItemBuilderParts() {
+    const b = itemBuilder;
+    const list = itemBuilderField('parts');
+    list.innerHTML = b.parts.map((p, i) => {
+        const child = itemById(p.itemId);
+        const group = !!child?.parts;
+        return `
+        <li class="item-builder-part" data-i="${i}">
+            ${group ? `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="1" aria-label="How many" title="How many">
+                <span class="item-builder-times">×</span>`
+                : `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount">
+                <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(p.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">`}
+            <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
+            <span class="recipe-kcal" data-kcal></span>
+            ${child ? '<button type="button" class="recipe-ingredient-btn" data-act="edit" title="Edit this item">✎</button>' : ''}
+            <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="down" title="Move down" ${i === b.parts.length - 1 ? 'disabled' : ''}>▼</button>
+            <button type="button" class="recipe-ingredient-btn" data-act="remove" title="Remove">✕</button>
+        </li>`;
+    }).join('');
+    list.querySelectorAll('.item-builder-part').forEach(row => {
+        const i = Number(row.dataset.i);
+        row.querySelectorAll('input').forEach(input => {
+            input.oninput = () => {
+                b.parts[i][input.dataset.field] = input.value;
+                refreshItemBuilderCalories();
+            };
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); itemBuilderField('part-search').focus(); } };
+        });
+        row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
+            btn.onclick = () => {
+                const act = btn.dataset.act;
+                if (act === 'edit') {
+                    // Changed on top of this one, which is kept as it is; a deleted one comes out of it
+                    const itemId = b.parts[i].itemId;
+                    openItemBuilder(itemById(itemId), { nested: true, onSaved: saved => {
+                        if (itemBuilder !== b) return;
+                        if (saved) b.parts.forEach(p => { if (p.itemId === itemId) p.name = saved.name; });
+                        else b.parts = b.parts.filter(p => p.itemId !== itemId);
+                        renderItemBuilderParts();
+                        renderItemBuilderPartResults();
+                    } });
+                    return;
+                }
+                if (act === 'remove') b.parts.splice(i, 1);
+                else {
+                    const j = act === 'up' ? i - 1 : i + 1;
+                    [b.parts[i], b.parts[j]] = [b.parts[j], b.parts[i]];
+                }
+                renderItemBuilderParts();
+                renderItemBuilderPartResults();
+            };
+        });
+    });
+    refreshItemBuilderCalories();
+}
+
+// The rows of one part, at the amount it uses
+function itemPartRows(part) {
+    const child = itemById(part.itemId);
+    if (!child) return [{ name: part.name, result: { missing: 'nutrition' } }];
+    return child.parts ? itemNutritionRows(child, '', '', partTimes(part.amount)) : itemNutritionRows(child, part.amount, part.unit);
+}
+
+// Calories on each part and the total for one person, without redrawing the rows (so typing in
+// one isn't interrupted)
+function refreshItemBuilderCalories() {
+    const b = itemBuilder;
+    if (!b) return;
+    itemBuilderField('parts').querySelectorAll('.item-builder-part').forEach(row => {
+        const part = b.parts[Number(row.dataset.i)];
+        const cell = row.querySelector('[data-kcal]');
+        const t = sumNutrition(itemPartRows(part));
+        cell.classList.toggle('unset', !t.counted);
+        cell.textContent = t.counted ? formatKcal(t.kcal) + (t.missing.length ? ' +' : '') : '';
+        cell.title = t.counted ? [formatNutritionTotal(t), ...nutritionTotalNotes(t)].join('\n') : 'No calories set';
+    });
+    const totalEl = itemBuilderField('total');
+    const t = sumNutrition(b.parts.flatMap(itemPartRows));
+    if (!b.parts.length || !t.anySet) {
+        totalEl.textContent = b.parts.length ? 'Set calories on the items to see a total.' : '';
+        totalEl.title = '';
         return;
     }
-    if (!confirm(`Delete the meal "${recipeDraft.name.trim() || 'Untitled'}"?`)) return;
+    totalEl.textContent = `About ${formatNutritionTotal(t)} per person`
+        + (t.missing.length ? ` · ${t.missing.length} item${t.missing.length === 1 ? '' : 's'} not counted` : '');
+    totalEl.title = nutritionTotalNotes(t).join('\n');
+}
+
+let itemBuilderPartMatches = []; // what the part search found, in order: items, or { create: name }
+
+// Items to add, matching the search box. Leaves out this item and any it's part of, and the same
+// for the items set aside to make this one in (an item can't be made of itself); offers to make a
+// new item when no name matches exactly.
+function renderItemBuilderPartResults() {
+    const b = itemBuilder;
+    const query = itemBuilderField('part-search').value.trim();
+    const el = itemBuilderField('part-results');
+    const q = query.toLowerCase();
+    const ids = [b.id, ...itemBuilderStack.map(s => s.builder.id)].filter(Boolean);
+    const allowed = i => !ids.some(id => i.id === id || itemContains(i, id));
+    const found = !q ? [] : ingredientList.filter(i => allowed(i) && i.name.toLowerCase().includes(q))
+        .sort((x, y) => y.name.toLowerCase().startsWith(q) - x.name.toLowerCase().startsWith(q))
+        .slice(0, 8);
+    itemBuilderPartMatches = [...found];
+    // An item that's already there is offered instead of making it again
+    const same = findIngredientByName(query);
+    if (same && allowed(same) && !found.includes(same)) itemBuilderPartMatches.unshift(same);
+    else if (q && !same) itemBuilderPartMatches.push({ create: query });
+    el.innerHTML = itemBuilderPartMatches.map((m, i) => m.create
+        ? `<button type="button" class="item-builder-result item-builder-create" data-i="${i}">+ New item “${escapeHtml(m.create)}”...</button>`
+        : `<button type="button" class="item-builder-result" data-i="${i}">
+            <span class="item-builder-result-name">${m.parts ? ITEM_GROUP_ICON : ''}${escapeHtml(m.name)}${confirmedStar(m)}</span>
+            <span class="item-builder-result-meta">${escapeHtml(itemSummary(m))}</span>
+        </button>`).join('');
+    el.querySelectorAll('[data-i]').forEach(btn => {
+        btn.onclick = () => addItemBuilderPart(itemBuilderPartMatches[Number(btn.dataset.i)]);
+    });
+}
+
+// match: an item (added at its one-person quantity, or one of it), or { create: name } to make a
+// new item in the item builder first, added once it's saved
+function addItemBuilderPart(match) {
+    const b = itemBuilder;
+    if (!b || !match) return;
+    if (match.create) {
+        openItemBuilder(null, { name: match.create, nested: true, onSaved: saved => {
+            if (saved && itemBuilder === b) addItemBuilderPart(saved);
+        } });
+        return;
+    }
+    const item = match;
+    b.parts.push({ itemId: item.id, name: item.name, amount: item.parts ? '' : item.amount, unit: item.parts ? '' : item.unit });
+    const search = itemBuilderField('part-search');
+    search.value = '';
+    search.focus();
+    renderItemBuilderParts();
+    renderItemBuilderPartResults();
+}
+
+function onItemBuilderPartSearchKey(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    if (itemBuilderPartMatches.length) addItemBuilderPart(itemBuilderPartMatches[0]);
+}
+
+async function saveItemBuilder() {
+    const b = itemBuilder;
+    if (!b) return;
+    const setStatus = (text, isError) => setCalendarSettingsStatus('item-builder-status', text, isError);
+    const name = itemBuilderField('name').value.trim();
+    if (!name) { setStatus('Enter a name.', true); itemBuilderField('name').focus(); return; }
+    const same = findIngredientByName(name);
+    if (same && same.id !== b.id) { setStatus(`There's already an item called ${same.name}.`, true); itemBuilderField('name').focus(); return; }
+    const group = b.kind === 'group';
+    if (group && !b.parts.length) { setStatus('Add at least one item, or make it a single item.', true); itemBuilderField('part-search').focus(); return; }
+    const body = {
+        name, confirmed: itemBuilderField('confirmed').checked,
+        amount: group ? '' : itemBuilderField('amount').value.trim(),
+        unit: group ? '' : itemBuilderField('unit').value.trim(),
+        parts: group ? b.parts.map(p => ({ id: p.itemId, amount: p.amount.trim(), unit: p.unit.trim() })) : [],
+    };
+    if (!group) body.nutrition = b.nutrition;
+    const btn = itemBuilderField('save-btn');
+    btn.disabled = true;
     try {
-        const res = await fetch(`/api/recipes/${encodeURIComponent(recipeDraft.id)}`, { method: 'DELETE' });
-        if (!res.ok) throw new Error((await res.json()).error || 'Failed to delete');
-        recipeDraft = null;
-        renderRecipeEditor();
-        await loadRecipes();
+        const saved = await sendIngredient(b.id ? `/api/ingredients/${encodeURIComponent(b.id)}` : '/api/ingredients', b.id ? 'PUT' : 'POST', body);
+        // The picture goes with the name (saved after it, so it's under the new name)
+        if (!group && b.product !== undefined) {
+            try {
+                const res = await fetch('/api/shopping-list/product', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ item: saved.name, product: b.product })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to save');
+                shoppingProducts.set(shoppingLineKey(saved.name), data);
+            } catch (err) {
+                showToast(`Saved, but not the picture: ${err.message}`, 'error', 4000);
+            }
+            refreshShoppingPictures();
+        }
+        if (b.originalName && saved.name !== b.originalName) loadShoppingList(); // the server renamed it there too
+        closeItemBuilder(true);
+        await loadIngredients();
+        b.onSaved?.(itemById(saved.id) || saved);
     } catch (err) {
-        setRecipeStatus(err.message, true);
+        setStatus(err.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function deleteItemBuilderItem() {
+    const b = itemBuilder;
+    if (!b?.id) return;
+    if (!confirm(`Delete "${b.originalName}"? It's also taken out of the meals on the calendar and the meal plan.`)) return;
+    try {
+        await sendIngredient(`/api/ingredients/${encodeURIComponent(b.id)}`, 'DELETE');
+        closeItemBuilder(true);
+        await loadIngredients();
+        b.onSaved?.(null);
+    } catch (err) {
+        setCalendarSettingsStatus('item-builder-status', err.message, true);
+    }
+}
+
+// --- Recipes tab: calories. Each ingredient stores kcal and grams of protein, carbs and fat per
+// 100 g, plus the weight of one of each unit (cup, each, packet...), so any amount in any meal can
+// be converted. ---
+const WEIGHT_GRAMS = { g: 1, kg: 1000, oz: 28.3495, lb: 453.592 };
+const VOLUME_ML = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588 };
+const UNIT_ALIASES = {
+    g: ['g', 'gram', 'grams', 'gramme', 'grammes', 'gr', 'gm', 'gms'],
+    kg: ['kg', 'kgs', 'kilo', 'kilos', 'kilogram', 'kilograms'],
+    oz: ['oz', 'ounce', 'ounces'],
+    lb: ['lb', 'lbs', 'pound', 'pounds'],
+    ml: ['ml', 'mls', 'millilitre', 'millilitres', 'milliliter', 'milliliters'],
+    l: ['l', 'litre', 'litres', 'liter', 'liters', 'ltr'],
+    tsp: ['tsp', 'tsps', 'teaspoon', 'teaspoons'],
+    tbsp: ['tbsp', 'tbsps', 'tbs', 'tbl', 'tablespoon', 'tablespoons'],
+    cup: ['cup', 'cups'],
+    each: ['', 'each', 'whole', 'item', 'items', 'x'],
+};
+const UNIT_KEYS = new Map(Object.entries(UNIT_ALIASES).flatMap(([key, names]) => names.map(n => [n, key])));
+
+// The key an ingredient's gramsPerUnit uses for a unit as typed: "Tablespoons" -> tbsp,
+// "" -> each, "packets" -> packet
+function unitKey(unit) {
+    const u = (unit || '').trim().toLowerCase().replace(/\.$/, '');
+    if (UNIT_KEYS.has(u)) return UNIT_KEYS.get(u);
+    if (/(ch|sh|x)es$/.test(u)) return u.slice(0, -2);
+    if (u.length > 3 && u.endsWith('s') && !u.endsWith('ss')) return u.slice(0, -1);
+    return u;
+}
+
+const UNICODE_FRACTIONS = { '½': 0.5, '¼': 0.25, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': 0.125 };
+
+// "2", "0.5", "1,5", "1/2", "1 1/2", "1½", "2-3" (the middle) -> number, otherwise null
+function parseAmount(text) {
+    const s = (text || '').trim().replace(/,/g, '.')
+        .replace(/(\d)?\s*([½¼¾⅓⅔⅛])/g, (_, whole, f) => String((Number(whole) || 0) + UNICODE_FRACTIONS[f]));
+    const one = part => {
+        const m = part.trim().match(/^(?:(\d+(?:\.\d+)?)\s+)?(\d+(?:\.\d+)?)(?:\s*\/\s*(\d+(?:\.\d+)?))?$/);
+        if (!m) return null;
+        const value = m[3] ? Number(m[2]) / Number(m[3]) : Number(m[2]);
+        return (m[1] ? Number(m[1]) : 0) + value;
+    };
+    const range = s.split(/\s*(?:-|–|to)\s*/);
+    if (range.length === 2) {
+        const [a, b] = range.map(one);
+        return a != null && b != null ? (a + b) / 2 : null;
+    }
+    const v = one(s);
+    return v != null && Number.isFinite(v) ? v : null;
+}
+
+// Words for one whole pack of a product. Open Food Facts gives its pack size as "pack", which
+// any of these uses unless the ingredient has its own weight for that word.
+const PACK_WORDS = new Set(['pack', 'packet', 'tin', 'can', 'jar', 'bottle', 'bag', 'box', 'pot', 'tub', 'carton', 'pouch', 'bar']);
+
+// Grams in one of this unit, or null if it can't be worked out. Volumes without their own
+// weight use the density of any volume the food does list, or water's.
+function gramsPerOne(key, gramsPerUnit) {
+    if (WEIGHT_GRAMS[key]) return WEIGHT_GRAMS[key];
+    if (gramsPerUnit[key] > 0) return gramsPerUnit[key];
+    if (PACK_WORDS.has(key) && gramsPerUnit.pack > 0) return gramsPerUnit.pack;
+    if (VOLUME_ML[key]) {
+        const known = Object.keys(VOLUME_ML).find(v => gramsPerUnit[v] > 0);
+        const density = known ? gramsPerUnit[known] / VOLUME_ML[known] : 1;
+        return VOLUME_ML[key] * density;
+    }
+    return null;
+}
+
+const MACROS = [['protein', 'proteinPer100g'], ['carbs', 'carbsPer100g'], ['fat', 'fatPer100g']];
+
+// UK alcohol units: one is 10 ml, or 8 g, of pure alcohol
+const ALCOHOL_GRAMS_PER_UNIT = 8;
+
+// { kcal, grams, protein, carbs, fat, alcohol } for an amount of an ingredient (a macro is null if
+// not known; alcohol is grams, 0 if not known), or { missing } saying what's needed: 'nutrition' (no calories set), 'amount' (no
+// quantity) or 'unit' (unknown weight of one).
+function ingredientCalories(amount, unit, nutrition) {
+    if (!nutrition) return { missing: 'nutrition' };
+    let qty = parseAmount(amount);
+    if (qty == null) {
+        if ((amount || '').trim() || !(unit || '').trim()) return { missing: 'amount' };
+        qty = 1; // "pinch", "bunch" with no number: one of it
+    }
+    const perOne = gramsPerOne(unitKey(unit), nutrition.gramsPerUnit || {});
+    if (perOne == null) return { missing: 'unit' };
+    const grams = qty * perOne;
+    const result = { grams, kcal: grams * nutrition.kcalPer100g / 100 };
+    for (const [macro, key] of MACROS) result[macro] = nutrition[key] == null ? null : grams * nutrition[key] / 100;
+    result.alcohol = grams * (nutrition.alcoholPer100g ?? 0) / 100;
+    return result;
+}
+
+const formatKcal = kcal => `${Math.round(kcal).toLocaleString()} kcal`;
+const formatGrams = g => `${g < 10 ? Math.round(g * 10) / 10 : Math.round(g).toLocaleString()} g`;
+
+// "1.5 units alcohol", or '' for none
+const formatAlcohol = grams => {
+    if (!(grams > 0)) return '';
+    const units = Math.round(grams / ALCOHOL_GRAMS_PER_UNIT * 10) / 10;
+    return `${units || '<0.1'} unit${units === 1 ? '' : 's'} alcohol`;
+};
+
+// "12 g protein · 30 g carbs · 5 g fat" for the macros that are known (then any alcohol), or ''
+const formatMacros = r => [...MACROS.filter(([m]) => r[m] != null).map(([m]) => `${formatGrams(r[m])} ${m}`), formatAlcohol(r.alcohol)]
+    .filter(Boolean).join(' · ');
+const unitLabel = (unit, ingredientName) => (unit || '').trim() || `one ${ingredientName.toLowerCase()}`;
+
+// The result of ingredientCalories for k of it
+function scaleNutrition(result, k) {
+    if (k === 1 || !('kcal' in result)) return result;
+    const out = { ...result };
+    for (const key of ['grams', 'kcal', 'protein', 'carbs', 'fat', 'alcohol']) if (out[key] != null) out[key] *= k;
+    return out;
+}
+
+// How many of an item made of others a part means ('' is one)
+const partTimes = amount => parseAmount(amount) ?? 1;
+
+// Every single item in an item at the amounts it uses, as [{ name, result }] (each result from
+// ingredientCalories) for sumNutrition. A single item is counted at amount/unit; one made of
+// others counts what it's made of at their amounts, times how many of it there are.
+function itemNutritionRows(item, amount, unit, times = 1, seen = new Set()) {
+    if (!item) return [];
+    if (!item.parts) return [{ name: item.name, result: scaleNutrition(ingredientCalories(amount, unit, item.nutrition), times) }];
+    if (seen.has(item.id)) return [];
+    const inner = new Set(seen).add(item.id);
+    return item.parts.flatMap(p => {
+        const child = itemById(p.itemId);
+        if (!child) return [{ name: p.name, result: { missing: 'nutrition' } }];
+        return child.parts ? itemNutritionRows(child, '', '', times * partTimes(p.amount), inner)
+            : itemNutritionRows(child, p.amount, p.unit, times, inner);
+    });
+}
+
+// An item for one person: a single item at its one-person quantity, or one of an item made of others
+const itemOnePersonRows = item => item ? itemNutritionRows(item, item.amount, item.unit) : [];
+
+// Adds up [{ name, result }] (each result from ingredientCalories): { kcal, protein, carbs, fat, alcohol,
+// counted, missing: names not counted, noMacros: names counted without protein, carbs or fat,
+// anySet: whether any has calories set }. Rows with no name aren't listed as missing.
+function sumNutrition(rows) {
+    const t = { kcal: 0, protein: 0, carbs: 0, fat: 0, alcohol: 0, counted: 0, missing: [], noMacros: [], anySet: false };
+    for (const { name, result } of rows) {
+        if (result.missing !== 'nutrition') t.anySet = true;
+        if (!('kcal' in result)) {
+            if (name) t.missing.push(name);
+            continue;
+        }
+        t.kcal += result.kcal;
+        t.counted++;
+        for (const [m] of MACROS) t[m] += result[m] ?? 0;
+        t.alcohol += result.alcohol;
+        if (MACROS.some(([m]) => result[m] == null)) t.noMacros.push(name);
+    }
+    return t;
+}
+
+// "650 kcal · 32 g protein · 70 g carbs · 21 g fat · 2 units alcohol". Protein, carbs and fat are
+// left out until at least one counted item has them; alcohol only shows when there is some.
+const formatNutritionTotal = t => {
+    const macros = t.noMacros.length < t.counted ? formatMacros(t) : formatAlcohol(t.alcohol);
+    return `${formatKcal(t.kcal)}${macros ? ` · ${macros}` : ''}`;
+};
+
+// What a total leaves out, one line each, for its tooltip
+const nutritionTotalNotes = t => [
+    t.missing.length ? `Not counted: ${t.missing.join(', ')}` : '',
+    t.noMacros.length && t.noMacros.length < t.counted ? `No protein, carbs or fat for: ${t.noMacros.join(', ')}` : '',
+].filter(Boolean);
+
+// The calories button on a row of the Items list. An item made of others shows its total.
+function ingredientCaloriesButton(ingredient) {
+    if (ingredient.parts) {
+        const t = sumNutrition(itemOnePersonRows(ingredient));
+        if (!t.counted) return { text: '', cls: 'unset', title: 'Set calories on the items it\'s made of to see a total' };
+        return { text: formatKcal(t.kcal) + (t.missing.length ? ' +' : ''), cls: '',
+            title: [`About ${formatNutritionTotal(t)} per person`, ...nutritionTotalNotes(t)].join('\n') };
+    }
+    const result = ingredientCalories(ingredient.amount, ingredient.unit, ingredient.nutrition);
+    if ('kcal' in result) {
+        const macros = formatMacros(result);
+        return { text: formatKcal(result.kcal), cls: '', title: `About ${Math.round(result.grams)} g for one person${macros ? `: ${macros}` : ''}. Click to change.` };
+    }
+    if (result.missing === 'nutrition') return { text: '+ kcal', cls: 'unset', title: 'Set calories' };
+    if (result.missing === 'unit') return { text: '? kcal', cls: 'unset', title: `Set how much ${unitLabel(ingredient.unit, ingredient.name)} weighs` };
+    return { text: `${Math.round(ingredient.nutrition.kcalPer100g)}/100g`, cls: '', title: `${ingredient.nutrition.kcalPer100g} kcal per 100 g` };
+}
+
+let nutritionDialog = null; // { ingredient, unit, source, sourceId, sourceName, sourceKcal, gramsPerUnit, onSave }
+const MACRO_INPUTS = { proteinPer100g: 'nutrition-protein', carbsPer100g: 'nutrition-carbs', fatPer100g: 'nutrition-fat', alcoholPer100g: 'nutrition-alcohol' };
+
+// Where calories can be looked up (the server's lib/nutrition.js)
+const NUTRITION_SOURCES = {
+    cofid: { label: 'UK food tables', hint: 'Basic foods, from the UK\'s official food tables (McCance and Widdowson\'s Composition of Foods). Contains public sector information licensed under the <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/" target="_blank" rel="noopener">Open Government Licence v3.0</a>.' },
+    off: { label: 'Open Food Facts', hint: 'Packaged products sold in the UK, from <a href="https://uk.openfoodfacts.org/" target="_blank" rel="noopener">Open Food Facts</a>, added by its users from the labels. Check the figure against the packet if it looks odd.' },
+    usda: { label: 'USDA', hint: 'US foods, from USDA FoodData Central, using American names (eggplant, zucchini). Needs a free key in Settings → Integrations.' },
+};
+const NUTRITION_SOURCE_KEY = 'ammui.nutritionSource';
+
+function lastNutritionSource() {
+    try {
+        const saved = localStorage.getItem(NUTRITION_SOURCE_KEY);
+        return NUTRITION_SOURCES[saved] ? saved : 'cofid';
+    } catch {
+        return 'cofid';
+    }
+}
+
+function setNutritionStatus(text, isError) {
+    setCalendarSettingsStatus('nutrition-status', text, isError);
+}
+
+// unit: the unit to ask the weight of, if the ingredient's own isn't the one needed (a meal can
+// use an ingredient in a different unit). onSave(nutrition), if given, gets the figures (null for
+// none) instead of them being saved to the item, as the item builder does until its item is saved.
+function openNutritionDialog(ingredient, unit = ingredient.unit, onSave = null) {
+    const n = ingredient.nutrition;
+    bringModalToFront('nutrition-modal');
+    nutritionDialog = {
+        ingredient, unit, onSave,
+        source: n?.source || '',
+        sourceId: n?.sourceId || '',
+        sourceName: n?.sourceName || '',
+        sourceKcal: n?.kcalPer100g ?? null,
+        gramsPerUnit: { ...(n?.gramsPerUnit || {}) },
+    };
+    document.getElementById('nutrition-ingredient-name').textContent = ingredient.name;
+    document.getElementById('nutrition-search-input').value = ingredient.name;
+    document.getElementById('nutrition-results').innerHTML = '';
+    document.getElementById('nutrition-kcal').value = n ? n.kcalPer100g : '';
+    for (const [key, inputId] of Object.entries(MACRO_INPUTS)) document.getElementById(inputId).value = n?.[key] ?? '';
+    document.getElementById('nutrition-remove-btn').style.visibility = n ? '' : 'hidden';
+    setNutritionStatus('', false);
+    // Search where this ingredient came from, otherwise wherever was used last
+    setNutritionSearchSource(NUTRITION_SOURCES[n?.source] ? n.source : lastNutritionSource(), false);
+    renderNutritionForm();
+    document.getElementById('nutrition-modal').style.display = 'flex';
+    if (!n) searchNutrition();
+}
+
+// The source tabs above the search box; remember picks the source for next time
+function setNutritionSearchSource(source, remember = true) {
+    document.querySelectorAll('#nutrition-sources [data-source]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.source === source);
+        btn.setAttribute('aria-selected', btn.dataset.source === source ? 'true' : 'false');
+    });
+    document.getElementById('nutrition-source-hint').innerHTML = NUTRITION_SOURCES[source].hint;
+    document.getElementById('nutrition-branded-option').hidden = source !== 'usda';
+    if (!remember) return;
+    try { localStorage.setItem(NUTRITION_SOURCE_KEY, source); } catch { /* not kept; fine */ }
+    document.getElementById('nutrition-results').innerHTML = '';
+    searchNutrition();
+}
+
+const nutritionSearchSource = () =>
+    document.querySelector('#nutrition-sources [data-source].active')?.dataset.source || 'cofid';
+
+function closeNutritionDialog() {
+    document.getElementById('nutrition-modal').style.display = 'none';
+    nutritionDialog = null;
+}
+
+// Where the figures came from, and the weight-of-one box for units that aren't a weight
+function renderNutritionForm() {
+    const d = nutritionDialog;
+    const key = unitKey(d.unit);
+    document.getElementById('nutrition-source').textContent = d.source && NUTRITION_SOURCES[d.source]
+        ? `From ${NUTRITION_SOURCES[d.source].label}: ${d.sourceName}` : '';
+
+    const group = document.getElementById('nutrition-unit-group');
+    group.hidden = !!WEIGHT_GRAMS[key];
+    if (group.hidden) { updateNutritionPreview(); return; }
+    const label = unitLabel(d.unit, d.ingredient.name);
+    document.getElementById('nutrition-unit-label').textContent = `Weight of ${/^one /.test(label) ? label : `1 ${label}`} (g)`;
+    const input = document.getElementById('nutrition-unit-grams');
+    const own = d.gramsPerUnit[key];
+    const worked = gramsPerOne(key, d.gramsPerUnit);
+    input.value = own > 0 ? own : '';
+    input.placeholder = worked ? String(Math.round(worked * 10) / 10) : 'Check the packet';
+    const known = Object.entries(d.gramsPerUnit).map(([u, g]) => `${u === 'each' ? 'one' : `1 ${u}`} = ${g} g`);
+    let hint = known.length ? `Known weights: ${known.join(' · ')}` : '';
+    if (!(own > 0) && VOLUME_ML[key]) hint = `Leave empty to work it out${known.length ? ` from ${known.join(', ')}` : ' as if it weighs the same as water'}.`;
+    else if (!(own > 0) && worked) hint = `Leave empty to use the pack size, ${worked} g.`;
+    document.getElementById('nutrition-unit-hint').textContent = hint;
+    updateNutritionPreview();
+}
+
+// The nutrition the form would save
+function nutritionFromForm() {
+    const d = nutritionDialog;
+    const kcalText = document.getElementById('nutrition-kcal').value.trim();
+    if (kcalText === '') return null;
+    const gramsPerUnit = { ...d.gramsPerUnit };
+    const key = unitKey(d.unit);
+    if (!document.getElementById('nutrition-unit-group').hidden) {
+        const grams = Number(document.getElementById('nutrition-unit-grams').value);
+        if (grams > 0) gramsPerUnit[key] = grams;
+        else delete gramsPerUnit[key];
+    }
+    // A figure typed over the looked-up one is no longer that food's
+    const kcalPer100g = Number(kcalText);
+    const macros = {};
+    for (const [key, inputId] of Object.entries(MACRO_INPUTS)) {
+        const text = document.getElementById(inputId).value.trim();
+        macros[key] = text === '' ? null : Number(text);
+    }
+    const looked = d.source && kcalPer100g === d.sourceKcal;
+    return { kcalPer100g, ...macros, gramsPerUnit, source: looked ? d.source : '', sourceId: looked ? d.sourceId : '', sourceName: looked ? d.sourceName : '' };
+}
+
+// What the ingredient comes to for one person (or for one of the unit being asked about)
+function updateNutritionPreview() {
+    const d = nutritionDialog;
+    const el = document.getElementById('nutrition-preview');
+    if (!d) return;
+    const nutrition = nutritionFromForm();
+    const ing = d.ingredient;
+    const forPerson = unitKey(d.unit) === unitKey(ing.unit) && parseAmount(ing.amount) != null;
+    const amount = forPerson ? ing.amount : '1';
+    const result = ingredientCalories(amount, d.unit, nutrition);
+    if (!('kcal' in result)) { el.textContent = ''; return; }
+    const what = `${amount} ${unitLabel(d.unit, ing.name).replace(/^one /, '')}`;
+    const macros = formatMacros(result);
+    el.textContent = `${what} (${Math.round(result.grams)} g) ≈ ${formatKcal(result.kcal)}${macros ? ` · ${macros}` : ''}${forPerson ? ' per person' : ''}`;
+}
+
+// Product labels and US figures vary (and are sometimes plain wrong), so alongside them show
+// what the UK food tables give for the same search, to compare against or use instead
+async function showNutritionReference(source, query) {
+    const d = nutritionDialog;
+    const el = document.getElementById('nutrition-reference');
+    el.hidden = true;
+    if (source === 'cofid') return;
+    try {
+        const res = await fetch(`/api/nutrition/search?source=cofid&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        const food = res.ok && data.foods[0];
+        if (!food || nutritionDialog !== d || nutritionSearchSource() !== source) return;
+        el.innerHTML = `For comparison, the UK food tables give <b>${escapeHtml(food.name)}</b> as ${Math.round(food.kcalPer100g)} kcal/100g.
+            <button type="button">Use this</button>`;
+        el.querySelector('button').onclick = () => pickNutritionFood('cofid', food.id, null);
+        el.hidden = false;
+    } catch {
+        // Just a comparison; leave it out
+    }
+}
+
+async function searchNutrition() {
+    const d = nutritionDialog;
+    const query = document.getElementById('nutrition-search-input').value.trim();
+    const resultsEl = document.getElementById('nutrition-results');
+    if (!d || !query) return;
+    const source = nutritionSearchSource();
+    const branded = document.getElementById('nutrition-branded').checked ? '1' : '0';
+    resultsEl.innerHTML = '<p class="settings-hint">Searching...</p>';
+    showNutritionReference(source, query);
+    try {
+        const res = await fetch(`/api/nutrition/search?source=${source}&q=${encodeURIComponent(query)}&branded=${branded}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Search failed');
+        // A newer search (another source, or the dialog closed) has taken over
+        if (nutritionDialog !== d || nutritionSearchSource() !== source) return;
+        if (!data.foods.length) {
+            resultsEl.innerHTML = '<p class="settings-hint">Nothing found. Try fewer or simpler words, or type the calories in below.</p>';
+            return;
+        }
+        resultsEl.innerHTML = data.foods.map(f => {
+            const detail = [f.brand, f.size].filter(Boolean).map(escapeHtml).join(' · ');
+            return `
+            <button type="button" class="nutrition-result${f.source === d.source && f.id === d.sourceId ? ' active' : ''}" data-source="${f.source}" data-id="${escapeAttr(f.id)}">
+                <span class="nutrition-result-name">${escapeHtml(f.name)}${detail ? ` <span class="nutrition-result-type">${detail}</span>` : ''}
+                    ${f.doubtful ? '<span class="nutrition-result-doubt">⚠ The calories on this label don\'t match its protein, carbs and fat</span>' : ''}</span>
+                <span class="nutrition-result-kcal">${Math.round(f.kcalPer100g)} kcal/100g</span>
+            </button>`;
+        }).join('');
+        resultsEl.querySelectorAll('.nutrition-result').forEach(btn => {
+            btn.onclick = () => pickNutritionFood(btn.dataset.source, btn.dataset.id, btn);
+        });
+    } catch (err) {
+        if (nutritionDialog === d) resultsEl.innerHTML = `<p class="settings-hint">${escapeHtml(err.message)}</p>`;
+    }
+}
+
+async function pickNutritionFood(source, id, btn) {
+    const d = nutritionDialog;
+    setNutritionStatus('Loading...', false);
+    try {
+        const res = await fetch(`/api/nutrition/food/${source}/${encodeURIComponent(id)}`);
+        const food = await res.json();
+        if (!res.ok) throw new Error(food.error || 'Lookup failed');
+        if (nutritionDialog !== d) return;
+        d.source = food.source;
+        d.sourceId = food.id;
+        d.sourceName = food.name;
+        d.sourceKcal = food.kcalPer100g;
+        // Weights typed in earlier (a packet, say) stay unless this food lists its own
+        d.gramsPerUnit = { ...d.gramsPerUnit, ...food.gramsPerUnit };
+        document.getElementById('nutrition-kcal').value = food.kcalPer100g;
+        for (const [key, inputId] of Object.entries(MACRO_INPUTS)) document.getElementById(inputId).value = food[key] ?? '';
+        document.querySelectorAll('#nutrition-results .nutrition-result').forEach(b => b.classList.toggle('active', b === btn));
+        setNutritionStatus('', false);
+        renderNutritionForm();
+    } catch (err) {
+        setNutritionStatus(err.message, true);
+    }
+}
+
+async function sendNutrition(nutrition) {
+    const { ingredient: ing, onSave } = nutritionDialog;
+    if (onSave) {
+        closeNutritionDialog();
+        onSave(nutrition);
+        return;
+    }
+    const saved = await sendIngredient(`/api/ingredients/${encodeURIComponent(ing.id)}`, 'PUT',
+        { name: ing.name, amount: ing.amount, unit: ing.unit, nutrition });
+    Object.assign(ing, saved);
+    closeNutritionDialog();
+    renderIngredientList();
+    refreshItemBuilderCalories();
+}
+
+async function saveNutrition() {
+    const nutrition = nutritionFromForm();
+    if (!nutrition) {
+        setNutritionStatus('Enter the calories per 100 g, or pick a food from the search.', true);
+        document.getElementById('nutrition-kcal').focus();
+        return;
+    }
+    try {
+        await sendNutrition(nutrition);
+    } catch (err) {
+        setNutritionStatus(err.message, true);
+    }
+}
+
+async function removeNutrition() {
+    try {
+        await sendNutrition(null);
+    } catch (err) {
+        setNutritionStatus(err.message, true);
     }
 }
 
@@ -6957,6 +9807,7 @@ document.addEventListener('visibilitychange', () => {
     // When page becomes visible again, immediately fetch latest data
     if (isPageVisible) {
         window.scrollTo(0, 0);
+        if (appView === 'recipes') loadShoppingList();
         fetchDevices();
         if (selectedRendererUdn && !isRendererOffline) {
             fetchStatus();
@@ -7042,13 +9893,17 @@ function adjustVolume(delta) {
 }
 
 let pollCounter = 0;
-// Poll status every 5s always (keeps tab title current in background); playlist only when visible
+// Poll status every 5s always (keeps tab title current in background); playlist only when visible.
+// While the renderer is offline, check every 15s whether it's back.
 setInterval(() => {
-    if (selectedRendererUdn && !isRendererOffline) {
-        pollCounter++;
-        const includePlaylist = isPageVisible && (pollCounter % 3 === 0);
-        fetchStatus(includePlaylist);
+    if (!selectedRendererUdn) return;
+    pollCounter++;
+    if (isRendererOffline) {
+        if (pollCounter % 3 === 0) tryRendererOnline('StatusPoll');
+        return;
     }
+    const includePlaylist = isPageVisible && (pollCounter % 3 === 0);
+    fetchStatus(includePlaylist);
 }, 5000);
 
 function togglePlaylist() {
@@ -7211,6 +10066,17 @@ async function handleUpload(event) {
     let uploaded = 0, skipped = 0, failed = 0;
     const MAX_LOG_ENTRIES = 500;
 
+    // iPhone Live Photos: a video with a photo of the same name in the same folder is filed beside
+    // the photo instead of with the videos. Each goes up after its photo, so it can be put in the
+    // same month folder (its own date can fall either side of a month end, or be missing).
+    const pathOf = f => (f.webkitRelativePath || f.name).toLowerCase();
+    const extOf = p => p.slice(p.lastIndexOf('.'));
+    const stemOf = p => p.slice(0, p.lastIndexOf('.'));
+    const photoStems = new Set(eligible.map(pathOf).filter(p => imageExts.has(extOf(p))).map(stemOf));
+    const isLiveVideo = f => videoExts.has(extOf(pathOf(f))) && photoStems.has(stemOf(pathOf(f)));
+    const photoDirs = new Map(); // stem -> month folder the server put the photo in
+    eligible.sort((a, b) => isLiveVideo(a) - isLiveVideo(b));
+
     for (const file of eligible) {
         // Everything for this file — including DOM lookups and building the request — lives in
         // one try/catch. A single bad file (stale File handle, transient DOM hiccup) must not be
@@ -7223,10 +10089,16 @@ async function handleUpload(event) {
             const formData = new FormData();
             formData.append('file', file);
             formData.append('relativePath', file.webkitRelativePath || file.name);
+            if (isLiveVideo(file)) {
+                formData.append('livePhoto', '1');
+                const photoDir = photoDirs.get(stemOf(pathOf(file)));
+                if (photoDir) formData.append('photoDir', photoDir);
+            }
 
             const res = await fetch('/api/upload-local-file', { method: 'POST', body: formData });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Upload failed');
+            if (data.dateDir && imageExts.has(extOf(pathOf(file)))) photoDirs.set(stemOf(pathOf(file)), data.dateDir);
 
             if (data.skipped) {
                 skipped++;
@@ -8842,6 +11714,23 @@ async function toggleFileFav() {
     await saveFileTags();
 }
 
+// A favourite's heart, beside its info button in the file browser
+const FAV_HEART_HTML = `<span class="browser-fav-heart" title="Favourite" aria-label="Favourite">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-9.6-9.2C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.2 5.3 3.1 1.7-1.9 3.2-3.1 5.3-3.1 3.7 0 5.8 3.9 4.3 7.3C19.5 16.4 12 21 12 21z"></path></svg>
+</span>`;
+
+// After a file is (un)favourited in the info panel: its row in the file browser follows
+function showBrowserFavHeart(uri, isFav) {
+    currentBrowserItems.forEach((item, index) => {
+        if (item.uri !== uri || !!item.fav === isFav) return;
+        item.fav = isFav;
+        const actions = browserItems.querySelector(`[data-item-index="${index}"] .item-actions`);
+        if (!actions) return;
+        actions.querySelector('.browser-fav-heart')?.remove();
+        if (isFav) actions.querySelector('.info-btn')?.insertAdjacentHTML('beforebegin', FAV_HEART_HTML);
+    });
+}
+
 async function saveFileTags() {
     if (!currentInfoUri) return;
     try {
@@ -8851,6 +11740,7 @@ async function saveFileTags() {
             body: JSON.stringify({ uri: currentInfoUri, tags: currentFileTags })
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        showBrowserFavHeart(currentInfoUri, currentFileTags.includes('fav'));
     } catch (err) {
         console.error('Failed to save tags:', err);
         showToast('Failed to save tags: ' + err.message, 'error', 4000);
@@ -8884,10 +11774,11 @@ async function copyTagToFolderAll(field, btn) {
             body: JSON.stringify({ uri: currentInfoUri, field, value })
         });
         if (!res.ok) throw new Error((await res.json()).error || 'Failed');
-        const { updated } = await res.json();
+        const { updated, failed = [] } = await res.json();
         btn.textContent = 'Done!';
         btn.style.color = '#4ade80';
         showToast(`${field} copied to ${updated} track${updated !== 1 ? 's' : ''} in folder`, 'success', 3000);
+        if (failed.length) showToast(`Couldn't update ${failed.length} file${failed.length !== 1 ? 's' : ''}: ${failed.join(', ')}`);
         setTimeout(() => { btn.textContent = origText; btn.style.color = ''; btn.disabled = false; }, 2000);
     } catch (err) {
         btn.textContent = origText;
@@ -9219,178 +12110,19 @@ async function saveGeneralSettings() {
             body: JSON.stringify({ deviceName })
         });
         if (response.ok) {
+            const renamed = deviceName !== currentDeviceName;
             currentDeviceName = deviceName;
             updateUIWithDeviceName();
             // The server button shows the media library's name, which follows the device name
             await fetchDevices();
-            showToast('Settings saved', 'success', 2000);
+            // The HTTPS certificate carries the name, so a new one was made
+            if (renamed) loadHttpsInfo(); // the .local address and the certificate's name follow it
+            if (renamed) showToast('Saved. The certificate now has the new name: install it again on each phone and PC (Settings > Secure Access) to stop the browser warning.', 'success', 10000);
+            else showToast('Settings saved', 'success', 2000);
         }
     } catch (err) {
         console.error('Failed to save general settings:', err);
         showToast('Failed to save settings');
-    }
-}
-
-// --- Favourites, deleted photos, tags, ingredients and meals: exported together in one file; on
-// import each can be ticked or not. Each part goes through its own server route (which, for the
-// media parts, rehomes paths). ---
-const LIBRARY_DATA_PARTS = [
-    { key: 'favourites', label: 'favourite', exportUrl: '/api/favourites/export', importUrl: '/api/favourites/import' },
-    { key: 'deleted', label: 'deleted photo', exportUrl: '/api/deleted/export', importUrl: '/api/deleted/import' },
-    { key: 'tags', label: 'tagged file', exportUrl: '/api/tags/export', importUrl: '/api/tags/import' },
-    // Ingredients before meals, so their one-person quantities are in place first
-    { key: 'ingredients', label: 'ingredient', exportUrl: '/api/ingredients/export', importUrl: '/api/ingredients/import' },
-    { key: 'meals', label: 'meal', exportUrl: '/api/meals/export', importUrl: '/api/meals/import' },
-];
-let pendingLibraryData = null; // parsed import file, while the import dialog is open
-
-const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
-
-// Shows how many of each the export would hold, so you can tell whether it's worth exporting
-async function loadLibraryDataCounts() {
-    const el = document.getElementById('library-data-counts');
-    if (!el) return;
-    try {
-        const res = await fetch('/api/library-data/counts');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const c = await res.json();
-        const row = (label, value) => `
-            <span class="local-stats-label">${label}</span>
-            <span class="local-stats-value">${value}</span>`;
-        el.innerHTML = row('Favourites', c.favourites)
-            + row('Deleted photos', c.deleted)
-            + row('Tags (incl. favourites)', c.tags ? `${c.tags} on ${plural(c.taggedFiles, 'file')}` : 0)
-            + row('Ingredients', c.ingredients)
-            + row('Meals', c.meals);
-    } catch (e) {
-        el.innerHTML = '<span class="settings-hint">Could not load counts.</span>';
-    }
-}
-
-async function exportLibraryData() {
-    try {
-        const parts = await Promise.all(LIBRARY_DATA_PARTS.map(async part => {
-            const response = await fetch(part.exportUrl);
-            if (!response.ok) throw new Error('Export failed');
-            return (await response.json())[part.key] || [];
-        }));
-        if (parts.every(p => !p.length)) {
-            showToast('Nothing to export', 'warning', 3000);
-            return;
-        }
-        const data = { version: 2, exportedAt: new Date().toISOString() };
-        LIBRARY_DATA_PARTS.forEach((part, i) => { data[part.key] = parts[i]; });
-
-        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `ammui-data-${new Date().toISOString().slice(0, 10)}.json`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
-
-        showToast(`Exported ${LIBRARY_DATA_PARTS.map((part, i) => plural(parts[i].length, part.label)).join(', ')}`, 'success', 3000);
-    } catch (err) {
-        console.error('Failed to export:', err);
-        showToast('Failed to export');
-    }
-}
-
-// Reads the chosen file and offers a tickbox for each part it contains. Files exported by older
-// versions (one part each, or a bare favourites array) work too.
-async function openLibraryDataImport(event) {
-    const file = event.target.files[0];
-    event.target.value = '';
-    if (!file) return;
-    let data;
-    try {
-        data = JSON.parse(await file.text());
-    } catch (err) {
-        showToast("That file isn't valid JSON");
-        return;
-    }
-    if (Array.isArray(data)) {
-        // Bare arrays came from the oldest exports; tags entries always carry a tags list
-        data = data.some(item => item && Array.isArray(item.tags)) ? { tags: data } : { favourites: data };
-    }
-    if (!data || !LIBRARY_DATA_PARTS.some(part => Array.isArray(data[part.key]))) {
-        showToast('Nothing to import found in that file');
-        return;
-    }
-    pendingLibraryData = data;
-    document.getElementById('import-library-data-file').textContent = file.name;
-    for (const part of LIBRARY_DATA_PARTS) {
-        const items = data[part.key];
-        const box = document.getElementById(`import-include-${part.key}`);
-        box.disabled = !Array.isArray(items) || !items.length;
-        box.checked = !box.disabled;
-        document.getElementById(`import-count-${part.key}`).textContent =
-            Array.isArray(items) ? `(${items.length} in file)` : '(not in file)';
-    }
-    setCalendarSettingsStatus('import-library-data-status', '', false);
-    updateLibraryDataImportButton();
-    document.getElementById('import-library-data-modal').style.display = 'flex';
-}
-
-function closeLibraryDataImport() {
-    document.getElementById('import-library-data-modal').style.display = 'none';
-    pendingLibraryData = null;
-}
-
-function updateLibraryDataImportButton() {
-    document.getElementById('import-library-data-btn').disabled =
-        !LIBRARY_DATA_PARTS.some(part => document.getElementById(`import-include-${part.key}`).checked);
-}
-
-// One line per imported part, e.g. "12 favourites (3 already favourited, 1 not found locally)"
-function describeImportResult(part, result) {
-    const extras = [];
-    if (result.fixed) extras.push(`${plural(result.fixed, 'path')} fixed up`);
-    if (result.ambiguous) extras.push(`${result.ambiguous} ambiguous match${result.ambiguous === 1 ? '' : 'es'}`);
-    if (result.alreadyFav) extras.push(`${result.alreadyFav} already favourited`);
-    if (result.alreadyDeleted) extras.push(`${result.alreadyDeleted} already deleted`);
-    if (result.alreadyPresent) extras.push(`${result.alreadyPresent} already tagged`);
-    if (result.updated) extras.push(`${plural(result.updated, 'quantity', 'quantities')} filled in`);
-    if (result.existing) extras.push(`${result.existing} already here`);
-    if (result.missing) extras.push(`${result.missing} not found locally`);
-    if (result.invalid) extras.push(`${result.invalid} invalid`);
-    const main = part.key === 'tags'
-        ? `${plural(result.tagsAdded, 'tag')} on ${plural(result.filesProcessed, 'file')}`
-        : plural(result.added, part.label);
-    return main + (extras.length ? ` (${extras.join(', ')})` : '');
-}
-
-async function runLibraryDataImport() {
-    const data = pendingLibraryData;
-    if (!data) return;
-    const chosen = LIBRARY_DATA_PARTS.filter(part => document.getElementById(`import-include-${part.key}`).checked);
-    if (!chosen.length) return;
-    const btn = document.getElementById('import-library-data-btn');
-    btn.disabled = true;
-    const done = [];
-    try {
-        // One at a time: each may scan the library to find files that have moved
-        for (const part of chosen) {
-            setCalendarSettingsStatus('import-library-data-status', `Importing ${part.label}s...`, false);
-            const response = await fetch(part.importUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ [part.key]: data[part.key] })
-            });
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error || `Importing ${part.label}s failed`);
-            done.push(describeImportResult(part, result));
-        }
-        closeLibraryDataImport();
-        showToast(`Imported ${done.join('; ')}`, 'success', 6000);
-        loadLibraryDataCounts();
-    } catch (err) {
-        console.error('Failed to import:', err);
-        const sofar = done.length ? ` (already imported: ${done.join('; ')})` : '';
-        setCalendarSettingsStatus('import-library-data-status', `${err.message}${sofar}`, true);
-        updateLibraryDataImportButton();
     }
 }
 
@@ -9404,17 +12136,102 @@ async function loadHttpsInfo() {
         console.error('Failed to fetch HTTPS info:', err);
     }
     renderHttpsSettings();
+    loadHttpPort();
+}
+
+// The HTTP and HTTPS ports, and why either couldn't be opened if it couldn't
+async function loadHttpPort() {
+    try {
+        const info = await (await fetch('/api/settings/port')).json();
+        document.getElementById('http-port-input').value = info.httpPort;
+        document.getElementById('https-port-input').value = info.httpsPort;
+        const problems = [info.httpError, info.httpsError].filter(Boolean);
+        const error = document.getElementById('port-error');
+        error.textContent = problems.length ? `${problems.join('. ')}. Choose another port.` : '';
+        error.style.display = problems.length ? '' : 'none';
+    } catch (err) {
+        console.error('Failed to fetch the ports:', err);
+    }
+}
+
+// Saves new ports; the server checks they're free, then restarts on them. The page reloads, or
+// moves to its new address when its own port is the one that changed.
+async function savePorts() {
+    const httpPort = Number(document.getElementById('http-port-input').value);
+    const httpsPort = Number(document.getElementById('https-port-input').value);
+    try {
+        const before = await (await fetch('/api/updates/check', { cache: 'no-store' })).json().catch(() => ({}));
+        const res = await fetch('/api/settings/port', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ httpPort, httpsPort })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!data.restart) return showToast('Ports saved', 'success', 2000);
+        showToast(`Restarting on ports ${httpPort} and ${httpsPort}...`, 'info', 10000);
+
+        const secure = window.location.protocol === 'https:';
+        const newPort = secure ? httpsPort : httpPort;
+        const url = new URL(window.location.href);
+        url.port = newPort === (secure ? 443 : 80) ? '' : String(newPort);
+        const moving = url.origin !== window.location.origin;
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 1500));
+            try {
+                if (moving) {
+                    // Another origin can't be read, but an answer at all means it's up
+                    await fetch(`${url.origin}/api/updates/check`, { mode: 'no-cors', cache: 'no-store' });
+                    window.location.href = url.href;
+                    return;
+                }
+                const info = await (await fetch('/api/updates/check', { cache: 'no-store' })).json();
+                if (info.bootId && info.bootId !== before.bootId) return window.location.reload();
+            } catch { /* still restarting */ }
+        }
+        showToast('The server did not come back after restarting: check logs/server.log', 'error', 8000);
+    } catch (err) {
+        showToast(`Couldn't change the ports: ${err.message}`, 'error', 6000);
+    }
 }
 
 // This page's address over HTTPS, or null if the server isn't running HTTPS.
 function secureAppUrl() {
     if (!httpsInfo?.available) return null;
-    return `https://${window.location.hostname}:${httpsInfo.httpsPort}${window.location.pathname}`;
+    const port = httpsInfo.httpsPort === 443 ? '' : `:${httpsInfo.httpsPort}`;
+    return `https://${window.location.hostname}${port}${window.location.pathname}`;
 }
 
 function renderHttpsSettings() {
     const el = document.getElementById('https-urls');
     if (!el) return;
+    // Windows gets a one-click trust script instead of the certificate import wizard.
+    const isWindows = /Windows/i.test(navigator.userAgent);
+    for (const id of ['https-trust-windows', 'https-trust-windows-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isWindows && httpsInfo?.available ? '' : 'none';
+    }
+    // iPhone / iPad get a configuration profile. iPadOS Safari claims to be a Mac, hence the touch check.
+    const ua = navigator.userAgent;
+    const isIos = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const isSafari = !/CriOS|FxiOS|EdgiOS|OPiOS|GSA\//.test(ua);
+    for (const id of ['https-trust-ios', 'https-trust-ios-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isIos && httpsInfo?.available ? '' : 'none';
+    }
+    // Macs install the same profile, from System Settings.
+    const isMac = /Macintosh/.test(ua) && !isIos;
+    for (const id of ['https-trust-mac', 'https-trust-mac-hint']) {
+        const node = document.getElementById(id);
+        if (node) node.style.display = isMac && httpsInfo?.available ? '' : 'none';
+    }
+    const safariNote = document.getElementById('https-trust-ios-safari');
+    if (safariNote) safariNote.style.display = isSafari ? 'none' : '';
+    // The certificate's name, as devices list it (server.js names it after the server)
+    if (currentDeviceName) {
+        document.querySelectorAll('.https-ca-name').forEach(node => { node.textContent = `AMMUI Local CA (${currentDeviceName})`; });
+    }
     if (!httpsInfo?.available) {
         el.textContent = "HTTPS isn't running - check the server log.";
         return;
@@ -9437,8 +12254,113 @@ async function fetchGeneralSettings() {
             if (nameInput) nameInput.value = data.deviceName;
             updateUIWithDeviceName();
         }
+        applySlideshowSettings(data);
+        applySupermarketSetting(data);
+        fillSpeechVoices();
     } catch (err) {
         console.error('Failed to fetch general settings:', err);
+    }
+}
+
+function applySupermarketSetting({ supermarket = '', supermarkets = [], shoppingEmail = '' }) {
+    const emailInput = document.getElementById('shopping-email-input');
+    if (emailInput) emailInput.value = shoppingEmail;
+    const select = document.getElementById('supermarket-select');
+    if (!select) return;
+    select.innerHTML = '<option value="">Any</option>' + supermarkets
+        .map(s => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`).join('');
+    select.value = supermarket;
+}
+
+async function saveSupermarket() {
+    const supermarket = document.getElementById('supermarket-select').value;
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ supermarket })
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        refreshShoppingPictures();
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save the supermarket:', err);
+        showToast('Failed to save settings');
+    }
+}
+
+async function saveShoppingEmail() {
+    const input = document.getElementById('shopping-email-input');
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ shoppingEmail: input.value.trim() })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save the shopping list email address:', err);
+        showToast(`Failed to save: ${err.message}`);
+    }
+}
+
+function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos, slideshowSky }) {
+    document.getElementById('slideshow-idle-input').value = slideshowIdleSeconds;
+    document.getElementById('slideshow-photo-input').value = slideshowPhotoSeconds;
+    if (slideshowVideos) {
+        document.getElementById('slideshow-videos-input').checked = slideshowVideos.enabled;
+        document.getElementById('slideshow-video-seconds-input').value = slideshowVideos.maxSeconds;
+        document.getElementById('slideshow-video-sound-input').checked = slideshowVideos.sound;
+        if (slideshow) slideshow.setVideoOptions(slideshowVideos);
+    }
+    if (slideshowSky) {
+        document.getElementById('slideshow-sky-sunset-input').value = slideshowSky.afterSunsetMinutes ?? 0;
+        document.getElementById('slideshow-sky-facing-input').value = Math.round(slideshowSky.facing / 45) % 8 * 45;
+        document.getElementById('slideshow-sky-lat-input').value = slideshowSky.lat ?? '';
+        document.getElementById('slideshow-sky-lon-input').value = slideshowSky.lon ?? '';
+        if (slideshow) slideshow.setSkyOptions(slideshowSky);
+    }
+    if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
+}
+
+async function saveSlideshowSettings() {
+    const idle = Number(document.getElementById('slideshow-idle-input').value);
+    const photo = Number(document.getElementById('slideshow-photo-input').value);
+    const videoSeconds = Number(document.getElementById('slideshow-video-seconds-input').value);
+    const afterSunset = Number(document.getElementById('slideshow-sky-sunset-input').value);
+    if (!(idle >= 0) || !(photo >= 0) || !(videoSeconds >= 0) || !(afterSunset >= 0)) return;
+    const sky = {
+        afterSunsetMinutes: afterSunset,
+        facing: Number(document.getElementById('slideshow-sky-facing-input').value)
+    };
+    // The location is saved once both halves of it are filled in (or both cleared)
+    const lat = document.getElementById('slideshow-sky-lat-input').value.trim();
+    const lon = document.getElementById('slideshow-sky-lon-input').value.trim();
+    if (!lat === !lon) Object.assign(sky, { lat: lat ? Number(lat) : null, lon: lon ? Number(lon) : null });
+    try {
+        const response = await fetch('/api/settings/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                slideshowIdleSeconds: idle, slideshowPhotoSeconds: photo,
+                slideshowVideos: {
+                    enabled: document.getElementById('slideshow-videos-input').checked,
+                    maxSeconds: videoSeconds,
+                    sound: document.getElementById('slideshow-video-sound-input').checked
+                },
+                slideshowSky: sky
+            })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        // Show the values the server kept (it clamps them to a sensible range)
+        applySlideshowSettings(await (await fetch('/api/settings/general')).json());
+        showToast('Settings saved', 'success', 2000);
+    } catch (err) {
+        console.error('Failed to save slideshow settings:', err);
+        showToast(`Failed to save settings: ${err.message}`);
     }
 }
 
@@ -9467,6 +12389,8 @@ async function fetchS3Settings() {
         const accessKey = document.getElementById('s3-access-key');
         const secretKey = document.getElementById('s3-secret-key');
         if (enabled) enabled.checked = !!data.enabled;
+        const time = document.getElementById('s3-time');
+        if (time) time.value = data.time || '03:00';
         if (endpoint) endpoint.value = data.endpoint || '';
         if (region) region.value = data.region || 'auto';
         if (bucket) bucket.value = data.bucket || '';
@@ -9476,6 +12400,8 @@ async function fetchS3Settings() {
         const mirrorMax = document.getElementById('s3-mirror-max');
         if (mirror) mirror.checked = !!data.mirror;
         if (mirrorMax) mirrorMax.value = data.mirrorMaxDeletePercent || 10;
+        const folder = document.getElementById('s3-folder');
+        if (folder) folder.value = folder.dataset.saved = data.folder || '';
         applyS3VerifiedUi(!!data.verified);
         setS3TestResult(data.verified ? 'Connection tested.' : '', 'ok');
         updateS3Status(); // Fetch status once to initialize UI, but don't poll until modal is opened
@@ -9494,7 +12420,8 @@ async function saveS3Settings() {
     const mirror = !!document.getElementById('s3-mirror')?.checked;
     const mirrorPercent = parseInt(document.getElementById('s3-mirror-max')?.value, 10);
     const mirrorMaxDeletePercent = mirrorPercent >= 1 && mirrorPercent <= 100 ? mirrorPercent : 10;
-    const settings = { enabled, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
+    const time = document.getElementById('s3-time')?.value || '03:00';
+    const settings = { enabled, time, endpoint, region, bucket, accessKeyId, secretAccessKey, mirror, mirrorMaxDeletePercent };
     // Clicking Test right after editing a field fires this first (on blur); the test waits for it
     s3SavePromise = (async () => {
         try {
@@ -9595,22 +12522,49 @@ async function updateS3Status() {
         const lastSyncEl = document.getElementById('s3-last-sync');
         const buttons = ['btn-s3-sync-now', 'btn-s3-restore-start', 'btn-s3-test']
             .map(id => document.getElementById(id)).filter(Boolean);
+        // Cancel: there while a backup or restore runs, greyed once pressed
+        const cancelBtn = document.getElementById('btn-s3-cancel');
+        if (cancelBtn) {
+            cancelBtn.style.display = status.running && !status.restarting ? '' : 'none';
+            cancelBtn.classList.toggle('disabled', !!status.cancelling);
+            cancelBtn.textContent = status.cancelling ? 'Cancelling...' : 'Cancel';
+        }
+        // Restarted after restoring data: reload, so the page shows what was restored
+        if (s3RestartBootId && status.bootId !== s3RestartBootId) {
+            location.reload();
+            return;
+        }
+        if (status.restarting) s3RestartBootId = status.bootId;
         if (stateEl) {
-            if (status.running) {
-                stateEl.textContent = status.mode === 'restore' ? 'Restoring...' : 'Backing up...';
+            if (status.restarting) {
+                stateEl.textContent = 'Restarting...';
+                stateEl.style.color = 'var(--primary)';
+                if (progressRow) progressRow.style.display = 'none';
+                buttons.forEach(b => b.classList.add('disabled'));
+            } else if (status.running) {
+                stateEl.textContent = status.cancelling ? 'Cancelling...'
+                    : { restore: 'Restoring...', move: 'Moving the backup...' }[status.mode] || 'Backing up...';
                 stateEl.style.color = 'var(--primary)';
                 if (progressRow) progressRow.style.display = 'block';
                 buttons.forEach(b => b.classList.add('disabled'));
+            } else if (status.cancelled) {
+                stateEl.textContent = { restore: 'Restore cancelled', move: 'Move cancelled' }[status.mode] || 'Backup cancelled';
+                stateEl.style.color = 'var(--text-muted)';
+                if (progressRow) progressRow.style.display = 'none';
+                buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             } else if (status.lastError) {
                 stateEl.textContent = 'Error';
                 stateEl.style.color = 'var(--accent)';
                 if (progressRow) progressRow.style.display = 'none';
                 buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             } else {
                 stateEl.textContent = 'Idle';
                 stateEl.style.color = 'var(--text-muted)';
                 if (progressRow) progressRow.style.display = 'none';
                 buttons.forEach(b => b.classList.remove('disabled'));
+                updateS3RestoreButton(); // only with something ticked
             }
         }
         if (status.running && status.totalCount > 0) {
@@ -9679,6 +12633,77 @@ async function triggerS3Sync() {
     }
 }
 
+// Settings > Backup's folder. Changed, the backup already in the old folder can be moved along
+// (copied within the bucket, so nothing is uploaded again); otherwise the next backup starts
+// afresh in the new folder, uploading everything again.
+async function changeS3Folder() {
+    const input = document.getElementById('s3-folder');
+    if (!input) return;
+    const folder = input.value.trim();
+    const current = input.dataset.saved || '';
+    if (!folder || folder === current) {
+        input.value = current;
+        return;
+    }
+    // Which folders the bucket has, to know whether there's a backup to move and the new one is free
+    let folders = null;
+    try {
+        const response = await fetch('/api/sync/s3/folders');
+        if (response.ok) folders = (await response.json()).folders;
+    } catch { }
+    let move = false;
+    if (folders?.includes(folder)) {
+        if (!confirm(`"${folder}" already has a backup in it, perhaps another server's.\n\n` +
+            `Back up into it anyway? The two would mix, and the backup in "${current}" stays where it is.`)) {
+            input.value = current;
+            return;
+        }
+    } else if (!folders || folders.includes(current)) {
+        if (confirm(`Move the backup from "${current}" to "${folder}"?\n\nIt's copied within the bucket, so nothing ` +
+            `is uploaded again, then removed from "${current}".\n\nOK moves it. Cancel gives the choice of starting ` +
+            `afresh in "${folder}" instead.`)) {
+            move = true;
+        } else if (!confirm(`Back up into "${folder}" without moving the old backup?\n\nThe next backup uploads ` +
+            `everything again, and the old backup stays in "${current}" until you delete it.`)) {
+            input.value = current;
+            return;
+        }
+    }
+    try {
+        const response = await fetch('/api/sync/s3/folder', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder, move })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        input.value = input.dataset.saved = data.folder;
+        showToast(move ? 'Moving the backup...' : 'Backup folder changed', 'success', 2500);
+        await updateS3Status();
+    } catch (err) {
+        input.value = current;
+        showToast(`Couldn't change the folder: ${err.message}`);
+    }
+}
+
+// Stops the backup or restore going on; what's done so far stays done
+async function cancelS3Sync() {
+    const btn = document.getElementById('btn-s3-cancel');
+    if (btn) btn.classList.add('disabled');
+    try {
+        const response = await fetch('/api/sync/s3/cancel', { method: 'POST' });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        await updateS3Status();
+    } catch (err) {
+        console.error('S3 cancel error:', err);
+        showToast(`Couldn't cancel: ${err.message}`);
+        if (btn) btn.classList.remove('disabled');
+    }
+}
+
 async function loadS3RestoreFolders() {
     const select = document.getElementById('s3-restore-folder');
     const startBtn = document.getElementById('btn-s3-restore-start');
@@ -9703,7 +12728,7 @@ async function loadS3RestoreFolders() {
             select.appendChild(opt);
         }
         select.disabled = false;
-        startBtn?.classList.remove('disabled');
+        loadS3RestoreOptions();
     } catch (err) {
         console.error('S3 folder list error:', err);
         select.innerHTML = '<option value="">Couldn\'t read the bucket</option>';
@@ -9712,15 +12737,86 @@ async function loadS3RestoreFolders() {
     }
 }
 
+// What a backup can bring back, ticked by default. Library folders are named as they are here.
+const S3_MEDIA_LABELS = { music: 'Music', pictures: 'Photos', videos: 'Videos', '': 'Other files' };
+const S3_DATA_GROUPS = [
+    { id: 'meals', label: 'Calendar, meals and items', hint: 'Meals on the calendar, the meal plan, items, the shopping list, family and their word games' },
+    { id: 'tags', label: 'Tags and photos', hint: 'Tags, favourites, photo rotations and deleted photos' },
+    { id: 'settings', label: 'Settings', hint: 'Integrations, smart home, mail, slideshow and the rest' },
+    { id: 'history', label: 'Play history', hint: '' },
+    { id: 'lookups', label: 'Saved lookups', hint: "Album art, lyrics and YouTube matches already found, so they aren't looked up again" },
+];
+
+async function loadS3RestoreOptions() {
+    const folder = document.getElementById('s3-restore-folder')?.value;
+    const el = document.getElementById('s3-restore-options');
+    const startBtn = document.getElementById('btn-s3-restore-start');
+    if (!el) return;
+    startBtn?.classList.add('disabled');
+    el.innerHTML = folder ? '<p class="settings-hint">Reading the backup...</p>' : '';
+    if (!folder) return;
+    try {
+        const response = await fetch(`/api/sync/s3/backup?folder=${encodeURIComponent(folder)}`);
+        const backup = await response.json();
+        if (!response.ok) throw new Error(backup.error || 'Failed to read the backup');
+        if (document.getElementById('s3-restore-folder')?.value !== folder) return; // another folder was picked since
+        const tick = (kind, value, label, hint) => `
+            <label class="settings-check">
+                <input type="checkbox" data-kind="${kind}" value="${escapeAttr(value)}" checked onchange="updateS3RestoreButton()">
+                <span>${escapeHtml(label)}${hint ? ` <span class="settings-hint">${escapeHtml(hint)}</span>` : ''}</span>
+            </label>`;
+        const media = backup.media.map(m => tick('media', m.section, S3_MEDIA_LABELS[m.section] ?? m.section,
+            `${m.files.toLocaleString()} file${m.files === 1 ? '' : 's'}, ${fmtBytes(m.bytes)}`)).join('');
+        const data = backup.data
+            ? S3_DATA_GROUPS.filter(g => backup.data.groups.includes(g.id)).map(g => tick('data', g.id, g.label, g.hint)).join('')
+            : '<p class="settings-hint">This backup has no data, only files. Back up that server again to include it.</p>';
+        // Off by default: it changes this server's name, and two servers backing up into one folder clash
+        const takeOver = !backup.data ? '' : `
+            <h4>Afterwards</h4>
+            <label class="settings-check">
+                <input type="checkbox" id="s3-restore-take-over" onchange="updateS3RestoreButton()">
+                <span>Carry on as that server, backing up into "${escapeHtml(folder)}"
+                    <span class="settings-hint">For moving to a new machine: this server takes the old one's name.
+                        Stop the old one backing up first, or the two will back up over each other.</span></span>
+            </label>`;
+        el.innerHTML = `
+            <h4>Files</h4>${media || '<p class="settings-hint">No files in this backup.</p>'}
+            <h4>Data${backup.data ? ` <span class="settings-hint">backed up ${escapeHtml(new Date(backup.data.backedUpAt).toLocaleString())}</span>` : ''}</h4>${data}${takeOver}`;
+        updateS3RestoreButton();
+    } catch (err) {
+        console.error('S3 backup read error:', err);
+        el.innerHTML = `<p class="settings-hint">Couldn't read the backup: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+const s3RestoreChoices = kind => [...document.querySelectorAll(`#s3-restore-options input[data-kind="${kind}"]:checked`)].map(i => i.value);
+
+const s3RestoreTakeOver = () => !!document.getElementById('s3-restore-take-over')?.checked;
+
+function updateS3RestoreButton() {
+    const any = s3RestoreChoices('media').length || s3RestoreChoices('data').length || s3RestoreTakeOver();
+    document.getElementById('btn-s3-restore-start')?.classList.toggle('disabled', !any);
+}
+
+let s3RestartBootId = null; // the server's bootId while it restarts after a restore, to reload once it's back
+
 async function startS3Restore() {
     const folder = document.getElementById('s3-restore-folder')?.value;
-    if (!folder) return;
-    if (!confirm(`Download all files from "${folder}" in the bucket into this server's library? Files that already exist with a different size will be overwritten.`)) return;
+    const media = s3RestoreChoices('media');
+    const data = s3RestoreChoices('data');
+    const takeOver = s3RestoreTakeOver();
+    if (!folder || (!media.length && !data.length && !takeOver)) return;
+    const steps = [];
+    if (media.length) steps.push(`download the files ticked from "${folder}" (files here with a different size are overwritten)`);
+    if (data.length) steps.push(`replace this server's ${S3_DATA_GROUPS.filter(g => data.includes(g.id)).map(g => g.label.toLowerCase()).join(', ')} with the backup's`);
+    if (takeOver) steps.push(`give this server the old one's name, so it carries on backing up into "${folder}"`);
+    if (data.length || takeOver) steps.push('restart');
+    if (!confirm(`This will ${steps.join(', and ')}. Go ahead?`)) return;
     try {
         const response = await fetch('/api/sync/s3/restore', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder })
+            body: JSON.stringify({ folder, media, data, takeOver })
         });
         if (!response.ok) {
             const data = await response.json();
@@ -9923,11 +13019,13 @@ async function refreshSmartHome() {
     clearTimeout(smartHomeTimer);
     if (appView !== 'smarthome') return;
     if (!document.hidden) {
+        const heatingLoad = loadHeating();
         try {
             const res = await fetch('/api/smart-home/plugs?live=1');
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || res.statusText);
             smartHomePlugs = data.plugs || [];
+            await heatingLoad; // so "no plugs" isn't shown above the heating
             if (!smartHomeDragging) renderSmartHome();
         } catch (err) {
             document.getElementById('smarthome-status').textContent = `Couldn't load plugs: ${err.message}`;
@@ -10018,7 +13116,7 @@ function energyBannerSvg() {
 function renderSmartHome() {
     const status = document.getElementById('smarthome-status');
     const shown = smartHomePlugs.filter(p => !p.hidden);
-    status.textContent = shown.length ? '' : smartHomePlugs.length
+    status.textContent = shown.length || heating.rooms.length ? '' : smartHomePlugs.length
         ? 'All plugs are hidden. Show them again from Manage Plugs.'
         : 'No plugs found yet. Use Manage Plugs to search the network.';
     const lights = shown.filter(p => p.type === 'twinkly');
@@ -10033,6 +13131,153 @@ function renderSmartHome() {
     const banner = document.getElementById('smarthome-lights-banner');
     if (lights.length && !banner.innerHTML) banner.innerHTML = lightsBannerSvg();
     banner.classList.toggle('on', lights.some(p => p.outlets.some(o => o.on)));
+}
+
+// Heating: the rooms of a tado° home (see lib/smart-home/tado.js). The server keeps their states
+// for a few minutes, as tado limits how often it can be asked, so polling it here costs nothing.
+// Taps on − and + are gathered and sent together once they stop.
+const HEAT_MIN = 5, HEAT_MAX = 25, HEAT_SEND_DELAY = 1200;
+let heating = { configured: false, rooms: [] };
+const heatBusy = new Map(); // room id -> a change waiting to be sent, or being sent
+
+const HEAT_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14 14.76V4.5a2 2 0 0 0-4 0v10.26a4 4 0 1 0 4 0Z"></path><path d="M12 9v7"></path></svg>`;
+const heatText = v => typeof v === 'number' ? `${v.toFixed(1)}°` : '–';
+
+async function loadHeating() {
+    try {
+        const res = await fetch('/api/tado/rooms');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        // A room mid-change keeps what's shown for it until the change has been made
+        if (!heatBusy.size) heating = data;
+    } catch (err) {
+        heating = { ...heating, error: err.message };
+    }
+    if (!heatBusy.size) renderHeating();
+}
+
+// When a change made here or in the tado app ends: today's time, or the day too if later.
+function heatClock(iso) {
+    const d = new Date(iso);
+    const today = d.toDateString() === new Date().toDateString();
+    return today ? clockTime(d) : `${d.toLocaleDateString([], { weekday: 'short' })} ${clockTime(d)}`;
+}
+
+function heatingBannerSvg() {
+    const width = 2400, pitch = 120;
+    let radiators = '';
+    for (let x = 12, n = 0; x < width; x += pitch, n++) {
+        let fins = '';
+        for (let f = 0; f < 8; f++) fins += `<rect class="radiator-fin" x="${x + f * 11}" y="20" width="8" height="25" rx="3"></rect>`;
+        let waves = '';
+        for (const dx of [18, 41, 64]) {
+            const delay = -(((n * 3 + dx) * 0.37) % 2.4).toFixed(2);
+            waves += `<path class="heat-wave" d="M${x + dx} 17c-3-2.5 3-4.5 0-7s3-4.5 0-7" style="animation-delay:${delay}s"></path>`;
+        }
+        radiators += `${fins}<rect class="radiator-pipe" x="${x - 4}" y="24" width="94" height="3" rx="1.5"></rect>
+            <rect class="radiator-pipe" x="${x - 4}" y="38" width="94" height="3" rx="1.5"></rect>${waves}`;
+    }
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">${radiators}</svg>`;
+}
+
+function renderHeating() {
+    const section = document.getElementById('smarthome-heating');
+    section.hidden = !heating.configured && !heating.signedOut;
+    if (section.hidden) return;
+    const connect = '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Connect tado°</button>';
+    document.getElementById('smarthome-heating-status').innerHTML = heating.signedOut
+        ? `tado° has signed this device out. ${connect}`
+        : heating.error ? `${escapeHtml(heating.error)}${heating.needsLogin ? ` ${connect}` : ''}`
+        : heating.rooms.length ? '' : 'No rooms found in this tado° home.';
+    document.getElementById('smarthome-heating-grid').innerHTML = heating.rooms.map(heatCard).join('');
+    const banner = document.getElementById('smarthome-heating-banner');
+    if (heating.rooms.length && !banner.innerHTML) banner.innerHTML = heatingBannerSvg();
+    banner.classList.toggle('on', heating.rooms.some(r => r.on && r.heating > 0));
+}
+
+function heatCard(r, i) {
+    const details = [r.humidity != null ? `${Math.round(r.humidity)}% humidity` : '', r.on && r.heating ? `Heating ${r.heating}%` : ''];
+    const status = !r.online ? 'Offline' : r.openWindow ? 'Window open' : details.filter(Boolean).join(' · ') || 'tado°';
+    const plan = r.manual ? (r.until ? `Until ${heatClock(r.until)}` : 'Until changed')
+        : r.next ? `Schedule: ${r.next.on ? heatText(r.next.target) : 'off'} at ${heatClock(r.next.at)}` : 'On schedule';
+    const off = r.online ? '' : 'disabled';
+    return `
+        <div class="plug-card heat-card ${r.on && r.heating > 0 ? 'on' : ''} ${r.online ? '' : 'unavailable'}">
+            <div class="plug-card-head">
+                <div class="plug-card-icon">${HEAT_ICON}</div>
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(r.name)}</div>
+                    <div class="plug-card-status">${escapeHtml(status)}</div>
+                </div>
+                <div class="heat-now" title="Temperature in the room">${heatText(r.temperature)}</div>
+            </div>
+            <div class="heat-target">
+                <button type="button" class="heat-step" onclick="stepHeating(${i}, -0.5)" ${off}
+                    aria-label="Lower ${escapeHtml(r.name)}">−</button>
+                <div class="heat-target-value ${r.on ? '' : 'off'}">${r.on ? heatText(r.target) : 'Off'}<span>${r.on ? 'Heating to' : 'Not heating'}</span></div>
+                <button type="button" class="heat-step" onclick="stepHeating(${i}, 0.5)" ${off}
+                    aria-label="Raise ${escapeHtml(r.name)}">+</button>
+            </div>
+            <div class="heat-actions">
+                <span class="heat-plan">${escapeHtml(plan)}</span>
+                ${r.on ? `<button type="button" class="btn-control btn-small" onclick="turnOffHeating(${i})" ${off}>Off</button>` : ''}
+                ${r.manual ? `<button type="button" class="btn-control btn-small" onclick="resumeHeating(${i})" ${off}
+                    title="Go back to following the tado° schedule">Resume schedule</button>` : ''}
+            </div>
+        </div>`;
+}
+
+// − and + move the target half a degree; from off, either turns the room on at what its schedule wants next.
+function stepHeating(i, delta) {
+    const r = heating.rooms[i];
+    if (!r) return;
+    const target = r.on ? (r.target ?? 20) + delta : (r.next?.on && r.next.target) || 20;
+    Object.assign(r, { on: true, target: Math.min(HEAT_MAX, Math.max(HEAT_MIN, target)), manual: true });
+    renderHeating();
+    clearTimeout(heatBusy.get(r.id));
+    heatBusy.set(r.id, setTimeout(() => heatingRequest(r, '', { on: true, target: r.target }), HEAT_SEND_DELAY));
+}
+
+function turnOffHeating(i) {
+    const r = heating.rooms[i];
+    if (!r) return;
+    clearTimeout(heatBusy.get(r.id));
+    Object.assign(r, { on: false, target: null, manual: true });
+    renderHeating();
+    heatingRequest(r, '', { on: false });
+}
+
+function resumeHeating(i) {
+    const r = heating.rooms[i];
+    if (r) heatingRequest(r, '/resume');
+}
+
+async function heatingRequest(r, path, body = {}) {
+    const mark = {};
+    heatBusy.set(r.id, mark);
+    let failed = false;
+    try {
+        const res = await fetch(`/api/tado/rooms/${encodeURIComponent(r.id)}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        // Unless another tap has come in since
+        if (heatBusy.get(r.id) === mark) {
+            const i = heating.rooms.findIndex(x => x.id === r.id);
+            if (i >= 0) heating.rooms[i] = data.room;
+        }
+    } catch (err) {
+        failed = true;
+        showToast(`Couldn't change ${r.name}: ${err.message}`, 'error', 5000);
+    }
+    if (heatBusy.get(r.id) !== mark) return;
+    heatBusy.delete(r.id);
+    if (failed) await loadHeating(); // show what it's really doing
+    else renderHeating();
 }
 
 // Energy tab: smart meter readings (Bright app login, see lib/smart-home/glow.js). They move
@@ -10062,6 +13307,12 @@ const kwhText = kwh => `${kwh < 10 ? kwh.toFixed(2) : kwh.toFixed(1)} kWh`;
 const clockTime = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
 async function loadEnergy({ refresh = false } = {}) {
+    // The meter readings take a few seconds to come back, so say so until the first lot arrive
+    // (later refreshes leave the last readings showing instead)
+    if (!document.getElementById('smarthome-energy-grid').innerHTML) {
+        document.getElementById('energy-status').innerHTML =
+            '<div class="energy-loading"><span class="spinner"></span>Reading your smart meter…</div>';
+    }
     try {
         const res = await fetch(`/api/energy${refresh ? '?refresh=1' : ''}`);
         const data = await res.json();
@@ -10075,6 +13326,7 @@ async function loadEnergy({ refresh = false } = {}) {
 function renderEnergy(data) {
     const section = document.getElementById('smarthome-energy');
     const grid = document.getElementById('smarthome-energy-grid');
+    document.getElementById('btn-energy-tariff-test').hidden = true; // until there's a tariff and history to test against
     section.hidden = !data.configured;
     document.getElementById('energy-status').textContent = data.configured ? ''
         : 'No smart meter set up yet. Press Bright Login to add the login from your Bright app.';
@@ -10087,6 +13339,8 @@ function renderEnergy(data) {
         return;
     }
     grid.innerHTML = data.fuels.map(energyCard).join('') || '<div class="smarthome-status">No meter readings yet.</div>';
+    energyData = data;
+    document.getElementById('btn-energy-tariff-test').hidden = !data.fuels.some(tariffTestUsage);
 }
 
 // A round top for a chart's scale and the step between its gridlines, e.g. 13.2 -> { max: 15, step: 5 }
@@ -10142,22 +13396,36 @@ function energyDailyPlot(f, days, ariaLabel, label, dense = false) {
             </div>`;
 }
 
-// Small bars of each period's total, the latest highlighted
-// Small bars of each period's total, the latest highlighted. A period with a lastYear total also gets a
-// line across its bar at that height, so it can be compared with the same period a year earlier.
-function energyTotalsBars(f, periods, title, label, dense = false) {
-    const cost = pence => f.hasCost ? ` · ${pounds(pence)}` : '';
-    const peak = Math.max(...periods.flatMap(p => [p.kwh, p.lastYear?.kwh || 0]), 0.001);
+const costText = (f, pence) => f.hasCost ? ` · ${pounds(pence)}` : '';
+
+// "▼ 12% less than usual by this time: the 7-day average was 4.20 kWh", comparing what's been used so far with
+// how much the earlier periods (those with readings) had used by the same point, their byNow
+function energySoFarComparison(kwh, earlier, unit, when) {
+    const used = earlier.filter(p => p.kwh > 0);
+    const average = used.length ? used.reduce((sum, p) => sum + p.byNow, 0) / used.length : 0;
+    const change = average ? Math.round((kwh / average - 1) * 100) : null;
+    const text = !used.length ? 'Not enough history to compare yet'
+        : change === null ? `Nothing to compare ${when} yet`
+            : `${change === 0 ? 'Same as' : `${Math.abs(change)}% ${change > 0 ? 'more than' : 'less than'}`} usual ${when}: the ${used.length}-${unit} average was ${kwhText(average)}`;
+    return `<div class="energy-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+}
+
+// Small bars of each period's total, the latest highlighted. mark(p) can give a { kwh, text } to draw a line
+// across a bar at that height: where the same month came to a year earlier, or where a day was by this time.
+function energyTotalsBars(f, periods, title, label, { dense = false, mark = () => null } = {}) {
+    const marks = periods.map(mark);
+    const peak = Math.max(...periods.map(p => p.kwh), ...marks.map(m => m?.kwh || 0), 0.001);
     return `<div class="energy-week ${dense ? 'dense' : ''}">${periods.map((p, i) => {
         const latest = i === periods.length - 1;
-        const change = yearChange(p);
-        const year = change === null ? '' : `&#10;A year earlier: ${kwhText(p.lastYear.kwh)}${cost(p.lastYear.pence)} (${change > 0 ? '+' : ''}${change}%)`;
-        return `<div class="energy-day ${latest ? 'today' : ''}" title="${title(p)}: ${kwhText(p.kwh)}${cost(p.pence)}${year}">
-            <div class="energy-day-bar ${p.lastYear !== undefined ? 'tall' : ''}"><span style="height:${Math.max(2, (p.kwh / peak) * 100)}%"></span>${
-                p.lastYear ? `<i class="energy-last-year" style="bottom:${(p.lastYear.kwh / peak) * 100}%"></i>` : ''}</div>
+        const m = marks[i];
+        return `<div class="energy-day ${latest ? 'today' : ''}" title="${title(p)}: ${kwhText(p.kwh)}${costText(f, p.pence)}${m ? `&#10;${m.text}` : ''}">
+            <div class="energy-day-bar tall"><span style="height:${Math.max(2, (p.kwh / peak) * 100)}%"></span>${
+                m ? `<i class="energy-last-year" style="bottom:${(m.kwh / peak) * 100}%"></i>` : ''}</div>
             <div class="energy-day-label">${label(p, latest)}</div></div>`;
     }).join('')}</div>`;
 }
+
+const energyMarkLegend = text => `<span><i class="energy-last-year"></i>${text}</span>`;
 
 const monthName = (month, style = 'long') => new Date(`${month}-15T12:00:00`).toLocaleDateString([], { month: style });
 
@@ -10169,36 +13437,210 @@ function energyFigures(f, total) {
                 </div>`;
 }
 
-// One card per fuel: the last 7 days beside last month, each with its totals for the periods before it
+// One card per fuel: today against the last 7 days and this week against the last 7 weeks, then last month
 function energyCard(f) {
     const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
-    const today = `Today${f.today.dataTo ? ` (to ${clockTime(f.today.dataTo)})` : ''}: ${kwhText(f.today.kwh)}${f.hasCost ? ` · ${pounds(f.today.pence)}` : ''}`;
+    const status = f.today.dataTo ? `Readings up to ${clockTime(f.today.dataTo)} today` : 'No readings for today yet';
     return `
         <div class="plug-card energy-card energy-${f.fuel}">
             <div class="plug-card-head">
                 <div class="plug-card-icon">${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}</div>
                 <div class="plug-card-title">
                     <div class="plug-card-name">${name}</div>
-                    <div class="plug-card-status">${today}</div>
+                    <div class="plug-card-status">${status}</div>
                 </div>
             </div>
-            <div class="energy-panes">${energyWeekPane(f, name)}${energyMonthPane(f, name)}</div>
+            ${energyTariff(f)}
+            <div class="energy-panes">${energyTodayPane(f)}${energyThisWeekPane(f)}${energyMonthPane(f, name)}</div>
         </div>`;
 }
 
-function energyWeekPane(f, name) {
-    const lastWeek = f.weeks[f.weeks.length - 1];
+const penceText = p => `${+p.toFixed(3)}p`;
+
+// --- Test a Tariff: the last 12 months' use (up to last month) priced on the current tariff and on a
+// standing charge and unit rate typed in, per fuel and together ---
+let energyData = null; // the last summary shown
+
+// What a fuel's months are priced from: the months with readings, their kWh and days, and the current
+// charges. A multi-rate tariff's split between its rates isn't known, so its unit rate is the average
+// the bills worked out at (cost less the standing charge, over the kWh), else the rates' plain average.
+function tariffTestUsage(f) {
+    const t = f.tariff;
+    if (!t || !t.rates.length || t.standingCharge == null) return null;
+    const months = (f.months || []).filter(m => m.kwh > 0);
+    if (!months.length) return null;
+    const daysIn = key => new Date(+key.slice(0, 4), +key.slice(5, 7), 0).getDate();
+    const kwh = months.reduce((s, m) => s + m.kwh, 0);
+    const days = months.reduce((s, m) => s + daysIn(m.month), 0);
+    let rate = t.rates[0].rate;
+    let estimated = false;
+    if (t.rates.length > 1) {
+        const billed = months.reduce((s, m) => s + m.pence, 0);
+        rate = f.hasCost && billed > 0 ? Math.max(0, (billed - t.standingCharge * days) / kwh)
+            : t.rates.reduce((s, r) => s + r.rate, 0) / t.rates.length;
+        estimated = true;
+    }
+    return { months, kwh, days, standing: t.standingCharge, rate, estimated,
+        from: months[0].month, to: months[months.length - 1].month };
+}
+
+const tariffTestCost = (u, standing, rate) => ({ units: u.kwh * rate, standing: u.days * standing, total: u.kwh * rate + u.days * standing });
+
+function openTariffTest() {
+    const fuels = (energyData?.fuels || []).map(f => ({ f, u: tariffTestUsage(f) })).filter(x => x.u);
+    const body = document.getElementById('tariff-test-body');
+    if (!fuels.length) {
+        body.innerHTML = '<p class="settings-hint">There isn\'t a tariff or enough meter history to compare with yet.</p>';
+    } else {
+        const monthLabel = key => `${monthName(key, 'short')} ${key.slice(0, 4)}`;
+        body.innerHTML = fuels.map(({ f, u }) => {
+            const name = f.fuel === 'gas' ? 'Gas' : 'Electricity';
+            const period = `${monthLabel(u.from)} – ${monthLabel(u.to)}${u.months.length < 12 ? ` (only ${u.months.length} months of readings)` : ''}`;
+            return `
+                <div class="tariff-test-fuel" data-fuel="${escapeAttr(f.fuel)}">
+                    <div class="tariff-test-head">
+                        <h3>${ENERGY_ICONS[f.fuel] || ENERGY_ICONS.electricity}${name}</h3>
+                        <span class="settings-hint">${kwhText(u.kwh)} over ${u.days} days, ${period}</span>
+                    </div>
+                    <div class="tariff-test-inputs">
+                        <label>Standing charge <span class="settings-hint">p/day</span>
+                            <input type="number" inputmode="decimal" min="0" step="0.01" data-field="standing" value="${+u.standing.toFixed(3)}"
+                                oninput="renderTariffTestResults()"></label>
+                        <label>Unit rate <span class="settings-hint">p/kWh</span>
+                            <input type="number" inputmode="decimal" min="0" step="0.01" data-field="rate" value="${+u.rate.toFixed(3)}"
+                                oninput="renderTariffTestResults()"></label>
+                    </div>
+                    <p class="settings-hint">Now: ${penceText(u.standing)}/day and ${penceText(u.rate)}/kWh${
+                        u.estimated ? ' (the average of your rates, as your bills worked out, since how much was on each isn\'t known)' : ''}</p>
+                    <div class="tariff-test-result"></div>
+                </div>`;
+        }).join('') + '<div id="tariff-test-total" class="tariff-test-total"></div>';
+        tariffTestFuels = fuels;
+        renderTariffTestResults();
+    }
+    document.getElementById('tariff-test-modal').style.display = 'flex';
+    body.querySelector('input')?.focus();
+}
+
+let tariffTestFuels = [];
+
+function closeTariffTest() {
+    document.getElementById('tariff-test-modal').style.display = 'none';
+}
+
+// "£12.34 cheaper" / "£12.34 dearer" / "The same", for new minus current in pence
+function tariffTestDifference(diff, current) {
+    if (Math.abs(diff) < 0.5) return '<span class="tariff-test-diff">The same</span>';
+    const pct = current ? ` (${Math.abs(Math.round(diff / current * 100))}%)` : '';
+    return `<span class="tariff-test-diff ${diff < 0 ? 'cheaper' : 'dearer'}">${pounds(Math.abs(diff))} a year ${diff < 0 ? 'cheaper' : 'dearer'}${pct}</span>`;
+}
+
+function renderTariffTestResults() {
+    let current = 0, next = 0, complete = true;
+    for (const { f, u } of tariffTestFuels) {
+        const el = document.querySelector(`#tariff-test-body .tariff-test-fuel[data-fuel="${f.fuel}"]`);
+        if (!el) continue;
+        const read = field => { const v = parseFloat(el.querySelector(`[data-field="${field}"]`).value); return Number.isFinite(v) && v >= 0 ? v : null; };
+        const standing = read('standing'), rate = read('rate');
+        const now = tariffTestCost(u, u.standing, u.rate);
+        const out = el.querySelector('.tariff-test-result');
+        if (standing === null || rate === null) {
+            out.innerHTML = '<p class="settings-hint">Enter a standing charge and unit rate to compare.</p>';
+            complete = false;
+            continue;
+        }
+        const then = tariffTestCost(u, standing, rate);
+        current += now.total;
+        next += then.total;
+        const perMonth = p => pounds(p / u.months.length);
+        out.innerHTML = `
+            <table class="tariff-test-table">
+                <thead><tr><th></th><th class="num">Current</th><th class="num">New</th></tr></thead>
+                <tbody>
+                    <tr><td>Units</td><td class="num">${pounds(now.units)}</td><td class="num">${pounds(then.units)}</td></tr>
+                    <tr><td>Standing charges</td><td class="num">${pounds(now.standing)}</td><td class="num">${pounds(then.standing)}</td></tr>
+                    <tr class="total"><td>Total</td><td class="num">${pounds(now.total)}</td><td class="num">${pounds(then.total)}</td></tr>
+                    <tr><td>Per month</td><td class="num">${perMonth(now.total)}</td><td class="num">${perMonth(then.total)}</td></tr>
+                </tbody>
+            </table>
+            ${tariffTestDifference(then.total - now.total, now.total)}`;
+    }
+    const total = document.getElementById('tariff-test-total');
+    if (total) {
+        total.hidden = tariffTestFuels.length < 2 || !complete;
+        total.innerHTML = `<span>Both together: ${pounds(current)} now, ${pounds(next)} on the new charges</span>
+            ${tariffTestDifference(next - current, current)}`;
+    }
+}
+
+// The tariff on the meter: its unit rate (or each rate of a multi-rate one, such as day and night) and
+// the standing charge, which the costs shown include
+function energyTariff(f) {
+    const t = f.tariff;
+    if (!t || (!t.rates.length && t.standingCharge == null)) return '';
+    const multi = t.rates.length > 1;
+    const rates = t.rates.map((r, i) => `
+        <div><span>${multi ? `Rate ${r.tier ?? i + 1}` : 'Unit rate'}</span><b>${penceText(r.rate)}/kWh</b>${
+            r.ratePerM3 != null ? `${penceText(r.ratePerM3)}/m³` : ''}</div>`).join('');
+    // A month's worth is this month's: its number of days at the daily charge
+    const now = new Date();
+    const monthDays = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const standing = t.standingCharge != null ? `
+        <div><span>Standing charge</span><b>${penceText(t.standingCharge)}/day</b>${f.hasCost ? 'included in costs' : ''}</div>
+        <div><span>Standing charge per month</span><b>${pounds(t.standingCharge * monthDays)}</b>${
+            now.toLocaleDateString([], { month: 'long' })}, ${monthDays} days</div>` : '';
+    const kind = multi ? `${t.rates.length}-rate tariff` : t.type === 'flatrate' ? 'Single rate, all day' : 'Tariff';
+    return `
+            <div class="energy-tariff">
+                <div class="energy-section-label">${kind}${t.from ? `, since ${shortDate(t.from)}` : ''}</div>
+                <div class="energy-totals">${rates}${standing}</div>
+            </div>`;
+}
+
+const periodAverage = periods => {
+    const used = periods.filter(p => p.kwh > 0);
+    return used.length ? { kwh: used.reduce((s, p) => s + p.kwh, 0) / used.length, pence: used.reduce((s, p) => s + p.pence, 0) / used.length } : { kwh: 0, pence: 0 };
+};
+
+// Today so far beside each of the 7 days before it; the line on each day's bar is where it had got to by this time
+function energyTodayPane(f) {
     const weekday = d => new Date(`${d.date}T12:00:00`).toLocaleDateString([], { weekday: 'short' }).slice(0, 2);
+    const days = [...f.recentDays, { date: '', ...f.today }];
+    const by = f.today.dataTo ? `by ${clockTime(f.today.dataTo)}` : 'by this time';
+    const average = periodAverage(f.recentDays);
+    const yesterday = f.recentDays[f.recentDays.length - 1];
     return `
             <div class="energy-pane">
-                <div class="energy-pane-title">Last 7 days, ${shortDate(lastWeek.from)} – ${shortDate(lastWeek.to)}</div>
-                ${energyFigures(f, lastWeek)}
-                ${energyComparison(f.weeks, 'week')}
-                ${energyDailyPlot(f, f.lastWeek, `${name} use per day over the last 7 days`, weekday)}
-                <div class="energy-section-label">Weekly totals, last ${f.weeks.length} weeks</div>
-                ${energyTotalsBars(f, f.weeks, w => `${shortDate(w.from)} – ${shortDate(w.to)}`, (w, latest) => latest ? 'Last' : shortDate(w.from))}
+                <div class="energy-pane-title">Today vs the last ${f.recentDays.length} days</div>
+                ${energyFigures(f, f.today)}
+                ${f.today.dataTo ? energySoFarComparison(f.today.kwh, f.recentDays, 'day', 'by this time') : '<div class="energy-compare">No readings for today yet</div>'}
+                <div class="energy-section-label energy-legend">Daily totals${f.today.dataTo ? energyMarkLegend(by) : ''}</div>
+                ${energyTotalsBars(f, days, d => d.date ? `${weekday(d)} ${shortDate(d.date)}` : 'Today so far', (d, latest) => latest ? 'Today' : weekday(d),
+                    { mark: d => d.date && f.today.dataTo && d.kwh ? { kwh: d.byNow, text: `${by[0].toUpperCase()}${by.slice(1)}: ${kwhText(d.byNow)}` } : null })}
                 <div class="energy-totals">
-                    <div><span>This month</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
+                    <div><span>Daily average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
+                    <div><span>Yesterday</span><b>${kwhText(yesterday.kwh)}</b>${f.hasCost ? pounds(yesterday.pence) : ''}</div>
+                </div>
+            </div>`;
+}
+
+// This week so far (from Monday) beside each of the 7 weeks before it, marked where they'd got to by the same point
+function energyThisWeekPane(f) {
+    const weeks = [...f.weeks, { ...f.thisWeek, to: '' }];
+    const average = periodAverage(f.weeks);
+    const lastWeek = f.weeks[f.weeks.length - 1];
+    return `
+            <div class="energy-pane">
+                <div class="energy-pane-title">This week vs the last ${f.weeks.length} weeks</div>
+                ${energyFigures(f, f.thisWeek)}
+                ${energySoFarComparison(f.thisWeek.kwh, f.weeks, 'week', 'by this point in the week')}
+                <div class="energy-section-label energy-legend">Weekly totals, from Monday${energyMarkLegend('by the same point')}</div>
+                ${energyTotalsBars(f, weeks, w => w.to ? `${shortDate(w.from)} – ${shortDate(w.to)}` : `This week so far, from ${shortDate(w.from)}`,
+                    (w, latest) => latest ? 'This' : shortDate(w.from),
+                    { mark: w => w.to && w.kwh ? { kwh: w.byNow, text: `By the same point: ${kwhText(w.byNow)}` } : null })}
+                <div class="energy-totals">
+                    <div><span>Weekly average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
+                    <div><span>Last week</span><b>${kwhText(lastWeek.kwh)}</b>${f.hasCost ? pounds(lastWeek.pence) : ''}</div>
                 </div>
             </div>`;
 }
@@ -10212,18 +13654,25 @@ function energyMonthPane(f, name) {
     const busiest = days.reduce((top, d) => d.kwh > top.kwh ? d : top, { kwh: 0 });
     const dayOfMonth = d => { const n = +d.date.slice(8); return n % 7 === 1 ? n : ''; };
     return `
-            <div class="energy-pane">
+            <div class="energy-pane wide">
                 <div class="energy-pane-title">Last month, ${monthName(lastMonth.month)} ${lastMonth.month.slice(0, 4)}</div>
                 ${energyFigures(f, lastMonth)}
                 ${energyComparison(f.months.slice(-7), 'month')}
                 ${energyYearComparison(lastMonth)}
                 ${energyDailyPlot(f, f.lastMonth, `${name} use per day through ${monthName(lastMonth.month)}`, dayOfMonth, true)}
                 <div class="energy-section-label energy-legend">Monthly totals, last ${f.months.length} months
-                    ${f.months.some(m => m.lastYear) ? '<span><i class="energy-last-year"></i>a year earlier</span>' : ''}</div>
-                ${energyTotalsBars(f, f.months, m => `${monthName(m.month)} ${m.month.slice(0, 4)}`, m => monthName(m.month, 'short').slice(0, 3), true)}
+                    ${f.months.some(m => m.lastYear) ? energyMarkLegend('a year earlier') : ''}</div>
+                ${energyTotalsBars(f, f.months, m => `${monthName(m.month)} ${m.month.slice(0, 4)}`, m => monthName(m.month, 'short').slice(0, 3), {
+                    dense: true,
+                    mark: m => {
+                        const change = yearChange(m);
+                        return change === null ? null : { kwh: m.lastYear.kwh, text: `A year earlier: ${kwhText(m.lastYear.kwh)}${costText(f, m.lastYear.pence)} (${change > 0 ? '+' : ''}${change}%)` };
+                    },
+                })}
                 <div class="energy-totals">
                     <div><span>Daily average</span><b>${kwhText(average.kwh)}</b>${f.hasCost ? pounds(average.pence) : ''}</div>
                     <div><span>Busiest day</span><b>${kwhText(busiest.kwh)}</b>${busiest.date ? shortDate(busiest.date) : ''}</div>
+                    <div><span>This month so far</span><b>${kwhText(f.month.kwh)}</b>${f.hasCost ? pounds(f.month.pence) : ''}</div>
                 </div>
             </div>`;
 }
@@ -10260,16 +13709,26 @@ function plugCard(p) {
             </div>
             ${p.supported && p.outlets.length ? `<div class="plug-card-outlets ${single ? 'single' : ''}">
                 ${p.outlets.map((o, n) => outletBtn(o, single ? 'Power' : escapeHtml(o.name || `Outlet ${n + 1}`))).join('')}
+                ${p.hasScenes ? `
+                <button type="button" class="plug-scene" onclick="openPlugScenes(${i})" ${p.online === false ? 'disabled' : ''}
+                    aria-label="Scenes for ${escapeHtml(p.name)}">
+                    ${SCENE_ICON}<span class="plug-scene-name">${anyOn && p.scene ? escapeHtml(p.scene) : 'Choose a scene'}</span><span aria-hidden="true">›</span>
+                </button>` : ''}
             </div>` : ''}
             ${p.needsLogin ? '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Set TP-Link Login</button>' : ''}
         </div>`;
 }
+
+// A plug with Confirm ticked in its settings asks before it's switched, dimmed or its scene changed
+const confirmPlugControl = (p, question) => !p.confirm || confirm(question);
 
 async function togglePlugOutlet(btn) {
     const p = smartHomePlugs[+btn.dataset.plug];
     const outlet = p?.outlets.find(o => o.id === btn.dataset.outlet);
     if (!outlet) return;
     const on = !outlet.on;
+    const what = outlet.name && outlet.name !== p.name && p.outlets.length > 1 ? `${p.name} (${outlet.name})` : p.name;
+    if (!confirmPlugControl(p, `Turn ${what} ${on ? 'on' : 'off'}?`)) return;
     outlet.on = on; // show it straight away; the reply has the real state
     renderSmartHome();
     try {
@@ -10298,6 +13757,7 @@ async function setPlugBrightness(input) {
     smartHomeDragging = false;
     const p = smartHomePlugs[+input.dataset.plug];
     if (!p) return;
+    if (!confirmPlugControl(p, `Set ${p.name} to ${input.value}%?`)) { renderSmartHome(); return; }
     try {
         const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(p.id)}/brightness`, {
             method: 'POST',
@@ -10312,6 +13772,118 @@ async function setPlugBrightness(input) {
         showToast(`Couldn't dim ${p.name}: ${err.message}`, 'error', 5000);
     }
     renderSmartHome();
+}
+
+// Scenes dialog for Twinkly lights: pick one of the movies uploaded from the Twinkly app, the
+// playlist, a built-in effect or a plain colour (see "Scenes" in lib/smart-home/twinkly.js).
+// Choosing one also turns the lights on.
+const SCENE_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-2a2 2 0 0 0-1.5 3.3A1.6 1.6 0 0 1 12 22Z"></path>
+    <circle cx="7.5" cy="11" r="1.2"></circle><circle cx="10.5" cy="7" r="1.2"></circle><circle cx="15.5" cy="7.5" r="1.2"></circle></svg>`;
+const SCENE_COLOURS = ['#ff0000', '#ff6a00', '#ffc800', '#00ff3c', '#00c8ff', '#0040ff', '#a000ff', '#ff0090', '#ffffff', '#ffb46b'];
+let plugScenes = null; // { plug, scenes, busy, error }
+
+const hexToRgb = hex => ({ red: parseInt(hex.slice(1, 3), 16), green: parseInt(hex.slice(3, 5), 16), blue: parseInt(hex.slice(5, 7), 16) });
+const rgbToHex = c => `#${[c.red, c.green, c.blue].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+
+async function openPlugScenes(i) {
+    const plug = smartHomePlugs[i];
+    if (!plug) return;
+    const state = plugScenes = { plug, scenes: null, busy: false, error: null };
+    document.getElementById('plug-scenes-name').textContent = plug.name;
+    document.getElementById('plug-scenes-modal').style.display = 'flex';
+    renderPlugScenes();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(plug.id)}/scenes`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        state.scenes = data.scenes;
+    } catch (err) {
+        state.error = err.message;
+    }
+    if (plugScenes === state) renderPlugScenes();
+}
+
+function closePlugScenes() {
+    document.getElementById('plug-scenes-modal').style.display = 'none';
+    plugScenes = null;
+}
+
+// { kind: 'movie' | 'playlist' | 'effect', id } or { kind: 'color', color }
+async function choosePlugScene(choice) {
+    const state = plugScenes;
+    if (!state || state.busy) return;
+    if (!confirmPlugControl(state.plug, `Change the scene on ${state.plug.name}?`)) return;
+    state.busy = true;
+    renderPlugScenes();
+    try {
+        const res = await fetch(`/api/smart-home/plugs/${encodeURIComponent(state.plug.id)}/scene`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(choice)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (data.scenes) state.scenes = data.scenes;
+        const i = smartHomePlugs.findIndex(x => x.id === state.plug.id);
+        if (i >= 0) { smartHomePlugs[i] = data.plug; renderSmartHome(); }
+    } catch (err) {
+        showToast(`Couldn't change the scene: ${err.message}`, 'error', 5000);
+    } finally {
+        state.busy = false;
+        if (plugScenes === state) renderPlugScenes();
+    }
+}
+
+function choosePlugSceneColour(hex) {
+    choosePlugScene({ kind: 'color', color: hexToRgb(hex) });
+}
+
+function renderPlugScenes() {
+    const body = document.getElementById('plug-scenes-body');
+    const state = plugScenes;
+    if (!body || !state) return;
+    const s = state.scenes;
+    if (!s) {
+        body.innerHTML = `<div class="smarthome-status">${state.error ? `Couldn't read the scenes: ${escapeHtml(state.error)}` : 'Reading the scenes...'}</div>`;
+        return;
+    }
+    const disabled = state.busy ? 'disabled' : '';
+    const option = (kind, item, current) => `
+        <button type="button" class="scene-option ${current ? 'current' : ''}" ${disabled} aria-pressed="${current}"
+            onclick='choosePlugScene(${JSON.stringify({ kind, id: item.id })})'>${escapeHtml(item.name)}</button>`;
+    const section = (title, content) => `<div class="plug-timers-section"><h4>${title}</h4>${content}</div>`;
+    let html = s.mode === 'off' ? '<div class="settings-hint">The lights are off. Choosing a scene turns them on.</div>' : '';
+
+    html += section('Movies', `<div class="scene-options">${s.movies.map(m =>
+        option('movie', m, s.mode === 'movie' && (m.id === null || m.id === s.movie))).join('')}</div>`);
+
+    if (s.playlist.length) {
+        html += section('Playlist', `
+            <button type="button" class="btn-control btn-small ${s.mode === 'playlist' ? 'primary' : ''}" ${disabled}
+                onclick='choosePlugScene({"kind":"playlist"})'>${s.mode === 'playlist' ? 'Playing playlist' : 'Play Playlist'}</button>
+            <div class="scene-options">${s.playlist.map(m =>
+                option('playlist', m, s.mode === 'playlist' && m.id === s.playlistEntry)).join('')}</div>`);
+    }
+
+    if (s.effects.length) {
+        html += section('Effects', `<div class="scene-options">${s.effects.map(m =>
+            option('effect', m, s.mode === 'effect' && m.id === s.effect)).join('')}</div>`);
+    }
+
+    const colour = s.color ? rgbToHex(s.color) : '#ffb46b';
+    html += section('Colour', `
+        <div class="scene-colours">
+            ${SCENE_COLOURS.map(c => `<button type="button" class="scene-swatch ${s.mode === 'color' && c === colour ? 'current' : ''}"
+                style="background:${c}" ${disabled} onclick="choosePlugSceneColour('${c}')" aria-label="Colour ${c}"></button>`).join('')}
+            <label class="scene-swatch scene-custom ${s.mode === 'color' && !SCENE_COLOURS.includes(colour) ? 'current' : ''}" title="Any colour"
+                style="background:${colour}"><input type="color" value="${colour}" ${disabled}
+                onchange="choosePlugSceneColour(this.value)" aria-label="Any colour"></label>
+        </div>`);
+
+    html += `<div class="settings-hint">Scenes sent to the lights from the ${escapeHtml(state.plug.brand)} app appear under Movies.${
+        state.plug.members?.length ? ' Paired units change too, where they have the same scene.' : ''}</div>`;
+    body.innerHTML = html;
 }
 
 // Timers dialog: the countdown and schedules kept on the device itself (see "Timers" in
@@ -10602,6 +14174,7 @@ async function loadPlugSettings() {
         password.value = '';
         password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
         loadGlowAccount();
+        loadTadoAccount();
     } catch (err) {
         list.innerHTML = `<div class="empty-state-mini">Couldn't load plugs: ${escapeHtml(err.message)}</div>`;
         return;
@@ -10636,9 +14209,12 @@ function renderPlugList() {
                     ${state ? `<span class="manage-item-host plug-state ${p.supported && p.online ? 'ok' : ''}">${escapeHtml(state)}</span>` : ''}
                 </div>
                 <div class="manage-item-actions">
-                    <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <div class="toggle-group" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+                        <label class="plug-confirm-toggle" title="Ask before this plug is switched from the app">
+                            <input type="checkbox" ${p.confirm ? 'checked' : ''} onchange="togglePlugConfirm(${i}, this.checked)"> Confirm
+                        </label>
                         <button class="btn-toggle ${p.hidden ? 'btn-enable' : 'btn-disable'}" onclick="togglePlugHidden(${i})"
-                            title="Show or hide this plug on the Smart Home tab">${p.hidden ? 'Show' : 'Hide'}</button>
+                            title="Show or hide this plug on the Controls tab">${p.hidden ? 'Show' : 'Hide'}</button>
                     </div>
                     <button class="btn-delete" onclick="forgetPlug(${i})" title="Remove this plug">Forget</button>
                 </div>
@@ -10672,6 +14248,10 @@ function renamePlug(i) {
 
 function togglePlugHidden(i) {
     updatePlug(i, { hidden: !managedPlugs[i].hidden });
+}
+
+function togglePlugConfirm(i, on) {
+    updatePlug(i, { confirm: on });
 }
 
 async function forgetPlug(i) {
@@ -10764,6 +14344,382 @@ async function saveGlowAccount(btn) {
         status.textContent = `Failed: ${err.message}`;
     } finally {
         btn.disabled = false;
+    }
+}
+
+// Fuel Finder (Settings → Integrations): the client id and secret the Petrol tab reads prices with
+async function loadFuelFinderAccount() {
+    try {
+        const account = await (await fetch('/api/fuel/account')).json();
+        document.getElementById('fuel-finder-client-id').value = account.clientId || '';
+        const secret = document.getElementById('fuel-finder-client-secret');
+        secret.value = '';
+        secret.placeholder = account.hasSecret ? 'Client secret saved (leave blank to keep)' : 'Client secret';
+    } catch (err) {
+        document.getElementById('fuel-finder-status').textContent = `Couldn't load: ${err.message}`;
+    }
+}
+
+async function saveFuelFinderAccount(btn) {
+    const status = document.getElementById('fuel-finder-status');
+    btn.disabled = true;
+    status.textContent = 'Connecting...';
+    try {
+        const res = await fetch('/api/fuel/account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                clientId: document.getElementById('fuel-finder-client-id').value,
+                clientSecret: document.getElementById('fuel-finder-client-secret').value,
+            })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        await loadFuelFinderAccount();
+        status.textContent = 'Connected';
+        if (appView === 'petrol') refreshPetrol();
+    } catch (err) {
+        status.textContent = `Failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function openFuelFinderSettings() {
+    openServerSettingsModal();
+    const tab = [...document.querySelectorAll('#server-settings-modal .settings-tab')]
+        .find(b => b.textContent.trim().toLowerCase() === 'integrations');
+    if (tab) switchSettingsTab('integrations', tab);
+    document.getElementById('fuel-finder-settings').scrollIntoView({ block: 'center' });
+}
+
+// Petrol tab: a map of the petrol stations around this device with the price of one fuel on each,
+// and the same stations listed cheapest first. Prices come from the government's Fuel Finder scheme
+// through the server (lib/fuel-prices.js). Forecourts update them within half an hour of a change.
+const PETROL_FUELS = { E10: 'Unleaded', E5: 'Super unleaded', B7_STANDARD: 'Diesel', B7_PREMIUM: 'Premium diesel' };
+const PETROL_REFRESH_MS = 5 * 60 * 1000;
+const PETROL_LOADING_RETRY_MS = 5000;
+const PETROL_STALE_DAYS = 7; // a price unchanged for longer than this may no longer be right
+const METRES_PER_MILE = 1609.34;
+let petrolFuel = PETROL_FUELS[localStorage.getItem('petrolFuel')] ? localStorage.getItem('petrolFuel') : 'E10';
+let petrolRadius = Number(localStorage.getItem('petrolRadius')) || 5;
+let petrolPlace = null; // { lat, lon, source: 'device' | 'saved' | 'last' }
+let petrolData = null;
+let petrolTimer = null;
+let petrolMap = null;
+let petrolLayer = null; // the station pins
+let petrolHere = null; // { dot, circle }
+let petrolFitted = ''; // the place and radius the map was last fitted to
+const petrolPins = new Map(); // station id -> marker
+
+function showPetrol() {
+    setAppView('petrol');
+    setPetrolFuel(petrolFuel, false);
+    document.getElementById('petrol-radius').value = String(petrolRadius);
+    petrolMap?.invalidateSize();
+    if (petrolPlace) refreshPetrol();
+    else locatePetrol();
+}
+
+function setPetrolFuel(fuel, redraw = true) {
+    petrolFuel = fuel;
+    try { localStorage.setItem('petrolFuel', fuel); } catch { /* not kept; fine */ }
+    document.querySelectorAll('#petrol-fuels [data-fuel]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.fuel === fuel);
+        btn.setAttribute('aria-selected', btn.dataset.fuel === fuel ? 'true' : 'false');
+    });
+    if (redraw && petrolData?.stations) renderPetrol(petrolData);
+}
+
+function setPetrolRadius(miles) {
+    petrolRadius = Number(miles) || 5;
+    try { localStorage.setItem('petrolRadius', String(petrolRadius)); } catch { /* not kept; fine */ }
+    refreshPetrol();
+}
+
+function devicePosition(fresh) {
+    return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+        pos => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+        reject, { timeout: 15000, maximumAge: fresh ? 0 : 10 * 60 * 1000 }));
+}
+
+// Where this device is: the browser's location if it'll share it, else the location in the
+// slideshow settings, else wherever it was last found
+async function locatePetrol(fresh = false) {
+    const status = document.getElementById('petrol-status');
+    status.innerHTML = '<div class="energy-loading"><span class="spinner"></span>Finding where this device is…</div>';
+    let place = null;
+    let why = '';
+    if (!window.isSecureContext) why = 'the browser only shares its location over HTTPS';
+    else if (!navigator.geolocation) why = 'this browser can\'t share its location';
+    else {
+        try {
+            place = { ...await devicePosition(fresh), source: 'device' };
+        } catch (err) {
+            why = err.code === 1 ? 'the browser wasn\'t allowed to share its location' : err.message;
+        }
+    }
+    if (!place) {
+        try {
+            const sky = (await (await fetch('/api/settings/general')).json()).slideshowSky;
+            if (typeof sky?.lat === 'number' && typeof sky?.lon === 'number') place = { lat: sky.lat, lon: sky.lon, source: 'saved' };
+        } catch { /* fall through */ }
+    }
+    if (!place) {
+        try {
+            const last = JSON.parse(localStorage.getItem('petrolPlace'));
+            if (typeof last?.lat === 'number' && typeof last?.lon === 'number') place = { lat: last.lat, lon: last.lon, source: 'last' };
+        } catch { /* none */ }
+    }
+    if (!place) {
+        document.getElementById('petrol-body').hidden = true;
+        status.textContent = `Couldn't find where this device is: ${why}. Allow it to share its location, or set one under Settings → Slideshow ("Seen from").`;
+        return;
+    }
+    if (place.source === 'device') {
+        try { localStorage.setItem('petrolPlace', JSON.stringify({ lat: place.lat, lon: place.lon })); } catch { /* not kept; fine */ }
+    } else if (why) {
+        showToast(`Using ${place.source === 'saved' ? 'the location from the slideshow settings' : 'where this device was last found'}: ${why}`, 'info', 4000);
+    }
+    petrolPlace = place;
+    refreshPetrol();
+}
+
+async function refreshPetrol() {
+    clearTimeout(petrolTimer);
+    if (appView !== 'petrol' || !petrolPlace) return;
+    if (!document.hidden) await loadPetrol();
+    if (appView === 'petrol') petrolTimer = setTimeout(refreshPetrol, petrolData?.loading ? PETROL_LOADING_RETRY_MS : PETROL_REFRESH_MS);
+}
+
+async function loadPetrol() {
+    const { lat, lon } = petrolPlace;
+    try {
+        const res = await fetch(`/api/fuel?lat=${lat}&lon=${lon}&miles=${petrolRadius}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        petrolData = data;
+    } catch (err) {
+        petrolData = { configured: true, error: err.message, stations: petrolData?.stations, updated: petrolData?.updated };
+    }
+    renderPetrol(petrolData);
+}
+
+const petrolPrice = p => `${p.toFixed(1)}p`;
+
+// "12 min ago", "3 hours ago", "5 days ago"
+function petrolAge(iso) {
+    const mins = (Date.now() - new Date(iso)) / 60000;
+    if (!(mins >= 0)) return '';
+    if (mins < 60) return `${Math.max(1, Math.round(mins))} min ago`;
+    if (mins < 48 * 60) return `${Math.round(mins / 60)} hours ago`;
+    return `${Math.round(mins / 1440)} days ago`;
+}
+
+const petrolIsStale = iso => iso && Date.now() - new Date(iso) > PETROL_STALE_DAYS * 86400000;
+
+function renderPetrol(data) {
+    const status = document.getElementById('petrol-status');
+    const body = document.getElementById('petrol-body');
+    if (!data.configured) {
+        body.hidden = true;
+        status.textContent = 'Petrol prices aren\'t set up yet. Press Fuel Finder Login to add a free client ID and secret from the government\'s Fuel Finder service.';
+        return;
+    }
+    if (!data.stations) {
+        body.hidden = true;
+        status.innerHTML = data.loading
+            ? '<div class="energy-loading"><span class="spinner"></span>Finding the petrol stations around here. The first time in a new area takes a minute or two…</div>'
+            : `Couldn't get petrol prices: ${escapeHtml(data.error || 'no reply')}`;
+        return;
+    }
+    status.innerHTML = data.error ? `Couldn't get the latest prices (${escapeHtml(data.error)}), so these may be out of date.` : '';
+    body.hidden = false;
+    drawPetrolMap(data);
+    drawPetrolList(data);
+}
+
+// Stations selling the chosen fuel, cheapest first, each banded by where its price sits between the cheapest and dearest
+function petrolRanked(data) {
+    const selling = data.stations.filter(s => s.prices[petrolFuel] && !s.closed)
+        .sort((a, b) => a.prices[petrolFuel].price - b.prices[petrolFuel].price || a.miles - b.miles);
+    const prices = selling.map(s => s.prices[petrolFuel].price);
+    const min = Math.min(...prices), max = Math.max(...prices);
+    return selling.map(s => {
+        const t = max > min ? (s.prices[petrolFuel].price - min) / (max - min) : 0;
+        return { ...s, band: t <= 0.2 ? 'cheap' : t >= 0.8 ? 'dear' : 'mid' };
+    });
+}
+
+function ensurePetrolMap() {
+    if (petrolMap) return;
+    petrolMap = L.map('petrol-map', { zoomControl: true, attributionControl: true });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap · Prices: Fuel Finder (OGL)',
+        maxZoom: 18
+    }).addTo(petrolMap);
+    petrolLayer = L.layerGroup().addTo(petrolMap);
+}
+
+function petrolPopup(s) {
+    const prices = Object.entries(PETROL_FUELS).filter(([f]) => s.prices[f]).map(([f, label]) => {
+        const p = s.prices[f];
+        return `<tr class="${f === petrolFuel ? 'current' : ''}"><td>${label}</td><td>${petrolPrice(p.price)}</td>
+            <td class="${petrolIsStale(p.updated) ? 'stale' : ''}">${p.updated ? petrolAge(p.updated) : ''}</td></tr>`;
+    }).join('');
+    const directions = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}`;
+    return `<div class="petrol-popup">
+        <strong>${escapeHtml(s.name)}</strong>
+        ${s.brand && s.brand.toLowerCase() !== s.name.toLowerCase() ? `<div>${escapeHtml(s.brand)}</div>` : ''}
+        <div class="petrol-popup-address">${escapeHtml([s.address, s.postcode].filter(Boolean).join(', '))}</div>
+        <table>${prices}</table>
+        <div class="petrol-popup-foot">${s.miles} miles away ·
+            <a href="${directions}" target="_blank" rel="noopener">Directions</a></div>
+    </div>`;
+}
+
+function drawPetrolMap(data) {
+    ensurePetrolMap();
+    petrolMap.invalidateSize();
+    const { lat, lon } = petrolPlace;
+    const radius = petrolRadius * METRES_PER_MILE;
+    if (!petrolHere) {
+        petrolHere = {
+            circle: L.circle([lat, lon], { radius, color: '#6366f1', weight: 1.5, dashArray: '6 6', fill: false, interactive: false }).addTo(petrolMap),
+            dot: L.circleMarker([lat, lon], { radius: 8, fillColor: '#6366f1', color: '#fff', weight: 2.5, fillOpacity: 1 })
+                .bindTooltip('This device').addTo(petrolMap),
+        };
+    } else {
+        petrolHere.circle.setLatLng([lat, lon]).setRadius(radius);
+        petrolHere.dot.setLatLng([lat, lon]);
+    }
+    // Fitted to the circle when the place or distance changes, not on every refresh, so panning around stays put
+    const view = `${lat},${lon},${petrolRadius}`;
+    if (petrolFitted !== view) {
+        petrolMap.fitBounds(L.latLng(lat, lon).toBounds(radius * 2), { padding: [10, 10] });
+        petrolFitted = view;
+    }
+    const open = [...petrolPins].find(([, m]) => m.isPopupOpen())?.[0];
+    petrolLayer.clearLayers();
+    petrolPins.clear();
+    // Dearest first so the cheapest are drawn on top where pins overlap
+    for (const s of petrolRanked(data).reverse()) {
+        const icon = L.divIcon({
+            className: 'petrol-pin-icon', iconSize: null,
+            html: `<div class="petrol-pin ${s.band}">${petrolPrice(s.prices[petrolFuel].price)}</div>`,
+        });
+        const pin = L.marker([s.lat, s.lon], { icon, title: s.name, riseOnHover: true }).bindPopup(petrolPopup(s)).addTo(petrolLayer);
+        petrolPins.set(s.id, pin);
+    }
+    if (open) petrolPins.get(open)?.openPopup();
+}
+
+function drawPetrolList(data) {
+    const ranked = petrolRanked(data);
+    const fuel = PETROL_FUELS[petrolFuel].toLowerCase();
+    const summary = document.getElementById('petrol-summary');
+    const list = document.getElementById('petrol-list');
+    const where = petrolPlace.source === 'device' ? '' : ' of the saved location';
+    if (!ranked.length) {
+        summary.textContent = `No stations within ${petrolRadius} miles${where} have a ${fuel} price.`;
+        list.innerHTML = '';
+        return;
+    }
+    const average = ranked.reduce((sum, s) => sum + s.prices[petrolFuel].price, 0) / ranked.length;
+    const cheapest = ranked[0];
+    summary.innerHTML = `<div class="petrol-summary-price">${petrolPrice(cheapest.prices[petrolFuel].price)}</div>
+        <div>Cheapest ${fuel} within ${petrolRadius} miles${where}, at ${escapeHtml(cheapest.name)}.
+        Average ${petrolPrice(average)} across ${ranked.length} station${ranked.length === 1 ? '' : 's'}.</div>
+        ${data.updated ? `<div class="petrol-summary-updated">Prices checked at ${clockTime(data.updated)}</div>` : ''}`;
+    list.innerHTML = ranked.map(s => {
+        const p = s.prices[petrolFuel];
+        const changed = p.updated ? ` · <span class="${petrolIsStale(p.updated) ? 'stale' : ''}">changed ${petrolAge(p.updated)}</span>` : '';
+        return `<button type="button" class="petrol-row" onclick="focusPetrolStation('${s.id}')">
+            <span class="petrol-row-price ${s.band}">${petrolPrice(p.price)}</span>
+            <span class="petrol-row-text">
+                <span class="petrol-row-name">${escapeHtml(s.name)}</span>
+                <span class="petrol-row-meta">${s.miles} mi${s.supermarket ? ' · supermarket' : ''}${s.motorway ? ' · motorway' : ''}${changed}</span>
+            </span>
+        </button>`;
+    }).join('');
+}
+
+function focusPetrolStation(id) {
+    const pin = petrolPins.get(id);
+    if (!pin) return;
+    petrolMap.setView(pin.getLatLng(), Math.max(petrolMap.getZoom(), 15));
+    pin.openPopup();
+}
+
+// tado°: signing in is done on tado's own site, by opening the link and confirming the code shown,
+// while the server waits for it. Checked every few seconds until it's done.
+let tadoPairingTimer = null;
+
+async function loadTadoAccount() {
+    clearTimeout(tadoPairingTimer);
+    const box = document.getElementById('tado-account');
+    let account;
+    try {
+        account = await (await fetch('/api/tado/account')).json();
+    } catch (err) {
+        box.innerHTML = `<span class="settings-hint">Couldn't load: ${escapeHtml(err.message)}</span>`;
+        return;
+    }
+    renderTadoAccount(account);
+    if (account.pairing && !account.pairing.error) tadoPairingTimer = setTimeout(loadTadoAccount, 3000);
+}
+
+function renderTadoAccount(a) {
+    const box = document.getElementById('tado-account');
+    const button = (label, action, primary) =>
+        `<button type="button" class="btn-control ${primary ? 'primary' : ''}" onclick="${action}">${label}</button>`;
+    if (a.pairing) {
+        box.innerHTML = a.pairing.error
+            ? `<p class="settings-hint">${escapeHtml(a.pairing.error)}</p>${button('Try Again', 'connectTado(this)', true)}`
+            : `<p class="settings-hint">Open tado°'s sign-in page, log in, and confirm the code
+                <strong class="tado-code">${escapeHtml(a.pairing.userCode)}</strong>. This page will carry on by itself.</p>
+               <div class="tado-buttons">
+                   <a class="btn-control primary" href="${escapeHtml(a.pairing.url)}" target="_blank" rel="noopener">Open tado° Sign-in</a>
+                   <span class="settings-hint" style="margin:0;"><span class="spinner"></span> Waiting for confirmation…</span>
+               </div>`;
+        return;
+    }
+    if (a.connected) {
+        const left = a.allowance ? ` · ${a.allowance.remaining} requests left today` : '';
+        box.innerHTML = `<div class="tado-buttons">
+                <span class="settings-hint plug-state ok" style="margin:0;">Connected to ${escapeHtml(a.homeName || 'your home')} (${escapeHtml(a.generation)})${left}</span>
+                ${button('Disconnect', 'disconnectTado()')}
+            </div>`;
+        return;
+    }
+    box.innerHTML = `${a.signedOut ? '<p class="settings-hint">tado° has signed this device out; connect again to carry on.</p>' : ''}
+        ${button('Connect tado°', 'connectTado(this)', true)}`;
+}
+
+async function connectTado(btn) {
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/tado/connect', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        renderTadoAccount(data);
+        // Opened straight away where a new tab can be; the link stays for tablets that block it
+        if (data.pairing?.url) window.open(data.pairing.url, '_blank', 'noopener');
+        tadoPairingTimer = setTimeout(loadTadoAccount, 3000);
+    } catch (err) {
+        btn.disabled = false;
+        showToast(`Couldn't connect to tado°: ${err.message}`, 'error', 5000);
+    }
+}
+
+async function disconnectTado() {
+    if (!confirm('Disconnect tado°? The heating will stop showing here until it\'s connected again.')) return;
+    try {
+        const res = await fetch('/api/tado/account', { method: 'DELETE' });
+        renderTadoAccount(await res.json());
+        heating = { configured: false, rooms: [] };
+        if (appView === 'smarthome') renderHeating();
+    } catch (err) {
+        showToast(`Couldn't disconnect: ${err.message}`, 'error', 5000);
     }
 }
 
@@ -11056,4 +15012,407 @@ function onHiddenPhotosKey(e) {
     else if (viewing && e.key === 'ArrowRight') stepHiddenPhotoViewer(1);
     else if (viewing && (e.key === 'u' || e.key === 'U')) unhideHiddenPhoto(hiddenPhotoViewerIndex);
     else if (viewing && e.key === 'Delete') deleteHiddenPhoto(hiddenPhotoViewerIndex);
+}
+
+// Games tab: a five-letter word a day, six guesses. The words are SCOWL's English and British
+// lists from a pinned version of the wordlist-english package, which never changes, so every
+// device builds the same list, shuffles it the same way and picks the same word for the same
+// day, without talking to the server or each other. Players (Server Settings → Games) and
+// their games and stats are kept on the server, so they follow a player between devices.
+const WORD_SOURCE = 'https://cdn.jsdelivr.net/npm/wordlist-english@1.2.1';
+const WORD_ANSWER_SIZES = [10, 20, 35];                    // common words: the daily answers
+const WORD_GUESS_SIZES = [...WORD_ANSWER_SIZES, 40, 50, 55, 60, 70]; // also accepted as guesses
+// Common, but not wanted as the word of the day (still fine as guesses)
+const WORD_NOT_ANSWERS = new Set(['bitch', 'chink', 'enema', 'horny', 'lynch', 'paddy', 'penis', 'prick', 'pussy', 'queer', 'semen', 'spunk', 'whore']);
+const WORD_LENGTH = 5;
+const WORD_GUESSES = 6;
+const WORD_FIRST_DAY = Date.UTC(2026, 0, 1) / 86400000; // puzzle #1
+const WORD_KEY_ROWS = ['qwertyuiop', 'asdfghjkl', '+zxcvbnm-']; // + is Enter, - is Backspace
+const WORD_REVEAL_MS = WORD_LENGTH * 250 + 250;
+const WORD_LETTERS_SHOWN_MS = 5000; // after finishing, before the board is blanked
+let wordList = null;   // { answers: [...in daily order], valid: Set }
+let gamePlayers = [];     // [{ id, name }]
+let gamePlayerId = null;  // who's playing on this device
+try { gamePlayerId = localStorage.getItem('gamePlayer'); } catch { }
+let wordGame = null;    // the player's game today: { day, guesses, status: playing | won | lost }
+let wordStats = null;
+let wordTyped = '';
+let wordSaving = false;
+let wordLoadToken = 0;
+let wordMessageTimer = null;
+
+// Days since 1970 for the local calendar date, so the word changes at the device's midnight
+const wordToday = () => {
+    const d = new Date();
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000;
+};
+const wordAnswer = day => {
+    const list = wordList.answers;
+    return list[((day - WORD_FIRST_DAY) % list.length + list.length) % list.length];
+};
+
+// Download the lists (only the first time: the result is kept in localStorage) and work out
+// the answers in daily order. Everything here must come out the same on every device.
+async function loadWordList() {
+    try {
+        const cached = JSON.parse(localStorage.getItem('wordList'));
+        if (cached?.source === WORD_SOURCE) return cached;
+    } catch { }
+    const lists = await Promise.all(WORD_GUESS_SIZES.flatMap(size => ['english', 'british'].map(async kind => {
+        const res = await fetch(`${WORD_SOURCE}/${kind}-words-${size}.json`);
+        if (!res.ok) throw new Error(`${kind}-words-${size}: ${res.statusText}`);
+        return { size, words: await res.json() };
+    })));
+    const common = lists.filter(l => WORD_ANSWER_SIZES.includes(l.size)).flatMap(l => l.words);
+    const short = new Set(common.filter(w => /^[a-z]{3,4}$/.test(w)));
+    // Plurals and past tenses of shorter common words make poor answers ("cakes", "baked")
+    const inflected = w =>
+        (w.endsWith('s') && !w.endsWith('ss') && (short.has(w.slice(0, 4)) ||
+            (w.endsWith('es') && short.has(w.slice(0, 3))) || (w.endsWith('ies') && short.has(w.slice(0, 2) + 'y')))) ||
+        (w.endsWith('ed') && (short.has(w.slice(0, 3)) || short.has(w.slice(0, 4)) ||
+            (w.endsWith('ied') && short.has(w.slice(0, 2) + 'y'))));
+    const fiveLetter = words => [...new Set(words.filter(w => /^[a-z]{5}$/.test(w)))].sort();
+    const answers = fiveLetter(common).filter(w => !inflected(w) && !WORD_NOT_ANSWERS.has(w));
+    // Fixed-seed shuffle (mulberry32), so consecutive days aren't alphabetical
+    let seed = 0x5eed1e55;
+    const rand = () => {
+        seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+    for (let i = answers.length - 1; i > 0; i--) {
+        const j = Math.floor(rand() * (i + 1));
+        [answers[i], answers[j]] = [answers[j], answers[i]];
+    }
+    const result = { source: WORD_SOURCE, answers, guesses: fiveLetter(lists.flatMap(l => l.words)) };
+    try { localStorage.setItem('wordList', JSON.stringify(result)); } catch { }
+    return result;
+}
+
+async function showGames() {
+    setAppView('games');
+    const token = ++wordLoadToken;
+    try {
+        if (!wordList) {
+            wordMessage('Loading words...', 0);
+            const { answers, guesses } = await loadWordList();
+            wordList = { answers, valid: new Set(guesses) };
+        }
+        const res = await fetch('/api/games/players');
+        if (!res.ok) throw new Error(res.statusText);
+        gamePlayers = await res.json();
+    } catch (err) {
+        if (token === wordLoadToken) wordMessage(`Couldn't load the game: ${err.message}`, 0);
+        return;
+    }
+    if (token !== wordLoadToken) return;
+    if (!gamePlayers.some(u => u.id === gamePlayerId)) gamePlayerId = null;
+    await loadWordGame();
+}
+
+function selectGamePlayer(id) {
+    if (wordSaving) return;
+    gamePlayerId = id;
+    try { localStorage.setItem('gamePlayer', id); } catch { }
+    loadWordGame();
+}
+
+// Today's game and stats for the selected player
+async function loadWordGame() {
+    const token = ++wordLoadToken;
+    wordGame = null;
+    wordStats = null;
+    wordTyped = '';
+    wordMessage('', 0);
+    renderWord();
+    if (!gamePlayerId) return;
+    const day = wordToday();
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(gamePlayerId)}/game?day=${day}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (token !== wordLoadToken) return;
+        wordGame = { day, guesses: data.guesses, status: data.status };
+        wordStats = data.stats;
+        renderWord();
+    } catch (err) {
+        if (token === wordLoadToken) wordMessage(`Couldn't load the game: ${err.message}`, 0);
+    }
+}
+
+// Colour each letter: right place, elsewhere in the word, or not in it. A repeated letter
+// only counts as many times as it's in the answer, right-place matches first.
+function wordScore(guess, answer) {
+    const result = Array(WORD_LENGTH).fill('absent');
+    const left = {};
+    for (let i = 0; i < WORD_LENGTH; i++) {
+        if (guess[i] === answer[i]) result[i] = 'correct';
+        else left[answer[i]] = (left[answer[i]] || 0) + 1;
+    }
+    for (let i = 0; i < WORD_LENGTH; i++) {
+        if (result[i] !== 'correct' && left[guess[i]] > 0) {
+            result[i] = 'present';
+            left[guess[i]]--;
+        }
+    }
+    return result;
+}
+
+const wordOver = () => !!wordGame && wordGame.status !== 'playing';
+// A game is on screen and not finished: the idle slideshow mustn't cover it
+const gameInProgress = () => appView === 'games' && wordGame?.status === 'playing';
+
+// A message under the title; ms = 0 leaves it showing
+function wordMessage(text, ms = 2000) {
+    const el = document.getElementById('word-message');
+    el.textContent = text;
+    clearTimeout(wordMessageTimer);
+    wordMessageTimer = null;
+    if (ms) wordMessageTimer = setTimeout(() => { el.textContent = wordOver() ? wordEndText() : ''; }, ms);
+}
+
+// Doesn't give the word away: a finished board is left for others on the device to see
+function wordEndText() {
+    if (wordGame.status !== 'won') return 'Out of guesses. A new word tomorrow.';
+    const praise = ['Genius!', 'Magnificent!', 'Impressive!', 'Splendid!', 'Great!', 'Phew!'];
+    return `${praise[wordGame.guesses.length - 1]} A new word tomorrow.`;
+}
+
+function wordKey(key) {
+    if (!wordGame || wordSaving) return;
+    // Left open past midnight: on to the new day's game
+    if (wordGame.day !== wordToday()) return loadWordGame();
+    if (wordOver()) return;
+    if (key === 'enter') return wordSubmit();
+    if (key === 'backspace') wordTyped = wordTyped.slice(0, -1);
+    else if (/^[a-z]$/.test(key) && wordTyped.length < WORD_LENGTH) wordTyped += key;
+    renderWord();
+}
+
+async function wordSubmit() {
+    if (wordTyped.length < WORD_LENGTH) return wordShake('Not enough letters');
+    if (!wordList.valid.has(wordTyped)) return wordShake('Not in the word list');
+    const game = wordGame;
+    const guesses = [...game.guesses, wordTyped];
+    const status = wordTyped === wordAnswer(game.day) ? 'won' : guesses.length >= WORD_GUESSES ? 'lost' : 'playing';
+    wordSaving = true;
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(gamePlayerId)}/game`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day: game.day, guesses, status })
+        });
+        const data = await res.json();
+        if (game !== wordGame) return; // switched player meanwhile
+        if (res.status === 409) {
+            // Played on another device meanwhile: show that game instead
+            Object.assign(wordGame, { guesses: data.guesses, status: data.status });
+            wordStats = data.stats;
+            wordTyped = '';
+            renderWord();
+            if (!wordOver()) wordMessage('Updated from another device');
+            return;
+        }
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        Object.assign(wordGame, { guesses, status });
+        wordStats = data.stats;
+        wordTyped = '';
+        renderWord(true);
+    } catch (err) {
+        if (game === wordGame) wordMessage(`Couldn't save the guess: ${err.message}`, 4000);
+    } finally {
+        wordSaving = false;
+    }
+}
+
+function wordShake(text) {
+    wordMessage(text);
+    const row = document.querySelector(`#word-board .word-row[data-row="${wordGame.guesses.length}"]`);
+    if (!row) return;
+    row.classList.remove('shake');
+    void row.offsetWidth; // restart the animation
+    row.classList.add('shake');
+}
+
+function renderGamePlayers() {
+    const el = document.getElementById('game-players');
+    if (!gamePlayers.length) {
+        el.innerHTML = `<span class="game-players-label">No players yet.</span>
+            <button type="button" class="btn-control btn-small primary" onclick="openGamePlayerSettings()">Add Family</button>`;
+        return;
+    }
+    el.innerHTML = `<span class="game-players-label">${gamePlayerId ? 'Playing:' : 'Who\'s playing?'}</span>` +
+        gamePlayers.map(u => `<button type="button" class="game-player${u.id === gamePlayerId ? ' active' : ''}"
+            onclick="selectGamePlayer('${escapeHtml(u.id)}')">${escapeHtml(u.name)}</button>`).join('');
+}
+
+function openGamePlayerSettings() {
+    openServerSettingsModal();
+    switchSettingsTab('games', serverSettingsModal.querySelector('.settings-tab[onclick*="\'word\'"]'));
+}
+
+// revealLast flips the tiles of the guess just made, and holds back its keyboard colours till they've turned.
+// A finished game shows only the colours, so the letters (and the word) aren't there for others to see.
+function renderWord(revealLast = false, showLetters = revealLast || !wordOver()) {
+    if (!wordList) return;
+    if (slideshow) slideshow.resetIdleTimer(); // re-arm once the game ends
+    renderGamePlayers();
+    const day = wordGame?.day ?? wordToday();
+    const answer = wordAnswer(day);
+    const guesses = wordGame?.guesses || [];
+    document.getElementById('word-number').textContent = `#${day - WORD_FIRST_DAY + 1}`;
+    document.getElementById('games-view').classList.toggle('no-player', !wordGame);
+    if (!gamePlayerId && gamePlayers.length) wordMessage('Pick who\'s playing to start.', 0);
+
+    const board = document.getElementById('word-board');
+    board.innerHTML = '';
+    const keyStates = {};
+    const rank = { absent: 1, present: 2, correct: 3 };
+    guesses.forEach((guess, r) => {
+        if (!showLetters || (revealLast && r === guesses.length - 1)) return;
+        wordScore(guess, answer).forEach((state, i) => {
+            if (!(rank[keyStates[guess[i]]] >= rank[state])) keyStates[guess[i]] = state;
+        });
+    });
+    for (let r = 0; r < WORD_GUESSES; r++) {
+        const row = document.createElement('div');
+        row.className = 'word-row';
+        row.dataset.row = r;
+        const guess = guesses[r];
+        const score = guess ? wordScore(guess, answer) : null;
+        const letters = guess || (r === guesses.length ? wordTyped : '');
+        for (let i = 0; i < WORD_LENGTH; i++) {
+            const tile = document.createElement('div');
+            tile.className = 'word-tile';
+            if (showLetters) tile.textContent = letters[i] || '';
+            if (letters[i]) tile.classList.add('filled');
+            if (score) {
+                tile.classList.add(score[i]);
+                if (revealLast && r === guesses.length - 1) {
+                    tile.classList.add('reveal');
+                    tile.style.animationDelay = `${i * 0.25}s`;
+                }
+            }
+            row.appendChild(tile);
+        }
+        board.appendChild(row);
+    }
+    renderWordKeyboard(keyStates);
+
+    const s = wordStats;
+    document.getElementById('word-stats').textContent = s?.played
+        ? `Played ${s.played} · Won ${Math.round(100 * s.won / s.played)}% · Streak ${s.streak} · Best ${s.best}`
+        : '';
+    if (revealLast) {
+        const game = wordGame;
+        setTimeout(() => {
+            if (appView !== 'games' || game !== wordGame) return;
+            if (!wordOver()) return renderWord();
+            // Just finished: a few seconds to look at the board (and the word, if missed) before it's blanked
+            renderWord(false, true);
+            if (game.status === 'lost') wordMessage(`The word was ${wordAnswer(game.day).toUpperCase()}.`, 0);
+            setTimeout(() => {
+                if (appView === 'games' && game === wordGame) renderWord();
+            }, WORD_LETTERS_SHOWN_MS);
+        }, WORD_REVEAL_MS);
+    } else if (wordOver()) {
+        wordMessage(wordEndText(), 0);
+    }
+}
+
+function renderWordKeyboard(keyStates) {
+    const keyboard = document.getElementById('word-keyboard');
+    keyboard.innerHTML = '';
+    for (const keys of WORD_KEY_ROWS) {
+        const row = document.createElement('div');
+        row.className = 'word-key-row';
+        for (const k of keys) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.tabIndex = -1; // keep focus off the keys so a typed Enter isn't also a click
+            btn.className = 'word-key';
+            const key = k === '+' ? 'enter' : k === '-' ? 'backspace' : k;
+            if (k === '+') {
+                btn.textContent = 'Enter';
+                btn.classList.add('wide');
+            } else if (k === '-') {
+                btn.classList.add('wide');
+                btn.setAttribute('aria-label', 'Backspace');
+                btn.innerHTML = `<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 5H8l-6 7 6 7h13a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1Z"></path><line x1="17" y1="9" x2="11" y2="15"></line><line x1="11" y1="9" x2="17" y2="15"></line></svg>`;
+            } else {
+                btn.textContent = k;
+                if (keyStates[k]) btn.classList.add(keyStates[k]);
+            }
+            btn.onclick = () => wordKey(key);
+            row.appendChild(btn);
+        }
+        keyboard.appendChild(row);
+    }
+}
+
+// Physical keyboard, while the tab is showing and nothing else wants the keys
+document.addEventListener('keydown', e => {
+    if (appView !== 'games' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target.matches?.('input, textarea, select, [contenteditable]')) return;
+    if (typeof slideshow !== 'undefined' && slideshow?.isActive) return;
+    if ([...document.querySelectorAll('[id$="-modal"]')].some(m => m.style.display === 'flex')) return;
+    const key = e.key.toLowerCase();
+    if (key === 'enter' || key === 'backspace' || /^[a-z]$/.test(key)) {
+        e.preventDefault();
+        wordKey(key);
+    }
+});
+
+// --- Server Settings → Family: the people who play games and eat meals (game players) ---
+async function loadGamePlayerSettings() {
+    const listEl = document.getElementById('game-players-list');
+    if (!listEl) return;
+    try {
+        const users = await (await fetch('/api/games/players')).json();
+        listEl.innerHTML = users.length
+            ? users.map(u => `
+                <div class="calendar-settings-row">
+                    <span class="game-player-name">${escapeHtml(u.name)}</span>
+                    <button class="btn-control btn-small" onclick="removeGamePlayer('${escapeHtml(u.id)}', this)"
+                        title="Remove this person, their game stats and them from planned meals">Remove</button>
+                </div>`).join('')
+            : '<span class="settings-hint">No family yet.</span>';
+    } catch (err) {
+        listEl.innerHTML = '<span class="settings-hint">Could not load the family.</span>';
+    }
+}
+
+async function addGamePlayer() {
+    const input = document.getElementById('game-player-add-name');
+    const name = input.value.trim();
+    if (!name) return setCalendarSettingsStatus('game-players-status', 'Enter a name first.', true);
+    try {
+        const res = await fetch('/api/games/players', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to add them');
+        input.value = '';
+        setCalendarSettingsStatus('game-players-status', `Added ${data.name}.`, false);
+        await loadGamePlayerSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('game-players-status', err.message, true);
+    }
+}
+
+async function removeGamePlayer(id, btn) {
+    const name = btn.closest('.calendar-settings-row')?.querySelector('.game-player-name')?.textContent || 'this person';
+    if (!confirm(`Remove ${name}? Their games and stats will be deleted, and they're taken off planned meals.`)) return;
+    try {
+        const res = await fetch(`/api/games/players/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+        setCalendarSettingsStatus('game-players-status', `Removed ${name}.`, false);
+        await loadGamePlayerSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('game-players-status', `Couldn't remove them: ${err.message}`, true);
+    }
 }

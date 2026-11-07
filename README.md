@@ -1,20 +1,14 @@
-# Media Hub (AMMUI)
+# Home Hub (AMMUI)
 
-A web based home hub with DLNA server, player and controller for music, videos and photos, a flexible slideshow feature and some smart home capability covering some smart plugs, twinkly lights and energy usage via the Bright API.
-
-* Left side of the screen - media server: Built in one or an external one: Subsonic, MiniDLNA, etc.
-* Right side of the screen - playback device: DLNA player, Sonos, Airplay
-
-**Get started:** on Windows, download and run the installer. See [Installation](#-installation).
-
+A web based home hub to manage and play your music, video and photo files. Send them to Sonos, TV, etc., a flexible slideshow, some smart home capabilities, calendar display, a basic meal manager and even a little game. 
 <table>
 <tr>
 <td><img src="images/ammui-music.png" /><br/><b>Music</b> - browse your library and play to Sonos, DLNA or AirPlay</td>
 <td><img src="images/ammui-slideshow-calendar.png" /><br/><b>Slideshow</b> - family photos with today's calendar alongside</td>
 </tr>
 <tr>
-<td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars with meal planning</td>
-<td><img src="images/ammui-smarthome.png" /><br/><b>Smart Home</b> - smart plugs and Twinkly lights</td>
+<td><img src="images/ammui-calendar.png" /><br/><b>Calendar</b> - shared family calendars</td>
+<td><img src="images/ammui-smarthome.png" /><br/><b>Controls</b> - smart plugs and Twinkly lights</td>
 </tr>
 <tr>
 <td><img src="images/ammui-energy.png" /><br/><b>Energy</b> - electricity and gas use from your smart meter</td>
@@ -33,13 +27,26 @@ A web based home hub with DLNA server, player and controller for music, videos a
 * Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
 * Watch a track's music video on YouTube, right from the track list (via a YouTube API key - see [Music Videos](#music-videos)).
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
-* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Smart Home tab (see [Smart Home](#smart-home)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
+* Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Controls tab (see [Controls](#controls)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
-* See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)).
+* See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)). It shows your tariff too, and **Test a Tariff** works out whether a new deal would have been cheaper over the last 12 months (see [Test a Tariff](#test-a-tariff)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
-* Meal planning: keep your meals as recipes with their ingredients (amounts per person), then put them on the calendar for the number of people eating. Meals and ingredients can be exported and imported.
+* Meal planning with **items**. An item is either a single thing (e.g. Peas), with its quantity for one person, a picture and calories, or made of other items (e.g. Mash, Roast chicken), each at the amount it uses; those can be made of others in turn. Items are made and changed in the **item builder**, which searches Open Food Facts for a single item's name and picture, and your items for what one is made of. Plan a meal on the Meals tab's own Calendar by adding one or more items (or making a new one there and then), an optional name (e.g. *Sunday roast*) and which family members are eating. Meals stay off the main Calendar. A **meal plan** of 1 to 8 weeks gives a meal for each day, and a day's meal can repeat every so many days or weeks within the plan (e.g. pizza every Friday); from the date its Day 1 falls on it repeats on the Meals calendar, where days without a meal show the planned one faded, and adding a meal starts with the planned one (change it before saving if you like). The Meals tab has Calendar, Meal Plan and Items tabs down the left, with the shopping list alongside. Items are included in the backup (see [Backup and restore](#backup-and-restore)).
+* Shopping lists, opened from the Meals tab or by tapping one on the slideshow, typed or by voice ("add milk"). Keep as many as you like (e.g. Groceries, Hardware): add, rename and delete them from the tabs along the top of the shopping list, and switch between them with the same tabs on the slideshow. It shares the items list with the meals: saved single items are suggested as you type, and new ones are added to it. Each item shows a picture of a matching product from Open Food Facts, preferring your supermarket's own brand if one is picked in Settings → General. Click a picture to choose a different product; the choice is kept for that item.
+* Calories, protein, carbs, fat and alcohol units for each item and meal per person, from items looked up once in the UK food tables, Open Food Facts or the USDA database, or typed in (see [Calories](#calories)).
+* Daily word game on the Games tab: guess the five-letter word in six tries, using a UK English dictionary. Everyone gets the same word each day, and each player keeps their own stats and streaks (see [Games](#games)).
 * Sync library to an S3 storage provider (AWS, Wasabi, etc.). Use as backup by turning on S3 versioning.
 
+## My journey to here...
+I'd been using an Amazon Echo Show for a while. It was great but...
+* I have a library of mp3s and was paying a subscription to a music service I could manage without.
+* I have a library of photos. To get them on the Echo, I had to upload them to AWS.
+* I didn't really have a backup strategy for the above.
+* I'd get Adverts :-(
+* I never really got the on-this-day slideshow I wanted. It didn't seem to quite work.
+* It didn't hook in with my Google Calendars very well.
+* I didn't really get the UI. Settings seemed hard to find, if they were there at all. I,ve designed a lot of UI heavy products and wanted something that made sense to me.
+Some of this stuff may have changed since then but I wanted a home hub that's not tied too much to one company's ecosystem, that covers a diverse range of functions, that is built with a decent UI, that can run on a wide range of hardware and that isn't too expensive to deploy. 
 ## Target Hardware
 
 The install contains the media server and a built in webserver to serve the UI. It should run on anything that can run node.js (Windows/Linux/MacOS) and will need storage space for the media library. The UI runs from a browser so any device with one should work. It can be on the same machine as the server and/or on any device on the local network to it. A touchscreen is highly recommended.
@@ -53,7 +60,7 @@ I initially had this running on a headless linux box and accessed the UI from an
 1. **Download the installer**: [ammui-setup.cmd](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.cmd). If the link opens as text in your browser, go back, right-click it and choose *Save link as…*. If the browser says the file isn't commonly downloaded, choose *Keep*.
 2. **Run it**: double-click the downloaded file. If Windows SmartScreen says "Windows protected your PC", choose *More info* → *Run anyway*.
 3. **Answer the prompts** (see [What you may need to do](#what-you-may-need-to-do) below). Setup takes a few minutes, most of it downloading.
-4. **Name your server**: when setup finishes, AMMUI opens in your browser at `https://localhost:3443`. Give the server a name when asked, and you're ready to go.
+4. **Name your server**: when setup finishes, AMMUI opens in your browser at `https://localhost`. Give the server a name when asked, and you're ready to go.
 
 The installer is a one-off: once AMMUI is set up you never need it again. AMMUI keeps itself up to date.
 
@@ -84,7 +91,7 @@ AMMUI is also listed in *Settings → Apps* as **AMMUI Media Hub**, so it can be
 * **Approve installs**: if Node.js or Git need installing, Windows asks for permission (*Yes* in the User Account Control prompt). This needs an administrator account or password.
 * **Allow Node.js through the firewall**: the first time the server starts, Windows Defender Firewall asks about Node.js. Tick **Private networks** and choose *Allow*, otherwise your players (Sonos, DLNA, AirPlay) and other devices can't connect. This also needs an administrator.
 * **Trust the AMMUI certificate**: AMMUI runs over HTTPS with its own certificate (see [Secure Access (HTTPS)](#secure-access-https)). The installer offers to trust it on this PC. Choose *Yes* in the Windows security warning so the browser and the kiosk don't show a certificate warning. Choosing *No* is safe; the browser will just warn you each time.
-* **Set up your other devices**: open `https://<this PC's name or IP address>:3443/` on a tablet, phone or other computer. To stop the certificate warning there, install the certificate on each device as described in [Getting rid of the browser warning](#getting-rid-of-the-browser-warning).
+* **Set up your other devices**: open `https://<this PC's name or IP address>/` on a tablet, phone or other computer. To stop the certificate warning there, install the certificate on each device as described in [Getting rid of the browser warning](#getting-rid-of-the-browser-warning).
 * **Add API keys** (optional) under **Server Settings → Integrations**: a Discogs token (album art), an AcoustID key (identify tracks by their audio) and a YouTube key (music videos).
 
 If something goes wrong the installer stops with a message in red and waits for a key press so you can read it. Fix the problem it describes and run the installer again; it carries on from where it got to.
@@ -98,6 +105,51 @@ Run the installer from a command prompt to change what it does:
 * `set AMMUI_NO_STARTUP=1` first so AMMUI doesn't start when you sign in to Windows.
 * `set AMMUI_NO_RUN=1` first to set everything up without starting the server.
 * Or run it straight from a PowerShell window without saving the file: `irm https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.cmd | iex`
+
+### Linux
+
+Open a terminal and run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | bash
+```
+
+Or download [ammui-setup.sh](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.sh) and run `bash ammui-setup.sh`. Run it as your normal user, not with `sudo`: it asks for your password only when it needs to install system packages or trust the certificate. It works on Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch, openSUSE and most other distributions (apt, dnf, pacman or zypper).
+
+Like the Windows installer it's a one-off, and running it again updates AMMUI and repairs anything missing.
+
+#### What it installs
+
+| What | Why | Where it goes |
+|---|---|---|
+| **Node.js** (current LTS, v22.13 or newer needed) | Runs AMMUI | Only if the installed one is missing or too old: the official build from nodejs.org, in `~/.local/share/ammui/node` (no root needed) |
+| **Git** | Downloads the AMMUI code from GitHub | Your package manager. If that isn't possible, the code is downloaded as a tar file instead |
+| **AMMUI** and its packages | The app itself | `~/ammui`. Your database, settings, certificates and local library are kept here too |
+| **ffmpeg** (optional) | AirPlay, photo and video thumbnails, local playback of YouTube videos | Your package manager, or a static build in the AMMUI folder |
+| **yt-dlp** (optional) | Plays YouTube videos that have embedding disabled | `yt-dlp` in the AMMUI folder (distribution packages are usually too old) |
+| **fpcalc** (Chromaprint, optional) | "Identify with AcoustID" | Your package manager, or the Chromaprint build in the AMMUI folder (x86-64 only) |
+
+It also adds:
+
+* An **`ammui` systemd service** that runs AMMUI in the background and starts it with the computer, even before anyone logs in (so it suits a headless box). Update & Restart in the app restarts it through systemd. View its log with `journalctl --user -u ammui -f`; stop and start it with `systemctl --user stop ammui` / `systemctl --user start ammui`.
+* **AMMUI Server** in the applications menu and on the desktop: starts the service if it isn't running and shows its log. Without systemd it runs the server in a terminal window instead (close the window to stop AMMUI).
+* **AMMUI Kiosk** in the applications menu and on the desktop, if Chrome, Chromium or Edge is installed: opens AMMUI full screen, for a dedicated display such as a Raspberry Pi with a touchscreen. Press Alt+F4 to close it.
+* **Uninstall AMMUI** in the applications menu (see [Uninstalling](#uninstalling)).
+
+It offers to trust the AMMUI certificate for Chrome/Chromium (this user's NSS database, using `certutil`) and for the system. Firefox keeps its own certificate list, so import `~/ammui/certs/ca.crt` in Firefox's settings if you use it (see [Getting rid of the browser warning](#getting-rid-of-the-browser-warning)).
+
+If a firewall (ufw or firewalld) is running, allow TCP ports 80 and 443 (or the ports the installer chose instead) and UPnP/mDNS discovery (UDP 1900 and 5353), otherwise your players and other devices can't connect.
+
+#### Options
+
+* Install somewhere other than `~/ammui`: `bash ammui-setup.sh /srv/ammui` (or `curl ... | bash -s -- /srv/ammui`).
+* `AMMUI_NO_EXTRAS=1` skips ffmpeg, yt-dlp and fpcalc.
+* `AMMUI_NO_STARTUP=1` doesn't set up the service (and removes it if an earlier run added it); the installer then runs AMMUI in the terminal until you press Ctrl+C.
+* `AMMUI_NO_RUN=1` sets everything up without starting the server.
+
+Set them before the command, e.g. `curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | AMMUI_NO_EXTRAS=1 bash`.
+
+Run as root (for example in a container), it installs for root with a system-wide service instead: use `journalctl -u ammui` and `systemctl stop ammui`.
 
 ### Other platforms (manual install)
 
@@ -148,9 +200,9 @@ AMMUI can be installed by hand on any system that runs Node.js.
 
 2.  Open your browser and navigate to:
     ```
-    https://localhost:3443
+    https://localhost
     ```
-    From another device use the server's address instead, e.g. `https://192.168.0.2:3443`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost:3000` also works and redirects to the HTTPS address.
+    From another device use the server's address instead, e.g. `https://192.168.0.2`. The browser warns about the certificate until you trust it - see [Secure Access (HTTPS)](#secure-access-https). `http://localhost` also works and redirects to the HTTPS address.
 
 ## Uninstalling
 
@@ -185,11 +237,18 @@ If the AMMUI entry is missing from *Settings → Apps*, run the uninstaller by h
 powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
 ```
 
+### Linux
+
+Choose **Uninstall AMMUI** in the applications menu, or run `bash ~/.local/share/ammui/uninstall.sh`. As on Windows it asks whether to delete the AMMUI folder (default: keep it), then stops and removes the service, the menu and desktop entries, the certificate trust, and `~/.local/share/ammui` (including the copy of Node.js the installer added, if any). Git and system packages such as ffmpeg are left installed.
+
 ### Other platforms
 
 Stop the server (Ctrl+C in its terminal, or stop the service if you set one up), then delete the folder you cloned AMMUI into. As on Windows, that folder holds the database, settings and local library, so back up anything you want to keep first.
 
 ## Slideshow:
+* Starts after the app has been idle for a while and moves to the next photo on a timer. Set both in Settings > General (0 turns either timer off). It won't start while a game is in progress.
+* iPhone Live Photos can play in the slideshow: check **Include videos** in Settings > General. When files are imported, a video with a photo of the same name beside it (a Live Photo's video) is filed next to the photo in the pictures folder rather than with the videos, and the slideshow plays it in place of the photo. Any other video in the slideshow's folder is included too. A video plays silently unless **Play video sound** is on; a short one stays on its last frame for the rest of the photo time, and a long one is cut short after **Play each video for up to** seconds.
+* In the photo browser, Live Photos have a **LIVE** badge, and resting the mouse on one in the grid plays its clip. Opening one plays its clip once and then settles on the photo; press and hold the photo to play it again, with sound.
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
 * Go back to the last picture in the slideshow in case you just missed it.
@@ -209,7 +268,7 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 ## Local DLNA Server
 * Upload button to add music, photos and videos from the device you're using: pick individual files or a whole folder.
 * Download buttons on music and photos from other servers to add a copy to the local server.
-* Back up all local music, photo and video files to S3 compatible storage (I use Wasabi), and restore them from it (see [Backup and restore](#backup-and-restore)).
+* Back up all local music, photo and video files, and everything else (meals, tags, settings...), to S3 compatible storage (I use Wasabi), and restore any of it from there, such as onto a new machine (see [Backup and restore](#backup-and-restore)).
 * Several AMMUI servers can run on the same network and see each other's libraries. Give each one a different name (Server Settings → General).
 
 ## Music Videos
@@ -228,7 +287,7 @@ Watch a track's music video on YouTube, right from the track list. When the vide
 
 ## Voice Commands
 
-Press the glowing **Voice** button at the right-hand end of the music browser's toolbar (or the one on the Smart Home tab) and say what you want. Music plays on the currently selected player, from the currently selected media server. Smart home commands work from either button and don't need a player selected.
+Press the glowing **Voice** button at the right-hand end of the music browser's toolbar (or the one on the Controls tab) and say what you want. Music plays on the currently selected player, from the currently selected media server. Smart home commands work from either button and don't need a player selected.
 
 | Say | What happens |
 |---|---|
@@ -243,11 +302,12 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 | "turn on the curtain", "switch the kettle off", "Christmas tree on" | Switches a plug, an outlet of a power strip, or a set of Twinkly lights |
 | "turn off all the lights", "turn everything off" | Switches all the Twinkly lights, or every device |
 | "set the Christmas tree to 40 percent", "dim the curtain to 20" | Sets the brightness of Twinkly lights (and turns them on) |
+| "set the matrix to Snowstorm", "show Orbs in Orbit on the matrix", "make the tree red", "set the curtain to effect 3", "set all the lights to green" | Changes what Twinkly lights show: a scene from the Twinkly app by name, a colour, a built-in effect, or "the playlist" |
 
 * A control word on its own is a command, but with "play" in front it's a search: "stop" stops the music, while "play Stop" finds a song called Stop.
 * If a song and an album have the same name, the song is played unless you say "album".
 * "play something by the Beatles" plays the song "Something" if the artist has one, and only otherwise plays a mix of their songs.
-* Devices are matched by the names on the Smart Home tab, loosely: "the tree lights" finds "small christmas tree", and "matrix two" finds "matrix2". If two devices fit equally well, nothing is switched and it says which two it could be; renaming one in **Manage Plugs** fixes that. Hidden devices aren't switched by voice.
+* Devices are matched by the names on the Controls tab, loosely: "the tree lights" finds "small christmas tree", and "matrix two" finds "matrix2". If two devices fit equally well, nothing is switched and it says which two it could be; renaming one in **Manage Plugs** fixes that. Hidden devices aren't switched by voice.
 * Matching allows for how speech recognition writes things, so "rumors" finds "Rumours", "and" matches "&", "AC DC" finds "AC/DC", and your pronunciation of an artist's name doesn't have to produce the exact spelling.
 
 ### Requirements and privacy
@@ -256,15 +316,16 @@ Press the glowing **Voice** button at the right-hand end of the music browser's 
 * Works in Chrome, Edge and Safari. Firefox has no speech recognition, so the button is hidden there.
 * The **browser** turns your speech into text using its maker's service: Chrome sends the audio to Google, Edge to Microsoft, and Safari uses Apple's recognition. Only the resulting text is sent to AMMUI, and finding the music and switching devices happens entirely on your server and network.
 
-## Smart Home
+## Controls
 
-The **Smart Home** tab shows a card for each smart plug and set of Twinkly lights on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing, and Twinkly lights have a brightness slider. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
+The **Controls** tab shows a card for each smart plug and set of Twinkly lights on your network, with a button to switch it on and off. Plugs that measure power (such as the Tapo P110) also show how much they're drawing, and Twinkly lights have a brightness slider. The cards refresh every 10 seconds while the tab is open, so a plug switched from its own app or button shows up here too.
 
 ### Supported plugs
 
 * **TP-Link Tapo** plugs (P100, P110, P115 and similar) on current firmware, which uses TP-Link's newest login (TPAP). Only single plugs for now, not Tapo power strips.
 * **TP-Link Kasa** plugs and power strips on the original Kasa firmware.
 * **Twinkly** lights (strings, curtains, trees and so on). They need no login. Turning them on brings back whatever they were last showing (a movie, playlist, colour or effect) since the server started, or the current movie otherwise.
+  The **scene** button on a Twinkly card shows what the lights are playing and opens a list to change it: the movies sent to the lights from the Twinkly app (under their names in the app), the playlist if there is one, the five built-in effects, or a plain colour. Choosing one turns the lights on.
   Units paired in the Twinkly app (to show one picture across several sets) appear as a single card, under the main unit's name, and switch and dim together. Voice commands answer to any of the paired units' names.
 
 Tapo and Kasa devices still on the older KLAP login are listed but can't be switched yet; the Plugs tab says so. Other plugs (Tuya / Smart Life, Shelly, Tasmota, Belkin WeMo and so on) aren't supported yet.
@@ -286,7 +347,7 @@ Timers aren't offered on Kasa power strips yet.
 1. Set the plugs up in the Tapo or Kasa app (or the lights in the Twinkly app) as usual, on the same network as the AMMUI server.
 2. Open **Devices** from the menu and go to the **Plugs** tab. Plugs are found automatically when the server starts and every 10 minutes after that; press **Seek** to search now.
 3. For Tapo plugs, enter the **email and password of the TP-Link account** the plugs were set up with, and press **Save & Connect**. It should say how many plugs it connected to. Kasa plugs on the original firmware and Twinkly lights don't need a login.
-4. Rename a plug with the pencil button, or **Hide** one you don't want on the Smart Home tab. **Forget** removes a plug from the list; it comes back the next time it's found.
+4. Rename a plug with the pencil button, or **Hide** one you don't want on the Controls tab. **Forget** removes a plug from the list; it comes back the next time it's found.
 
 Plugs and lights take their names from the Tapo or Twinkly app unless you rename them here.
 
@@ -306,7 +367,28 @@ The **Energy** tab shows your electricity and gas use from your smart meter, wit
 
 Costs are shown alongside where the Bright account has them. It's read through the free **Bright** app (by Hildebrand), so you need a Bright account linked to your meter first.
 
-To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Smart Home** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
+To set it up, press **Bright Login** on the Energy tab (or open **Devices** from the menu and go to the **Controls** tab), enter the email and password of your Bright account under **Smart Meter (Bright)** and connect. Readings come from your meter via Bright's servers and are usually an hour or two behind; the tab re-reads them every 5 minutes while it's open.
+
+### Your tariff
+
+Each card shows the tariff your supplier has put on your meter: the unit rate (in p/kWh, and p/m³ for gas), the standing charge per day and for the current month, and the date the tariff started. The costs on the Energy tab already include the standing charge. A tariff with more than one rate (such as Economy 7) shows each rate as Rate 1, Rate 2 and so on, since the meter doesn't say which is day and which is night.
+
+### Test a Tariff
+
+Thinking of switching? Press **Test a Tariff** on the Energy tab, type in a new tariff's standing charge and unit rate for electricity and gas, and see straight away whether it would have saved you money. It takes your actual use over the last 12 months and prices it twice, on your current charges and on the new ones, then shows for each fuel:
+
+* the cost of the units, the standing charges and the total for the year, both ways
+* the cost per month, both ways
+* how much cheaper or dearer the new tariff would be over the year, in pounds and as a percentage
+
+With both fuels filled in, it also shows the two added together, so you can weigh up a dual fuel deal in one go. The boxes start with your current charges, and the results change as you type.
+
+Good to know:
+
+* Both sides use the same 12 months of use, priced at today's charges, so it compares the two tariffs fairly. Since it uses today's charges and not the ones in force at the time, the "current" figure won't match what you actually paid over the year.
+* It's based on how much you used, not when, so it can't tell you what a time-of-use tariff (cheaper at night, say) would cost. If your current tariff has more than one rate, it uses the average rate your bills worked out at instead.
+* With less than a year of readings (see below), it uses the months there are and says how many.
+* Nothing you type is saved, and it doesn't change anything with your supplier.
 
 ### How far back the history goes
 
@@ -316,11 +398,82 @@ Comparing a month with the same month a year earlier needs readings from both mo
 
 <img src="images/ammui-energy.png" width="600"/>
 
+## Calories
+
+The **Meals** tab can show how many calories, and how much protein, carbohydrate and fat, each item and meal has per person. These are set once on each single item, from the **Items** list or the item builder. An item made of other items then adds up what it's made of, at the amounts it uses.
+
+### Where calories come from
+
+The Calories dialog can look in three places. Pick one with the tabs at the top.
+
+| Tab | What it has | Needs |
+| --- | --- | --- |
+| **UK foods** (the default) | About 2,850 basic foods with UK names and UK figures, such as *Aubergine, raw*, *Swede, boiled* or *Bacon rashers, back, grilled*. These come from McCance and Widdowson's *Composition of Foods*, the UK's official food tables. | Nothing. It's built into AMMUI and works offline. |
+| **UK products** | Packaged products sold in the UK, such as Heinz beans or Warburtons bread, from [Open Food Facts](https://uk.openfoodfacts.org/). It knows the pack size, so *"1 tin"* works without entering a weight. | An internet connection. No key. |
+| **USDA** | US foods from [USDA FoodData Central](https://fdc.nal.usda.gov/), including weights for cups, slices and single items. It uses American names (*eggplant*, *zucchini*, *cilantro*). | A free API key (see below). |
+
+The dialog remembers the tab you used last.
+
+#### USDA key (optional)
+
+1. Sign up at [fdc.nal.usda.gov/api-key-signup](https://fdc.nal.usda.gov/api-key-signup). The key arrives by email straight away.
+2. Paste it in **Settings → Integrations → USDA FoodData Central API Key** and press Save.
+
+The key allows 1,000 lookups an hour.
+
+### Adding calories to an item
+
+1. In the **Items** list, press **+ kcal** next to a single item (or the calories button in the item builder).
+2. AMMUI searches for its name and lists matching foods with their calories per 100 g. Close misspellings are found too (*"brocolli"* finds broccoli). If nothing useful comes up, try another tab or a simpler name (*"chicken breast"* rather than *"skinless chicken fillets"*). For USDA, tick **Include branded products** to search US packaged foods as well.
+3. Pick the closest match. This fills in **Calories per 100 g** and the grams of **Protein**, **Carbs**, **Fat** and **Alcohol** per 100 g, plus any weights the source knows: the pack size for a UK product, or a cup, a slice and one medium item for a USDA food.
+4. If the item's unit isn't a weight, check the **Weight of 1 …** box (see below). The UK food tables don't list weights for single items, so for *"2 eggs"* or *"1 onion"* enter how much one weighs.
+5. Press **Save**. The line underneath shows what the item comes to, e.g. *"1 onion (150 g) ≈ 53 kcal · 1.5 g protein · 12 g carbs · 0.2 g fat per person"*.
+
+You can also skip the search and type the figures per 100 g from a packet label. Protein, carbs, fat and alcohol can be left empty; only calories are needed. Alcohol is grams per 100 g (or 100 ml), not % ABV: a 5% beer has about 4 g. Open Food Facts gives % ABV, and AMMUI converts it. Carbs are *available* carbohydrate, as UK labels give it (fibre isn't included), and USDA figures are adjusted to match. To change an item's calories later, click its calorie figure. **Remove** clears them.
+
+Each item is only looked up once. The result is saved in AMMUI's database, so items show their calories straight away and work without an internet connection.
+
+### How amounts are converted
+
+Calories are worked out from the amount and unit each item made of others uses, so the same item can be measured differently in different ones. An item made of others that's part of another counts as many of it as its amount says (blank is one).
+
+| Unit | How it's converted |
+| --- | --- |
+| g, kg, oz, lb | Directly by weight |
+| cup, tbsp, tsp, ml, l | The food's own weight for that measure if the source lists one. Otherwise it's worked out from another volume it does list, or as if it weighed the same as water |
+| No unit ("2" onions) | The weight of one item that you enter, or USDA's medium size where it has one |
+| tin, can, packet, pack, jar, bag, box, bottle, pot, tub, carton, pouch, bar | The weight you enter for one. If you haven't entered one, the product's pack size from Open Food Facts |
+| Anything else (bunch, pinch, serving…) | The weight you enter for one, in **Weight of 1 …** |
+
+Amounts can be whole numbers, decimals (*0.5* or *0,5*), fractions (*1/2*, *1 1/2*, *½*) or ranges (*2-3* counts as 2.5). A unit typed with no amount, such as *pinch*, counts as one of it.
+
+Each item row shows its calories; hover over the figure for its weight, protein, carbs and fat. **? kcal** means AMMUI doesn't know the weight of that unit yet; click it to enter the weight. In the item builder, an item made of others shows its total, e.g. *"About 650 kcal · 32 g protein · 70 g carbs · 21 g fat per person"*, with UK alcohol units added when any of its items has alcohol (one unit is 8 g), and how many items aren't counted yet. Hover over the total to see which ones those are, and which counted items have no protein, carbs or fat.
+
+Items given calories before AMMUI kept protein, carbs, fat and alcohol get them filled in automatically when the server starts, from the food they were looked up from. That needs an internet connection for UK products and USDA foods (and the USDA key for those). Calories that were typed in aren't changed.
+
+### Good to know
+
+* Figures are estimates. Food tables give averages, products change their recipes, and the weight of "one onion" or "a cup of rice" varies, so treat totals as a rough guide.
+* Open Food Facts figures are typed in from labels by its users. AMMUI catches the common slip of entering kJ where kcal should be, but check a figure against the packet if it looks odd.
+* The USDA key is copied along with the other keys by **Settings → Integrations → Copy Keys From Another Device**.
+* The UK food tables are © Crown copyright: Public Health England (2021), *McCance and Widdowson's The Composition of Foods Integrated Dataset*. They contain public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). The copy built into AMMUI is made from the published spreadsheet by `scripts/build-cofid.py`, which can be re-run when a new edition comes out. Open Food Facts data is available under the [Open Database License](https://opendatacommons.org/licenses/odbl/1-0/).
+
+## Games
+
+The **Games** tab has a daily word game: guess the five-letter word in six tries. After each guess the tiles turn green for a letter in the right place, amber for a letter that's in the word but somewhere else, and grey for a letter that isn't in it. The on-screen keyboard keeps track of the letters you've tried, or you can type on a keyboard.
+
+* **A new word every day, the same for everyone.** The word changes at midnight, and every device picks the same one for the same day without needing to talk to the server or each other, so the family can compare how they got on.
+* **UK English.** Words come from the British English lists of [SCOWL](http://wordlist.aspell.net/) (the word lists behind many spell checkers), so British spellings such as *odour* and *kerb* are accepted and American ones such as *color* aren't. The daily word is always a fairly common word, with plurals and past tenses such as *cakes* and *baked* left out. Guesses can be any word from a much larger list. The lists are downloaded the first time the tab is opened (about 1.3 MB) and kept by the browser after that.
+* **Players.** Add the people who play in **Server Settings** → **Family** (the same people meals are planned for). Pick who's playing at the top of the tab before starting; each device remembers who played on it last. Each player's game and stats (games played, win rate, current and best streak) are kept on the server, so they're the same on every device, and a day's word can only be played once per player.
+* **No spoilers.** When a game is finished the letters are cleared, leaving just the coloured tiles, so others can see how it went without seeing the word.
+
+Removing a family member also deletes their games and stats, and takes them off planned meals.
+
 ## Secure Access (HTTPS)
 
-AMMUI serves the app over HTTPS on port **3443**, e.g. `https://192.168.0.2:3443/`. Opening the page over plain HTTP (port 3000) redirects there automatically.
+AMMUI serves the app over HTTPS on port **443**, e.g. `https://192.168.0.2/`. Opening the page over plain HTTP (port 80) redirects there automatically. If another program had either port, the installer chose another and said so (such as `https://192.168.0.2:3443/`); servers set up before the ports could be changed stay on 3443 and 3000. Change them in Settings > Secure Access.
 
-Port 3000 still runs plain HTTP in the background and must stay open. Players (DLNA, Sonos, AirPlay) and AMMUI's own DLNA server fetch music, album art and device descriptions from it, and they can't use HTTPS with a self-made certificate. If the server machine has a firewall, allow both ports 3000 and 3443.
+The HTTP port still runs plain HTTP in the background and must stay open. Players (DLNA, Sonos, AirPlay) and AMMUI's own DLNA server fetch music, album art and device descriptions from it, and they can't use HTTPS with a self-made certificate. If the server machine has a firewall, allow both ports.
 
 ### The certificate
 
@@ -335,10 +488,10 @@ The `certs` folder holds private keys, so it isn't committed to git. Delete it a
 
 Until a device trusts AMMUI's certificate, browsers show a "connection is not private" warning. You can click through it (Advanced → Proceed) and everything, including voice commands, works. To remove the warning for good, go to **Settings → General → Secure Access (HTTPS)**, press **Download Certificate** on each device, and install it as a trusted root certificate:
 
-* **Windows**: open the downloaded file → Install Certificate → Local Machine → "Place all certificates in the following store" → **Trusted Root Certification Authorities**. Restart the browser.
+* **Windows**: press **Install on this PC** instead, open the downloaded `trust-ammui.cmd` and choose *Yes* in the Windows security warning (if SmartScreen appears, choose More info → Run anyway). Restart the browser. Or install it by hand: open the downloaded certificate → Install Certificate → Local Machine → "Place all certificates in the following store" → **Trusted Root Certification Authorities**. Restart the browser.
 * **Android**: Settings → Security → Encryption & credentials → Install a certificate → **CA certificate**, and choose the downloaded file.
-* **iPhone / iPad**: open the download in Safari and allow the profile, install it under Settings → General → VPN & Device Management, then turn it on under Settings → General → About → **Certificate Trust Settings**.
-* **macOS**: open the file in Keychain Access, then double-click "AMMUI Local CA" and set **Trust → When using this certificate** to Always Trust.
+* **iPhone / iPad**: in Safari, press **Install on this iPhone / iPad** and allow the profile, install it under Settings → General → VPN & Device Management, then turn it on under Settings → General → About → **Certificate Trust Settings**.
+* **macOS**: press **Install on this Mac** instead, open the downloaded `ammui.mobileconfig`, then in System Settings search for **Profiles**, double-click AMMUI and choose Install. Or by hand: open the certificate in Keychain Access, then double-click "AMMUI Local CA" and set **Trust → When using this certificate** to Always Trust.
 
 Each device only needs this once: when the server certificate is renewed it's signed by the same authority, so it stays trusted.
 
@@ -395,7 +548,7 @@ The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagr
 4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
 5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
 6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
-7. **Export Tags** and **Back Up Now** to keep a backup.
+7. **Back Up Now** to keep a backup (tags are included).
 
 
 ### Album art
@@ -408,7 +561,6 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
 * **Logs** (logo menu): see what a command did and why it failed, filtered by type (for example `IDENTIFY`, `TAGS`, `UPLOAD`).
 * **Playback Stats** (logo menu): your 100 most played tracks, and the 100 albums with the most track plays (every play of a track counts towards its album). The lists scroll.
 * **Server Settings → General → Local Library**: file counts and sizes for what is stored on the server.
-* **Server Settings → General → Tags**: **Export Tags** saves all your file tags (favourites included) to a file. **Import Tags** loads one, matching files by path and falling back to file name if they've since moved. Use this to back up your tagging or copy it to another AMMUI.
 * **Server Settings → Integrations**: the Discogs token (album art and filename identification), AcoustID key (audio fingerprinting), YouTube key.
 * **Server Settings → Backup**: back up to, and restore from, an S3 bucket. See [Backup and restore](#backup-and-restore).
 * **Server Settings → Updates**: AMMUI checks GitHub for a new version shortly after it starts and then once a day, and shows a badge in the menu when one is available.
@@ -423,15 +575,23 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
    * red: what's wrong, such as an unknown access key, wrong secret key, missing bucket, wrong region or unreachable endpoint.
 
    The Backup and Restore sections appear once the test passes. Changing any connection detail hides them again until it's re-tested.
-2. **Backup**: **Back Up Now** copies the local music, photos and videos into a folder in the bucket named after this server. Tick **Back up automatically every day** to run it daily. Deleted photos and .DS_Store-type housekeeping files are left out, and a file whose size has changed is uploaded again.
+2. **Backup**: **Back Up Now** copies the local music, photos and videos into a folder in the bucket named after this server, along with a copy of the app's data (in `_ammui/ammui.db` there), which is sent every time. Tick **Back up automatically every day** to run it daily. Deleted photos and .DS_Store-type housekeeping files are left out, and a file whose size has changed is uploaded again.
    * **Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each backup also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
-3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one and press **Restore** to download everything in it into this server's library. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced. This is how to move a library to a new machine: set up the connection there, then restore the old server's folder.
+3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one to see what's in it, all ticked, and untick anything you don't want:
+   * **Files**: each library folder (Music, Photos, Videos), with how many files and how big. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced.
+   * **Data**: **Calendar, meals and items** (with the meal plan, shopping list, family and their word games), **Tags and photos** (tags, favourites, photo rotations, deleted photos), **Settings**, **Play history** and **Saved lookups** (album art, lyrics and YouTube matches already found). Each one ticked replaces what's here. This server keeps its own name and S3 connection, and the device list and library index are rebuilt rather than restored. A folder backed up before data was included has no Data section.
+
+   * **Carry on as that server** (off by default): this server takes the old one's name, so from then on it backs up into the same folder, carrying on from the backup it was restored from rather than starting a new one.
+
+   The files come first, then the data, and the app restarts to load the data (the page reloads by itself). This is how to move everything to a new machine: stop the old one backing up, install the new one, set up the connection, then restore the old server's folder with everything ticked, including **Carry on as that server**. Leave that unticked to copy a server instead, giving the copy its own name and folder (two servers with one name would back up over each other). If **Delete files from the bucket that are no longer on this server** is on, restore all the files before the next backup, or ones left behind are deleted from the bucket. The HTTPS certificate isn't restored: the new machine makes its own, so phones and tablets need to trust it again (see [Secure Access (HTTPS)](#secure-access-https)).
 
 The status box underneath shows progress for both. **View Log** shows the result of the last backup or restore, with counts for each folder.
 
 ### Logs
 
 Open the logo menu and choose **Logs** to see the discovered devices (IP address table) and a live log of the server and browser. Use the type dropdown above the log window to show a single log type, such as `YOUTUBE`, `IDENTIFY`, `DEVICES` or `DEBUG` (DEBUG is hidden from the default "All types" view because it is noisy). Log lines are given a type from their `[TAG]` prefix; untagged messages are grouped by keyword. The server keeps the last 1000 lines and the browser the last 500.
+
+The server also writes its log to `logs/ammui.log` in the AMMUI folder, so there's a record even if the server crashes or is restarted. Each start and exit is marked with a `---- Server starting ----` / `---- Server exiting ----` line; a start with no exit before it means the server stopped unexpectedly. When the file reaches 5 MB it's renamed to `ammui.log.1` (older ones move up to `.2` … `.5`, and the oldest is deleted), so the logs never take more than about 30 MB.
 
 ## How music video matching works
 
