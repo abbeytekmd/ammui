@@ -1817,9 +1817,7 @@ p.subtitle {
     flex-shrink: 0;
 }
 
-.library-mode-tabs .lib-tab[data-mode="music"] svg { color: #f472b6; }
-.library-mode-tabs .lib-tab[data-mode="photo"] svg { color: #38bdf8; }
-.library-mode-tabs .lib-tab[data-mode="video"] svg { color: #a78bfa; }
+.library-mode-tabs .lib-tab[data-mode="media"] svg { color: #f472b6; }
 .library-mode-tabs .lib-tab[data-mode="calendar"] svg { color: #f87171; }
 .library-mode-tabs .lib-tab[data-mode="recipes"] svg { color: #fb923c; }
 .library-mode-tabs .lib-tab[data-mode="smarthome"] svg { color: #34d399; }
@@ -12280,5 +12278,353 @@ input:checked+.slider:before {
 
     .petrol-list {
         overflow: visible;
+    }
+}
+
+/* --- Peer link: Settings → Peer Link and the Remote Libraries window --- */
+#settings-peerlink .input-with-button,
+.peer-add-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: stretch;
+}
+#settings-peerlink .input-with-button input,
+.peer-add-row input {
+    flex: 1;
+    min-width: 0;
+}
+.settings-group input.peer-port-input,
+.peer-add-row input.peer-port-input {
+    flex: none;
+    width: 7rem;
+}
+.peer-link-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.peer-link-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+.peer-link-info {
+    flex: 1;
+    min-width: 12rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    overflow-wrap: anywhere;
+}
+.peer-link-info .settings-hint {
+    margin: 0;
+}
+.peer-link-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+.peer-link-fix {
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+.peer-link-fix.input-with-button {
+    flex-direction: row;
+    align-items: stretch;
+}
+.peer-link-fix .settings-hint {
+    margin: 0;
+}
+
+.peer-browser-content {
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+}
+.peer-browser-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    padding: 0 0 0.75rem;
+    border-bottom: 1px solid var(--card-border);
+}
+.peer-browser-bar select {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    color: var(--text);
+    font-family: inherit;
+    max-width: 100%;
+}
+.peer-browser-bar select option {
+    background: var(--bg);
+}
+.peer-browser-crumbs {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+}
+.peer-crumb {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 0.25rem 0.35rem;
+    border-radius: 0.35rem;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    text-align: left;
+}
+.peer-crumb:last-child {
+    color: var(--text);
+    font-weight: 600;
+}
+.peer-crumb:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+.peer-crumb-sep {
+    color: var(--text-muted);
+}
+.peer-browser-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 12rem;
+    padding-top: 0.5rem;
+}
+.peer-browser-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.25rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.peer-row-icon {
+    flex: none;
+    width: 1.5rem;
+    text-align: center;
+}
+.peer-row-name {
+    flex: 1;
+    min-width: 0;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.peer-browser-row.dir .peer-row-name,
+.peer-browser-row.dir .peer-row-icon,
+.peer-row-name[title] {
+    cursor: pointer;
+}
+.peer-browser-row.dir .peer-row-name:hover,
+.peer-row-name[title]:hover {
+    text-decoration: underline;
+}
+.peer-row-size {
+    flex: none;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+.peer-row-actions {
+    flex: none;
+    display: flex;
+    gap: 0.4rem;
+}
+.peer-row-actions a.btn-control {
+    text-decoration: none;
+}
+.peer-browser-empty {
+    padding: 2rem 1rem;
+    text-align: center;
+    color: var(--text-muted);
+}
+.peer-browser-empty .btn-control {
+    display: inline-flex;
+}
+@media (max-width: 600px) {
+    .peer-browser-row {
+        flex-wrap: wrap;
+    }
+    .peer-row-name {
+        flex-basis: calc(100% - 2.5rem);
+    }
+    .peer-row-size {
+        margin-left: 2.25rem;
+    }
+    .peer-row-actions {
+        margin-left: auto;
+    }
+}
+
+/* --- Media tab: the Music / Photos / Videos switch at the top of the library --- */
+.media-mode-switch {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.main-layout:has(#playlist-items.expanded) .media-mode-switch {
+    display: none;
+}
+.media-mode-switch[hidden] {
+    display: none;
+}
+.media-mode-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-width: 0;
+    padding: 0.55rem 0.75rem;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 0.55rem;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.media-mode-btn:hover {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.06);
+}
+.media-mode-btn:active {
+    transform: scale(0.97);
+}
+.media-mode-btn.active {
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.media-mode-btn svg {
+    flex: none;
+}
+.media-mode-btn[data-mode="music"] svg { color: #f472b6; }
+.media-mode-btn[data-mode="photo"] svg { color: #38bdf8; }
+.media-mode-btn[data-mode="video"] svg { color: #a78bfa; }
+.media-mode-btn span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* The switch and the media server side by side, leaving the height to the media list */
+.media-top-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-shrink: 0;
+}
+.media-top-row .device-section,
+.browser-column .media-top-row .device-section {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 45%;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    animation: none;
+}
+/* With no server yet, the "Searching..." message has the row to itself */
+.media-top-row:has(.media-mode-switch[hidden]) .device-section {
+    flex: 1 1 auto;
+    max-width: none;
+}
+.media-top-row .device-list {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+}
+.media-top-row .device-list .empty-state {
+    padding: 0.6rem 0.75rem;
+    font-size: 0.85rem;
+}
+.media-top-row .device-card.is-static.server-card {
+    --icon-size: 2.25rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    padding: 0.25rem 0.75rem 0.25rem 0.25rem;
+    gap: 0.6rem;
+    align-items: center;
+    border-radius: 0.75rem;
+}
+.media-top-row .device-card.server-card:hover {
+    transform: none;
+}
+.media-top-row .device-card.is-static.server-card .device-icon {
+    width: var(--icon-size);
+    height: var(--icon-size);
+    border-radius: 0.55rem;
+    box-shadow: none;
+}
+.media-top-row .device-card.server-card .device-icon svg {
+    width: 20px;
+    height: 20px;
+}
+.media-top-row .device-card.is-static.server-card .device-info {
+    padding: 0;
+}
+.media-top-row .device-card.server-card .device-name-container {
+    margin: 0;
+    gap: 0.4rem;
+    justify-content: flex-start;
+}
+.media-top-row .device-card.server-card .device-name {
+    font-size: 0.9rem;
+}
+.media-top-row .device-card.server-card .device-protocol-label {
+    font-size: 0.55rem;
+    padding: 0.1rem 0.3rem;
+}
+.media-top-row .device-card.server-card .media-library-label {
+    display: none;
+}
+.media-top-row .device-card.server-card.selected {
+    box-shadow: 0 0 12px var(--primary-glow), inset 0 0 12px rgba(99, 102, 241, 0.08);
+}
+/* Phones: icons only on the switch, and no protocol tag, so the server name has room */
+@media (max-width: 600px) {
+    .media-top-row .media-mode-btn {
+        padding: 0.5rem;
+    }
+    .media-top-row .media-mode-btn span {
+        display: none;
+    }
+    .media-top-row .device-section,
+    .browser-column .media-top-row .device-section {
+        max-width: 60%;
+    }
+    .media-top-row .device-card.server-card .device-protocol-label {
+        display: none;
     }
 }

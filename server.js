@@ -61,6 +61,7 @@ import {
     listPasswords, getPassword, savePassword, deletePassword,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
+import { PeerListener, PeerConnections, PeerError, derivePeerKey, cleanLibraryPath, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import http from 'http';
@@ -3154,6 +3155,225 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
     if (imported.length) saveSettings();
     console.log(`Imported ${imported.length} API key(s) from ${source.name} (${source.origin}).`);
     res.json({ source: source.name, imported, s3Verified });
+});
+
+// --- Peer link: browsing and downloading from another AMMUI's library (see lib/peer-link.js) ---
+const localLibraryRoot = path.join(__dirname, 'local');
+const PEER_LISTENER_DEFAULTS = { enabled: false, port: DEFAULT_PEER_PORT, salt: null, key: null };
+const peerListenerSettings = () => ({ ...PEER_LISTENER_DEFAULTS, ...(getSetting('peerListener', null) || {}) });
+let peerListenerKeyCache = { stored: undefined, key: null };
+
+// The listener's settings with its password key decrypted (null when none is set, or it was
+// locked with another server's key, such as after restoring a backup on a new machine)
+function peerListenerConfig() {
+    const s = peerListenerSettings();
+    if (s.key !== peerListenerKeyCache.stored) {
+        let key = null;
+        try {
+            const hex = s.key ? decryptSecret(s.key) : '';
+            if (hex.length === 64) key = Buffer.from(hex, 'hex');
+        } catch (e) {
+            console.warn('[PEER] The peer link password can\'t be read on this server; set it again in Settings.');
+        }
+        peerListenerKeyCache = { stored: s.key, key };
+    }
+    return { enabled: !!s.enabled, port: s.port, salt: s.salt, key: peerListenerKeyCache.key };
+}
+
+const peerListener = new PeerListener({
+    certDir: certsDir,
+    libraryRoot: localLibraryRoot,
+    getConfig: peerListenerConfig,
+    getName: () => settings.deviceName || 'AMMUI',
+});
+let peerListenerQueue = Promise.resolve();
+const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
+    .then(() => peerListener.apply())
+    .catch(err => console.error('[PEER] Could not start the peer link:', err.message)));
+
+const peerLinks = new PeerConnections({
+    load: () => getSetting('peerLinks', null) || [],
+    save: list => setSetting('peerLinks', list),
+    encrypt: encryptSecret,
+    decrypt: decryptSecret,
+    clientName: () => settings.deviceName || 'AMMUI',
+});
+
+const peerError = (res, err) => {
+    if (!(err instanceof PeerError)) console.error('[PEER]', err);
+    res.status(err.status || 500).json({ error: err.message, code: err.code, fingerprint: err.fingerprint });
+};
+
+app.get('/api/settings/peer-listener', (req, res) => {
+    res.json(peerListener.status());
+});
+
+// { enabled?, port?, password? }: a new password ends everyone's session
+app.post('/api/settings/peer-listener', express.json(), async (req, res) => {
+    const { enabled, port: wantedPort, password } = req.body || {};
+    const next = peerListenerSettings();
+    if (wantedPort !== undefined && wantedPort !== null && wantedPort !== '') {
+        const p = Number(wantedPort);
+        if (!Number.isInteger(p) || p < 1 || p > 65535) return res.status(400).json({ error: 'The port must be a number from 1 to 65535' });
+        if (p === port || p === httpsPort) return res.status(400).json({ error: `Port ${p} is already used by the app itself; choose another` });
+        next.port = p;
+    }
+    if (password) {
+        if (typeof password !== 'string' || password.length < MIN_PEER_PASSWORD) {
+            return res.status(400).json({ error: `Use a password of at least ${MIN_PEER_PASSWORD} characters` });
+        }
+        next.salt = crypto.randomBytes(16).toString('base64');
+        next.key = encryptSecret((await derivePeerKey(password, next.salt)).toString('hex'));
+    }
+    if (enabled !== undefined) next.enabled = enabled === true;
+    if (next.enabled && !password && !peerListenerConfig().key) {
+        return res.status(400).json({ error: 'Set a password before switching the peer link on' });
+    }
+    setSetting('peerListener', next);
+    if (password) {
+        peerListener.endSessions();
+        console.log('[PEER] Peer link password changed; everyone connected has to log in again.');
+    }
+    if (enabled !== undefined) console.log(`[PEER] Peer link ${next.enabled ? 'switched on' : 'switched off'}.`);
+    await applyPeerListener();
+    res.json(peerListener.status());
+});
+
+app.get('/api/peer-links', (req, res) => {
+    res.json({ peers: peerLinks.summary() });
+});
+
+// { address, port?, password }: connects, trusting the certificate it sees, and saves the connection
+app.post('/api/peer-links', express.json(), async (req, res) => {
+    try {
+        const peer = await peerLinks.add(req.body || {});
+        res.json({ peer: peerLinks.summary().find(p => p.id === peer.id) });
+    } catch (err) { peerError(res, err); }
+});
+
+app.post('/api/peer-links/:id/password', express.json(), async (req, res) => {
+    try {
+        if (!req.body?.password) return res.status(400).json({ error: 'Enter the password' });
+        await peerLinks.setPassword(req.params.id, String(req.body.password));
+        res.json({ ok: true });
+    } catch (err) { peerError(res, err); }
+});
+
+app.post('/api/peer-links/:id/trust', async (req, res) => {
+    try {
+        await peerLinks.trustNewCertificate(req.params.id);
+        res.json({ ok: true });
+    } catch (err) { peerError(res, err); }
+});
+
+app.delete('/api/peer-links/:id', async (req, res) => {
+    await peerLinks.remove(req.params.id);
+    res.json({ ok: true });
+});
+
+app.get('/api/peer-links/:id/list', async (req, res) => {
+    try {
+        res.json(await peerLinks.list(req.params.id, req.query.path || ''));
+    } catch (err) { peerError(res, err); }
+});
+
+// A file from the other server, to this browser. Pictures, music and video can be shown inline;
+// anything else (and everything with ?download=1) comes as an attachment, so nothing from the
+// other server can run as a page on this one.
+const PEER_INLINE_TYPES = /\.(mp3|flac|m4a|aac|wav|ogg|opus|jpe?g|png|webp|gif|bmp|mp4|m4v|mov|webm)$/i;
+app.get('/api/peer-links/:id/file', async (req, res) => {
+    const ac = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) ac.abort(); });
+    try {
+        const rel = cleanLibraryPath(req.query.path);
+        const name = rel.split('/').pop() || 'download';
+        const r = await peerLinks.openFile(req.params.id, rel, { range: req.headers.range, signal: ac.signal });
+        res.status(r.status);
+        for (const h of ['content-length', 'content-range', 'accept-ranges', 'last-modified']) {
+            if (r.headers[h]) res.setHeader(h, r.headers[h]);
+        }
+        if (req.query.download || !PEER_INLINE_TYPES.test(name)) res.attachment(name);
+        else res.type(path.extname(name));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox");
+        r.res.on('error', () => res.destroy());
+        r.res.pipe(res);
+    } catch (err) {
+        if (err.code === 'CANCELLED') return;
+        if (res.headersSent) return res.destroy();
+        peerError(res, err);
+    }
+});
+
+// { path }: copies that file or folder into this server's library at the same place
+// (music/Artist/Album/...), as a download job shown in the download progress window
+app.post('/api/peer-links/:id/copy', express.json(), async (req, res) => {
+    let rel, peer;
+    try {
+        rel = cleanLibraryPath(req.body?.path);
+        if (!rel) return res.status(400).json({ error: 'Choose a file or folder' });
+        peer = peerLinks.get(req.params.id);
+    } catch (err) { return peerError(res, err); }
+
+    const job = createDownloadJob(`${rel.split('/').pop()} from ${peer.name || peer.host}`);
+    res.json({ jobId: job.id });
+
+    (async () => {
+        let copied = 0;
+        try {
+            job.current = 'Listing files...';
+            pushDownloadJobUpdate(job);
+            const { files, truncated } = await peerLinks.tree(peer.id, rel);
+            job.total = files.length;
+            pushDownloadJobUpdate(job);
+            for (const f of files) {
+                const title = f.path.split('/').slice(1).join('/');
+                const dest = path.join(localLibraryRoot, ...f.path.split('/'));
+                const part = path.join(path.dirname(dest), `.${path.basename(dest)}.peer-part`);
+                job.current = title;
+                pushDownloadJobUpdate(job);
+                try {
+                    const existing = await fsp.stat(dest).catch(() => null);
+                    if (existing?.isFile() && existing.size === f.size) {
+                        job.skippedCount++;
+                        job.log.push({ status: 'skipped', title });
+                    } else if (existing) {
+                        job.skippedCount++;
+                        job.log.push({ status: 'skipped', title: `${title} (a different file with that name is already here)` });
+                    } else {
+                        await fsp.mkdir(path.dirname(dest), { recursive: true });
+                        const r = await peerLinks.openFile(peer.id, f.path);
+                        await pipeline(r.res, fs.createWriteStream(part));
+                        const written = (await fsp.stat(part)).size;
+                        if (f.size && written !== f.size) throw new Error(`only ${written} of ${f.size} bytes arrived`);
+                        await fsp.rename(part, dest);
+                        copied++;
+                        job.downloadCount++;
+                        job.log.push({ status: 'done', title });
+                    }
+                } catch (err) {
+                    await fsp.unlink(part).catch(() => { });
+                    job.failCount++;
+                    job.log.push({ status: 'failed', title, error: err.message });
+                    // Lost the other server altogether: don't fail every remaining file one by one
+                    if (err.code === 'UNREACHABLE' || err.code === 'FINGERPRINT_CHANGED' || err.code === 'NEEDS_PASSWORD') throw err;
+                }
+                pushDownloadJobUpdate(job);
+            }
+            if (truncated) job.log.push({ status: 'failed', title: 'That folder has too many files: only the first 100,000 were copied' });
+            console.log(`[PEER] Copied ${copied} file(s) of ${rel} from "${peer.name}" (${job.skippedCount} already here, ${job.failCount} failed).`);
+        } catch (err) {
+            job.error = err.message;
+        } finally {
+            if (copied) markDirty(SERVER_UDN, findDeviceByUdn);
+            job.done = true;
+            job.current = '';
+            pushDownloadJobUpdate(job);
+            const clients = downloadJobClients.get(job.id);
+            if (clients) { for (const c of clients) { try { c.end(); } catch (e) { } } clients.clear(); }
+            setTimeout(() => { downloadJobs.delete(job.id); downloadJobClients.delete(job.id); }, 10 * 60 * 1000);
+        }
+    })();
 });
 
 app.get('/api/settings/s3', (req, res) => {
@@ -6914,6 +7134,7 @@ function startServices() {
     scheduleUpdateChecks();
     startIndexScheduler(findDeviceByUdn);
     smartHome.startBackgroundDiscovery();
+    applyPeerListener();
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {
         const local = findDeviceByUdn(SERVER_UDN);

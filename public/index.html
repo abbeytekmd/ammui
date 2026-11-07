@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=83">
+    <link rel="stylesheet" href="style.css?v=86">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -17,32 +17,13 @@
     <div class="container">
         <div class="top-bar">
             <nav id="library-mode-tabs" class="library-mode-tabs" hidden>
-                <button type="button" class="lib-tab" data-mode="music" onclick="switchBrowserMode('music')">
+                <button type="button" class="lib-tab" data-mode="media" onclick="showMedia()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <path d="M9 18V5l12-2v13"></path>
-                        <circle cx="6" cy="18" r="3"></circle>
-                        <circle cx="18" cy="16" r="3"></circle>
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                        <path d="M10 9l5 3-5 3V9z" fill="currentColor"></path>
                     </svg>
-                    <span>Music</span>
-                </button>
-                <button type="button" class="lib-tab" data-mode="photo" onclick="switchBrowserMode('photo')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-                        <circle cx="8.5" cy="8.5" r="1.5"></circle>
-                        <path d="M21 15l-5-5L5 21"></path>
-                    </svg>
-                    <span>Photos</span>
-                </button>
-                <button type="button" class="lib-tab" data-mode="video" onclick="switchBrowserMode('video')">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                        <line x1="8" y1="21" x2="16" y2="21"></line>
-                        <line x1="12" y1="17" x2="12" y2="21"></line>
-                    </svg>
-                    <span>Videos</span>
+                    <span>Media</span>
                 </button>
                 <button type="button" class="lib-tab" data-mode="calendar" onclick="showCalendar()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -152,6 +133,16 @@
                         </svg>
                         Server Settings
                     </button>
+                    <button id="btn-remote-libraries" onclick="openPeerBrowser()" class="dropdown-item"
+                        title="Browse and download from other AMMUI servers">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="2" y="3" width="8" height="7" rx="1"></rect>
+                            <rect x="14" y="14" width="8" height="7" rx="1"></rect>
+                            <path d="M6 10v4a3 3 0 0 0 3 3h5"></path>
+                        </svg>
+                        Remote Libraries
+                    </button>
                     <button id="btn-client-settings" onclick="openClientSettingsModal()" class="dropdown-item"
                         title="Devices: servers, players, AirPlay, plugs">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -221,11 +212,41 @@
         <main class="main-layout">
             <!-- Left Column: Media Library & Folders -->
             <div class="column browser-column">
-                <section class="device-section">
-                    <div id="server-list" class="device-list">
-                        <div class="empty-state">Searching for Media Libraries...</div>
+                <!-- Media type switch, with the media server alongside it -->
+                <div class="media-top-row">
+                    <!-- Which part of the library the Media tab shows -->
+                    <div id="media-mode-switch" class="media-mode-switch" role="tablist" aria-label="Media type" hidden>
+                        <button type="button" class="media-mode-btn" role="tab" data-mode="music" title="Music" onclick="switchBrowserMode('music')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M9 18V5l12-2v13"></path>
+                                <circle cx="6" cy="18" r="3"></circle>
+                                <circle cx="18" cy="16" r="3"></circle>
+                            </svg>
+                            <span>Music</span>
+                        </button>
+                        <button type="button" class="media-mode-btn" role="tab" data-mode="photo" title="Photos" onclick="switchBrowserMode('photo')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                <circle cx="8.5" cy="8.5" r="1.5"></circle>
+                                <path d="M21 15l-5-5L5 21"></path>
+                            </svg>
+                            <span>Photos</span>
+                        </button>
+                        <button type="button" class="media-mode-btn" role="tab" data-mode="video" title="Videos" onclick="switchBrowserMode('video')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                            </svg>
+                            <span>Videos</span>
+                        </button>
                     </div>
-                </section>
+                    <section class="device-section">
+                        <div id="server-list" class="device-list">
+                            <div class="empty-state">Searching for Media Libraries...</div>
+                        </div>
+                    </section>
+                </div>
 
                 <div id="browser-container" class="playlist-container">
                     <div class="section-header">
@@ -1133,6 +1154,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
+                <button class="settings-tab" data-tab="peerlink" onclick="switchSettingsTab('peerlink', this)">Peer Link</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
                 <button class="settings-tab" onclick="switchSettingsTab('tools', this)">Tools</button>
                 <button class="settings-tab" onclick="switchSettingsTab('startup', this)">Startup</button>
@@ -1696,6 +1718,57 @@
                                 packages, then restarts the server and reloads this page. Changing the channel takes effect when you
                                 update; going from Dev back to Stable can go back to an older version.
                             </p>
+                        </div>
+                    </div>
+                </div>
+                <div id="settings-peerlink" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Connect to Another Server</h3>
+                        <div class="settings-group">
+                            <p class="settings-hint">Browse another AMMUI server's music, pictures and videos and download
+                                them, on this network or over the internet. That server needs <b>Let other servers
+                                connect</b> switched on below, and gives you its address, port and password.</p>
+                            <div class="peer-add-row">
+                                <input type="text" id="peer-add-address" placeholder="Address or IP (e.g. 192.168.1.20 or home.example.com)" spellcheck="false" autocomplete="off">
+                                <input type="number" id="peer-add-port" placeholder="Port" min="1" max="65535" class="peer-port-input">
+                            </div>
+                            <div class="input-with-button">
+                                <input type="password" id="peer-add-password" placeholder="That server's peer link password" autocomplete="new-password"
+                                    onkeydown="if (event.key === 'Enter') addPeerLink()">
+                                <button id="peer-add-btn" class="btn-control btn-small primary" onclick="addPeerLink()">Connect</button>
+                            </div>
+                            <p id="peer-add-status" class="settings-hint" style="display:none;"></p>
+                            <ul id="peer-link-list" class="peer-link-list"></ul>
+                        </div>
+                    </div>
+                    <div class="manage-section">
+                        <h3>Let Other Servers Connect</h3>
+                        <div class="settings-group">
+                            <label class="settings-check">
+                                <input type="checkbox" id="peer-listener-enabled" onchange="savePeerListener({ toggle: true })">
+                                <span>Let other servers connect to this one
+                                    <span class="settings-hint">They can browse and download this server's music, pictures
+                                        and videos (nothing else, and they can't change anything). Switched off, the port is
+                                        closed and everyone connected is cut off.</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="settings-group">
+                            <label for="peer-listener-port">Port</label>
+                            <input type="number" id="peer-listener-port" min="1" max="65535" class="peer-port-input">
+                            <label for="peer-listener-password">Password</label>
+                            <input type="password" id="peer-listener-password" autocomplete="new-password" placeholder="At least 8 characters">
+                            <div style="display:flex; gap:0.75rem;">
+                                <button class="btn-control btn-small primary" onclick="savePeerListener()">Save</button>
+                            </div>
+                            <p id="peer-listener-status" class="settings-hint"></p>
+                            <p class="settings-hint">Connections are encrypted, and the password is never sent: both servers
+                                prove they know it. After 5 wrong passwords an address is blocked for 15 minutes. Changing
+                                the password cuts off everyone connected until they enter the new one.</p>
+                            <p class="settings-hint">To connect from outside your home, forward this port (TCP) on your
+                                router to this machine and give the other server your public address. Only the peer link
+                                is reachable that way, not the rest of the app. Use a long password if you do.</p>
+                            <ul id="peer-session-list" class="peer-link-list"></ul>
                         </div>
                     </div>
                 </div>
@@ -2287,6 +2360,31 @@
     </div>
 
     <!-- Download Progress Modal -->
+    <!-- Remote Libraries: another AMMUI's library over the peer link -->
+    <div id="peer-browser-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content manage-modal-content peer-browser-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Remote Libraries</h2>
+                </div>
+                <button class="btn-close" onclick="closePeerBrowser()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="peer-browser-bar">
+                <select id="peer-browser-select" onchange="peerBrowseTo(this.value, '')"></select>
+                <div id="peer-browser-crumbs" class="peer-browser-crumbs"></div>
+                <button id="peer-browser-copy-folder" class="btn-control btn-small" style="display:none;"
+                    onclick="peerCopy(peerBrowserState.path)" title="Copy everything in this folder to this server's library">Copy Folder to My Library</button>
+            </div>
+            <div id="peer-browser-list" class="peer-browser-list"></div>
+        </div>
+    </div>
+
     <div id="download-progress-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content download-progress-modal-content">
             <div class="modal-header">
@@ -2960,7 +3058,8 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=77"></script>
+    <script src="app.js?v=79"></script>
+    <script src="peers.js?v=1"></script>
     <script src="slideshow.js?v=16"></script>
     <script src="timers.js?v=2"></script>
     <script src="passwords.js?v=2"></script>

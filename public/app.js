@@ -4525,6 +4525,7 @@ function openServerSettingsModal() {
         loadEmailSettings();
         loadKeySources();
         loadKeySharing();
+        if (typeof loadPeerLinkSettings === 'function') loadPeerLinkSettings();
         loadCalendarSettings();
         loadGamePlayerSettings();
         startS3StatusPolling();
@@ -4719,6 +4720,7 @@ function switchSettingsTab(tab, btnEl) {
     if (tab.toLowerCase() === 'tools') loadToolsStatus();
     if (tab.toLowerCase() === 'startup') loadStartupSettings();
     if (tab.toLowerCase() === 'smarthome') loadPlugSettings();
+    if (tab.toLowerCase() === 'peerlink') loadPeerLinkSettings();
 }
 
 // Settings → Startup: a command the server runs once it's up, usually opening a browser.
@@ -5800,18 +5802,27 @@ async function setScreensaver() {
 }
 
 
-// Highlight the active Music/Photos/Videos tab and show the bar only when a
-// media server is available to browse.
+// Highlight the active tab (Media whenever the library is showing) and the Music/Photos/Videos
+// switch inside it, and show them only when a media server is available to browse.
 function updateBrowserModeTabs() {
     const bar = document.getElementById('library-mode-tabs');
     if (!bar) return;
     const hasServer = !!selectedServerUdn &&
         (currentDevices || []).some(d => d.udn === selectedServerUdn && d.isServer);
     bar.hidden = !hasServer;
-    const activeTab = appView || currentBrowserMode;
+    const activeTab = appView || 'media';
     bar.querySelectorAll('.lib-tab').forEach(tab => {
         tab.classList.toggle('active', tab.dataset.mode === activeTab);
     });
+    const modeSwitch = document.getElementById('media-mode-switch');
+    if (modeSwitch) {
+        modeSwitch.hidden = !hasServer;
+        modeSwitch.querySelectorAll('.media-mode-btn').forEach(btn => {
+            const on = btn.dataset.mode === currentBrowserMode;
+            btn.classList.toggle('active', on);
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+    }
     // On a narrow screen the tabs scroll sideways: keep the selected one in view
     const active = bar.querySelector('.lib-tab.active');
     if (active && !bar.hidden) {
@@ -9426,6 +9437,11 @@ async function removeNutrition() {
     } catch (err) {
         setNutritionStatus(err.message, true);
     }
+}
+
+// The Media tab: back to the library, in whichever of Music, Photos and Videos was last used
+function showMedia() {
+    return switchBrowserMode(currentBrowserMode || 'music');
 }
 
 async function switchBrowserMode(mode) {
