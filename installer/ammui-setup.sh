@@ -775,7 +775,12 @@ open_if_unnamed() {
 start_server() {
     step 'Starting AMMUI'
     if use_service; then
-        $SYSTEMCTL start "$SERVICE_NAME" || fail "The AMMUI service did not start. See: $JOURNAL_CMD"
+        # This first start leaves opening the page to the installer, once the certificate is
+        # trusted (see openToName in server.js). The service takes its environment as it starts.
+        $SYSTEMCTL set-environment AMMUI_INSTALLER=1 2>/dev/null
+        $SYSTEMCTL start "$SERVICE_NAME"; local started=$?
+        $SYSTEMCTL unset-environment AMMUI_INSTALLER 2>/dev/null
+        [ "$started" -eq 0 ] || fail "The AMMUI service did not start. See: $JOURNAL_CMD"
         print_addresses
         if wait_for_port ''; then grant_certificate_trust; open_if_unnamed
         else warn "AMMUI has not opened its port yet. See its log: $JOURNAL_CMD"; fi
@@ -792,7 +797,8 @@ start_server() {
     # The server shares this terminal for its log. Once it is listening (its certificate exists
     # by then), trust the certificate.
     cd "$INSTALL_DIR" || fail "Cannot open $INSTALL_DIR"
-    node server.js </dev/null &
+    # It leaves opening the page to the installer, once the certificate is trusted (see openToName in server.js)
+    AMMUI_INSTALLER=1 node server.js </dev/null &
     local server=$! code
     # A background job ignores Ctrl+C in a script, so pass it on. wait returns when the trap
     # runs, so wait again until the server has really gone.

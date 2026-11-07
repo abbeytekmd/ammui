@@ -650,6 +650,8 @@ function Start-Server {
     # The server shares this window for its log. Once it is listening (its certificate exists
     # by then), trust the certificate. No browser is opened here: Settings > Startup in the app
     # chooses whether the server opens one when it starts.
+    # The server leaves opening the page to the installer, once the certificate is trusted (see openToName in server.js)
+    $env:AMMUI_INSTALLER = '1'
     $server = Start-Process (Get-Command node).Source -ArgumentList 'server.js' -NoNewWindow -PassThru
     $null = $server.Handle   # keep a handle so ExitCode is available afterwards
     for ($i = 0; $i -lt 120 -and -not $server.HasExited; $i++) {
