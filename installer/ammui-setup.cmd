@@ -420,6 +420,14 @@ $links = @(
     (Join-Path ([Environment]::GetFolderPath('Desktop'))  'AMMUI Kiosk.lnk'))
 foreach ($l in $links) { if (Test-Path -LiteralPath $l) { Remove-Item -LiteralPath $l -Force; Info "Removed $l" } }
 
+# Remove the firewall rule the installer added (Windows asks to confirm).
+if (Get-NetFirewallRule -DisplayName 'AMMUI (Node.js)' -ErrorAction SilentlyContinue) {
+    try {
+        Info 'Removing the AMMUI firewall rule: choose Yes in the Windows prompt.'
+        Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -ArgumentList '-NoProfile', '-Command', "Remove-NetFirewallRule -DisplayName 'AMMUI (Node.js)'"
+    } catch { Write-Host "    The AMMUI firewall rule was left in place ($($_.Exception.Message))." -ForegroundColor Yellow }
+}
+
 # Stop trusting AMMUI's certificate (Windows asks to confirm).
 $caPath = Join-Path $InstallDir 'certs\ca.crt'
 if (Test-Path -LiteralPath $caPath) {
@@ -561,6 +569,48 @@ function Grant-CertificateTrust {
     } catch { Warn "The AMMUI certificate was not trusted, so browsers will show a warning ($($_.Exception.Message))." }
 }
 
+# The name of the firewall rule the installer adds (and the uninstaller removes)
+$FirewallRule = 'AMMUI (Node.js)'
+
+function Grant-FirewallAccess {
+    # Players (Sonos, DLNA, AirPlay) are found by their announcements and mDNS replies, which reach
+    # the server unasked, and Windows Firewall drops those unless Node.js is let in. Windows' own
+    # prompt for that is easy to miss, and dismissing it adds rules that block Node.js, which win
+    # over any rule that allows it. So: no rules blocking this node.exe, and one allowing it on
+    # private and domain networks. Changing rules needs admin, so Windows asks (once, and only
+    # when something needs changing).
+    try {
+        $node = (Get-Command node).Source
+        $mine = @(Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue |
+            Where-Object { $_.Program -and [Environment]::ExpandEnvironmentVariables($_.Program) -ieq $node } |
+            Get-NetFirewallRule -ErrorAction SilentlyContinue |
+            Where-Object { $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' })
+        $blocked = @($mine | Where-Object { $_.Action -eq 'Block' }).Count -gt 0
+        $allowed = @($mine | Where-Object { $_.Action -eq 'Allow' -and "$($_.Profile)" -match 'Private|Any' }).Count -gt 0
+        if ($blocked -or -not $allowed) {
+            $script = @"
+Get-NetFirewallApplicationFilter | Where-Object { `$_.Program -and [Environment]::ExpandEnvironmentVariables(`$_.Program) -ieq '$node' } |
+    Get-NetFirewallRule | Where-Object { `$_.Direction -eq 'Inbound' -and `$_.Action -eq 'Block' } | Remove-NetFirewallRule
+Get-NetFirewallRule -DisplayName '$FirewallRule' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+New-NetFirewallRule -DisplayName '$FirewallRule' -Direction Inbound -Program '$node' -Action Allow -Profile Private, Domain | Out-Null
+"@
+            $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+            Info 'Letting AMMUI find players on this network: choose Yes in the Windows prompt.'
+            $p = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru `
+                -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded
+            if ($p.ExitCode -eq 0) { Info 'Windows Firewall lets AMMUI in on private networks.' }
+            else { Warn "Windows Firewall could not be set up (exit code $($p.ExitCode))." }
+        }
+    } catch {
+        Warn "Windows Firewall was not set up ($($_.Exception.Message)). If players are missing, allow Node.js on private networks in Windows Security > Firewall."
+    }
+    # On a network Windows treats as public, the firewall lets nothing in whatever the rules say
+    $public = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue | Where-Object { "$($_.NetworkCategory)" -eq 'Public' })
+    if ($public.Count) {
+        Warn "Windows treats this network ($(($public | ForEach-Object Name) -join ', ')) as Public, which stops AMMUI finding players. Change it to Private: Settings > Network & internet > your connection > Network profile type."
+    }
+}
+
 # The server's name, or '' when it hasn't been named yet
 function Get-ServerName {
     Push-Location $InstallDir
@@ -641,7 +691,6 @@ function Start-Server {
     Write-Host "    AMMUI is starting: $url" -ForegroundColor Green
     Write-Host '    Open that address in a browser. To have a browser open whenever AMMUI starts, use Settings > Startup.'
     Write-Host "    From other devices use $(Get-HttpsUrl $env:COMPUTERNAME) (or this PC's IP address)."
-    Write-Host '    If Windows Firewall asks about Node.js, allow it on private networks so players and other devices can connect.'
     Write-Host '    Close this window to stop AMMUI.' -ForegroundColor Green
     Write-Host ''
 
@@ -697,6 +746,7 @@ try {
     New-Shortcuts
     New-KioskShortcut
     Register-Uninstaller
+    Grant-FirewallAccess
 
     if ($env:AMMUI_NO_RUN -eq '1') { Step "AMMUI is installed in $InstallDir" } else { Start-Server }
 } catch {
