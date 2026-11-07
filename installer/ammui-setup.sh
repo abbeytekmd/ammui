@@ -755,12 +755,29 @@ print_addresses() {
     fi
 }
 
+# A new server waits to be named before it starts its services, and nothing else opens the page
+# on a new install: say so where it can be seen (the log has pushed the addresses out of sight),
+# and open the page when there's a desktop to open it on.
+open_if_unnamed() {
+    local url name
+    url="$(https_url localhost)"
+    name="$(cd "$INSTALL_DIR" && node scripts/server-name.js 2>/dev/null)"
+    printf '\n'
+    green "AMMUI is running: $url"
+    [ -n "$name" ] && return 0
+    green 'Give this server a name there to finish setting it up.'
+    if [ "$IS_ROOT" -eq 0 ] && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && have xdg-open; then
+        info 'Opening it in your browser.'
+        xdg-open "$url" >/dev/null 2>&1 &
+    fi
+}
+
 start_server() {
     step 'Starting AMMUI'
     if use_service; then
         $SYSTEMCTL start "$SERVICE_NAME" || fail "The AMMUI service did not start. See: $JOURNAL_CMD"
         print_addresses
-        if wait_for_port ''; then grant_certificate_trust
+        if wait_for_port ''; then grant_certificate_trust; open_if_unnamed
         else warn "AMMUI has not opened its port yet. See its log: $JOURNAL_CMD"; fi
         printf '\n'
         green 'AMMUI is running in the background and starts with the computer.'
@@ -780,7 +797,7 @@ start_server() {
     # A background job ignores Ctrl+C in a script, so pass it on. wait returns when the trap
     # runs, so wait again until the server has really gone.
     trap 'kill "$server" 2>/dev/null' INT TERM
-    wait_for_port "$server" && grant_certificate_trust
+    wait_for_port "$server" && { grant_certificate_trust; open_if_unnamed; green 'Press Ctrl+C to stop AMMUI.'; printf '\n'; }
     while kill -0 "$server" 2>/dev/null; do wait "$server"; code=$?; done
     trap - INT TERM
     printf '\n'

@@ -561,6 +561,13 @@ function Grant-CertificateTrust {
     } catch { Warn "The AMMUI certificate was not trusted, so browsers will show a warning ($($_.Exception.Message))." }
 }
 
+# The server's name, or '' when it hasn't been named yet
+function Get-ServerName {
+    Push-Location $InstallDir
+    try { $out = cmd /c 'node scripts/server-name.js 2>nul'; if ($LASTEXITCODE -eq 0) { return "$out".Trim() } } catch { } finally { Pop-Location }
+    return ''
+}
+
 # The saved HTTP and HTTPS ports (80 and 443 when none are saved yet), or $null before the code is there
 function Get-SavedPorts {
     if (-not (Test-Path (Join-Path $InstallDir 'scripts\ports.js'))) { return $null }
@@ -648,7 +655,20 @@ function Start-Server {
     for ($i = 0; $i -lt 120 -and -not $server.HasExited; $i++) {
         try { (New-Object Net.Sockets.TcpClient('localhost', $HttpsPort)).Close(); break } catch { Start-Sleep -Milliseconds 500 }
     }
-    if (-not $server.HasExited) { Grant-CertificateTrust }
+    if (-not $server.HasExited) {
+        Grant-CertificateTrust
+        # Said again here, as the server's log has pushed the first time up out of sight
+        Write-Host ''
+        Write-Host "    AMMUI is running: $url" -ForegroundColor Green
+        # A new server waits to be named before it starts its services, and nothing else opens
+        # the page on a new install, so open it here to do that
+        if (-not (Get-ServerName)) {
+            Write-Host '    Opening it in your browser: give this server a name there to finish setting it up.' -ForegroundColor Green
+            try { Start-Process $url } catch { Warn "Could not open a browser ($($_.Exception.Message)). Open $url yourself." }
+        }
+        Write-Host '    Close this window to stop AMMUI.' -ForegroundColor Green
+        Write-Host ''
+    }
     $server.WaitForExit()
     Write-Host ''
     Warn "The AMMUI server stopped (exit code $($server.ExitCode))."
