@@ -5209,13 +5209,30 @@ function slideshowVideoSlide(v) {
     };
 }
 
+// Our library files photos under pictures/ and videos (other than Live Photo clips) under
+// videos/, in the same YYYY/MM layout. So a slideshow of pictures (or pictures/2025) also
+// takes its videos from videos (or videos/2025). Null for any other folder or server.
+function companionVideoScope(udn, objectId) {
+    if (!isOwnUdn(udn) || !objectId) return null;
+    const m = /^pictures(\/.*)?$/.exec(String(objectId).replace(/\/+$/, ''));
+    return m ? `videos${m[1] || ''}` : null;
+}
+
+// The videos under a folder plus those under its companion videos folder
+function videosWithCompanion(udn, objectId, videos, fetchUnder) {
+    const scope = companionVideoScope(udn, objectId);
+    if (!scope) return videos;
+    const seen = new Set(videos.map(v => v.id));
+    return [...videos, ...fetchUnder(scope).filter(v => isVideoItem(v) && !seen.has(v.id))];
+}
+
 // Fills the cache with the photos (and videos, see "Slideshow videos") under its folder from the
 // server's library index.
 function loadScreensaverCacheFromIndex(cache, meta) {
     const items = getLibraryIndexItemsUnder(cache.udn, cache.objectId);
     const images = items.filter(isPhotoItem);
     cache.images = images;
-    cache.videos = items.filter(isVideoItem);
+    cache.videos = videosWithCompanion(cache.udn, cache.objectId, items.filter(isVideoItem), s => getLibraryIndexItemsUnder(cache.udn, s));
     cache.indexBuiltAt = meta.built_at;
     cache.status = 'ready';
     cache.timestamp = Date.now();
@@ -5523,7 +5540,8 @@ function ownPhotosUnder(objectId, withVideos = false) {
     if (!cached || cached.builtAt !== meta.built_at) {
         if (peerPhotoCache.size >= 4) peerPhotoCache.clear();
         const items = getLibraryIndexItemsUnder(SERVER_UDN, objectId);
-        cached = { builtAt: meta.built_at, images: items.filter(isPhotoItem), videos: items.filter(isVideoItem) };
+        const videos = videosWithCompanion(SERVER_UDN, objectId, items.filter(isVideoItem), s => getLibraryIndexItemsUnder(SERVER_UDN, s));
+        cached = { builtAt: meta.built_at, images: items.filter(isPhotoItem), videos };
         peerPhotoCache.set(objectId, cached);
     }
     if (!withVideos || !cached.videos.length) return cached.images;
@@ -5631,10 +5649,12 @@ async function slideshowList(req, res) {
     let partial = false;
     if (indexMeta) {
         const cutoff = getRecentCutoff();
-        const dated = mode === 'onThisDay'
-            ? getLibraryIndexPhotosOnDay(serverUdn, objectId, monthDay(new Date()))
-            : getLibraryIndexPhotosSince(serverUdn, objectId, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
-        const photos = dated.filter(isPhotoItem), videos = dated.filter(isVideoItem);
+        const datedUnder = scope => mode === 'onThisDay'
+            ? getLibraryIndexPhotosOnDay(serverUdn, scope, monthDay(new Date()))
+            : getLibraryIndexPhotosSince(serverUdn, scope, `${cutoff.getFullYear()}-${monthDay(cutoff)}`);
+        const dated = datedUnder(objectId);
+        const photos = dated.filter(isPhotoItem);
+        const videos = videosWithCompanion(serverUdn, objectId, dated.filter(isVideoItem), datedUnder);
         source = peerObjectId ? (req.query.videos === '1' ? livePairs(photos, videos) : photos) : withLiveVideos(photos, videos);
     } else if (peerObjectId) {
         source = ownPhotosUnder(objectId, req.query.videos === '1');
