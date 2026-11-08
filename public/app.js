@@ -2606,15 +2606,13 @@ function renderBrowser(items) {
                                     </svg>
                                     Identify Dates from Filename
                                 </button>
-                                <button class="dropdown-item" onclick="moveFolderPicturesToDateFolder(${index}, event)">
+                                ` : ''}
+                                ${isContainer && (currentBrowserMode === 'photo' || currentBrowserMode === 'video') ? `
+                                <button class="dropdown-item" style="color: #10b981;" onclick="moveFolderPicturesToDateFolder(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                                        <line x1="16" y1="2" x2="16" y2="6"></line>
-                                        <line x1="8" y1="2" x2="8" y2="6"></line>
-                                        <line x1="3" y1="10" x2="21" y2="10"></line>
-                                        <path d="M8 14h.01M12 14h.01M16 14h.01"/>
+                                        <path d="M5 12h14M12 5l7 7-7 7"/>
                                     </svg>
-                                    Place in Date Folders
+                                    Reimport (Move to Date Folders)
                                 </button>
                                 ` : ''}
                                 ${isContainer ? `
@@ -2680,15 +2678,13 @@ function renderBrowser(items) {
                                     </svg>
                                     Identify Date from Filename
                                 </button>
-                                <button class="dropdown-item" onclick="movePictureToDateFolder(${index}, event)">
+                                ` : ''}
+                                ${!isContainer && (isImage || isVideo) ? `
+                                <button class="dropdown-item" style="color: #10b981;" onclick="movePictureToDateFolder(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                                        <line x1="16" y1="2" x2="16" y2="6"></line>
-                                        <line x1="8" y1="2" x2="8" y2="6"></line>
-                                        <line x1="3" y1="10" x2="21" y2="10"></line>
-                                        <path d="M8 14h.01M12 14h.01M16 14h.01"/>
+                                        <path d="M5 12h14M12 5l7 7-7 7"/>
                                     </svg>
-                                    Place in Date Folder
+                                    Reimport (Move to Date Folder)
                                 </button>
                                 ` : ''}
                                 <button class="dropdown-item" onclick="clipFiles(${index}, 'copy', event)">
@@ -11307,7 +11303,7 @@ async function movePictureToDateFolder(index, event) {
         if (res.ok) {
             const msg = data.isDuplicate
                 ? `Duplicate — moved to _deleted`
-                : `Moved to ${data.year}/${data.month}`;
+                : `Moved to ${data.root ? data.root + '/' : ''}${data.year}/${data.month}`;
             showToast(msg, 'success', 3000);
             if (browsePath && browsePath.length > 0 && selectedServerUdn) {
                 await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);

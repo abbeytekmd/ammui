@@ -8498,6 +8498,72 @@ async function* walkByExt(dir, extSet) {
     }
 }
 
+// Removes now-empty folders from dir upwards, stopping at (and never removing) root
+async function pruneEmptyDirs(dir, root) {
+    let currentDir = dir;
+    while (currentDir.length > root.length && currentDir.startsWith(root + path.sep)) {
+        try {
+            if ((await fs.promises.readdir(currentDir)).length) break;
+            await fs.promises.rmdir(currentDir);
+            currentDir = path.dirname(currentDir);
+        } catch (e) {
+            break;
+        }
+    }
+}
+
+// Re-files one photo or video in local/ the way an import would: photos to
+// pictures/YYYY/MM, videos to videos/YYYY/MM — except a Live Photo's video, which
+// follows its photo into the pictures tree. liveDirs maps a photo's stem to the folder
+// it was just moved to, so a folder reimport keeps each pair together.
+// Returns { status: 'moved'|'duplicate'|'in-place'|'no-date', root, year, month }.
+async function reimportMediaFile(filePath, liveDirs = new Map()) {
+    const localDir = path.join(__dirname, 'local');
+    const filename = path.basename(filePath);
+    const isVideo = VIDEO_EXTS.has(path.extname(filename).toLowerCase());
+    const stem = fileStem(filename);
+
+    let targetDir = null, root = 'pictures', detected = null;
+    if (isVideo) {
+        if (liveDirs.has(stem)) {
+            targetDir = liveDirs.get(stem);
+        } else {
+            // A photo of the same name beside it: file the pair by the photo's date
+            const sourceDir = path.dirname(filePath);
+            const photo = fs.readdirSync(sourceDir).find(f => IMAGE_EXTS.has(path.extname(f).toLowerCase()) && fileStem(f) === stem);
+            if (photo) {
+                const pd = await detectPictureDate(path.join(sourceDir, photo));
+                if (pd) targetDir = path.join(localDir, 'pictures', pd.year, pd.month ?? '01');
+            }
+        }
+    }
+    if (!targetDir) {
+        detected = await detectPictureDate(filePath);
+        if (!detected) return { status: 'no-date' };
+        const dateDir = path.join(detected.year, detected.month ?? '01');
+        root = isVideo && !hasPhotoBeside(path.join(localDir, 'pictures', dateDir), filename) ? 'videos' : 'pictures';
+        targetDir = path.join(localDir, root, dateDir);
+    }
+    const [month, year] = [path.basename(targetDir), path.basename(path.dirname(targetDir))];
+
+    if (filePath.toLowerCase() === path.join(targetDir, filename).toLowerCase()) {
+        if (!isVideo) liveDirs.set(stem, targetDir);
+        return { status: 'in-place', root, year, month };
+    }
+
+    const { finalPath, isDuplicate } = await resolveTargetPath(filePath, targetDir, path.join(localDir, root, '_deleted'));
+    await fs.promises.mkdir(path.dirname(finalPath), { recursive: true });
+    await fs.promises.rename(filePath, finalPath);
+    if (!isVideo && !isDuplicate) liveDirs.set(stem, targetDir);
+
+    // Tidy up folders the move left empty, within whichever library tree it came from
+    for (const tree of ['pictures', 'videos']) {
+        const treeRoot = path.join(localDir, tree);
+        if (filePath.startsWith(treeRoot + path.sep)) await pruneEmptyDirs(path.dirname(filePath), treeRoot);
+    }
+    return { status: isDuplicate ? 'duplicate' : 'moved', root, year, month };
+}
+
 app.post('/api/local/move-picture-to-date', express.json(), async (req, res) => {
     const { uri } = req.body;
     if (!uri) return res.status(400).json({ error: 'URI is required' });
@@ -8520,48 +8586,15 @@ app.post('/api/local/move-picture-to-date', express.json(), async (req, res) => 
             return res.status(404).json({ error: 'File not found' });
         }
 
-        const filename = path.basename(localPath);
-        const detected = await detectPictureDate(localPath);
-
-        if (!detected) {
+        const result = await reimportMediaFile(localPath);
+        if (result.status === 'no-date') {
             return res.status(400).json({ error: 'Could not determine date from EXIF, folder name, or filename.' });
         }
-
-        const { year, month } = detected;
-
-        const targetDir = path.join(localDir, 'pictures', year, month ?? '01');
-        const naiveTarget = path.join(targetDir, filename);
-
-        if (localPath.toLowerCase() === naiveTarget.toLowerCase()) {
+        if (result.status === 'in-place') {
             return res.status(400).json({ error: 'File is already in the correct folder.' });
         }
-
-        const deletedDir = path.join(localDir, 'pictures', '_deleted');
-        const { finalPath, isDuplicate } = await resolveTargetPath(localPath, targetDir, deletedDir);
-        const destDir = path.dirname(finalPath);
-
-        const sourceDir = path.dirname(localPath);
-        if (!fs.existsSync(destDir)) await fs.promises.mkdir(destDir, { recursive: true });
-        await fs.promises.rename(localPath, finalPath);
-
-        // Clean up empty source directories up to the pictures root
-        const picturesRoot = path.join(localDir, 'pictures');
-        let currentDir = sourceDir;
-        while (currentDir.length > picturesRoot.length && currentDir.startsWith(picturesRoot)) {
-            try {
-                const remaining = await fs.promises.readdir(currentDir);
-                if (remaining.length === 0) {
-                    await fs.promises.rmdir(currentDir);
-                    currentDir = path.dirname(currentDir);
-                } else {
-                    break;
-                }
-            } catch (e) {
-                break;
-            }
-        }
-
-        res.json({ success: true, year, month, isDuplicate });
+        const { root, year, month } = result;
+        res.json({ success: true, root, year, month, isDuplicate: result.status === 'duplicate' });
     } catch (e) {
         console.error('[Move Picture] Error:', e);
         res.status(500).json({ error: e.message });
@@ -8628,64 +8661,35 @@ app.post('/api/local/move-folder-pictures-to-date', express.json(), async (req, 
             return res.status(404).json({ error: 'Folder not found' });
         }
 
-        const picturesRoot = path.join(localDir, 'pictures');
-        const deletedDir = path.join(localDir, 'pictures', '_deleted');
         let moved = 0, duplicates = 0, skipped = 0, failed = 0;
-        const sourceDirs = new Set();
 
-        for await (const filePath of walkImages(folderPath)) {
+        // List everything first (files moved into a subfolder mustn't be walked again).
+        // Photos go before videos, so each Live Photo video can follow its photo.
+        const files = [];
+        for await (const f of walkByExt(folderPath, new Set([...IMAGE_EXTS, ...VIDEO_EXTS]))) {
+            if (!f.split(path.sep).includes('_deleted')) files.push(f);
+        }
+        const isVid = f => VIDEO_EXTS.has(path.extname(f).toLowerCase());
+        files.sort((a, b) => isVid(a) - isVid(b));
+
+        const liveDirs = new Map();
+        for (const filePath of files) {
             const filename = path.basename(filePath);
-            const detected = await detectPictureDate(filePath);
-
-            if (!detected) {
-                console.log(`[Move Folder Pictures] No date for ${filename}, skipping`);
-                skipped++;
-                continue;
-            }
-
-            const { year, month } = detected;
-            const targetDir = path.join(localDir, 'pictures', year, month ?? '01');
-            const naiveTarget = path.join(targetDir, filename);
-
-            if (filePath.toLowerCase() === naiveTarget.toLowerCase()) {
-                skipped++;
-                continue;
-            }
-
             try {
-                const { finalPath, isDuplicate } = await resolveTargetPath(filePath, targetDir, deletedDir);
-                const destDir = path.dirname(finalPath);
-                if (!fs.existsSync(destDir)) await fs.promises.mkdir(destDir, { recursive: true });
-                sourceDirs.add(path.dirname(filePath));
-                await fs.promises.rename(filePath, finalPath);
-                if (isDuplicate) {
-                    console.log(`[Move Folder Pictures] Duplicate ${filename} → _deleted`);
+                const r = await reimportMediaFile(filePath, liveDirs);
+                if (r.status === 'moved') {
+                    console.log(`[Reimport Media] Moved ${filename} → ${r.root}/${r.year}/${r.month}`);
+                    moved++;
+                } else if (r.status === 'duplicate') {
+                    console.log(`[Reimport Media] Duplicate ${filename} → ${r.root}/_deleted`);
                     duplicates++;
                 } else {
-                    console.log(`[Move Folder Pictures] Moved ${filename} → ${year}/${month}`);
-                    moved++;
+                    if (r.status === 'no-date') console.log(`[Reimport Media] No date for ${filename}, skipping`);
+                    skipped++;
                 }
             } catch (e) {
-                console.error(`[Move Folder Pictures] Failed to move ${filename}:`, e.message);
+                console.error(`[Reimport Media] Failed to move ${filename}:`, e.message);
                 failed++;
-            }
-        }
-
-        // Clean up empty source directories up to the pictures root
-        for (const dir of [...sourceDirs].sort((a, b) => b.length - a.length)) {
-            let currentDir = dir;
-            while (currentDir.length > picturesRoot.length && currentDir.startsWith(picturesRoot)) {
-                try {
-                    const remaining = await fs.promises.readdir(currentDir);
-                    if (remaining.length === 0) {
-                        await fs.promises.rmdir(currentDir);
-                        currentDir = path.dirname(currentDir);
-                    } else {
-                        break;
-                    }
-                } catch (e) {
-                    break;
-                }
             }
         }
 
