@@ -10790,6 +10790,11 @@ async function openFileInfoModal(trackData) {
             return value + ' fps';
         }
         if (key === 'common.date' && value) {
+            // A day with no time (e.g. an AVI's creation date) — show just the day, read as local
+            const dayOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value));
+            if (dayOnly) {
+                return new Date(+dayOnly[1], +dayOnly[2] - 1, +dayOnly[3]).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+            }
             try {
                 const d = new Date(value);
                 if (!isNaN(d.getTime())) {

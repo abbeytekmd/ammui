@@ -5909,7 +5909,7 @@ app.post('/api/slideshow/set-date', async (req, res) => {
         }
     }
     if (!['.jpg', '.jpeg'].includes(ext)) {
-        return res.status(422).json({ error: 'Date editing is only supported for JPEG photos and MP4/MOV/MKV/WebM videos' });
+        return res.status(422).json({ error: 'Date editing is only supported for JPEG photos and MP4/MOV/MKV/WebM/AVI videos' });
     }
 
     try {
@@ -5929,11 +5929,12 @@ app.post('/api/slideshow/set-date', async (req, res) => {
     }
 });
 
-const VIDEO_DATE_EXTS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm']);
+const VIDEO_DATE_EXTS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm', '.avi']);
 
 // Sets a video's recorded date (container + stream creation_time, and Apple's own
 // creationdate tag) with an ffmpeg stream copy — no re-encode. A bare day keeps the
-// clip's existing local time of day. Apple's timed-metadata tracks are dropped because
+// clip's existing local time of day. AVI can only hold a day, in its INFO creation-date
+// (ICRD) tag, which ffmpeg calls "date". Apple's timed-metadata tracks are dropped because
 // copied ones leave a file music-metadata (which dates the library) can't parse; the
 // Apple make/model/identifier tags themselves are kept. Returns the new ISO time.
 async function writeVideoCreationDate(filePath, day, dateObj) {
@@ -5947,13 +5948,17 @@ async function writeVideoCreationDate(filePath, day, dateObj) {
     const iso = when.toISOString().replace(/\.\d{3}Z$/, '.000000Z');
     const ext = path.extname(filePath);
     const isMov = ['.mp4', '.m4v', '.mov'].includes(ext.toLowerCase());
+    const isAvi = ext.toLowerCase() === '.avi';
+    const p = n => String(n).padStart(2, '0');
+    const localDay = `${when.getFullYear()}-${p(when.getMonth() + 1)}-${p(when.getDate())}`;
     const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath, ext)}.dating${ext}`);
     const args = [
         '-v', 'error', '-y', '-i', filePath,
         '-map', '0', '-map', '-0:d', '-c', 'copy', '-map_metadata', '0',
         ...(isMov ? ['-movflags', 'use_metadata_tags',
             '-metadata', `com.apple.quicktime.creationdate=${iso.replace(/\.\d+Z$/, '+0000')}`] : []),
-        '-metadata', `creation_time=${iso}`, '-metadata:s', `creation_time=${iso}`,
+        ...(isAvi ? ['-metadata', `date=${localDay}`]
+            : ['-metadata', `creation_time=${iso}`, '-metadata:s', `creation_time=${iso}`]),
         tmp
     ];
     await new Promise((resolve, reject) => {
@@ -5969,7 +5974,7 @@ async function writeVideoCreationDate(filePath, day, dateObj) {
         await fsp.unlink(tmp).catch(() => { });
         throw new Error(e.code === 'EBUSY' || e.code === 'EPERM' ? 'The video is in use (playing?) — close it and try again' : e.message);
     }
-    return iso;
+    return isAvi ? localDay : iso;
 }
 
 // Writes the capture-date EXIF fields (DateTime / DateTimeOriginal / DateTimeDigitized)
@@ -7329,7 +7334,8 @@ async function getVideoMetadata(uri) {
         // Report the size as it's displayed, so portrait phone clips read as portrait
         const swap = Math.abs(rotation) % 180 === 90;
         // Files rewritten with use_metadata_tags carry the tag twice, which ffprobe joins with ';'
-        const created = String(fmt.tags?.creation_time || v.tags?.creation_time || '').split(';')[0];
+        // AVI keeps its creation date in the INFO "date" (ICRD) tag instead
+        const created = String(fmt.tags?.creation_time || v.tags?.creation_time || fmt.tags?.date || '').split(';')[0];
         const tag = k => fmt.tags?.[k] || fmt.tags?.[k.toUpperCase()] || undefined;
         return {
             common: {
@@ -8425,7 +8431,17 @@ async function detectPictureDate(localPath, { hintFilename, hintSegments, useBir
                 const result = dateToYearMonth(format.creationTime);
                 if (result) return result;
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            // music-metadata can't read AVI (and some other containers) — ask ffprobe
+            const tags = (await probeVideoDetails(localPath))?.format?.tags || {};
+            const raw = String(tags.creation_time || tags.date || '').split(';')[0];
+            const ymd = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+            const d = ymd ? new Date(+ymd[1], +ymd[2] - 1, +ymd[3], 12) : new Date(raw);
+            if (d.getFullYear() >= 1990) {
+                const result = dateToYearMonth(d);
+                if (result) return result;
+            }
+        }
     }
 
     // 2. Date in filename
