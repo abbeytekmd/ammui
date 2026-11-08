@@ -5898,8 +5898,18 @@ app.post('/api/slideshow/set-date', async (req, res) => {
     }
 
     const ext = path.extname(filePath).toLowerCase();
+    if (VIDEO_DATE_EXTS.has(ext)) {
+        try {
+            const written = await writeVideoCreationDate(filePath, ymd ? { y: +ymd[1], m: +ymd[2], d: +ymd[3] } : null, dateObj);
+            console.log(`[SET-DATE] Updated video creation time for ${filePath} to ${written}`);
+            return res.json({ success: true, date: written });
+        } catch (err) {
+            console.error('[SET-DATE]', err);
+            return res.status(500).json({ error: err.message });
+        }
+    }
     if (!['.jpg', '.jpeg'].includes(ext)) {
-        return res.status(422).json({ error: 'EXIF date editing only supported for JPEG files' });
+        return res.status(422).json({ error: 'Date editing is only supported for JPEG photos and MP4/MOV/MKV/WebM videos' });
     }
 
     try {
@@ -5918,6 +5928,49 @@ app.post('/api/slideshow/set-date', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
+const VIDEO_DATE_EXTS = new Set(['.mp4', '.m4v', '.mov', '.mkv', '.webm']);
+
+// Sets a video's recorded date (container + stream creation_time, and Apple's own
+// creationdate tag) with an ffmpeg stream copy — no re-encode. A bare day keeps the
+// clip's existing local time of day. Apple's timed-metadata tracks are dropped because
+// copied ones leave a file music-metadata (which dates the library) can't parse; the
+// Apple make/model/identifier tags themselves are kept. Returns the new ISO time.
+async function writeVideoCreationDate(filePath, day, dateObj) {
+    let when = dateObj;
+    if (day) {
+        when = new Date(day.y, day.m - 1, day.d, 12, 0, 0);
+        const probe = await probeVideoDetails(filePath);
+        const old = new Date(String(probe?.format?.tags?.creation_time || '').split(';')[0]);
+        if (!isNaN(old.getTime())) when.setHours(old.getHours(), old.getMinutes(), old.getSeconds(), 0);
+    }
+    const iso = when.toISOString().replace(/\.\d{3}Z$/, '.000000Z');
+    const ext = path.extname(filePath);
+    const isMov = ['.mp4', '.m4v', '.mov'].includes(ext.toLowerCase());
+    const tmp = path.join(path.dirname(filePath), `.${path.basename(filePath, ext)}.dating${ext}`);
+    const args = [
+        '-v', 'error', '-y', '-i', filePath,
+        '-map', '0', '-map', '-0:d', '-c', 'copy', '-map_metadata', '0',
+        ...(isMov ? ['-movflags', 'use_metadata_tags',
+            '-metadata', `com.apple.quicktime.creationdate=${iso.replace(/\.\d+Z$/, '+0000')}`] : []),
+        '-metadata', `creation_time=${iso}`, '-metadata:s', `creation_time=${iso}`,
+        tmp
+    ];
+    await new Promise((resolve, reject) => {
+        const proc = spawn('ffmpeg', args, { windowsHide: true });
+        let stderr = '';
+        proc.stderr.on('data', d => { stderr += d.toString(); });
+        proc.on('error', e => reject(new Error(e.code === 'ENOENT' ? 'FFmpeg is needed to change a video\'s date' : e.message)));
+        proc.on('close', code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(-200)}`)));
+    });
+    try {
+        await fsp.rename(tmp, filePath);
+    } catch (e) {
+        await fsp.unlink(tmp).catch(() => { });
+        throw new Error(e.code === 'EBUSY' || e.code === 'EPERM' ? 'The video is in use (playing?) — close it and try again' : e.message);
+    }
+    return iso;
+}
 
 // Writes the capture-date EXIF fields (DateTime / DateTimeOriginal / DateTimeDigitized)
 // on a JPEG at 00:00:00 of the given day. Returns the date as "YYYY-MM-DD".
@@ -7275,7 +7328,8 @@ async function getVideoMetadata(uri) {
         const rotation = Number(v.tags?.rotate ?? v.side_data_list?.find(s => s.rotation !== undefined)?.rotation ?? 0);
         // Report the size as it's displayed, so portrait phone clips read as portrait
         const swap = Math.abs(rotation) % 180 === 90;
-        const created = fmt.tags?.creation_time || v.tags?.creation_time;
+        // Files rewritten with use_metadata_tags carry the tag twice, which ffprobe joins with ';'
+        const created = String(fmt.tags?.creation_time || v.tags?.creation_time || '').split(';')[0];
         const tag = k => fmt.tags?.[k] || fmt.tags?.[k.toUpperCase()] || undefined;
         return {
             common: {

@@ -11002,7 +11002,8 @@ async function openFileInfoModal(trackData) {
 
             const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
             const editFieldMap = { 'Title': 'title', 'Artist': 'artist', 'Album Artist': 'albumartist', 'Album': 'album', 'Track No.': 'trackno', 'Track Count': 'trackof', 'Year': 'year' };
-            const isEditable = ((f.label in editFieldMap) || f.label === 'Created') && isLocalFile;
+            const isDateField = f.label === 'Created' || f.label === 'Recorded';
+            const isEditable = ((f.label in editFieldMap) || isDateField) && isLocalFile;
             const editField = editFieldMap[f.label];
             // "Copy to all tracks in this folder" only makes sense for album-level fields
             const canCopyToFolder = editField === 'artist' || editField === 'album' || editField === 'albumartist' || editField === 'trackof' || editField === 'year';
@@ -11010,14 +11011,16 @@ async function openFileInfoModal(trackData) {
             let editCell;
             if (!isEditable) {
                 editCell = `<div class="metadata-cell metadata-value-cell secondary ${mismatchClass}">${eVal}${mismatchIcon}</div>`;
-            } else if (f.label === 'Created') {
+            } else if (isDateField) {
                 let dateInputVal = '';
                 if (eValRaw) {
                     // A plain YYYY-MM-DD[...] value is a timezone-less capture date —
                     // take the date part verbatim. Only fall back to Date parsing for
-                    // other shapes, and then read local components (never toISOString,
+                    // other shapes (including UTC video timestamps ending in Z or an
+                    // offset), and then read local components (never toISOString,
                     // which shifts the day in UTC+ timezones).
-                    const dm = String(eValRaw).match(/^(\d{4}-\d{2}-\d{2})/);
+                    const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(String(eValRaw));
+                    const dm = !hasZone && String(eValRaw).match(/^(\d{4}-\d{2}-\d{2})/);
                     if (dm) {
                         dateInputVal = dm[1];
                     } else {
