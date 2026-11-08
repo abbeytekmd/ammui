@@ -10786,6 +10786,9 @@ async function openFileInfoModal(trackData) {
             };
             return labels[value] ? `${value} — ${labels[value]}` : String(value);
         }
+        if (key === 'format.frameRate' && typeof value === 'number') {
+            return value + ' fps';
+        }
         if (key === 'common.date' && value) {
             try {
                 const d = new Date(value);
@@ -10800,11 +10803,15 @@ async function openFileInfoModal(trackData) {
     const isImage = (trackData.class && trackData.class.includes('imageItem')) ||
         (trackData.protocolInfo && trackData.protocolInfo.includes('image/')) ||
         (embeddedMeta && embeddedMeta.format && embeddedMeta.format.isImage);
+    const isVideo = !isImage && (
+        (trackData.class && trackData.class.includes('videoItem')) ||
+        (trackData.protocolInfo && trackData.protocolInfo.includes('video/')) ||
+        (embeddedMeta && embeddedMeta.format && embeddedMeta.format.isVideo));
 
     // "Identify with AcoustID" only applies to local audio files
     const acoustidBar = document.getElementById('acoustid-bar');
     if (acoustidBar) {
-        const showAcoustid = !isImage && trackData.uri && trackData.uri.includes('/local-files/');
+        const showAcoustid = !isImage && !isVideo && trackData.uri && trackData.uri.includes('/local-files/');
         acoustidBar.style.display = showAcoustid ? 'flex' : 'none';
         const acoustidBtn = document.getElementById('acoustid-btn');
         if (acoustidBtn) { acoustidBtn.disabled = false; acoustidBtn.classList.remove('is-busy'); }
@@ -10817,8 +10824,6 @@ async function openFileInfoModal(trackData) {
     // Manual video lookup applies to any titled audio track
     const videoBar = document.getElementById('video-lookup-bar');
     if (videoBar) {
-        const isVideo = (trackData.class && trackData.class.includes('videoItem')) ||
-            (trackData.protocolInfo && trackData.protocolInfo.includes('video/'));
         videoBar.style.display = (!isImage && !isVideo && trackData.title) ? 'flex' : 'none';
     }
 
@@ -10858,6 +10863,29 @@ async function openFileInfoModal(trackData) {
                 { label: 'Make', sKey: '', eKey: 'common.make' },
                 { label: 'Model', sKey: '', eKey: 'common.model' },
                 { label: 'Software', sKey: '', eKey: 'common.software' }
+            ]
+        }
+    ] : isVideo ? [
+        {
+            title: 'Video Information',
+            fields: [
+                { label: 'Name', sKey: 'title', eKey: 'common.title' },
+                { label: 'Recorded', sKey: 'date', eKey: 'common.date' },
+                { label: 'Duration', sKey: 'duration', eKey: 'format.duration' },
+                { label: 'Width', sKey: 'width', eKey: 'format.width' },
+                { label: 'Height', sKey: 'height', eKey: 'format.height' },
+                { label: 'Frame Rate', sKey: '', eKey: 'format.frameRate' },
+                { label: 'File Size', sKey: 'size', eKey: 'format.size' }
+            ]
+        },
+        {
+            title: 'Technical Specs',
+            fields: [
+                { label: 'Container', sKey: '', eKey: 'format.container' },
+                { label: 'Video Codec', sKey: '', eKey: 'format.codec' },
+                { label: 'Audio Codec', sKey: '', eKey: 'format.audioCodec' },
+                { label: 'Bitrate', sKey: 'bitrate', eKey: 'format.bitrate' },
+                { label: 'Audio Channels', sKey: 'channels', eKey: 'format.numberOfChannels' }
             ]
         }
     ] : [
@@ -10931,6 +10959,9 @@ async function openFileInfoModal(trackData) {
                     if (Math.abs(sSec - eSec) > 1.1) {
                         isMismatch = true;
                     }
+                } else if (f.label === 'Recorded') {
+                    // Different sources give the same day with or without a time part
+                    isMismatch = String(sValRaw).slice(0, 10) !== String(eValRaw).slice(0, 10);
                 } else {
                     const ns = normalizeForComparison(sValRaw);
                     const ne = normalizeForComparison(eValRaw);

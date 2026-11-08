@@ -2073,6 +2073,26 @@ function probeVideoCodec(srcPath) {
     });
 }
 
+// Full ffprobe report (format + streams) for the File Information panel, or null if
+// ffprobe is missing or can't read the source. Works on local paths and http URLs.
+function probeVideoDetails(src) {
+    return new Promise(resolve => {
+        let proc;
+        try {
+            proc = spawn('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', src], { windowsHide: true });
+        } catch (e) { return resolve(null); }
+        let out = '';
+        const timer = setTimeout(() => { try { proc.kill(); } catch (e) { } }, 15000);
+        proc.stdout.on('data', d => { out += d.toString(); });
+        proc.stderr.on('data', () => { });
+        proc.on('error', () => { clearTimeout(timer); resolve(null); });
+        proc.on('close', () => {
+            clearTimeout(timer);
+            try { resolve(JSON.parse(out)); } catch (e) { resolve(null); }
+        });
+    });
+}
+
 app.get('/api/video/playable', async (req, res) => {
     const rawUri = req.query.uri;
     if (!rawUri) return res.status(400).send('Missing uri');
@@ -7227,9 +7247,80 @@ function exifDateToWallClock(d) {
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
+// Video details for the File Information panel. ffprobe reads only the headers it needs
+// (instead of downloading the whole file); without ffprobe, local files fall back to
+// music-metadata, which still gives duration and codec.
+async function getVideoMetadata(uri) {
+    let src = uri;
+    if (uri.startsWith('http')) {
+        const local = localFileForKey(mediaKey(uri));
+        if (local && fs.existsSync(local)) src = local;
+    } else if (!fs.existsSync(src)) {
+        const absoluteLocal = path.join(__dirname, 'local', uri);
+        if (fs.existsSync(absoluteLocal)) src = absoluteLocal;
+    }
+    const isLocal = !src.startsWith('http');
+    const title = decodeURIComponent(path.basename(src.split('?')[0]));
+    const size = isLocal ? (await fs.promises.stat(src).catch(() => null))?.size : undefined;
+
+    const probe = await probeVideoDetails(src);
+    if (probe?.format) {
+        const streams = probe.streams || [];
+        const v = streams.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic) || {};
+        const a = streams.find(s => s.codec_type === 'audio') || {};
+        const fmt = probe.format;
+        let frameRate;
+        const [num, den] = String(v.avg_frame_rate || v.r_frame_rate || '').split('/').map(Number);
+        if (num && den) frameRate = Math.round((num / den) * 100) / 100;
+        const rotation = Number(v.tags?.rotate ?? v.side_data_list?.find(s => s.rotation !== undefined)?.rotation ?? 0);
+        // Report the size as it's displayed, so portrait phone clips read as portrait
+        const swap = Math.abs(rotation) % 180 === 90;
+        const created = fmt.tags?.creation_time || v.tags?.creation_time;
+        const tag = k => fmt.tags?.[k] || fmt.tags?.[k.toUpperCase()] || undefined;
+        return {
+            common: {
+                title: tag('title') || title,
+                ...(created ? { date: created } : {}),
+                ...(tag('artist') ? { artist: tag('artist') } : {}),
+                ...(tag('album') ? { album: tag('album') } : {}),
+                ...(tag('album_artist') ? { albumartist: tag('album_artist') } : {})
+            },
+            format: {
+                isVideo: true,
+                container: (fmt.format_long_name || fmt.format_name || '').split(',')[0] || undefined,
+                codec: v.codec_long_name || v.codec_name,
+                audioCodec: a.codec_long_name || a.codec_name,
+                width: swap ? v.height : v.width,
+                height: swap ? v.width : v.height,
+                frameRate,
+                duration: fmt.duration ? Number(fmt.duration) : undefined,
+                bitrate: fmt.bit_rate ? Number(fmt.bit_rate) : undefined,
+                size: size ?? (fmt.size ? Number(fmt.size) : undefined),
+                numberOfChannels: a.channels,
+                sampleRate: a.sample_rate ? Number(a.sample_rate) : undefined
+            }
+        };
+    }
+
+    if (!isLocal) return { common: { title }, format: { isVideo: true } };
+    const mmMeta = await mm.parseFile(src).catch(() => null);
+    return {
+        common: { ...(mmMeta?.common || {}), title: mmMeta?.common?.title || title },
+        format: {
+            isVideo: true,
+            container: mmMeta?.format?.container,
+            codec: mmMeta?.format?.codec,
+            duration: mmMeta?.format?.duration,
+            bitrate: mmMeta?.format?.bitrate,
+            size
+        }
+    };
+}
+
 async function getTrackMetadata(uri) {
     if (!uri) throw new Error('URI is required');
     const isImage = /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(uri);
+    if (/\.(mp4|m4v|mov|webm|mkv|avi|3gp|mts|m2ts|wmv|mpg|mpeg)(\?|$)/i.test(uri)) return getVideoMetadata(uri);
     let metadata;
 
     if (uri.startsWith('http')) {
@@ -7365,6 +7456,9 @@ app.get('/api/track-metadata', async (req, res) => {
                 height: metadata.format.height,
                 size: metadata.format.size,
                 isImage: metadata.format.isImage,
+                isVideo: metadata.format.isVideo,
+                audioCodec: metadata.format.audioCodec,
+                frameRate: metadata.format.frameRate,
                 latitude: metadata.format.latitude,
                 longitude: metadata.format.longitude,
                 orientation: metadata.format.orientation
