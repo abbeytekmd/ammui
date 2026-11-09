@@ -66,6 +66,7 @@ import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_P
 import { MEDIA_SERVICE, MEDIA_SERVICE_VERSION, ShareRules, cleanLibraryPath, mediaServiceRouter, PeerMediaServer, mountPeerMediaRoutes } from './lib/peer-services/media.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
+import { getTickerHeadlines, getTickerStory, cleanFeedUrl, DEFAULT_TICKER_FEEDS } from './lib/news-ticker.js';
 import http from 'http';
 import https from 'https';
 import net from 'net';
@@ -244,6 +245,11 @@ let settings = {
         lat: null,
         lon: null
     },
+    // A news ticker along the top of the slideshow, from RSS or Atom feeds
+    slideshowTicker: {
+        enabled: false,
+        feeds: DEFAULT_TICKER_FEEDS
+    },
     supermarket: '', // id from SUPERMARKETS whose own products picture the shopping list ('' = any)
     shoppingEmail: '', // where the Email button on the shopping list sends it
     passwordsEmail: '', // where the Passwords tab's Email buttons send an entry ('' = the shopping list's address)
@@ -331,6 +337,7 @@ function loadSettings() {
         sound: savedVideos.sound ?? settings.slideshowVideos.sound
     };
     settings.slideshowSky = { ...settings.slideshowSky, ...(getSetting('slideshowSky', {}) || {}) };
+    settings.slideshowTicker = { ...settings.slideshowTicker, ...(getSetting('slideshowTicker', {}) || {}) };
     settings.supermarket = getSetting('supermarket', '') || '';
     settings.shoppingEmail = getSetting('shoppingEmail', '') || '';
     settings.passwordsEmail = getSetting('passwordsEmail', '') || '';
@@ -369,6 +376,7 @@ function saveSettings() {
     setSetting('slideshowPhotoSeconds', settings.slideshowPhotoSeconds);
     setSetting('slideshowVideos', settings.slideshowVideos);
     setSetting('slideshowSky', settings.slideshowSky);
+    setSetting('slideshowTicker', settings.slideshowTicker);
     setSetting('supermarket', settings.supermarket);
     setSetting('shoppingEmail', settings.shoppingEmail);
     setSetting('passwordsEmail', settings.passwordsEmail);
@@ -3548,6 +3556,7 @@ app.get('/api/settings/general', (req, res) => {
         slideshowPhotoSeconds: settings.slideshowPhotoSeconds,
         slideshowVideos: settings.slideshowVideos,
         slideshowSky: settings.slideshowSky,
+        slideshowTicker: settings.slideshowTicker,
         supermarket: settings.supermarket,
         supermarkets: SUPERMARKETS.map(({ id, name }) => ({ id, name })),
         shoppingEmail: settings.shoppingEmail,
@@ -3592,6 +3601,18 @@ app.post('/api/settings/general', express.json(), (req, res) => {
             if (blank(sky.lat) && blank(sky.lon)) Object.assign(settings.slideshowSky, { lat: null, lon: null });
             else if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) Object.assign(settings.slideshowSky, { lat, lon });
             else return res.status(400).json({ error: 'Latitude must be -90 to 90 and longitude -180 to 180' });
+        }
+        saveSettings();
+    }
+    // Slideshow news ticker: on/off and its feeds (up to 10)
+    const ticker = req.body.slideshowTicker;
+    if (ticker && typeof ticker === 'object') {
+        if (typeof ticker.enabled === 'boolean') settings.slideshowTicker.enabled = ticker.enabled;
+        if (Array.isArray(ticker.feeds)) {
+            const feeds = ticker.feeds.map(f => String(f || '').trim()).filter(Boolean);
+            const bad = feeds.find(f => !cleanFeedUrl(f));
+            if (bad) return res.status(400).json({ error: `${bad} isn't a web address` });
+            settings.slideshowTicker.feeds = [...new Set(feeds.map(cleanFeedUrl))].slice(0, 10);
         }
         saveSettings();
     }
@@ -3698,7 +3719,22 @@ app.delete('/api/calendars/:id', (req, res) => {
     res.json({ success: true });
 });
 
+// Headlines for the slideshow's news ticker
+app.get('/api/news-ticker', async (req, res) => {
+    const { enabled, feeds } = settings.slideshowTicker;
+    if (!enabled || !feeds.length) return res.json({ headlines: [] });
+    res.json({ headlines: await getTickerHeadlines(feeds) });
+});
+
+// A ticker headline's story, from its page. ?link= must be a link the ticker's feeds gave.
+app.get('/api/news-ticker/story', async (req, res) => {
+    const story = await getTickerStory(String(req.query.link || ''));
+    if (!story) return res.status(404).json({ error: 'That story is no longer in the news ticker' });
+    res.json(story);
+});
+
 // ?start=YYYY-MM-DD&end=YYYY-MM-DD (end exclusive)
+
 app.get('/api/calendars/events', async (req, res) => {
     const start = new Date(`${req.query.start}T00:00:00`);
     const end = new Date(`${req.query.end}T00:00:00`);

@@ -12424,7 +12424,7 @@ async function saveShoppingEmail() {
     }
 }
 
-function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos, slideshowSky }) {
+function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, slideshowVideos, slideshowSky, slideshowTicker }) {
     document.getElementById('slideshow-idle-input').value = slideshowIdleSeconds;
     document.getElementById('slideshow-photo-input').value = slideshowPhotoSeconds;
     if (slideshowVideos) {
@@ -12439,6 +12439,11 @@ function applySlideshowSettings({ slideshowIdleSeconds, slideshowPhotoSeconds, s
         document.getElementById('slideshow-sky-lat-input').value = slideshowSky.lat ?? '';
         document.getElementById('slideshow-sky-lon-input').value = slideshowSky.lon ?? '';
         if (slideshow) slideshow.setSkyOptions(slideshowSky);
+    }
+    if (slideshowTicker) {
+        document.getElementById('slideshow-ticker-input').checked = slideshowTicker.enabled;
+        document.getElementById('slideshow-ticker-feeds-input').value = (slideshowTicker.feeds || []).join('\n');
+        if (slideshow) slideshow.setTickerOptions(slideshowTicker);
     }
     if (slideshow) slideshow.setTimings(slideshowIdleSeconds, slideshowPhotoSeconds);
 }
@@ -12468,7 +12473,11 @@ async function saveSlideshowSettings() {
                     maxSeconds: videoSeconds,
                     sound: document.getElementById('slideshow-video-sound-input').checked
                 },
-                slideshowSky: sky
+                slideshowSky: sky,
+                slideshowTicker: {
+                    enabled: document.getElementById('slideshow-ticker-input').checked,
+                    feeds: document.getElementById('slideshow-ticker-feeds-input').value.split(/\r?\n/).map(f => f.trim()).filter(Boolean)
+                }
             })
         });
         const data = await response.json().catch(() => ({}));

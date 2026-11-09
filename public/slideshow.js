@@ -66,6 +66,9 @@ class Slideshow {
         this.resumeMode = null;
         this.listVersion = null; // server delete-version of this.items when it came from a Day/Recent/Favs list, else null
         this.browserOpen = false; // grid of this.items is showing; the slideshow is paused under it
+        this.ticker = null; // the news ticker's settings (slideshowTicker)
+        this.tickerEl = document.getElementById('ss-ticker');
+        this.tickerKey = ''; // the headlines the ticker is showing, so a reload that changes nothing doesn't restart it
     }
 
     init() {
@@ -157,6 +160,59 @@ class Slideshow {
         else if (this.skyShowing) showSkySlide(sky); // looking another way, or turning now
         this.updateSkyButton();
         if (this.isActive) { this.loadSun(); this.checkSunsetSky(); }
+    }
+
+    // From the General settings: the news ticker (slideshowTicker)
+    setTickerOptions(ticker) {
+        const feedsChanged = JSON.stringify(ticker?.feeds) !== JSON.stringify(this.ticker?.feeds);
+        this.ticker = ticker;
+        if (!this.isActive) return;
+        if (!ticker?.enabled) this.showTicker([]);
+        else if (feedsChanged || !this.tickerKey) this.loadTicker();
+    }
+
+    async loadTicker() {
+        if (!this.ticker?.enabled || !this.tickerEl) return this.showTicker([]);
+        try {
+            const data = await fetch('/api/news-ticker').then(r => r.json());
+            if (this.isActive) this.showTicker(data.headlines || []);
+        } catch (err) {
+            console.warn('[SLIDESHOW] News ticker load failed:', err.message); // keeps what it was showing
+        }
+    }
+
+    // Scrolls the headlines from right to left at a steady speed, however many there are. The track
+    // holds them twice, so moving it left by half its width brings it back to where it started.
+    showTicker(headlines) {
+        const el = this.tickerEl;
+        if (!el) return;
+        this.tickerHeadlines = headlines; // what a tap on one opens (its summary shows straight away)
+        const key = JSON.stringify(headlines.map(h => [h.title, h.source]));
+        if (key === this.tickerKey) return;
+        this.tickerKey = headlines.length ? key : '';
+        const on = headlines.length > 0;
+        el.hidden = !on;
+        this.overlay?.classList.toggle('has-ticker', on);
+        const track = el.querySelector('.ss-ticker-track');
+        if (!track.onclick) {
+            // A tap on a headline opens its story
+            track.onclick = (e) => {
+                const item = e.target.closest('.ss-ticker-item');
+                if (!item) return;
+                e.stopPropagation();
+                const headline = this.tickerHeadlines?.[Number(item.dataset.index)];
+                if (headline) openTickerStory(headline);
+            };
+        }
+        if (!on) { track.innerHTML = ''; return; }
+        const sources = new Set(headlines.map(h => h.source).filter(Boolean));
+        const items = headlines.map((h, i) => `<span class="ss-ticker-item" data-index="${i}">${sources.size > 1 && h.source
+            ? `<b class="ss-ticker-source">${escapeHtml(h.source)}</b>` : ''}${escapeHtml(h.title)}</span>`).join('');
+        track.innerHTML = items + items;
+        track.style.animation = 'none';
+        const pxPerSecond = 90;
+        const seconds = Math.max(track.scrollWidth / 2 / pxPerSecond, 10); // reading its width lays it out, restarting the animation
+        track.style.animation = `ss-ticker-scroll ${seconds}s linear infinite`;
     }
 
     // For the set time after sunset the sky shows instead of the photos, and then they come back.
@@ -267,6 +323,9 @@ class Slideshow {
         this.loadShopping();
         clearInterval(this._agendaTimer);
         this._agendaTimer = setInterval(() => { this.loadAgenda(); this.loadShopping(); }, 15 * 60 * 1000);
+        this.loadTicker();
+        clearInterval(this._tickerTimer);
+        this._tickerTimer = setInterval(() => this.loadTicker(), 10 * 60 * 1000);
         this.loadSun();
         clearInterval(this._sunTimer);
         this._sunTimer = setInterval(() => { this.loadSun(); this.checkSunsetSky(); }, 60 * 1000);
@@ -296,6 +355,8 @@ class Slideshow {
         clearTimeout(this._modeRetryTimer);
         clearInterval(this._agendaTimer);
         clearInterval(this._sunTimer);
+        clearInterval(this._tickerTimer);
+        if (this.storyOpen) closeTickerStory();
         console.log('[SLIDESHOW] Stopping...');
         this._browserCurrentHidden = false;
         this.closeBrowser();
@@ -467,8 +528,9 @@ class Slideshow {
         if (this.interval) clearInterval(this.interval);
         // A playing video moves the slideshow on itself, when it ends or runs out of time
         const videoPlaying = this.slideIsVideo && this.videoShowing && !this.video.ended;
-        // A zoomed-in photo stays up until it's tapped back out, and the photos wait while the sky is up
-        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed && !this.skyShowing) {
+        // A zoomed-in photo stays up until it's tapped back out, and the photos wait while the sky
+        // or a news story is up
+        if (this.isActive && this.duration > 0 && !videoPlaying && !this.zoomed && !this.skyShowing && !this.storyOpen) {
             this.interval = setInterval(() => this.next(), this.duration);
         }
     }
@@ -1608,6 +1670,82 @@ class Slideshow {
 // Global instance
 slideshow = new Slideshow();
 slideshow.init();
+
+// --- A news ticker headline's story, in a modal over the slideshow. The feed's summary shows at
+// once, then the opening paragraphs from the story's page replace it when they arrive. The photos
+// and the ticker wait while it's open, and it closes itself after a while untouched. ---
+const TICKER_STORY_IDLE_MS = 2 * 60 * 1000;
+let tickerStoryLink = null;
+let tickerStoryTimer = null;
+
+function tickerStoryTouched() {
+    clearTimeout(tickerStoryTimer);
+    tickerStoryTimer = setTimeout(closeTickerStory, TICKER_STORY_IDLE_MS);
+}
+
+function renderTickerStory(story, loading) {
+    const modal = document.getElementById('ticker-story-modal');
+    const when = story.date ? new Date(story.date) : null;
+    const meta = [story.source, when && !isNaN(when)
+        ? when.toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '']
+        .filter(Boolean).map(escapeHtml).join(' · ');
+    modal.querySelector('.ticker-story-meta').innerHTML = meta;
+    modal.querySelector('.ticker-story-title').textContent = story.title;
+    const img = modal.querySelector('.ticker-story-image');
+    if (story.image) {
+        if (img.getAttribute('src') !== story.image) img.src = story.image;
+        img.hidden = false;
+    } else {
+        img.hidden = true;
+        img.removeAttribute('src');
+    }
+    const paragraphs = story.paragraphs || [];
+    modal.querySelector('.ticker-story-body').innerHTML =
+        (story.summary ? `<p class="ticker-story-standfirst">${escapeHtml(story.summary)}</p>` : '') +
+        paragraphs.map(p => `<p>${escapeHtml(p)}</p>`).join('') +
+        (loading ? '<div class="energy-loading"><span class="spinner"></span>Loading the story…</div>' : '') +
+        (!loading && !story.summary && !paragraphs.length ? '<p class="settings-hint">There\'s no summary of this story.</p>' : '');
+    const link = modal.querySelector('.ticker-story-link');
+    link.hidden = !story.link;
+    if (story.link) link.href = story.link;
+}
+
+async function openTickerStory(headline) {
+    const modal = document.getElementById('ticker-story-modal');
+    bringModalToFront('ticker-story-modal');
+    modal.style.display = 'flex';
+    modal.querySelector('.ticker-story-scroll').scrollTop = 0;
+    tickerStoryLink = headline.link;
+    renderTickerStory(headline, !!headline.link);
+    if (slideshow) {
+        slideshow.storyOpen = true;
+        slideshow.resetInterval();
+        slideshow.overlay?.classList.add('ticker-paused');
+    }
+    tickerStoryTouched();
+    if (!headline.link) return;
+    try {
+        const res = await fetch(`/api/news-ticker/story?link=${encodeURIComponent(headline.link)}`);
+        const story = await res.json();
+        if (!res.ok) throw new Error(story.error || `HTTP ${res.status}`);
+        if (tickerStoryLink === headline.link) renderTickerStory(story, false);
+    } catch (err) {
+        console.warn('[SLIDESHOW] News story load failed:', err.message);
+        if (tickerStoryLink === headline.link) renderTickerStory(headline, false);
+    }
+}
+
+function closeTickerStory() {
+    clearTimeout(tickerStoryTimer);
+    tickerStoryLink = null;
+    const modal = document.getElementById('ticker-story-modal');
+    if (modal) modal.style.display = 'none';
+    if (slideshow) {
+        slideshow.storyOpen = false;
+        slideshow.overlay?.classList.remove('ticker-paused');
+        slideshow.resetInterval();
+    }
+}
 
 // Compatibility wrappers for existing HTML/Logic
 function resetIdleTimer(e) { if (slideshow) slideshow.resetIdleTimer(e); }
