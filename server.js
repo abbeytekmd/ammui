@@ -16,7 +16,7 @@ import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { advertiseLocalName, localNameFor } from './lib/local-name.js';
-import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer } from './lib/media-key.js';
+import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer, localMediaKey } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
 import { setupLocalDlna, listLibraryChildren, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName, isPlaceholderImage } from './lib/local-dlna-server.js';
@@ -36,6 +36,7 @@ import VirtualRenderer from './lib/virtual-renderer.js';
 import * as smartHome from './lib/smart-home/index.js';
 import * as energy from './lib/smart-home/glow.js';
 import * as tado from './lib/smart-home/tado.js';
+import * as homeConnect from './lib/smart-home/homeconnect.js';
 import * as fuelPrices from './lib/fuel-prices.js';
 import exifr from 'exifr';
 import {
@@ -430,6 +431,7 @@ loadSettings();
 smartHome.init({ getSetting, setSetting });
 energy.init({ getSetting, setSetting });
 tado.init({ getSetting, setSetting });
+homeConnect.init({ getSetting, setSetting });
 fuelPrices.init({ getSetting, setSetting, cachePath: path.join(baseDataDir, 'cache', 'fuel-prices.json') });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
@@ -7049,6 +7051,73 @@ app.delete('/api/tado/account', (req, res) => {
     res.json(tado.disconnect());
 });
 
+// Appliances: everything on a Bosch (Home Connect) account, through Home Connect's cloud API
+// (see lib/smart-home/homeconnect.js)
+app.get('/api/appliances', async (req, res) => {
+    res.json(await homeConnect.listAppliances());
+});
+
+// { on }: switch it on or off
+app.post('/api/appliances/:id/power', async (req, res) => {
+    try {
+        res.json({ appliance: await homeConnect.setPower(req.params.id, !!req.body?.on) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+// What can be chosen when starting one of its programs: temperature, spin, timer, delay...
+app.get('/api/appliances/:id/programs/:program/options', async (req, res) => {
+    try {
+        res.json({ options: await homeConnect.programOptions(req.params.id, req.params.program) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+// { key, value }: change one of its settings (a fridge's temperature, a hood's light...)
+app.post('/api/appliances/:id/settings', async (req, res) => {
+    try {
+        res.json({ appliance: await homeConnect.changeSetting(req.params.id, String(req.body?.key || ''), req.body?.value) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+// { program, options: { key: value } }: start a program (Remote Start must be on at the appliance)
+app.post('/api/appliances/:id/start', async (req, res) => {
+    try {
+        res.json({ appliance: await homeConnect.startProgram(req.params.id, req.body || {}) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.post('/api/appliances/:id/stop', async (req, res) => {
+    try {
+        res.json({ appliance: await homeConnect.stopProgram(req.params.id) });
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.get('/api/appliances/account', (req, res) => {
+    res.json(homeConnect.getAccount());
+});
+
+// { clientId, clientSecret? }: starts signing in; the reply has the link and code to confirm on Home Connect's site
+app.post('/api/appliances/connect', async (req, res) => {
+    try {
+        res.json(await homeConnect.startPairing(req.body || {}));
+    } catch (err) {
+        smartHomeError(res, err);
+    }
+});
+
+app.delete('/api/appliances/account', (req, res) => {
+    res.json(homeConnect.disconnect());
+});
+
 // Petrol prices near a place, from the government's Fuel Finder scheme (see lib/fuel-prices.js)
 app.get('/api/fuel', async (req, res) => {
     const lat = Number(req.query.lat), lon = Number(req.query.lon);
@@ -8140,6 +8209,44 @@ app.post('/api/file-tags', (req, res) => {
 
 app.get('/api/tags', (req, res) => {
     res.json({ tags: getAllTags() });
+});
+
+// { id, add: [tags], remove: [tags] }: adds tags to (or removes them from) every music file in a
+// folder of the library, and every folder inside it. Files already as asked are left alone.
+app.post('/api/local/folder-file-tags', express.json(), async (req, res) => {
+    const clean = list => [...new Set((Array.isArray(list) ? list : []).map(t => String(t).trim()).filter(Boolean))];
+    const add = clean(req.body?.add), remove = clean(req.body?.remove);
+    const { id } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    if (!add.length && !remove.length) return res.status(400).json({ error: 'Give a tag to add or remove' });
+    if ([...add, ...remove].some(t => t.length > 100)) return res.status(400).json({ error: 'Tags must be up to 100 characters' });
+
+    try {
+        const localDir = path.join(__dirname, 'local');
+        const folderPath = path.resolve(localDir, path.normalize(String(id)).replace(/^(\.\.(\/|\\|$))+/, ''));
+        if (!folderPath.startsWith(localDir + path.sep)) return res.status(403).json({ error: 'Access denied' });
+        if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) return res.status(404).json({ error: 'Folder not found' });
+
+        let files = 0, changed = 0;
+        for await (const filePath of walkByExt(folderPath, AUDIO_EXTS)) {
+            files++;
+            const key = localMediaKey(path.relative(localDir, filePath).split(path.sep).join('/'));
+            const before = settings.fileTags[key] || [];
+            const after = [...new Set([...before.filter(t => !remove.includes(t)), ...add])];
+            if (after.length === before.length && after.every(t => before.includes(t))) continue;
+            setFileTags(key, after);
+            if (after.length) settings.fileTags[key] = after;
+            else delete settings.fileTags[key];
+            changed++;
+        }
+
+        const what = [add.length ? `added ${add.join(', ')}` : '', remove.length ? `removed ${remove.join(', ')}` : ''].filter(Boolean).join('; ');
+        terminalLog(`[TAGS] Folder "${id}": ${what} on ${changed} of ${files} music files`);
+        res.json({ success: true, files, changed });
+    } catch (err) {
+        console.error('[TAGS] Folder tagging failed:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 

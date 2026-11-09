@@ -674,7 +674,7 @@
                         Voice
                     </button>
                     <button type="button" class="btn-control btn-small" onclick="openPlugSettings()"
-                        title="Find plugs, set the TP-Link and Bright logins and names">Manage Plugs</button>
+                        title="Find plugs, set the TP-Link, Bright, tado° and Home Connect logins and names">Manage Plugs</button>
                 </div>
             </div>
             <div id="smarthome-status" class="smarthome-status"></div>
@@ -693,6 +693,12 @@
                 <h3>Heating</h3>
                 <div id="smarthome-heating-status" class="smarthome-status"></div>
                 <div id="smarthome-heating-grid" class="smarthome-grid"></div>
+            </div>
+            <div id="smarthome-appliances" class="smarthome-section" hidden>
+                <div id="smarthome-appliances-banner" class="smarthome-banner appliances-banner" aria-hidden="true"></div>
+                <h3>Appliances</h3>
+                <div id="smarthome-appliances-status" class="smarthome-status"></div>
+                <div id="smarthome-appliances-grid" class="smarthome-grid"></div>
             </div>
         </section>
 
@@ -1959,6 +1965,23 @@
                             asked: room temperatures are refreshed every few minutes.</p>
                         <div id="tado-account" class="tado-account"></div>
                     </div>
+                    <div class="manage-section">
+                        <h3>Appliances (Bosch Home Connect)</h3>
+                        <p class="settings-hint">Shows Home Connect appliances (Bosch, Siemens, Neff...: dishwashers, ovens, washers, dryers, fridges, coffee machines, hoods...) on the Controls
+                            tab: what they're doing, how long is left, starting, stopping or switching them on and off, and changing their settings.
+                            Home Connect needs a client id of your own: register free at
+                            <a href="https://developer.home-connect.com" target="_blank" rel="noopener">developer.home-connect.com</a>,
+                            add an application with <strong>Device Flow</strong> as its OAuth flow, and paste its client id here.</p>
+                        <div class="settings-group">
+                            <label for="homeconnect-client-id">Client ID</label>
+                            <input type="text" id="homeconnect-client-id" autocomplete="off" spellcheck="false">
+                        </div>
+                        <div class="settings-group">
+                            <label for="homeconnect-client-secret">Client Secret (if the application has one)</label>
+                            <input type="password" id="homeconnect-client-secret" autocomplete="new-password">
+                        </div>
+                        <div id="homeconnect-account" class="tado-account"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2217,6 +2240,34 @@
     </div>
 
     <!-- Merge Into Modal -->
+    <div id="folder-tag-modal" class="modal-overlay" style="display: none;">
+        <div class="modal-content" style="max-width: 420px;">
+            <div class="modal-header">
+                <h2>Tag All Tracks</h2>
+                <button class="btn-close" onclick="closeFolderTagModal()">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div style="padding: 1.25rem 1.5rem 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                <p id="folder-tag-desc" class="settings-hint" style="margin: 0;"></p>
+                <div class="settings-group" style="gap: 0.4rem;">
+                    <label for="folder-tag-input">Tag</label>
+                    <input type="text" id="folder-tag-input" list="folder-tag-list" maxlength="100" placeholder="Type or pick a tag..." autocomplete="off" onkeydown="if(event.key==='Enter') applyFolderTag()">
+                    <datalist id="folder-tag-list"></datalist>
+                    <p class="settings-hint">The same tags as a track's info panel. Use <strong>fav</strong> to make them all favourites.</p>
+                </div>
+                <div style="display: flex; gap: 0.75rem; justify-content: flex-end; flex-wrap: wrap;">
+                    <button class="btn-control ghost" onclick="closeFolderTagModal()">Cancel</button>
+                    <button class="btn-control ghost" onclick="applyFolderTag(true)" title="Take this tag off every track in the folder">Remove From All</button>
+                    <button class="btn-control primary" onclick="applyFolderTag()">Add to All</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="merge-into-modal" class="modal-overlay" style="display: none;">
         <div class="modal-content" style="max-width: 420px;">
             <div class="modal-header">

@@ -29,6 +29,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Voice commands: say "play Wonderwall by Oasis", "queue the album Rumours", "next", "stop", "turn on the Christmas tree" (see [Voice Commands](#voice-commands)).
 * Switch TP-Link Tapo and Kasa smart plugs and Twinkly lights on and off, and dim Twinkly lights, from the Controls tab (see [Controls](#controls)). Plugs that measure power (such as the Tapo P110) show how many watts they're drawing.
 * See and change your tado° heating from the Controls tab: each room's temperature and humidity, what it's heating to, and its next scheduled change. Raise or lower a room, turn it off, or put it back on its schedule (see [Heating (tado°)](#heating-tado)).
+* See and control your Bosch (Home Connect) appliances from the Controls tab: dishwashers, ovens, washers, dryers, fridges, coffee machines, hoods, robots and more. See what each is doing, when it will be done, and its warnings; start a program with its temperature, spin, strength, timer or a delay, or stop it; and change settings such as a fridge's temperature (see [Appliances (Bosch Home Connect)](#appliances-bosch-home-connect)).
 * Set countdowns and on/off schedules that are kept on the plugs and lights themselves, so they run even when AMMUI is off. Each card has a clock face shaded for the hours it's scheduled on (see [Timers](#timers)).
 * See your home's electricity and gas use, and its cost, from your smart meter on the Energy tab: today so far, the last 7 days, last month and the last 12 months, compared with earlier weeks and months (via a free Bright account - see [Energy](#energy)). It shows your tariff too, and **Test a Tariff** works out whether a new deal would have been cheaper over the last 12 months (see [Test a Tariff](#test-a-tariff)).
 * Family calendar: a month view of shared calendars from Google Calendar or any other iCal feed, each in its own colour and easy to show or hide, alongside your own entries with repeats and colour-coded tags. Today's events can show next to the slideshow.
@@ -405,6 +406,42 @@ Good to know:
 * **Each server needs its own sign-in.** tado° replaces the sign-in every time it's used, so it isn't copied by **Copy Keys From Another Device**: two servers sharing one would sign each other out. If tado° signs a server out, the Controls tab says so and offers to connect again.
 * Heating can't be controlled by voice yet.
 
+### Appliances (Bosch Home Connect)
+
+If you have Bosch appliances (or Siemens, Neff, Gaggenau or other Home Connect ones), the Controls tab shows an **Appliances** section with a card for each: dishwashers, ovens, washing machines, dryers, washer-dryers, fridges and freezers, wine coolers, coffee machines, cooker hoods, hobs, cleaning robots, cook processors, warming drawers, and any other kind Home Connect adds. Each card shows:
+
+* whether it's off, ready, running, finished or offline, and any door that's open
+* while it's running: the program and its settings (such as *40°C · 1400 rpm*), when it'll be done, how long is left and a progress bar
+* for an oven: how hot it is inside, and how long it's been on when there's no timer
+* for a cleaning robot: its battery, and whether it's charging
+* warnings when the appliance gives them, such as *Salt low* (dishwashers), *i-Dos low* (washing machines), *Clean the filter* (dryers), *Water tank empty* (coffee machines), *Freezer door open* (fridges), *Stuck* (robots), *Clean the grease filter* (hoods) and *Preheated* (ovens)
+
+**On/Off** switches it on or off (an oven goes to standby). When it's on, pick a program and its settings and press **Start**; **Stop** cancels a program that's running or waiting to start, and **Send Home** sends a cleaning robot back to its dock. Every setting the appliance gives for the chosen program is offered, for example:
+
+* **Dishwashers:** start now or in up to 24 hours
+* **Ovens:** the temperature, and a timer if you want one
+* **Washing machines and dryers:** the temperature, spin speed or how dry, and when it should be done
+* **Coffee machines:** the strength, cup size and temperature
+* **Hoods:** the fan level
+
+The appliance's own settings are on its card too, and change as soon as you pick them: a fridge's and freezer's temperatures, Super cool, Super freeze, Eco and Holiday modes, and a hood's light are shown straight away; the rest (child lock, kitchen timer, cup warmer, lights and so on) are under **More settings**.
+
+Home Connect only lets an appliance be started remotely after **Remote Start** has been pressed on it, so the card says so until it has been. Hobs and cook processors can only be watched: Home Connect doesn't allow controlling them.
+
+To set it up you need a client id of your own from Home Connect (it's free):
+
+1. Sign up at [developer.home-connect.com](https://developer.home-connect.com) with the same email as your Home Connect app account.
+2. Under **Applications**, register a new application with **Device Flow** as its OAuth flow, and copy its **Client ID** (and **Client Secret** if it shows one).
+3. Open **Devices** from the menu, go to the **Controls** tab, paste them under **Appliances (Bosch Home Connect)** and press **Connect Home Connect**. Home Connect's sign-in page opens: log in there with your Home Connect app account and confirm the code it shows.
+
+**Disconnect** on the same tab removes it again (the client id is kept, so connecting again only needs the sign-in).
+
+Good to know:
+
+* **This goes through Home Connect's servers**, so it needs an internet connection and Home Connect's service to be up.
+* **Changes show up straight away.** AMMUI keeps a connection open to Home Connect, which tells it about every change as it happens, so it stays well within Home Connect's limit of 1000 requests a day.
+* The appliances can't be controlled by voice yet.
+
 ## Energy
 
 The **Energy** tab shows your electricity and gas use from your smart meter, with a card for each showing today so far and, side by side:
@@ -570,13 +607,14 @@ Browse the local server in **Music** mode to see the commands. Most of them are 
 | **Build Album** | Gathers scattered tracks that share an album title (for example a compilation split across artist folders), lets you tick which ones to include and choose the artist folder (`Various Artists` or one of the existing artists, or your own name), then moves them into one album folder. |
 | **Rename** | Renames the folder. If a folder with that name already exists you're asked whether to merge into it. |
 | **Merge Into** | Moves everything in this folder into another folder alongside it (pick from the suggestions or type a new name), for example to combine `The Beatles` and `Beatles`. |
-| **Reimport (Move to Tag Locations)** | Moves every track in the folder to `Artist/Album` folders that match its own tags, as a fresh import would. Exact duplicates are removed, and a different file already at the destination is left alone and reported as a failure. Empty folders left behind are cleaned up. |
-| **Identify Tags from Filename** | For files with missing or generic tags (blank, "Unknown", "Track"), guesses artist and title from the file name and confirms the guess against Discogs before writing the tags. Files that already have tags are untouched. Needs a Discogs token in Settings. |
-| **Sync File Tags** | Writes the folder names into the files: the album folder becomes the Album tag and the artist folder becomes the Artist tag, for every audio file inside. Use it after you've renamed or merged folders. This is the opposite direction to Reimport. |
+| **Reimport (Move to ID3 Tag Locations)** | Moves every track in the folder to `Artist/Album` folders that match its own tags, as a fresh import would. Exact duplicates are removed, and a different file already at the destination is left alone and reported as a failure. Empty folders left behind are cleaned up. |
+| **Identify ID3 Tags from Filename** | For files with missing or generic tags (blank, "Unknown", "Track"), guesses artist and title from the file name and confirms the guess against Discogs before writing the tags. Files that already have tags are untouched. Needs a Discogs token in Settings. |
+| **Tag All Tracks...** | Adds a tag (the kind set in a track's ⓘ panel, such as *fav* or *party*) to every track in the folder and the folders inside it, or **Remove From All** takes it off them all. Existing tags pick from a list as you type. These tags are AMMUI's own: nothing is written into the files. |
+| **Sync ID3 Tags** | Writes the folder names into the files: the album folder becomes the Album tag and the artist folder becomes the Artist tag, for every audio file inside. Use it after you've renamed or merged folders. This is the opposite direction to Reimport. |
 | **Delete** | Permanently deletes the file or folder from the library. There is no recycle bin for music. |
 | **Download** | Only appears for other servers' content (see above). |
 
-On a single track the menu also offers **Sync File Tags**, **Delete**, and, when the file's folder doesn't match its tags, **Move to Tag Location** (moves just that file, as Reimport does for a folder).
+On a single track the menu also offers **Sync ID3 Tags**, **Delete**, and, when the file's folder doesn't match its tags, **Move to ID3 Tag Location** (moves just that file, as Reimport does for a folder).
 
 ### File information panel (the ⓘ button on a track)
 
@@ -590,10 +628,10 @@ The ⓘ button turns red and pulses when a track's `Artist/Album` folders disagr
 ### A typical clean-up
 
 1. **Upload** or copy the new music in.
-2. On folders with untagged tracks, run **Identify Tags from Filename**, or open a track's ⓘ and **Identify with AcoustID**.
+2. On folders with untagged tracks, run **Identify ID3 Tags from Filename**, or open a track's ⓘ and **Identify with AcoustID**.
 3. Run **Reimport** on the folder so tracks land in the right `Artist/Album` folders.
 4. Use **Build Album** for compilations, and **Rename** / **Merge Into** to tidy near-duplicate artist folders.
-5. Run **Sync File Tags** on anything you renamed or merged so the files match their folders.
+5. Run **Sync ID3 Tags** on anything you renamed or merged so the files match their folders.
 6. Check the red ⓘ buttons for anything that still disagrees, and fix the album art.
 7. **Back Up Now** to keep a backup (tags are included).
 

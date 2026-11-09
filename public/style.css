@@ -12070,6 +12070,188 @@ input:checked+.slider:before {
     letter-spacing: 0.08em;
 }
 
+/* Appliances (Home Connect dishwashers, ovens, washing machines): bubbles along the banner, rising while one is running */
+.appliances-banner .bubble {
+    fill: #0ea5e9;
+    fill-opacity: 0.08;
+    stroke: var(--text-muted);
+    stroke-opacity: 0.35;
+}
+
+.appliances-banner.on .bubble {
+    stroke: #0ea5e9;
+    stroke-opacity: 0.7;
+    animation: bubble-rise 3s ease-in-out infinite;
+}
+
+@keyframes bubble-rise {
+    0% { opacity: 0; transform: translateY(6px); }
+    40% { opacity: 1; }
+    100% { opacity: 0; transform: translateY(-14px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .appliances-banner.on .bubble {
+        animation: none;
+    }
+}
+
+.appliance-card.on {
+    border-color: rgba(14, 165, 233, 0.5);
+    box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.25);
+}
+
+.appliance-card.on .plug-card-icon {
+    background: #0ea5e9;
+}
+
+.appliance-card .plug-card-title {
+    flex: 1;
+}
+
+.plug-switch.appliance-power {
+    flex: none;
+    width: auto;
+    padding: 0.5rem 0.9rem;
+}
+
+.appliance-run {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.appliance-program {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.appliance-when {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-size: 1.4rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.appliance-when span {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.appliance-progress {
+    height: 0.4rem;
+    border-radius: 0.2rem;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+
+.appliance-progress div {
+    height: 100%;
+    background: #0ea5e9;
+    transition: width 0.6s;
+}
+
+.appliance-start {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.appliance-option {
+    flex: 1 1 7rem;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+
+.appliance-option.wide {
+    flex-basis: 100%;
+}
+
+.appliance-option > span {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.appliance-go {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.appliance-start select {
+    width: 100%;
+    min-width: 0;
+    padding: 0.55rem 0.6rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.appliance-hint {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.appliance-alerts {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.appliance-alerts span {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+}
+
+.appliance-toggles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 0.5rem;
+}
+
+.plug-switch.appliance-toggle {
+    padding: 0.55rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+.appliance-more {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.appliance-more summary {
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.appliance-more[open] > .appliance-start + .appliance-toggles {
+    margin-top: 0.5rem;
+}
+
+.appliance-alerts span.info {
+    background: rgba(14, 165, 233, 0.15);
+    color: #0ea5e9;
+}
+
 /* ─── Petrol tab ──────────────────────────────────────────────────────── */
 .petrol-view {
     overflow: hidden;

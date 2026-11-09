@@ -1012,6 +1012,69 @@ async function renameFolder(index, event) {
 
 let _mergeSourceItem = null;
 
+// Tag All Tracks: adds a tag to (or removes it from) every music file in a folder and the
+// folders inside it, the same tags as a file's info panel sets one at a time.
+let _folderTagItem = null;
+
+async function openFolderTagModal(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    const item = currentBrowserItems[index];
+    if (!item) return;
+    _folderTagItem = item;
+
+    document.getElementById('folder-tag-desc').textContent = `Every track in "${item.title}", and in the folders inside it.`;
+    const input = document.getElementById('folder-tag-input');
+    input.value = '';
+    document.getElementById('folder-tag-modal').style.display = 'flex';
+    input.focus();
+
+    try {
+        const { tags = [] } = await (await fetch('/api/tags')).json();
+        allLibraryTags = tags;
+        document.getElementById('folder-tag-list').innerHTML = tags.map(t => `<option value="${escapeHtml(t)}"></option>`).join('');
+    } catch (e) { /* suggestions are optional */ }
+}
+
+function closeFolderTagModal() {
+    document.getElementById('folder-tag-modal').style.display = 'none';
+    _folderTagItem = null;
+}
+
+async function applyFolderTag(remove = false) {
+    const item = _folderTagItem;
+    const tag = document.getElementById('folder-tag-input').value.trim();
+    if (!item) return;
+    if (!tag) {
+        document.getElementById('folder-tag-input').focus();
+        return;
+    }
+    const buttons = document.querySelectorAll('#folder-tag-modal .btn-control');
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+        const res = await fetch('/api/local/folder-file-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: item.id, [remove ? 'remove' : 'add']: [tag] })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        closeFolderTagModal();
+        const tracks = n => `${n} track${n === 1 ? '' : 's'}`;
+        showToast(!data.files ? `No music files in "${item.title}"`
+            : !data.changed ? `All ${tracks(data.files)} in "${item.title}" ${remove ? "already don't have" : 'already have'} "${tag}"`
+            : `${remove ? 'Removed' : 'Added'} "${tag}" ${remove ? 'from' : 'to'} ${tracks(data.changed)} in "${item.title}"`,
+            data.files ? 'success' : 'info', 3500);
+        if (!remove && !allLibraryTags.includes(tag)) allLibraryTags = [...allLibraryTags, tag].sort();
+        // Favourite hearts in the list follow a "fav" tag
+        if (tag === 'fav' && browsePath?.length && selectedServerUdn) await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+    } catch (err) {
+        showToast(`Couldn't tag "${item.title}": ${err.message}`, 'error', 5000);
+    } finally {
+        buttons.forEach(b => { b.disabled = false; });
+    }
+}
+
 async function openMergeIntoModal(index, event) {
     if (event) event.stopPropagation();
     document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
@@ -2644,14 +2707,21 @@ function renderBrowser(items) {
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M5 12h14M12 5l7 7-7 7"/>
                                     </svg>
-                                    Reimport (Move to Tag Locations)
+                                    Reimport (Move to ID3 Tag Locations)
                                 </button>
                                 <button class="dropdown-item" onclick="identifyTracksFromFilename(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <circle cx="11" cy="11" r="8"></circle>
                                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                                     </svg>
-                                    Identify Tags from Filename
+                                    Identify ID3 Tags from Filename
+                                </button>
+                                <button class="dropdown-item" onclick="openFolderTagModal(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                                    </svg>
+                                    Tag All Tracks...
                                 </button>
                                 ` : ''}
                                 ` : ''}
@@ -2660,14 +2730,14 @@ function renderBrowser(items) {
                                         <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
                                         <line x1="12" y1="5" x2="12" y2="19"></line>
                                     </svg>
-                                    Sync File Tags
+                                    Sync ID3 Tags
                                 </button>
                                 ${!isContainer && detectFolderMismatch(item) ? `
                                 <button class="dropdown-item" style="color: #10b981;" onclick="moveFileToTagsLocationFromBrowser(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                         <path d="M5 12h14M12 5l7 7-7 7"/>
                                     </svg>
-                                    Move to Tag Location
+                                    Move to ID3 Tag Location
                                 </button>
                                 ` : ''}
                                 ${!isContainer && isImage ? `
@@ -10671,7 +10741,7 @@ async function openFileInfoModal(trackData) {
         <div class="metadata-grid">
             <div class="metadata-header">Field</div>
             <div class="metadata-header">Media Server</div>
-            <div class="metadata-header">File Tags (Deep Scan)</div>
+            <div class="metadata-header">ID3 Tags (Deep Scan)</div>
             <div class="metadata-header">Folder Path</div>
             
             <div class="metadata-loading-row" id="metadata-loading-spinner">
@@ -10998,7 +11068,7 @@ async function openFileInfoModal(trackData) {
                 || (folderReasons.album && f.label === 'Album');
 
             const folderMismatchClass = isFolderMismatch ? 'mismatch' : '';
-            const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name doesn\'t match the tags — this is why the info icon is red">!</div>' : '';
+            const folderMismatchIcon = isFolderMismatch ? '<div class="mismatch-badge" title="Folder name doesn\'t match the ID3 tags — this is why the info icon is red">!</div>' : '';
             const serverCauseClass = causesRedIcon && sValRaw ? 'mismatch' : '';
 
             const isLocalFile = trackData.uri && trackData.uri.includes('/local-files/');
@@ -13067,7 +13137,7 @@ async function refreshSmartHome() {
     clearTimeout(smartHomeTimer);
     if (appView !== 'smarthome') return;
     if (!document.hidden) {
-        const heatingLoad = loadHeating();
+        const heatingLoad = Promise.all([loadHeating(), loadAppliances()]);
         try {
             const res = await fetch('/api/smart-home/plugs?live=1');
             const data = await res.json();
@@ -13164,7 +13234,7 @@ function energyBannerSvg() {
 function renderSmartHome() {
     const status = document.getElementById('smarthome-status');
     const shown = smartHomePlugs.filter(p => !p.hidden);
-    status.textContent = shown.length || heating.rooms.length ? '' : smartHomePlugs.length
+    status.textContent = shown.length || heating.rooms.length || applianceState.appliances.length ? '' : smartHomePlugs.length
         ? 'All plugs are hidden. Show them again from Manage Plugs.'
         : 'No plugs found yet. Use Manage Plugs to search the network.';
     const lights = shown.filter(p => p.type === 'twinkly');
@@ -13326,6 +13396,316 @@ async function heatingRequest(r, path, body = {}) {
     heatBusy.delete(r.id);
     if (failed) await loadHeating(); // show what it's really doing
     else renderHeating();
+}
+
+// Appliances: everything on a Home Connect account (Bosch, Siemens...: dishwashers, ovens, washers,
+// dryers, fridges, coffee machines, hoods, hobs, robots...; see lib/smart-home/homeconnect.js). The server keeps them up to date from Home Connect's event
+// stream, so polling it here costs nothing. Cards are only redrawn when something has changed, so
+// a program being picked isn't interrupted. What can be set for a program (temperature, spin,
+// timer, delay) is asked for the first time that program is picked. Settings (a fridge's
+// temperature, a hood's light...) are changed as soon as they're picked.
+let applianceState = { configured: false, appliances: [] };
+let appliancesShown = '';
+const applianceChoice = new Map(); // id -> { program, options: { key: value } }
+const applianceBusy = new Set(); // ids with a request on the way
+const applianceOptions = new Map(); // `${id} ${program}` -> [option] | 'loading'
+const applianceMoreOpen = new Set(); // ids with More settings open
+
+const APPLIANCE_ICONS = {
+    Dishwasher: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M4 7h16"></path><path d="M8 4.5h.01M11 4.5h.01"></path><circle cx="12" cy="14.5" r="4"></circle></svg>`,
+    Oven: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M3 8h18"></path><path d="M7 5.5h.01M10 5.5h.01M14 5.5h3"></path><rect x="6.5" y="11" width="11" height="7" rx="1"></rect></svg>`,
+    Washer: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M4 6.5h16"></path><path d="M7.5 4.3h.01M10.5 4.3h.01"></path><circle cx="12" cy="14" r="4.5"></circle><path d="M9.5 14.5c1-.8 2-.8 3 0s2 .8 3 0"></path></svg>`,
+    Dryer: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="2" width="16" height="20" rx="2"></rect><path d="M4 6.5h16"></path><path d="M7.5 4.3h.01M10.5 4.3h.01"></path><circle cx="12" cy="14" r="4.5"></circle><path d="M10.5 12.5c.8.8-.8 2.2 0 3M13.5 12.5c.8.8-.8 2.2 0 3"></path></svg>`,
+    Fridge: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="5" y="2" width="14" height="20" rx="2"></rect><path d="M5 9h14"></path><path d="M8 5v1.5M8 12v3"></path></svg>`,
+    CoffeeMaker: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17 8h1a3 3 0 0 1 0 6h-1"></path><path d="M3 8h14v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4Z"></path><path d="M7 2v2M10 2v2M13 2v2"></path></svg>`,
+    Hood: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 2h6v6H9z"></path><path d="M9 8 3 15h18l-6-7"></path><path d="M3 15v2h18v-2"></path><path d="M8 20h.01M12 20h.01M16 20h.01"></path></svg>`,
+    Hob: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="2" y="3" width="20" height="18" rx="2"></rect><circle cx="8" cy="9" r="2.5"></circle><circle cx="16" cy="9" r="2.5"></circle><circle cx="8" cy="16" r="2"></circle><circle cx="16" cy="16" r="2"></circle></svg>`,
+    CleaningRobot: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"></circle><circle cx="12" cy="12" r="3"></circle><path d="M5.5 8h13"></path></svg>`,
+    CookProcessor: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 10h12l-1.5 8h-9Z"></path><path d="M5 22h14"></path><path d="M8 18v4M16 18v4"></path><path d="M9 10V6a3 3 0 0 1 6 0v4"></path></svg>`,
+    Appliance: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M4 8h16"></path><circle cx="12" cy="14.5" r="3"></circle></svg>`,
+};
+const APPLIANCE_ICON_FOR = {
+    WasherDryer: 'Washer', FridgeFreezer: 'Fridge', Refrigerator: 'Fridge', Freezer: 'Fridge', WineCooler: 'Fridge',
+    WarmingDrawer: 'Oven', Microwave: 'Oven',
+};
+const applianceIcon = a => APPLIANCE_ICONS[APPLIANCE_ICON_FOR[a.type] || a.type] || APPLIANCE_ICONS.Appliance;
+const APPLIANCE_STATES = {
+    Inactive: 'Idle', Ready: 'Ready', DelayedStart: 'Waiting to start', Run: 'Running', Pause: 'Paused',
+    ActionRequired: 'Needs attention', Finished: 'Finished', Error: 'Error', Aborting: 'Stopping',
+};
+
+async function loadAppliances() {
+    try {
+        const res = await fetch('/api/appliances');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (!applianceBusy.size) applianceState = data;
+    } catch (err) {
+        applianceState = { ...applianceState, error: err.message };
+    }
+    if (!applianceBusy.size) renderAppliances();
+}
+
+// Bubbles along the banner, rising while an appliance is running
+function appliancesBannerSvg() {
+    const width = 2400;
+    let bubbles = '';
+    for (let x = 10, n = 0; x < width; x += 26, n++) {
+        const r = 3 + ((n * 7) % 5);
+        const y = 30 + ((n * 13) % 14);
+        const delay = -((n * 0.71) % 3).toFixed(2);
+        bubbles += `<circle class="bubble" cx="${x}" cy="${y}" r="${r}" style="animation-delay:${delay}s"></circle>`;
+    }
+    return `<svg viewBox="0 0 ${width} ${BANNER_HEIGHT}" height="${BANNER_HEIGHT}" width="100%" preserveAspectRatio="xMinYMid slice">${bubbles}</svg>`;
+}
+
+function renderAppliances(force = false) {
+    // Not under an open program list
+    if (!force && document.activeElement?.closest?.('#smarthome-appliances-grid select')) return;
+    const key = JSON.stringify(applianceState) + [...applianceBusy].join() + [...applianceOptions.keys()].join();
+    if (!force && key === appliancesShown) return;
+    appliancesShown = key;
+    const section = document.getElementById('smarthome-appliances');
+    section.hidden = !applianceState.configured && !applianceState.signedOut;
+    if (section.hidden) return;
+    const connect = '<button type="button" class="btn-control btn-small" onclick="openPlugSettings()">Connect Home Connect</button>';
+    const list = applianceState.appliances || [];
+    document.getElementById('smarthome-appliances-status').innerHTML = applianceState.signedOut
+        ? `Home Connect has signed this device out. ${connect}`
+        : applianceState.error ? `${escapeHtml(applianceState.error)}${applianceState.needsLogin ? ` ${connect}` : ''}`
+        : list.length ? '' : 'No appliances found on this Home Connect account.';
+    document.getElementById('smarthome-appliances-grid').innerHTML = list.map(applianceCard).join('');
+    const banner = document.getElementById('smarthome-appliances-banner');
+    if (list.length && !banner.innerHTML) banner.innerHTML = appliancesBannerSvg();
+    banner.classList.toggle('on', list.some(a => a.connected && a.operation === 'Run'));
+}
+
+function applianceLeft(ms) {
+    const mins = Math.max(0, Math.round(ms / 60000));
+    return mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min left` : `${mins} min left`;
+}
+
+function applianceStatus(a) {
+    if (!a.connected) return 'Offline';
+    const state = !a.on && !a.busy ? 'Off' : APPLIANCE_STATES[a.operation] || a.operation || 'Connected';
+    const doors = a.openDoors.length ? `${a.openDoors.join(', ')} door open` : a.door === 'Open' ? 'Door open' : '';
+    const battery = a.battery != null ? `Battery ${a.battery}%${a.charging ? ', charging' : ''}` : '';
+    return [state, doors, battery, a.brand || ''].filter(Boolean).join(' · ');
+}
+
+// The big line on a running card, and the smaller one beside it
+function applianceRunLines(a) {
+    if (a.startsAt) return [`Starts at ${heatClock(a.startsAt)}`, 'Waiting to start'];
+    if (a.endsAt) return [`Done at ${heatClock(a.endsAt)}`, applianceLeft(a.endsAt - Date.now())];
+    if (a.operation === 'DelayedStart') return ['Waiting to start', ''];
+    // An oven with no timer: how hot it is, and how long it's been on
+    if (a.type === 'Oven' && a.cavity != null) {
+        return [`${a.cavity}°C`, a.startedAt ? `On for ${applianceLeft(Date.now() - a.startedAt).replace(' left', '')}` : 'Now'];
+    }
+    return [APPLIANCE_STATES[a.operation] || 'Running', ''];
+}
+
+// The program chosen on a card: the last picked, else the one selected on the appliance, else the first
+function applianceProgram(a) {
+    const c = applianceChoice.get(a.id) || {};
+    return a.programs.some(p => p.key === c.program) ? c.program
+        : a.programs.some(p => p.key === a.selected) ? a.selected : a.programs[0].key;
+}
+
+async function loadApplianceOptions(a, program) {
+    const key = `${a.id} ${program}`;
+    if (applianceOptions.has(key)) return;
+    applianceOptions.set(key, 'loading');
+    try {
+        const res = await fetch(`/api/appliances/${encodeURIComponent(a.id)}/programs/${encodeURIComponent(program)}/options`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        applianceOptions.set(key, data.options || []);
+    } catch {
+        applianceOptions.set(key, []); // started with the program's own settings
+    }
+    renderAppliances(true);
+}
+
+function applianceOptionSelect(a, i, o) {
+    const chosen = applianceChoice.get(a.id)?.options?.[o.key];
+    const value = o.choices.some(c => c.value === chosen) ? chosen : o.default;
+    // Delays show the clock time they come to
+    const label = c => !c.seconds ? c.label
+        : `${c.label} (${o.delay === 'finish' ? 'done ' : ''}${clockTime(new Date(Date.now() + c.seconds * 1000))})`;
+    return `<label class="appliance-option"><span>${escapeHtml(o.label)}</span>
+        <select data-option="${escapeHtml(o.key)}" onchange="chooseApplianceOption(${i}, this)" ${!a.connected || applianceBusy.has(a.id) ? 'disabled' : ''}>
+            ${o.choices.map(c => `<option value="${escapeHtml(c.value)}" ${c.value === value ? 'selected' : ''}>${escapeHtml(label(c))}</option>`).join('')}
+        </select></label>`;
+}
+
+// A setting, changed as soon as it's picked: a switch for on/off ones, a list for the rest
+function applianceSetting(a, i, s) {
+    const off = !a.connected || applianceBusy.has(a.id) ? 'disabled' : '';
+    if (s.kind === 'toggle') {
+        const on = s.value === 'true';
+        return `<button type="button" class="plug-switch appliance-toggle ${on ? 'on' : ''}" data-setting="${escapeHtml(s.key)}"
+            onclick="changeApplianceSetting(${i}, this.dataset.setting, ${!on})" ${off} aria-pressed="${on}">
+            <span class="plug-switch-label">${escapeHtml(s.label)}</span><span class="plug-switch-state">${on ? 'On' : 'Off'}</span></button>`;
+    }
+    return `<label class="appliance-option"><span>${escapeHtml(s.label)}</span>
+        <select data-setting="${escapeHtml(s.key)}" onchange="this.blur(); changeApplianceSetting(${i}, this.dataset.setting, this.value)" ${off}>
+            ${s.choices.map(c => `<option value="${escapeHtml(c.value)}" ${c.value === s.value ? 'selected' : ''}>${escapeHtml(c.label)}</option>`).join('')}
+        </select></label>`;
+}
+
+// Main settings on the card itself, the rest folded away under More settings
+function applianceSettings(a, i) {
+    if (!a.connected || !a.settings.length) return '';
+    const group = list => {
+        const lists = list.filter(s => s.kind !== 'toggle'), toggles = list.filter(s => s.kind === 'toggle');
+        return `${lists.length ? `<div class="appliance-start">${lists.map(s => applianceSetting(a, i, s)).join('')}</div>` : ''}
+            ${toggles.length ? `<div class="appliance-toggles">${toggles.map(s => applianceSetting(a, i, s)).join('')}</div>` : ''}`;
+    };
+    const main = a.settings.filter(s => s.main), more = a.settings.filter(s => !s.main);
+    return `${main.length ? group(main) : ''}
+        ${more.length ? `<details class="appliance-more" ${applianceMoreOpen.has(a.id) ? 'open' : ''} ontoggle="toggleApplianceMore(${i}, this.open)">
+            <summary>${main.length ? 'More settings' : 'Settings'}</summary>${group(more)}</details>` : ''}`;
+}
+
+function toggleApplianceMore(i, open) {
+    const a = applianceState.appliances[i];
+    if (!a) return;
+    if (open) applianceMoreOpen.add(a.id);
+    else applianceMoreOpen.delete(a.id);
+}
+
+function changeApplianceSetting(i, key, value) {
+    const a = applianceState.appliances[i];
+    if (a) applianceRequest(a, 'settings', { key, value });
+}
+
+function applianceCard(a, i) {
+    const busy = applianceBusy.has(a.id);
+    const off = !a.connected || busy ? 'disabled' : '';
+    const running = a.connected && a.busy;
+    let middle = '';
+    if (running) {
+        const [when, left] = applianceRunLines(a);
+        const details = [a.program, ...a.details].filter(Boolean).join(' · ');
+        middle = `
+            <div class="appliance-run">
+                <div class="appliance-program">${escapeHtml(details || 'Program')}</div>
+                <div class="appliance-when">${escapeHtml(when)}<span>${escapeHtml(left)}</span></div>
+                ${typeof a.progress === 'number' ? `<div class="appliance-progress" role="progressbar" aria-valuenow="${a.progress}"
+                    aria-valuemin="0" aria-valuemax="100"><div style="width:${a.progress}%"></div></div>` : ''}
+            </div>`;
+    } else if (a.connected && a.on && a.programs.length) {
+        const program = applianceProgram(a);
+        const options = applianceOptions.get(`${a.id} ${program}`);
+        if (!options) loadApplianceOptions(a, program);
+        const ready = Array.isArray(options);
+        middle = `
+            <div class="appliance-start">
+                <label class="appliance-option wide"><span>Program</span>
+                    <select data-program onchange="chooseApplianceProgram(${i}, this.value)" ${off}>
+                        ${a.programs.map(p => `<option value="${escapeHtml(p.key)}" ${p.key === program ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('')}
+                    </select></label>
+                ${ready ? options.map(o => applianceOptionSelect(a, i, o)).join('') : '<span class="appliance-hint"><span class="spinner"></span></span>'}
+            </div>
+            <div class="appliance-go">
+                <span class="appliance-hint">${a.remoteStart ? '' : `Press Remote Start on the ${escapeHtml(a.name)} to start it from here.`}</span>
+                <button type="button" class="btn-control primary" onclick="startAppliance(${i})" ${off || (a.remoteStart && ready ? '' : 'disabled')}>Start</button>
+            </div>`;
+    }
+    return `
+        <div class="plug-card appliance-card ${running ? 'on' : ''} ${a.connected ? '' : 'unavailable'}">
+            <div class="plug-card-head">
+                <div class="plug-card-icon">${applianceIcon(a)}</div>
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(a.name)}</div>
+                    <div class="plug-card-status">${escapeHtml(applianceStatus(a))}</div>
+                </div>
+                ${running && a.type === 'Oven' && a.cavity != null && (a.endsAt || a.startsAt) ? `<div class="heat-now" title="Temperature in the oven">${a.cavity}°</div>` : ''}
+                ${a.connected && a.canPower && !running ? `<button type="button" class="plug-switch appliance-power ${a.on ? 'on' : ''}" onclick="powerAppliance(${i}, ${!a.on})"
+                    ${off} aria-pressed="${a.on}" aria-label="Power for ${escapeHtml(a.name)}"><span class="plug-switch-state">${a.on ? 'On' : 'Off'}</span></button>` : ''}
+            </div>
+            ${middle}
+            ${a.alerts.length ? `<div class="appliance-alerts">${a.alerts.map(t => `<span class="${t.level}">${escapeHtml(t.text)}</span>`).join('')}</div>` : ''}
+            ${running ? `<div class="heat-actions"><span class="heat-plan"></span>
+                ${a.homeProgram ? `<button type="button" class="btn-control btn-small" onclick="sendApplianceHome(${i})" ${off}>Send Home</button>` : ''}
+                <button type="button" class="btn-control btn-small" onclick="stopAppliance(${i})" ${off}>Stop</button></div>` : ''}
+            ${applianceSettings(a, i)}
+            ${a.error && a.connected ? `<div class="appliance-hint">${escapeHtml(a.error)}</div>` : ''}
+        </div>`;
+}
+
+// Picking another program shows its own settings; ones chosen before carry over where they fit
+function chooseApplianceProgram(i, program) {
+    const a = applianceState.appliances[i];
+    if (!a) return;
+    applianceChoice.set(a.id, { ...applianceChoice.get(a.id), program });
+    document.activeElement?.blur?.();
+    renderAppliances(true);
+}
+
+function chooseApplianceOption(i, select) {
+    const a = applianceState.appliances[i];
+    if (!a) return;
+    const c = applianceChoice.get(a.id) || {};
+    applianceChoice.set(a.id, { ...c, options: { ...c.options, [select.dataset.option]: select.value } });
+    select.blur();
+}
+
+function startAppliance(i) {
+    const a = applianceState.appliances[i];
+    if (!a) return;
+    const card = document.querySelectorAll('#smarthome-appliances-grid .appliance-card')[i];
+    const program = card.querySelector('select[data-program]').value;
+    const options = Object.fromEntries([...card.querySelectorAll('select[data-option]')].map(el => [el.dataset.option, el.value]));
+    applianceRequest(a, 'start', { program, options });
+}
+
+// A cleaning robot back to its dock
+function sendApplianceHome(i) {
+    const a = applianceState.appliances[i];
+    if (a?.homeProgram) applianceRequest(a, 'start', { program: a.homeProgram });
+}
+
+function stopAppliance(i) {
+    const a = applianceState.appliances[i];
+    if (a && confirm(`Stop ${a.name}? The program will be cancelled.`)) applianceRequest(a, 'stop');
+}
+
+function powerAppliance(i, on) {
+    const a = applianceState.appliances[i];
+    if (a) applianceRequest(a, 'power', { on });
+}
+
+async function applianceRequest(a, action, body = {}) {
+    applianceBusy.add(a.id);
+    renderAppliances(true);
+    try {
+        const res = await fetch(`/api/appliances/${encodeURIComponent(a.id)}/${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        const i = applianceState.appliances.findIndex(x => x.id === a.id);
+        if (i >= 0) applianceState.appliances[i] = data.appliance;
+    } catch (err) {
+        showToast(`Couldn't change ${a.name}: ${err.message}`, 'error', 5000);
+    }
+    applianceBusy.delete(a.id);
+    renderAppliances(true);
 }
 
 // Energy tab: smart meter readings (Bright app login, see lib/smart-home/glow.js). They move
@@ -14223,6 +14603,7 @@ async function loadPlugSettings() {
         password.placeholder = account.hasPassword ? 'Saved (leave blank to keep)' : '';
         loadGlowAccount();
         loadTadoAccount();
+        loadHomeConnectAccount();
     } catch (err) {
         list.innerHTML = `<div class="empty-state-mini">Couldn't load plugs: ${escapeHtml(err.message)}</div>`;
         return;
@@ -14766,6 +15147,90 @@ async function disconnectTado() {
         renderTadoAccount(await res.json());
         heating = { configured: false, rooms: [] };
         if (appView === 'smarthome') renderHeating();
+    } catch (err) {
+        showToast(`Couldn't disconnect: ${err.message}`, 'error', 5000);
+    }
+}
+
+// Home Connect: like tado°, signed in on Home Connect's own site with a code, using the client id
+// of an application registered at developer.home-connect.com.
+let homeConnectPairingTimer = null;
+
+async function loadHomeConnectAccount() {
+    clearTimeout(homeConnectPairingTimer);
+    const box = document.getElementById('homeconnect-account');
+    let account;
+    try {
+        account = await (await fetch('/api/appliances/account')).json();
+    } catch (err) {
+        box.innerHTML = `<span class="settings-hint">Couldn't load: ${escapeHtml(err.message)}</span>`;
+        return;
+    }
+    const id = document.getElementById('homeconnect-client-id');
+    if (document.activeElement !== id) id.value = account.clientId || '';
+    document.getElementById('homeconnect-client-secret').placeholder = account.hasSecret ? 'Saved (leave blank to keep)' : '';
+    renderHomeConnectAccount(account);
+    if (account.pairing && !account.pairing.error) homeConnectPairingTimer = setTimeout(loadHomeConnectAccount, 3000);
+}
+
+function renderHomeConnectAccount(a) {
+    const box = document.getElementById('homeconnect-account');
+    const button = (label, action, primary) =>
+        `<button type="button" class="btn-control ${primary ? 'primary' : ''}" onclick="${action}">${label}</button>`;
+    if (a.pairing) {
+        box.innerHTML = a.pairing.error
+            ? `<p class="settings-hint">${escapeHtml(a.pairing.error)}</p>${button('Try Again', 'connectHomeConnect(this)', true)}`
+            : `<p class="settings-hint">Open Home Connect's sign-in page, log in with your Home Connect app account,
+                and confirm the code <strong class="tado-code">${escapeHtml(a.pairing.userCode)}</strong>. This page will carry on by itself.</p>
+               <div class="tado-buttons">
+                   <a class="btn-control primary" href="${escapeHtml(a.pairing.url)}" target="_blank" rel="noopener">Open Home Connect Sign-in</a>
+                   <span class="settings-hint" style="margin:0;"><span class="spinner"></span> Waiting for confirmation…</span>
+               </div>`;
+        return;
+    }
+    if (a.connected) {
+        const names = a.appliances.length ? `: ${a.appliances.join(', ')}` : '';
+        box.innerHTML = `<div class="tado-buttons">
+                <span class="settings-hint plug-state ok" style="margin:0;">Connected${escapeHtml(names)}</span>
+                ${button('Disconnect', 'disconnectHomeConnect()')}
+            </div>`;
+        return;
+    }
+    box.innerHTML = `${a.signedOut ? '<p class="settings-hint">Home Connect has signed this device out; connect again to carry on.</p>' : ''}
+        ${button('Connect Home Connect', 'connectHomeConnect(this)', true)}`;
+}
+
+async function connectHomeConnect(btn) {
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/appliances/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                clientId: document.getElementById('homeconnect-client-id').value,
+                clientSecret: document.getElementById('homeconnect-client-secret').value,
+            })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        document.getElementById('homeconnect-client-secret').value = '';
+        renderHomeConnectAccount(data);
+        // Opened straight away where a new tab can be; the link stays for tablets that block it
+        if (data.pairing?.url) window.open(data.pairing.url, '_blank', 'noopener');
+        homeConnectPairingTimer = setTimeout(loadHomeConnectAccount, 3000);
+    } catch (err) {
+        btn.disabled = false;
+        showToast(`Couldn't connect to Home Connect: ${err.message}`, 'error', 5000);
+    }
+}
+
+async function disconnectHomeConnect() {
+    if (!confirm('Disconnect Home Connect? Your appliances will stop showing here until it\'s connected again.')) return;
+    try {
+        const res = await fetch('/api/appliances/account', { method: 'DELETE' });
+        renderHomeConnectAccount(await res.json());
+        applianceState = { configured: false, appliances: [] };
+        if (appView === 'smarthome') renderAppliances(true);
     } catch (err) {
         showToast(`Couldn't disconnect: ${err.message}`, 'error', 5000);
     }
