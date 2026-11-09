@@ -47,10 +47,11 @@ const PEER_SHARE_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="n
 
 function peerShareBadgeInner(id) {
     const st = peerShareState(id);
-    // Off by default isn't marked: only what's shared, and what's been switched off inside it
-    if (st.value === 'off' && !st.explicit) return '';
+    // Only what's been set On or Off here is marked; As Parent (the default) isn't, so a shared
+    // folder's contents don't each carry the icon
+    if (!st.explicit) return '';
     const title = st.value === 'on'
-        ? (st.explicit ? 'Shared on the peer link' : `Shared on the peer link (from ${st.from})`)
+        ? 'Shared on the peer link, with everything in it unless switched off there'
         : 'Not shared on the peer link (switched off here)';
     return `<span class="peer-share-badge ${st.value}${st.explicit ? ' explicit' : ''}" title="${peerShareAttr(title)}">${PEER_SHARE_ICON}</span>`;
 }
