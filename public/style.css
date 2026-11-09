@@ -9959,10 +9959,22 @@ input:checked+.slider:before {
     font-size: 0.9rem;
 }
 
+/* The title and its banner share the top row (title left, banner filling the rest); everything
+   else spans the full width below. A section without a title (energy) leaves the first column
+   empty, so its banner still runs the whole width. */
 .smarthome-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0.75rem;
+}
+
+.smarthome-section > * {
+    grid-column: 1 / -1;
+}
+
+.smarthome-section > .smarthome-banner {
+    grid-column: 2;
+    grid-row: 1;
 }
 
 .smarthome-section[hidden] {
@@ -9970,7 +9982,11 @@ input:checked+.slider:before {
 }
 
 .smarthome-section h3 {
-    margin: 0;
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    white-space: nowrap;
+    margin: 0 1rem 0 0;
     font-size: 0.8rem;
     font-weight: 700;
     text-transform: uppercase;
@@ -11613,13 +11629,6 @@ input:checked+.slider:before {
     --ss-ticker-h: calc(44px + env(safe-area-inset-top));
 }
 
-/* The photo or video starts below the ticker rather than under it, so nothing in it is covered */
-.screensaver-overlay.has-ticker:not(.sky-mode) .screensaver-img,
-.screensaver-overlay.has-ticker:not(.sky-mode) .screensaver-video {
-    height: calc(100% - var(--ss-ticker-h));
-    margin-top: var(--ss-ticker-h);
-}
-
 .ss-ticker {
     position: absolute;
     top: 0;
@@ -11772,9 +11781,14 @@ input:checked+.slider:before {
 }
 
 @media (orientation: landscape) and (min-height: 480px) {
+    /* Across the full width, over the side panel too, so the panel's contents start below it */
     .ss-ticker {
-        grid-column: 1;   /* positioned against the photo's column of the grid */
+        grid-column: 1 / -1;
         grid-row: 1;
+    }
+
+    .ss-side-panel {
+        padding-top: var(--ss-ticker-h);
     }
 }
 
