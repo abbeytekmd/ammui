@@ -1187,6 +1187,7 @@ class Slideshow {
             this.peopleTouched.clear();
         }
         if (!data || !this.peopleNames.length || this.mode === 'nowPlaying') {
+            this.overlay?.classList.remove('people-open');
             el.hidden = true;
             return;
         }
@@ -1198,6 +1199,7 @@ class Slideshow {
             (this.peopleOpen ? `<button class="ss-person ss-person-new" data-new title="Someone not on the list yet">New...</button>` : '') +
             `<button class="ss-person ss-person-more" data-more title="${this.peopleOpen ? 'Just the people in this photo' : 'Tag someone in this photo'}">${this.peopleOpen ? 'Done' : '+'}</button>`;
         el.classList.toggle('open', this.peopleOpen);
+        this.overlay?.classList.toggle('people-open', this.peopleOpen);
         el.hidden = false;
     }
 

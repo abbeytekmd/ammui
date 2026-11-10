@@ -13506,7 +13506,7 @@ input:checked+.slider:before {
     gap: 6px;
     padding: 0 16px;   /* below the photo details and the controls */
     pointer-events: none;
-    z-index: 10002;
+    z-index: 10004;   /* over the photo details, which it can reach when it wraps */
 }
 
 .ss-people[hidden],
@@ -13542,7 +13542,12 @@ input:checked+.slider:before {
     color: rgba(255, 255, 255, 0.8);
 }
 
-/* Showing everyone: a backing so the names read over any photo */
+/* Showing everyone: the photo details make way, so every name can be read and tapped */
+.screensaver-overlay.people-open .screensaver-info {
+    opacity: 0 !important;
+    pointer-events: none;
+}
+
 .ss-people.open {
     pointer-events: auto;
     max-height: 40vh;
