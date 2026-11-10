@@ -80,6 +80,7 @@ async function openFaceTagModal(index, event) {
     _faceTag = {
         item, photos: [], people: [], samples: [], faces: [], clusters: [],
         threshold: faceTagThreshold(), scanning: false, stop: false, failed: 0, renderTimer: null,
+        selected: new Set(), dragging: null,
     };
     document.getElementById('face-tag-desc').textContent = `Photos in "${item.title}" and the folders inside it.`;
     const slider = document.getElementById('face-tag-threshold');
@@ -276,7 +277,7 @@ function addFace(photoIndex, raw, place = true) {
     // neighbors: [face, distance] for every face close enough to be grouped with it.
     const face = {
         index: _faceTag.faces.length, photoIndex, box: raw.box, ar: raw.ar, descriptor: Float32Array.from(raw.descriptor),
-        off: false, named: null, rejected: new Set(), pin: null, sampleId: null, unmatched: false,
+        named: null, rejected: new Set(), pin: null, sampleId: null, unmatched: false,
         match: null, maybe: null, cluster: null, neighbors: [],
     };
     for (const other of _faceTag.faces) {
@@ -408,7 +409,7 @@ async function teachFaces(name, faces, { quiet = false } = {}) {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || res.statusText);
         if (state !== _faceTag) return;
-        faces.forEach(f => { f.named = data.person.name; f.off = false; f.pin = null; f.unmatched = false; f.rejected.delete(data.person.name); });
+        faces.forEach(f => { f.named = data.person.name; f.pin = null; f.unmatched = false; f.rejected.delete(data.person.name); });
         taught.forEach((f, i) => { f.sampleId = data.sampleIds?.[i] ?? null; });
         await loadFacePeople();
         rematchFaces();
@@ -423,7 +424,10 @@ function nameFaceCluster(clusterId) {
     const input = document.getElementById(`face-cluster-name-${clusterId}`);
     if (!cluster || !input) return;
     if (!input.value.trim()) return input.focus();
-    teachFaces(input.value, cluster.faces.filter(f => !f.off));
+    const name = input.value;
+    input.value = '';
+    input.blur();
+    teachFaces(name, [...cluster.faces]);
 }
 
 async function forgetFacePerson(id) {
@@ -440,84 +444,148 @@ async function forgetFacePerson(id) {
     }
 }
 
-// A click waits to see if it's the start of a double-click, which does something else.
-let _faceClickTimer = null;
+// ─── Selecting faces ─────────────────────────────────────────────────────────
+// A click selects or deselects a face, anywhere in the dialog. Selected faces are moved together:
+// dragged onto a name or group, or with a click on a name at the top, New (someone it doesn't know
+// yet) or Not them.
 
-function faceTileClick(faceIndex) {
-    clearTimeout(_faceClickTimer);
-    _faceClickTimer = setTimeout(() => clickFaceTile(faceIndex), 250);
-}
-
-function faceTileDblClick(faceIndex) {
-    clearTimeout(_faceClickTimer);
-    unmatchFace(faceIndex);
-}
-
-// Double-click on a recognised face, or a maybe: it isn't them. Only that face moves, into the
-// unknown group most like it (or on its own), and it isn't matched to anyone again.
-async function unmatchFace(faceIndex) {
+function selectedFaces() {
     const state = _faceTag;
-    const face = state?.faces[faceIndex];
-    if (!face?.match && !face?.maybe) return;
-    if (face.maybe) face.rejected.add(face.maybe.name);
-    keepFaceFollowers(face);
-    await forgetFaceAsPerson(face);
-    if (state !== _faceTag) return;
-    detachFace(face);
-    face.unmatched = true;
-    face.pin = null;
-    face.off = false;
-    let best = null, bestDist = FACE_CLUSTER_DISTANCE;
-    for (const c of state.clusters) {
-        if (!c.faces.length || c.pin?.startsWith('solo')) continue;
-        const dist = faceDistance(face.descriptor, c.centroid);
-        if (dist < bestDist) { best = c; bestDist = dist; }
-    }
-    if (!best) {
-        best = { id: state.clusters.length, faces: [], centroid: new Float32Array(128), pin: null };
-        state.clusters.push(best);
-    }
-    attachFace(face, best);
-    renderFaceTag();
+    return state ? [...state.selected].map(i => state.faces[i]).filter(Boolean) : [];
 }
 
-// A tile: on a recognised person it switches the face in or out of the tagging; on a maybe it's a
-// yes; on a face no one is known for, it asks who it is.
-function clickFaceTile(faceIndex) {
-    const face = _faceTag?.faces[faceIndex];
-    if (!face) return;
-    if (face.maybe) return confirmFaceMaybes([face]);
-    if (!face.match) {
-        const name = prompt('Who is this?', '');
-        if (name?.trim()) teachFaces(name, [face]);
+function toggleFaceSelected(faceIndex) {
+    const state = _faceTag;
+    if (!state?.faces[faceIndex]) return;
+    if (state.selected.has(faceIndex)) state.selected.delete(faceIndex);
+    else state.selected.add(faceIndex);
+    document.querySelector(`.face-tile[data-face="${faceIndex}"]`)?.classList.toggle('selected', state.selected.has(faceIndex));
+    updateFaceSelectionBar();
+}
+
+function clearFaceSelection() {
+    if (!_faceTag) return;
+    _faceTag.selected.clear();
+    document.querySelectorAll('#face-tag-modal .face-tile.selected').forEach(el => el.classList.remove('selected'));
+    updateFaceSelectionBar();
+}
+
+// The faces a group (or the singles) on screen holds
+function facesOfTarget(el) {
+    const state = _faceTag;
+    const d = el.dataset;
+    if (d.dropPerson != null) {
+        return el.classList.contains('face-maybe-group')
+            ? state.faces.filter(f => f.maybe?.name === d.dropPerson)
+            : state.faces.filter(f => f.match?.name === d.dropPerson);
+    }
+    if (d.dropCluster != null) return state.clusters[Number(d.dropCluster)]?.faces || [];
+    if (d.dropSingles != null) return state.clusters.filter(c => c.faces.length === 1).map(c => c.faces[0]);
+    return [];
+}
+
+// Selects every face in a group, or deselects them if they all are already.
+function selectFaceGroup(event) {
+    event.stopPropagation();
+    event.preventDefault();
+    const state = _faceTag;
+    const group = event.currentTarget.closest('[data-drop-person],[data-drop-cluster],[data-drop-singles]');
+    if (!state || !group) return;
+    const faces = facesOfTarget(group);
+    const all = faces.length && faces.every(f => state.selected.has(f.index));
+    faces.forEach(f => all ? state.selected.delete(f.index) : state.selected.add(f.index));
+    group.querySelectorAll('.face-tile').forEach(el => el.classList.toggle('selected', state.selected.has(Number(el.dataset.face))));
+    updateFaceSelectionBar();
+}
+
+function updateFaceSelectionBar() {
+    const bar = document.getElementById('face-tag-selection');
+    if (!bar) return;
+    const faces = selectedFaces();
+    if (!faces.length) {
+        bar.classList.remove('active');
+        bar.innerHTML = `<span class="face-tag-label">Click faces to select them, then drag them onto a name or group, or press <strong>New</strong> for someone new.</span>`;
         return;
     }
-    face.off = !face.off;
-    document.querySelector(`.face-tile[data-face="${faceIndex}"]`)?.classList.toggle('off', face.off);
-    updateFaceTagButtons();
+    const known = faces.filter(f => f.match || f.maybe).length;
+    bar.classList.add('active');
+    bar.innerHTML = `<strong>${faces.length} selected</strong>` +
+        `<span class="face-tag-label">drag ${faces.length === 1 ? 'it' : 'them'} onto a name or group, or click a name above</span>` +
+        `<span class="face-selection-actions">` +
+        `<button class="btn-control ghost" onclick="newFacePerson()">New...</button>` +
+        (known ? `<button class="btn-control ghost" onclick="unmatchFaces(selectedFaces())" title="Not the person they're shown as: back to Not recognised">Not them</button>` : '') +
+        `<button class="btn-control ghost" onclick="clearFaceSelection()">Clear</button></span>`;
 }
 
-// A maybe is them: each face moves up to the person, and nothing else changes.
-function confirmFaceMaybes(faces) {
+// A click on a name at the top: the selected faces are them.
+function faceChipClick(event) {
+    if (event.target.closest('button')) return;
+    const name = event.currentTarget.dataset.dropPerson;
+    const faces = selectedFaces();
+    if (!faces.length) return showToast(`Select faces first, then click ${name} to make them ${name}`, 'info', 3000);
+    moveFaces(faces, { person: name });
+}
+
+// New: the selected faces are someone it doesn't know yet (or, if the name's known, them). This
+// teaches it who they are, so other faces like them may move up to them too.
+async function newFacePerson(faces = selectedFaces()) {
+    const state = _faceTag;
+    if (!state) return;
+    if (!faces.length) return showToast('Click the faces of someone first, then New', 'info', 3000);
+    const name = prompt(faces.length === 1 ? 'Who is this?' : `Who are these ${faces.length} faces?`, '')?.trim();
+    if (!name) return;
+    const same = n => n?.toLowerCase() === name.toLowerCase();
     for (const face of faces) {
-        if (!face.maybe) continue;
-        const name = face.maybe.name;
-        detachFace(face);
-        face.named = name;
-        face.off = false;
-        face.match = { name, dist: 0 };
+        if (face.maybe && !same(face.maybe.name)) face.rejected.add(face.maybe.name);
+        keepFaceFollowers(face);
     }
+    await forgetFacesAsPerson(faces.filter(f => f.match && !same(f.match.name)));
+    if (state !== _faceTag) return;
+    state.selected.clear();
+    await teachFaces(name, faces);
+    if (state === _faceTag) renderFaceTag();
+}
+
+// Not them: each face goes back to the unknown group most like it (or on its own), and isn't
+// matched to that person again. Nothing else moves.
+async function unmatchFaces(faces) {
+    const state = _faceTag;
+    faces = faces.filter(f => f.match || f.maybe);
+    if (!state || !faces.length) return;
+    for (const face of faces) {
+        if (face.maybe) face.rejected.add(face.maybe.name);
+        keepFaceFollowers(face);
+    }
+    await forgetFacesAsPerson(faces);
+    if (state !== _faceTag) return;
+    for (const face of faces) {
+        detachFace(face);
+        face.unmatched = true;
+        face.pin = null;
+        let best = null, bestDist = FACE_CLUSTER_DISTANCE;
+        for (const c of state.clusters) {
+            if (!c.faces.length || c.pin?.startsWith('solo')) continue;
+            const dist = faceDistance(face.descriptor, c.centroid);
+            if (dist < bestDist) { best = c; bestDist = dist; }
+        }
+        if (!best) {
+            best = { id: state.clusters.length, faces: [], centroid: new Float32Array(128), pin: null };
+            state.clusters.push(best);
+        }
+        attachFace(face, best);
+    }
+    state.selected.clear();
     renderFaceTag();
 }
 
 function confirmFaceMaybesFor(name) {
-    confirmFaceMaybes((_faceTag?.faces || []).filter(f => f.maybe?.name === name && !f.off));
+    moveFaces((_faceTag?.faces || []).filter(f => f.maybe?.name === name), { person: name });
 }
 
 // ─── Keeping other faces where they are ──────────────────────────────────────
-// Moving a face only ever moves that face. If it was one of the faces a group was named from, what
-// it taught its person is taken back (so it doesn't spoil future scans), and the faces matched
-// through that are fixed to the person they're shown with, so they don't move now or on a rematch.
+// Moving a face only ever moves that face. If it was one of the faces a person was learned from, what
+// it taught them is taken back (so it doesn't spoil future scans), and the faces matched through
+// that are fixed to the person they're shown with, so they don't move now or on a rematch.
 function keepFaceFollowers(face) {
     if (!_faceTag || !face?.match || !face.sampleId) return;
     for (const f of _faceTag.faces) {
@@ -525,26 +593,84 @@ function keepFaceFollowers(face) {
     }
 }
 
-// ─── Dragging faces between groups ───────────────────────────────────────────
-// Only the face dragged moves: nothing is re-matched and no one is taught from it, so no other
+// ─── Moving faces ────────────────────────────────────────────────────────────
+// Only the faces moved move: nothing is re-matched and no one is taught from them, so no other
 // face changes group.
-// Onto a person (their group or their name at the top): it's them.
-// Onto an unrecognised group: it's whoever that is, and not the person it came from.
-// Onto the faces seen only once: it's no one known, on its own.
+// Onto a person (their group or their name at the top): they're them.
+// Onto an unrecognised group: they're whoever that is, and not the person they came from.
+// Onto the faces seen only once: they're no one known, each on their own.
+// Onto New: they're someone new (see newFacePerson).
 
 let _facePinCount = 0;
 
+// Of `faces`, those that moving to `target` would change
+function facesThatMove(faces, target) {
+    const state = _faceTag;
+    if (target.person != null) return faces.filter(f => f.match?.name !== target.person);
+    if (target.cluster != null) return faces.filter(f => f.cluster !== state.clusters[target.cluster]);
+    if (target.singles) return faces.filter(f => f.cluster?.faces.length !== 1);
+    return faces;
+}
+
+async function moveFaces(faces, target) {
+    const state = _faceTag;
+    if (!state) return;
+    const cluster = target.cluster != null ? state.clusters[target.cluster] : null;
+    if (target.cluster != null && !cluster) return;
+    faces = facesThatMove(faces, target);
+    if (!faces.length) return;
+    for (const face of faces) {
+        if (face.maybe && face.maybe.name !== target.person) face.rejected.add(face.maybe.name);
+        keepFaceFollowers(face);
+    }
+    await forgetFacesAsPerson(faces.filter(f => f.match));
+    if (state !== _faceTag) return;
+    // Groups are found again on a rematch, but not now: re-forming them could move other faces.
+    for (const face of faces) {
+        detachFace(face);
+        face.unmatched = false;
+        if (target.person != null) {
+            face.named = target.person;
+            face.rejected.delete(target.person);
+            face.pin = null;
+            face.match = { name: target.person, dist: 0 };
+        } else if (cluster) {
+            cluster.pin ||= `pin${++_facePinCount}`;
+            face.pin = cluster.pin;
+            attachFace(face, cluster);
+        } else {
+            face.pin = `solo${++_facePinCount}`;
+            const solo = { id: state.clusters.length, faces: [], centroid: new Float32Array(128), pin: face.pin };
+            state.clusters.push(solo);
+            attachFace(face, solo);
+        }
+    }
+    state.selected.clear();
+    renderFaceTag();
+}
+
+// Dragging a selected face drags all the selected ones; dragging any other drags just it.
 function faceDragStart(event, faceIndex) {
-    if (!_faceTag) return;
-    _faceTag.dragging = faceIndex;
-    event.dataTransfer.setData('text/plain', String(faceIndex));
+    const state = _faceTag;
+    if (!state) return;
+    const faces = state.selected.has(faceIndex) ? selectedFaces() : [state.faces[faceIndex]];
+    state.dragging = faces.map(f => f.index);
+    event.dataTransfer.setData('text/plain', state.dragging.join(','));
     event.dataTransfer.effectAllowed = 'move';
-    event.currentTarget.classList.add('dragging');
+    faces.forEach(f => document.querySelector(`.face-tile[data-face="${f.index}"]`)?.classList.add('dragging'));
+    if (faces.length > 1) {
+        const badge = document.createElement('div');
+        badge.className = 'face-drag-badge';
+        badge.textContent = `${faces.length} faces`;
+        document.body.appendChild(badge);
+        event.dataTransfer.setDragImage(badge, 20, 16);
+        setTimeout(() => badge.remove(), 0);
+    }
     document.getElementById('face-tag-modal').classList.add('face-dragging');
 }
 
-function faceDragEnd(event) {
-    event.currentTarget.classList.remove('dragging');
+function faceDragEnd() {
+    document.querySelectorAll('#face-tag-modal .face-tile.dragging').forEach(el => el.classList.remove('dragging'));
     document.getElementById('face-tag-modal').classList.remove('face-dragging');
     document.querySelectorAll('#face-tag-modal .drop-target').forEach(el => el.classList.remove('drop-target'));
     if (!_faceTag) return;
@@ -552,21 +678,27 @@ function faceDragEnd(event) {
     if (_faceTag.renderPending) renderFaceTag();
 }
 
-// The face being dragged, if dropping it on `el` would move it.
-function faceDropAllowed(el) {
-    const face = _faceTag?.faces[_faceTag.dragging];
-    if (!face) return null;
+function faceDropTarget(el) {
     const d = el.dataset;
-    if (d.dropPerson != null) return face.match?.name === d.dropPerson ? null : face;
-    if (d.dropCluster != null) return face.cluster?.id === Number(d.dropCluster) ? null : face;
-    if (d.dropSingles != null) return face.cluster?.faces.length === 1 ? null : face;
+    if (d.dropNew != null) return { isNew: true };
+    if (d.dropPerson != null) return { person: d.dropPerson };
+    if (d.dropCluster != null) return { cluster: Number(d.dropCluster) };
+    if (d.dropSingles != null) return { singles: true };
     return null;
+}
+
+// The faces being dragged that dropping on `el` would move
+function faceDropAllowed(el) {
+    const state = _faceTag;
+    const target = faceDropTarget(el);
+    if (!state?.dragging || !target) return [];
+    const faces = state.dragging.map(i => state.faces[i]).filter(Boolean);
+    return target.isNew ? faces : facesThatMove(faces, target);
 }
 
 function faceDragOver(event) {
     const el = event.currentTarget;
-    const face = faceDropAllowed(el);
-    if (!face) return;
+    if (!faceDropAllowed(el).length) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = 'move';
@@ -584,39 +716,14 @@ async function faceDrop(event) {
     event.stopPropagation();
     const el = event.currentTarget;
     el.classList.remove('drop-target');
-    const face = faceDropAllowed(el);
-    if (!face) return;
-    const d = el.dataset;
-    // The drag is over as far as rendering goes: the tile may be gone before its dragend arrives.
+    const faces = faceDropAllowed(el);
+    const target = faceDropTarget(el);
+    // The drag is over as far as rendering goes: the tiles may be gone before their dragend arrives.
     _faceTag.dragging = null;
     document.getElementById('face-tag-modal').classList.remove('face-dragging');
-    const state = _faceTag;
-    if (face.maybe && face.maybe.name !== d.dropPerson) face.rejected.add(face.maybe.name);
-    keepFaceFollowers(face);
-    if (d.dropPerson == null || face.match) await forgetFaceAsPerson(face);
-    if (state !== _faceTag) return;
-    // Groups are found again on a rematch, but not now: re-forming them could move other faces.
-    const cluster = d.dropCluster != null ? state.clusters[Number(d.dropCluster)] : null;
-    if (d.dropCluster != null && !cluster) return;
-    detachFace(face);
-    face.off = false;
-    face.unmatched = false;
-    if (d.dropPerson != null) {
-        face.named = d.dropPerson;
-        face.rejected.delete(d.dropPerson);
-        face.pin = null;
-        face.match = { name: d.dropPerson, dist: 0 };
-    } else if (cluster) {
-        cluster.pin ||= `pin${++_facePinCount}`;
-        face.pin = cluster.pin;
-        attachFace(face, cluster);
-    } else {
-        face.pin = `solo${++_facePinCount}`;
-        const solo = { id: state.clusters.length, faces: [], centroid: new Float32Array(128), pin: face.pin };
-        state.clusters.push(solo);
-        attachFace(face, solo);
-    }
-    renderFaceTag();
+    if (!faces.length) return;
+    if (target.isNew) return newFacePerson(faces);
+    moveFaces(faces, target);
 }
 
 // Takes a face out of the person or group it's in, without disturbing the rest.
@@ -634,28 +741,29 @@ function detachFace(face) {
 function attachFace(face, cluster) {
     face.match = null;
     face.maybe = null;
-    face.off = false;   // there's no leaving out among the unknown faces (a click there names it)
     face.cluster = cluster;
     cluster.faces.push(face);
     const n = cluster.faces.length;
     for (let i = 0; i < 128; i++) cluster.centroid[i] += (face.descriptor[i] - cluster.centroid[i]) / n;
 }
 
-// The face isn't the person it's matched to: it won't be matched to them again, and if it
-// taught them, that's taken back.
-async function forgetFaceAsPerson(face) {
-    if (!face.match) return;
-    face.rejected.add(face.match.name);
-    face.named = null;
-    if (face.sampleId) {
-        const id = face.sampleId;
+// The faces aren't the people they're matched to: they won't be matched to them again, and any
+// they taught are taken back.
+async function forgetFacesAsPerson(faces) {
+    const ids = [];
+    for (const face of faces) {
+        if (!face.match) continue;
+        face.rejected.add(face.match.name);
+        face.named = null;
+        if (face.sampleId) ids.push(face.sampleId);
         face.sampleId = null;
-        try {
-            await fetch(`/api/faces/samples/${id}`, { method: 'DELETE' });
-            await loadFacePeople();
-        } catch (err) {
-            console.warn('[FACES] Taking back a sample failed:', err);
-        }
+    }
+    if (!ids.length) return;
+    try {
+        await Promise.all(ids.map(id => fetch(`/api/faces/samples/${id}`, { method: 'DELETE' })));
+        await loadFacePeople();
+    } catch (err) {
+        console.warn('[FACES] Taking back a sample failed:', err);
     }
 }
 
@@ -691,10 +799,11 @@ function faceTilesHtml(faces) {
         const photo = state.photos[f.photoIndex];
         const close = f.match && !f.named ? f.match : f.maybe;
         const title = photo.path + (close ? ` (${Math.round((1 - close.dist) * 100)}% match${f.maybe ? '?' : ''})` : '');
-        return `<div class="face-tile${f.off ? ' off' : ''}${f.maybe ? ' maybe' : ''}" role="button" tabindex="0" data-face="${i}" title="${escapeHtml(title)}" style="${faceTileStyle(f, photo)}"` +
+        const selected = state.selected.has(i);
+        return `<div class="face-tile${selected ? ' selected' : ''}${f.maybe ? ' maybe' : ''}" role="checkbox" aria-checked="${selected}" tabindex="0" data-face="${i}" title="${escapeHtml(title)}" style="${faceTileStyle(f, photo)}"` +
             ` draggable="true" ondragstart="faceDragStart(event, ${i})" ondragend="faceDragEnd(event)"` +
-            ` onclick="faceTileClick(${i})" ondblclick="faceTileDblClick(${i})"` +
-            ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();clickFaceTile(${i})}"></div>`;
+            ` onclick="toggleFaceSelected(${i})"` +
+            ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleFaceSelected(${i})}"></div>`;
     }).join('');
     const more = faces.length - FACE_TILES_PER_GROUP;
     return `<div class="face-tiles">${shown}${more > 0 ? `<span class="face-more">+${more} more</span>` : ''}</div>`;
@@ -707,11 +816,14 @@ function renderFaceTag() {
     if (state.dragging != null) { state.renderPending = true; return; }
     state.renderPending = false;
 
-    document.getElementById('face-tag-people').innerHTML = state.people.length
-        ? `<span class="face-tag-label">Knows</span>` + state.people.map(p =>
-            `<span class="face-person-chip" data-drop-person="${escapeHtml(p.name)}" ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)" title="Learned from ${p.samples} face${p.samples === 1 ? '' : 's'}. Drop a face here if it's them.">${escapeHtml(p.name)}` +
-            `<button onclick="forgetFacePerson(${p.id})" title="Forget ${escapeHtml(p.name)}" aria-label="Forget ${escapeHtml(p.name)}">&times;</button></span>`).join('')
-        : `<span class="face-tag-label">No one named yet. Name the groups of faces below to teach it who's who.</span>`;
+    const dropAttrs = `ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)"`;
+    document.getElementById('face-tag-people').innerHTML =
+        (state.people.length ? `<span class="face-tag-label">Knows</span>` : `<span class="face-tag-label">No one named yet.</span>`) +
+        state.people.map(p =>
+            `<span class="face-person-chip" role="button" data-drop-person="${escapeHtml(p.name)}" ${dropAttrs} onclick="faceChipClick(event)" title="Learned from ${p.samples} face${p.samples === 1 ? '' : 's'}. Drop faces here, or select them and click, if they're ${escapeHtml(p.name)}.">${escapeHtml(p.name)}` +
+            `<button onclick="forgetFacePerson(${p.id})" title="Forget ${escapeHtml(p.name)}" aria-label="Forget ${escapeHtml(p.name)}">&times;</button></span>`).join('') +
+        `<button class="face-person-chip face-new-chip" data-drop-new ${dropAttrs} onclick="newFacePerson()" title="Someone it doesn't know yet: select their faces (or drop them here) and give a name">+ New</button>`;
+    const selectBtn = `<button class="btn-control ghost face-select-all" onclick="selectFaceGroup(event)" title="Select all the faces in this group (again to deselect)">Select All</button>`;
 
     const byPerson = new Map();
     for (const f of state.faces) {
@@ -724,10 +836,10 @@ function renderFaceTag() {
 
     let html = '';
     if (byPerson.size) {
-        html += `<h3 class="face-section-title">Recognised <span>click a face to leave it out, drag it to who it really is, or double-click if it isn't them</span></h3>`;
+        html += `<h3 class="face-section-title">Recognised <span>select faces that aren't right, then drag them to who it is or press Not them</span></h3>`;
         for (const [name, faces] of [...byPerson].sort((a, b) => a[0].localeCompare(b[0]))) {
             html += `<div class="face-group" data-drop-person="${escapeHtml(name)}" ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)"><div class="face-group-head"><strong>${escapeHtml(name)}</strong>` +
-                `<span>${plural(photosOf(faces), 'photo')}</span></div>${faceTilesHtml(faces)}</div>`;
+                `<span>${plural(photosOf(faces), 'photo')}</span>${selectBtn}</div>${faceTilesHtml(faces)}</div>`;
         }
     }
 
@@ -738,23 +850,23 @@ function renderFaceTag() {
         maybes.get(f.maybe.name).push(f);
     }
     if (maybes.size) {
-        html += `<h3 class="face-section-title">Maybe <span>click a face if it's them, double-click if it isn't, or drag it to who it is</span></h3>`;
+        html += `<h3 class="face-section-title">Maybe <span>Yes to All, or select faces and drag them onto the name (or anyone else), or press Not them</span></h3>`;
         for (const [name, faces] of [...maybes].sort((a, b) => a[0].localeCompare(b[0]))) {
             html += `<div class="face-group face-maybe-group" data-drop-person="${escapeHtml(name)}" ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)">` +
                 `<div class="face-group-head"><strong>${escapeHtml(name)}?</strong>` +
                 `<button class="btn-control ghost" onclick="confirmFaceMaybesFor(this.closest('[data-drop-person]').dataset.dropPerson)">Yes to All</button>` +
-                `<span>${plural(photosOf(faces), 'photo')}</span></div>${faceTilesHtml(faces)}</div>`;
+                `<span>${plural(photosOf(faces), 'photo')}</span>${selectBtn}</div>${faceTilesHtml(faces)}</div>`;
         }
     }
 
     const groups = state.clusters.filter(c => c.faces.length > 1).sort((a, b) => b.faces.length - a.faces.length);
     if (groups.length) {
-        html += `<h3 class="face-section-title">Not recognised <span>name a group to teach it, click a face to name just that one, or drag it to another group</span></h3>`;
+        html += `<h3 class="face-section-title">Not recognised <span>name a group and Save, or select faces and press New or drag them onto a name</span></h3>`;
         for (const c of groups.slice(0, FACE_GROUPS_SHOWN)) {
             html += `<div class="face-group" data-drop-cluster="${c.id}" ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)"><div class="face-group-head">` +
-                `<input type="text" id="face-cluster-name-${c.id}" list="face-tag-names" maxlength="100" placeholder="Who is this?" autocomplete="off" onkeydown="if(event.key==='Enter') nameFaceCluster(${c.id})">` +
+                `<input type="text" id="face-cluster-name-${c.id}" data-group-key="${Math.min(...c.faces.map(f => f.index))}" list="face-tag-names" maxlength="100" placeholder="Who is this?" autocomplete="off" onkeydown="if(event.key==='Enter') nameFaceCluster(${c.id})">` +
                 `<button class="btn-control ghost" onclick="nameFaceCluster(${c.id})">Save</button>` +
-                `<span>${plural(photosOf(c.faces), 'photo')}</span></div>${faceTilesHtml(c.faces)}</div>`;
+                `<span>${plural(photosOf(c.faces), 'photo')}</span>${selectBtn}</div>${faceTilesHtml(c.faces)}</div>`;
         }
         if (groups.length > FACE_GROUPS_SHOWN) html += `<p class="settings-hint">${groups.length - FACE_GROUPS_SHOWN} smaller groups not shown. Name some people and they'll be picked out.</p>`;
     }
@@ -762,23 +874,27 @@ function renderFaceTag() {
     const singles = state.clusters.filter(c => c.faces.length === 1).map(c => c.faces[0]);
     if (state.faces.length) {
         html += `<details class="face-singles" data-drop-singles ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)"><summary>${plural(singles.length, 'face')} seen only once ` +
-            `<span>click one to name it; drop a face here to take it out of its group</span></summary>${faceTilesHtml(singles)}</details>`;
+            `<span>drop faces here to take them out of their group</span></summary>${faceTilesHtml(singles)}</details>`;
     }
 
     // Keep what's being typed, and the open state of the singles, across a re-render.
     const results = document.getElementById('face-tag-results');
-    const typed = [...results.querySelectorAll('input[id^="face-cluster-name-"]')].map(i => [i.id, i.value, i === document.activeElement]);
+    // Groups are renumbered when faces are re-matched, so what's typed is kept with the group's own
+    // faces (its first face), not its number: it never lands on a different group.
+    const typed = [...results.querySelectorAll('input[data-group-key]')].filter(i => i.value)
+        .map(i => [i.dataset.groupKey, i.value, i === document.activeElement]);
     const singlesOpen = results.querySelector('.face-singles')?.open;
     const scroll = results.scrollTop;
     results.innerHTML = html || (state.scanning ? '' : `<p class="settings-hint">No faces found.</p>`);
-    for (const [id, value, focused] of typed) {
-        const input = document.getElementById(id);
+    for (const [key, value, focused] of typed) {
+        const input = results.querySelector(`input[data-group-key="${key}"]`);
         if (!input) continue;
         input.value = value;
         if (focused) input.focus();
     }
     if (singlesOpen) results.querySelector('.face-singles')?.setAttribute('open', '');
     results.scrollTop = scroll;
+    updateFaceSelectionBar();
     updateFaceTagButtons();
 }
 
@@ -786,7 +902,7 @@ function renderFaceTag() {
 function faceTagsToAdd() {
     const out = new Map();
     for (const f of _faceTag?.faces || []) {
-        if (!f.match || f.off) continue;
+        if (!f.match) continue;
         const key = _faceTag.photos[f.photoIndex].key;
         if (!out.has(key)) out.set(key, new Set());
         out.get(key).add(f.match.name);
@@ -811,7 +927,7 @@ async function learnFromAcceptedFaces() {
     const state = _faceTag;
     const byName = new Map();
     for (const f of state.faces) {
-        if (!f.match || f.off || f.sampleId) continue;
+        if (!f.match || f.sampleId) continue;
         if (!f.named && f.match.dist > state.threshold * FACE_LEARN_CONFIDENT) continue;
         if (!byName.has(f.match.name)) byName.set(f.match.name, []);
         byName.get(f.match.name).push(f);
