@@ -22,6 +22,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Send to local players (Sonos and DLNA players. Some Airplay support)
 * Send from other local DLNA servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent, Music (album art of playing track)
+* Tag photos with the people in them: teach it who's who from a few faces, then let it tag a whole folder. Recognition runs in your browser, so photos never leave your network (see [Face Tagging](#face-tagging)).
 * Album art can be retrieved from discogs (via a Discogs API key)
 * Lyrics from LRCLIB shown in the slideshow's Music mode. Sync'd as closely as possible.
 * Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
@@ -251,6 +252,7 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 ## Slideshow:
 * Starts after the app has been idle for a while and moves to the next photo on a timer. Set both in Settings > General (0 turns either timer off). It won't start while a game is in progress.
 * iPhone Live Photos can play in the slideshow: check **Include videos** in Settings > General. When files are imported, a video with a photo of the same name beside it (a Live Photo's video) is filed next to the photo in the pictures folder rather than with the videos, and the slideshow plays it in place of the photo. Any other video in the slideshow's folder is included too. A video plays silently unless **Play video sound** is on; a short one stays on its last frame for the rest of the photo time, and a long one is cut short after **Play each video for up to** seconds.
+* In the photo browser's grid view, each photo's tags (such as the people [Face Tagging](#face-tagging) found) show under its name: the first three, then how many more. Rest the mouse on them to see them all.
 * In the photo browser, Live Photos have a **LIVE** badge, and resting the mouse on one in the grid plays its clip. Opening one plays its clip once and then settles on the photo; press and hold the photo to play it again, with sound.
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
@@ -262,6 +264,25 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 
 <img src="images/ammui-slideshow.png" width="300"/>
 <img src="images/ammui-slideshow-map.png" width="300"/>
+
+## Face Tagging
+
+On a photo folder of the local library, the ☰ menu's **Tag Faces...** finds the faces in every photo in the folder and the folders inside it, and tags each photo with the names of the people it recognises.
+
+1. Open **Tag Faces...** on a folder. It scans the photos, showing the faces as it goes. The first time, it downloads the face recognition models (about 12 MB, kept by the browser afterwards), and the first photo takes a few seconds longer while it warms up.
+2. **Recognised** lists the people it already knows, with each of their faces. Click a face to leave it out of the tagging, or double-click it if it isn't them: just that face goes back to Not recognised, and it won't be matched to anyone again. A face only counts as someone when it's clearly them: close to them, closer to them than to anyone else, and (once it knows them from a few faces) close to more than one of those.
+3. **Maybe** shows faces that are nearly someone, or could be one of two people. Click a face if it is them, double-click it if it isn't, or **Yes to All**. Maybes aren't tagged until you say yes.
+4. **Not recognised** groups faces that look like the same person. Type a name (or pick a known one) and press **Save** to teach it who that is. Click any face in the group that doesn't belong first. Faces **seen only once** are named by clicking them. Once named, those faces move up to Recognised, and so do any others that match. Groups are worked out from each face's closest look-alikes, so someone's photos stay together even when the oldest and newest don't look much alike.
+5. **Drag a face** to put it right: onto a person's group (or their name at the top) if it's them, onto a group under Not recognised if it's that person, or onto **seen only once** to take it out of its group. Only the face you drag (or double-click) moves, and it stays where you put it. Naming a group is what teaches it who someone is; moving a face doesn't, except that a face taken off a person it was learned from is unlearned, so it doesn't spoil later scans.
+6. **Matching** sets how alike a face must be to count: **Strict** misses more, **Loose** mistakes more. It's applied straight away.
+7. **Tag N Photos** adds each person's name as a tag to the photos they're in. Tags already on a photo are kept. In grid view, the photos' tags show under them. It also learns from the faces you've just accepted: for each person, up to 8 that look least like what it knows already (a new angle, age or light), so it gets better at them folder by folder. Faces you confirmed by hand always count; automatic matches only if they were clear ones.
+
+Good to know:
+* The more faces a person is learned from, the better they're recognised, which is why tagging teaches it too. It keeps up to 200 faces per person. The people it knows are shown at the top. **×** forgets one (their tags stay on the photos).
+* Each photo is only scanned once: going back to a folder is quick, and only new or changed photos are looked at. Scanning can be stopped and carried on later.
+* Faces are found and recognised in the browser (with [face-api](https://github.com/vladmandic/face-api)). The server only keeps the people's names and face measurements (128 numbers per face), the scan results and the tags. Use Chrome, Edge or Safari on a computer for big folders; it's slower on a phone or tablet, and dragging faces needs a mouse.
+* HEIC photos are scanned when ffmpeg is installed (it converts them for the browser).
+* The people it knows are backed up and restored with **Tags and photos**. The scan results aren't backed up; photos are just scanned again.
 
 ## Tablet/Phone mode
 * Player / server switchable panes.
@@ -664,7 +685,7 @@ Art is looked up in this order: a `folder.jpg`, `cover.jpg`, `folder.png`, `cove
    * **Delete files from the bucket that are no longer on this server**: off by default, so the bucket keeps everything ever backed up. When on, each backup also removes anything in this server's folder of the bucket that has been deleted, moved or renamed locally. If more than the set percentage (default 10%) would be removed, nothing is deleted and the log says why, which protects the backup if the library drive is missing or emptied. Turning on versioning in the bucket lets you recover anything deleted by mistake.
 3. **Restore**: lists the folders in the bucket (one per server that has backed up to it). Pick one to see what's in it, all ticked, and untick anything you don't want:
    * **Files**: each library folder (Music, Photos, Videos), with how many files and how big. Files already here with the same size are skipped, so an interrupted restore can simply be run again. A local file with a different size is replaced.
-   * **Data**: **Calendar, meals and items** (with the meal plan, shopping list, family and their word games), **Tags and photos** (tags, favourites, photo rotations, deleted photos), **Settings**, **Play history** and **Saved lookups** (album art, lyrics and YouTube matches already found). Each one ticked replaces what's here. This server keeps its own name and S3 connection, and the device list and library index are rebuilt rather than restored. A folder backed up before data was included has no Data section.
+   * **Data**: **Calendar, meals and items** (with the meal plan, shopping list, family and their word games), **Tags and photos** (tags, favourites, photo rotations, deleted photos, the people known for face tagging), **Settings**, **Play history** and **Saved lookups** (album art, lyrics and YouTube matches already found). Each one ticked replaces what's here. This server keeps its own name and S3 connection, and the device list and library index are rebuilt rather than restored. A folder backed up before data was included has no Data section.
 
    * **Carry on as that server** (off by default): this server takes the old one's name, so from then on it backs up into the same folder, carrying on from the backup it was restored from rather than starting a new one.
 

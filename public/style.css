@@ -12959,3 +12959,318 @@ input:checked+.slider:before {
         display: none;
     }
 }
+
+/* ─── Tag Faces dialog ─────────────────────────────────────────────────────── */
+.modal-content.face-tag-content {
+    max-width: 760px;
+    width: 94%;
+    max-height: 88vh;
+    padding: 0;
+}
+
+.face-tag-body {
+    padding: 0 1.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    min-height: 0;
+    flex: 1;
+}
+
+.face-tag-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+.face-tag-status {
+    margin-top: 0.4rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.face-tag-status.error {
+    color: var(--accent);
+    white-space: normal;
+}
+
+.face-tag-label {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.face-tag-people {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.face-person-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.2rem 0.3rem 0.2rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.18);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    font-size: 0.85rem;
+}
+
+.face-person-chip button {
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 0.3rem;
+    border-radius: 50%;
+}
+
+.face-person-chip button:hover {
+    color: var(--accent);
+}
+
+.face-tag-threshold {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+
+.face-tag-threshold input[type="range"] {
+    flex: 0 1 200px;
+    accent-color: var(--primary);
+}
+
+.face-tag-results {
+    overflow-y: auto;
+    min-height: 120px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding-right: 0.25rem;
+}
+
+.face-section-title {
+    margin: 0.25rem 0 0;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.face-section-title span,
+.face-singles summary span {
+    font-weight: 400;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-left: 0.4rem;
+}
+
+.face-group {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    padding: 0.65rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.face-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.face-group-head > span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+
+.face-group-head input {
+    flex: 1 1 160px;
+    min-width: 0;
+    max-width: 260px;
+}
+
+.face-group-head .btn-control {
+    padding: 0.35rem 0.9rem;
+}
+
+.face-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.face-tile {
+    width: 72px;
+    height: 72px;
+    flex: none;
+    border-radius: 0.6rem;
+    border: 2px solid var(--primary);
+    background-color: rgba(0, 0, 0, 0.4);
+    background-repeat: no-repeat;
+    cursor: pointer;
+    padding: 0;
+    position: relative;
+    transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+.face-tile.off {
+    opacity: 0.35;
+    border-color: transparent;
+}
+
+.face-tile.off::after {
+    content: '\00d7';
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+    color: #fff;
+}
+
+.face-singles .face-tile {
+    border-color: var(--card-border);
+}
+
+.face-more {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    padding: 0 0.4rem;
+}
+
+.face-singles summary {
+    cursor: pointer;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
+.face-tag-footer {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.75rem 1.5rem 1.25rem;
+    border-top: 1px solid var(--card-border);
+    flex-wrap: wrap;
+}
+
+@media (max-width: 1100px) {
+    .modal-content.face-tag-content {
+        max-width: 760px;
+        width: 96%;
+        padding: 0;
+    }
+}
+
+@media (max-width: 600px) {
+    .face-tag-body { padding: 0 1rem 0.75rem; }
+    .face-tag-footer { padding: 0.75rem 1rem 1rem; }
+}
+
+/* Dragging faces between groups in Tag Faces */
+.face-tile {
+    display: block;
+    box-sizing: border-box;
+}
+
+.face-tile:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+}
+
+.face-tile.dragging {
+    opacity: 0.4;
+}
+
+#face-tag-modal.face-dragging .face-group,
+#face-tag-modal.face-dragging .face-singles,
+#face-tag-modal.face-dragging .face-person-chip {
+    outline: 1px dashed var(--card-border);
+    outline-offset: 2px;
+}
+
+#face-tag-modal .face-group.drop-target,
+#face-tag-modal .face-singles.drop-target,
+#face-tag-modal .face-person-chip.drop-target {
+    outline: 2px solid var(--primary);
+    background: rgba(99, 102, 241, 0.15);
+}
+
+.face-singles {
+    border-radius: 1rem;
+    padding: 0.4rem 0.5rem;
+}
+
+/* Photo grid: a photo's tags under its name */
+.playlist-items.grid-view .browser-item.has-tags .item-icon,
+.playlist-items.grid-view .browser-item.has-tags .item-icon.has-thumb {
+    height: calc(100% - 3.1rem);
+}
+
+.playlist-items.grid-view .browser-item.has-tags .item-info {
+    flex: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+}
+
+.playlist-items.grid-view .browser-item.has-tags .item-title {
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
+}
+
+.playlist-items.grid-view .item-tags {
+    display: flex;
+    justify-content: center;
+    gap: 0.25rem;
+    margin-top: 0.3rem;
+    overflow: hidden;
+    min-width: 0;
+    width: 100%;
+}
+
+.playlist-items.grid-view .item-tag {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.2);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    color: var(--text);
+    font-size: 0.65rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.playlist-items.grid-view .item-tag-more {
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--card-border);
+    color: var(--text-muted);
+}
+
+/* Tag Faces: faces that might be someone */
+.face-tile.maybe {
+    border-style: dashed;
+    border-color: #f59e0b;
+}
+
+.face-maybe-group .face-group-head strong {
+    color: #f59e0b;
+}

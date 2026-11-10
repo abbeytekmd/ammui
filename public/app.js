@@ -2497,6 +2497,8 @@ function renderBrowser(items) {
         }
     });
 
+    const showGridTags = effectiveViewMode === 'grid' && currentBrowserMode === 'photo';
+
     browserItems.innerHTML = items.map((item, index) => {
         const isContainer = item.type === 'container';
         const firstLetter = (browserSortTitle(item)[0] || '').toUpperCase();
@@ -2579,9 +2581,10 @@ function renderBrowser(items) {
         // For plain HTML attribute values (data-*), where a backslash would be kept literally
         const escAttr = (s) => (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
         const isLocalServer = selectedServerUdn === LOCAL_SERVER_UDN;
+        const tagsHtml = showGridTags && !isContainer ? browserTagsHtml(item.tags) : '';
 
         return `
-            <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}${isImage && currentBrowserMode === 'photo' && selectedPhotos.has(item.uri) ? ' photo-selected' : ''}" data-item-index="${index}"
+            <div ${letterIdAttr} class="playlist-item browser-item ${isContainer ? 'folder' : 'file'}${isImage && currentBrowserMode === 'photo' && selectedPhotos.has(item.uri) ? ' photo-selected' : ''}${tagsHtml ? ' has-tags' : ''}" data-item-index="${index}"
                  onclick="${isContainer ?
                 `enterFolder('${escJs(item.id)}', '${escJs(item.title)}')` :
                 isImage ?
@@ -2592,6 +2595,7 @@ function renderBrowser(items) {
                 <div class="item-icon${thumbUrl ? ' has-thumb' : ''}">${icon}</div>
                 <div class="item-info">
                     <div class="item-title">${item.title}${isLocalServer && typeof peerShareBadgeHtml === 'function' ? peerShareBadgeHtml(item.id) : ''}</div>
+                    ${tagsHtml}
                 </div>
                 <div class="item-actions">
                     ${!isContainer ? `
@@ -2668,6 +2672,15 @@ function renderBrowser(items) {
                                         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                                     </svg>
                                     Identify Dates from Filename
+                                </button>
+                                <button class="dropdown-item" onclick="openFaceTagModal(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <circle cx="12" cy="12" r="10"></circle>
+                                        <path d="M8 14s1.5 2 4 2 4-2 4-2"></path>
+                                        <line x1="9" y1="9" x2="9.01" y2="9"></line>
+                                        <line x1="15" y1="9" x2="15.01" y2="9"></line>
+                                    </svg>
+                                    Tag Faces...
                                 </button>
                                 ` : ''}
                                 ${isContainer && (currentBrowserMode === 'photo' || currentBrowserMode === 'video') ? `
@@ -11850,6 +11863,34 @@ function showBrowserFavHeart(uri, isFav) {
     });
 }
 
+// A photo's or video's tags (other than fav, which is the heart) under it in the photo grid: the first few, then
+// how many more. Hovering shows them all.
+const BROWSER_TAGS_SHOWN = 3;
+
+function browserTagsHtml(tags) {
+    if (!tags?.length) return '';
+    const shown = tags.slice(0, BROWSER_TAGS_SHOWN).map(t => `<span class="item-tag">${escapeHtml(t)}</span>`).join('');
+    const more = tags.length - BROWSER_TAGS_SHOWN;
+    return `<div class="item-tags" title="${escapeHtml(tags.join(', '))}">${shown}${more > 0 ? `<span class="item-tag item-tag-more">+${more}</span>` : ''}</div>`;
+}
+
+// After a photo's tags change (info panel, Tag Faces): its grid tile follows. `match` picks the
+// items, by URL or by the key tags are saved against.
+function showBrowserTags(match, tags) {
+    const others = tags.filter(t => t !== 'fav');
+    const showGridTags = browserItems.classList.contains('grid-view') && browserItems.classList.contains('photo-mode');
+    currentBrowserItems.forEach((item, index) => {
+        if (!match(item)) return;
+        item.tags = others.length ? others : undefined;
+        const row = browserItems.querySelector(`[data-item-index="${index}"]`);
+        if (!row || !showGridTags || row.classList.contains('folder')) return;
+        row.querySelector('.item-tags')?.remove();
+        const html = browserTagsHtml(item.tags);
+        row.classList.toggle('has-tags', !!html);
+        if (html) row.querySelector('.item-info')?.insertAdjacentHTML('beforeend', html);
+    });
+}
+
 async function saveFileTags() {
     if (!currentInfoUri) return;
     try {
@@ -11860,6 +11901,8 @@ async function saveFileTags() {
         });
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
         showBrowserFavHeart(currentInfoUri, currentFileTags.includes('fav'));
+        const uri = currentInfoUri;
+        showBrowserTags(item => item.uri === uri, currentFileTags);
     } catch (err) {
         console.error('Failed to save tags:', err);
         showToast('Failed to save tags: ' + err.message, 'error', 4000);
@@ -12145,6 +12188,9 @@ function manualStartSlideshow() {
 
 async function startPhotoSlideshow(u, t, d, l, fid, ft) {
     if (slideshow) {
+        // The thumbnail already showing for this photo stands in while the full-size one loads
+        const tile = browserItems.querySelector(`[data-item-index="${currentBrowserItems.findIndex(i => i.uri === u)}"] .item-icon img`);
+        slideshow.placeholder = tile?.complete && tile.naturalWidth ? { url: u, src: tile.currentSrc || tile.src } : null;
         // Find current images to allow navigation
         const images = slideshowItems(currentBrowserItems.filter(item => isImageItem(item)), currentFolderVideos);
         if (images.length > 0) {

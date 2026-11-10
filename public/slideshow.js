@@ -307,6 +307,7 @@ class Slideshow {
         }
 
         console.log('[SLIDESHOW] Starting...');
+        this.clearStage();
         this.isActive = true;
         this.lastStartTime = Date.now();
         this.listVersion = null;
@@ -348,6 +349,26 @@ class Slideshow {
         }
         this.checkSunsetSky();
         this.updateSkyButton();
+    }
+
+    // Takes the photo left from last time off the screen, so the first slide appears on its own
+    // rather than transitioning from it.
+    clearStage() {
+        if (this._imgAnim) { this._imgAnim.cancel(); this._imgAnim = null; }
+        if (this.img) {
+            this.img.onload = null;
+            this.img.removeAttribute('src');
+            this.img.style.opacity = 0;
+            this.img.style.animation = '';
+            this.img.classList.remove('panorama');
+        }
+        if (this.bg) {
+            this.bg.style.backgroundImage = 'none';
+            this.bg.style.opacity = 0;
+        }
+        if (this.info) this.info.style.opacity = 0;
+        this.currentPhoto = null;
+        this._showNextAtOnce = true;
     }
 
     stop() {
@@ -832,6 +853,13 @@ class Slideshow {
     }
 
     renderPhoto(data) {
+        // The first slide after starting appears straight away, with no transition. If it's the
+        // photo clicked in the file browser, the thumbnail already loaded there stands in for it
+        // while the full-size photo loads.
+        const atOnce = this._showNextAtOnce;
+        this._showNextAtOnce = false;
+        const placeholder = atOnce && this.placeholder?.url === (data.originalUrl || data.url) ? this.placeholder.src : null;
+        this.placeholder = null;
         // Moving on (or off) a photo zooms it back out first
         if (data.url !== this.currentPhoto) this.clearZoom();
         if (data.isVideo) return this.renderVideo(data);
@@ -842,16 +870,19 @@ class Slideshow {
         this.slideIsVideo = false;
         this._videoToken = null; // a video still fading in gives way to this photo
 
-        const doTransition = (naturalWidth, naturalHeight) => {
+        // instant: no exit or entrance (the first slide). src: what to show, if not the photo itself.
+        const doTransition = (naturalWidth, naturalHeight, { instant = false, src = null } = {}) => {
             const fx = this.pickTransition();
             // Coming from a video: fade it out while the transition's exit runs
             if (this.videoShowing) this.video.style.opacity = 0;
-            // A panning panorama's transform belongs to its CSS animation, so only fade it out
-            this.animateImg(this.img.classList.contains('panorama') ? SS_TRANSITIONS.fade : fx, 'out');
+            if (!instant) {
+                // A panning panorama's transform belongs to its CSS animation, so only fade it out
+                this.animateImg(this.img.classList.contains('panorama') ? SS_TRANSITIONS.fade : fx, 'out');
+            }
             this.img.style.opacity = 0;
             if (this.info) this.info.style.opacity = 0;
 
-            setTimeout(() => {
+            const showNew = () => {
                 if (this.currentPhoto) {
                     this.previousPhoto = {
                         url: this.currentPhoto,
@@ -861,15 +892,21 @@ class Slideshow {
                 }
                 this.stopVideo();
 
+                const shown = src || mediaUrl(data.url);
                 if (this.bg) {
-                    this.bg.style.opacity = 0;
-                    setTimeout(() => {
-                        this.bg.style.backgroundImage = `url("${mediaUrl(data.url).replace(/"/g, '%22')}")`;
+                    const setBg = () => {
+                        this.bg.style.backgroundImage = `url("${shown.replace(/"/g, '%22')}")`;
                         this.bg.style.opacity = 1;
-                    }, 500);
+                    };
+                    if (instant) setBg();
+                    else {
+                        this.bg.style.opacity = 0;
+                        setTimeout(setBg, 500);
+                    }
                 }
 
-                this.img.src = mediaUrl(data.url);
+                this.img.onload = null;
+                this.img.src = shown;
                 this.currentPhoto = data.url;
                 this.originalUrl = data.originalUrl || data.url;
                 this.currentPhotoData = data;
@@ -887,7 +924,7 @@ class Slideshow {
                 const applyDisplay = (w, h) => {
                     const ratio = w / h;
                     const isPanorama = ratio > 2.2;
-                    this.animateImg(isPanorama ? SS_TRANSITIONS.fade : fx, 'in');
+                    if (!instant) this.animateImg(isPanorama ? SS_TRANSITIONS.fade : fx, 'in');
                     this.img.style.opacity = 1;
                     if (this.info) this.info.style.opacity = 1;
                     this.img.classList.toggle('panorama', isPanorama);
@@ -917,14 +954,36 @@ class Slideshow {
                 } else {
                     this.img.onload = () => applyDisplay(this.img.naturalWidth, this.img.naturalHeight);
                 }
-                if (data.liveVideo) setTimeout(() => this.playLive(data), fx.inMs);
-            }, fx.outMs);
+                if (data.liveVideo) setTimeout(() => this.playLive(data), instant ? 0 : fx.inMs);
+            };
+            if (instant) showNew();
+            else setTimeout(showNew, fx.outMs);
         };
+
+        if (placeholder) {
+            // Up at once from the browser's cache; the full-size photo replaces it, unanimated, when
+            // it arrives (unless the slideshow has moved on by then).
+            doTransition(0, 0, { instant: true, src: placeholder });
+            const full = new Image();
+            full.onload = () => {
+                if (this.currentPhoto !== data.url || !this.isActive) return;
+                this.img.onload = null;
+                this.img.src = full.src;
+                // In case it beat the thumbnail, whose onload would have shown it
+                if (this.img.style.opacity !== '1') {
+                    this.img.style.opacity = 1;
+                    if (this.info) this.info.style.opacity = 1;
+                }
+                if (this.bg) this.bg.style.backgroundImage = `url("${full.src.replace(/"/g, '%22')}")`;
+            };
+            full.src = mediaUrl(data.url);
+            return;
+        }
 
         // Preload the image so the current photo stays visible until the new one is ready
         const preload = new Image();
-        preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight);
-        preload.onerror = () => doTransition(0, 1);
+        preload.onload = () => doTransition(preload.naturalWidth, preload.naturalHeight, { instant: atOnce });
+        preload.onerror = () => doTransition(0, 1, { instant: atOnce });
         preload.src = mediaUrl(data.url);
     }
 

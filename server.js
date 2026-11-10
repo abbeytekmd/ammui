@@ -60,6 +60,7 @@ import {
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
     listPasswords, getPassword, savePassword, deletePassword,
+    getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
@@ -1540,9 +1541,16 @@ app.get('/api/browse/:udn', async (req, res) => {
     try {
         const server = createMediaServer(device);
         const items = await server.browse(objectId);
-        // Favourites get a heart in the file browser
+        // Favourites get a heart in the file browser, and photos show their other tags in grid view.
+        // tagKey is what tags are saved against, so tags added elsewhere can find their item.
         for (const item of items) {
-            if (item.uri && settings.fileTags?.[mediaKey(item.uri)]?.includes('fav')) item.fav = true;
+            if (!item.uri) continue;
+            const key = mediaKey(item.uri);
+            const tags = settings.fileTags?.[key] || [];
+            if (tags.includes('fav')) item.fav = true;
+            const others = tags.filter(t => t !== 'fav');
+            if (others.length) item.tags = others;
+            item.tagKey = key;
         }
         res.json({ objectId, items });
     } catch (err) {
@@ -8283,6 +8291,95 @@ app.post('/api/local/folder-file-tags', express.json(), async (req, res) => {
         console.error('[TAGS] Folder tagging failed:', err);
         res.status(500).json({ error: err.message });
     }
+});
+
+// ─── Face tagging ─────────────────────────────────────────────────────────────
+// The browser does the face finding and matching (see the Tag Faces dialog); the server keeps the
+// people it has been taught, each photo's faces so a folder isn't scanned twice, and the tags.
+
+const isFaceDescriptor = d => Array.isArray(d) && d.length === 128 && d.every(n => typeof n === 'number' && Number.isFinite(n));
+
+// The photos in a library folder and the folders inside it: [{ path, key, stamp, faces }], where
+// `faces` is what's cached for the photo as it is now, or null if it needs scanning.
+app.get('/api/local/face-photos', async (req, res) => {
+    const localDir = path.join(__dirname, 'local');
+    const folderPath = path.resolve(localDir, path.normalize(String(req.query.id || '')).replace(/^(\.\.(\/|\\|$))+/, ''));
+    if (!folderPath.startsWith(localDir + path.sep)) return res.status(403).json({ error: 'Access denied' });
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) return res.status(404).json({ error: 'Folder not found' });
+    try {
+        const photos = [];
+        for await (const filePath of walkImages(folderPath)) {
+            const stat = await fs.promises.stat(filePath).catch(() => null);
+            if (!stat) continue;
+            const rel = path.relative(localDir, filePath).split(path.sep).join('/');
+            const key = localMediaKey(rel);
+            const stamp = `${Math.round(stat.mtimeMs)}|${stat.size}`;
+            photos.push({ path: rel, key, stamp, faces: getFaceScan(key, stamp) });
+        }
+        photos.sort((a, b) => a.path.localeCompare(b.path));
+        res.json({ photos });
+    } catch (err) {
+        console.error('[FACES] Listing photos failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// { items: [{ key, stamp, faces: [{ box: [x, y, w, h], ar, descriptor }] }] }: caches what the browser found.
+app.post('/api/faces/scans', express.json({ limit: '5mb' }), (req, res) => {
+    const items = (Array.isArray(req.body?.items) ? req.body.items : []).filter(i =>
+        typeof i?.key === 'string' && typeof i.stamp === 'string' && Array.isArray(i.faces) && i.faces.every(f => isFaceDescriptor(f?.descriptor)));
+    setFaceScans(items.map(i => ({ uri: i.key, stamp: i.stamp, faces: i.faces })));
+    res.json({ success: true, saved: items.length });
+});
+
+// { people: [{ id, name, samples }], samples: [{ id, personId, name, descriptor }] }
+app.get('/api/faces/people', (req, res) => {
+    res.json({ people: getFacePeople(), samples: getFaceSamples() });
+});
+
+// { name, samples: [{ descriptor, source }] }: teaches it a person from some of their faces.
+app.post('/api/faces/people', express.json({ limit: '2mb' }), (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    const samples = (Array.isArray(req.body?.samples) ? req.body.samples : []).filter(s => isFaceDescriptor(s?.descriptor)).slice(0, 50);
+    if (!name) return res.status(400).json({ error: 'A name is required' });
+    if (name.length > 100) return res.status(400).json({ error: 'Names must be up to 100 characters' });
+    if (!samples.length) return res.status(400).json({ error: 'No faces given' });
+    const { person, sampleIds } = addFaceSamples(name, samples);
+    terminalLog(`[FACES] Learned ${samples.length} face${samples.length === 1 ? '' : 's'} of "${person.name}" (${person.samples} in all)`);
+    res.json({ person, sampleIds });
+});
+
+// Takes back a face a person was taught from (when it's dragged off them again).
+app.delete('/api/faces/samples/:id', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Bad id' });
+    deleteFaceSample(id);
+    res.json({ success: true });
+});
+
+app.delete('/api/faces/people/:id', (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'Bad id' });
+    deleteFacePerson(id);
+    res.json({ success: true });
+});
+
+// { items: [{ key, add: [tags] }] }: adds tags to photos, keeping the ones they already have.
+app.post('/api/local/photo-tags', express.json({ limit: '5mb' }), (req, res) => {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    let changed = 0;
+    for (const { key, add } of items) {
+        if (typeof key !== 'string' || !splitMediaKey(key)?.isLocal || !Array.isArray(add)) continue;
+        const tags = add.map(t => String(t).trim()).filter(t => t && t.length <= 100);
+        const before = settings.fileTags[key] || [];
+        const after = [...new Set([...before, ...tags])];
+        if (after.length === before.length) continue;
+        setFileTags(key, after);
+        settings.fileTags[key] = after;
+        changed++;
+    }
+    terminalLog(`[FACES] Tagged ${changed} of ${items.length} photos`);
+    res.json({ success: true, photos: items.length, changed });
 });
 
 
