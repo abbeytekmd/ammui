@@ -60,7 +60,7 @@ import {
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
     listPasswords, getPassword, savePassword, deletePassword,
-    getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans,
+    getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans, getPhotoHash, setPhotoHash,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
@@ -8363,6 +8363,106 @@ app.delete('/api/faces/people/:id', (req, res) => {
     if (!id) return res.status(400).json({ error: 'Bad id' });
     deleteFacePerson(id);
     res.json({ success: true });
+});
+
+// ─── Duplicate photos ─────────────────────────────────────────────────────────
+// Each photo gets a fingerprint: a "difference hash" of a 9x8 grey shrink of it (64 bits, one for
+// each pair of neighbouring pixels: is the right one brighter?), which stays the same when a photo
+// is resized or re-saved, plus its pixel size. Photos that might be exact copies (same file size
+// and fingerprint) also get a SHA-1 of their bytes. Cached against each file's stamp, so a folder
+// is only worked out once. The browser compares them (see duplicates.js).
+
+function photoFingerprint(srcPath) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn('ffmpeg', [
+            '-hide_banner', '-i', srcPath, '-frames:v', '1',
+            '-vf', 'scale=9:8:flags=area,format=gray', '-f', 'rawvideo', '-',
+        ], { windowsHide: true });
+        const chunks = [];
+        let stderr = '';
+        proc.stdout.on('data', d => chunks.push(d));
+        proc.stderr.on('data', d => { if (stderr.length < 20000) stderr += d.toString(); });
+        proc.on('error', err => {
+            if (err.code === 'ENOENT') ffmpegUnavailable = true;
+            reject(err);
+        });
+        proc.on('close', code => {
+            const px = Buffer.concat(chunks);
+            if (code !== 0 || px.length < 72) return reject(new Error(`ffmpeg exited ${code}`));
+            let dhash = '';
+            for (let row = 0; row < 8; row++) {
+                let byte = 0;
+                for (let col = 0; col < 8; col++) byte = (byte << 1) | (px[row * 9 + col] < px[row * 9 + col + 1] ? 1 : 0);
+                dhash += byte.toString(16).padStart(2, '0');
+            }
+            const size = stderr.match(/Video:.*?(\d{2,5})x(\d{2,5})/);   // the source's stream comes first
+            resolve({ dhash, w: size ? Number(size[1]) : 0, h: size ? Number(size[2]) : 0 });
+        });
+    });
+}
+
+function fileSha1(filePath) {
+    return new Promise((resolve, reject) => {
+        const hash = crypto.createHash('sha1');
+        fs.createReadStream(filePath).on('error', reject).on('data', d => hash.update(d)).on('end', () => resolve(hash.digest('hex')));
+    });
+}
+
+function localLibraryPath(rel) {
+    const localDir = path.join(__dirname, 'local');
+    const full = path.resolve(localDir, path.normalize(String(rel || '')).replace(/^(\.\.(\/|\\|$))+/, ''));
+    return full.startsWith(localDir + path.sep) ? full : null;
+}
+
+// The photos in a library folder and the folders inside it: [{ path, key, stamp, size, hash }],
+// where `hash` is { dhash, w, h, sha1 } as cached for the photo as it is now, or null.
+app.get('/api/local/photo-hashes', async (req, res) => {
+    const localDir = path.join(__dirname, 'local');
+    const folderPath = localLibraryPath(req.query.id);
+    if (!folderPath) return res.status(403).json({ error: 'Access denied' });
+    if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) return res.status(404).json({ error: 'Folder not found' });
+    try {
+        const photos = [];
+        for await (const filePath of walkImages(folderPath)) {
+            const stat = await fs.promises.stat(filePath).catch(() => null);
+            if (!stat) continue;
+            const rel = path.relative(localDir, filePath).split(path.sep).join('/');
+            const key = localMediaKey(rel);
+            const stamp = `${Math.round(stat.mtimeMs)}|${stat.size}`;
+            photos.push({ path: rel, key, stamp, size: stat.size, mtime: Math.round(stat.mtimeMs), hash: getPhotoHash(key, stamp) });
+        }
+        photos.sort((a, b) => a.path.localeCompare(b.path));
+        res.json({ photos, ffmpeg: !ffmpegUnavailable });
+    } catch (err) {
+        console.error('[DUPES] Listing photos failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// { items: [{ path, sha1: true|false }] } -> { items: [{ path, stamp, hash }] }: works out (and
+// caches) the fingerprint of each photo that hasn't one, and its SHA-1 where asked.
+app.post('/api/local/photo-hashes', express.json({ limit: '2mb' }), async (req, res) => {
+    const items = (Array.isArray(req.body?.items) ? req.body.items : []).slice(0, 100);
+    const out = await Promise.all(items.map(async item => {
+        const filePath = localLibraryPath(item?.path);
+        if (!filePath) return { path: item?.path, error: 'Access denied' };
+        try {
+            const stat = await fs.promises.stat(filePath);
+            const key = localMediaKey(String(item.path));
+            const stamp = `${Math.round(stat.mtimeMs)}|${stat.size}`;
+            const hash = getPhotoHash(key, stamp) || { dhash: null, w: 0, h: 0, sha1: null };
+            if (hash.dhash == null) {
+                try { Object.assign(hash, await runThumbTask(() => photoFingerprint(filePath))); }
+                catch { hash.dhash = ''; }   // unreadable: it can still be an exact copy
+            }
+            if (item.sha1 && !hash.sha1) hash.sha1 = await fileSha1(filePath);
+            setPhotoHash(key, stamp, hash);
+            return { path: item.path, stamp, hash };
+        } catch (err) {
+            return { path: item.path, error: err.message };
+        }
+    }));
+    res.json({ items: out });
 });
 
 // { items: [{ key, add: [tags] }] }: adds tags to photos, keeping the ones they already have.

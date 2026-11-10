@@ -69,6 +69,11 @@ class Slideshow {
         this.ticker = null; // the news ticker's settings (slideshowTicker)
         this.tickerEl = document.getElementById('ss-ticker');
         this.tickerKey = ''; // the headlines the ticker is showing, so a reload that changes nothing doesn't restart it
+        this.peopleEl = document.getElementById('ss-people');
+        this.peopleNames = []; // everyone Tag Faces knows, for the people bar along the bottom
+        this.peopleOpen = false; // the bar is showing everyone, to tag them, not just who's in the photo
+        this.peopleTouched = new Set(); // names switched on this photo, kept on the bar (dimmed if off) until it moves on
+        this.peoplePhoto = null;
     }
 
     init() {
@@ -283,6 +288,7 @@ class Slideshow {
     }
 
     async start(items = null, index = -1) {
+        this.loadPeople();
         // Photos picked from the library (a folder, a selection) show as Custom until the mode is
         // changed or the slideshow stops; the saved mode is left alone.
         if (items) {
@@ -1149,10 +1155,93 @@ class Slideshow {
         if (typeof updateSsLyricsVisibility === 'function') updateSsLyricsVisibility();
 
         currentScreensaverFolder = { id: data.folderId, title: data.folderTitle };
+        this.renderPeople();
 
         // Always fetch full metadata to get camera info (and GPS fallback).
         // The server's 64KB range-fetch often misses EXIF data deeper in the file.
         this.fetchMetadataFallback(data);
+    }
+
+    // ─── People bar ──────────────────────────────────────────────────────────
+    // Along the bottom: the people (from Tag Faces) tagged in the photo showing. Tap one to take
+    // them off it, or + to show everyone and tap them on. Saved straight away.
+
+    async loadPeople() {
+        try {
+            const res = await fetch('/api/faces/people');
+            if (!res.ok) return;
+            const data = await res.json();
+            this.peopleNames = (data.people || []).map(p => p.name).sort((a, b) => a.localeCompare(b));
+            this.renderPeople();
+        } catch (e) { }
+    }
+
+    renderPeople() {
+        const el = this.peopleEl;
+        if (!el) return;
+        const data = this.currentPhotoData;
+        const photoKey = data ? (data.originalUrl || data.url) : null;
+        if (photoKey !== this.peoplePhoto) {
+            this.peoplePhoto = photoKey;
+            this.peopleOpen = false;
+            this.peopleTouched.clear();
+        }
+        if (!data || !this.peopleNames.length || this.mode === 'nowPlaying') {
+            el.hidden = true;
+            return;
+        }
+        const tags = new Set((data.tags || []).map(t => t.toLowerCase()));
+        const isIn = name => tags.has(name.toLowerCase());
+        const names = this.peopleOpen ? this.peopleNames : this.peopleNames.filter(n => isIn(n) || this.peopleTouched.has(n));
+        el.innerHTML = names.map(n =>
+            `<button class="ss-person${isIn(n) ? ' on' : ''}" data-name="${escapeHtml(n)}" aria-pressed="${isIn(n)}" title="${isIn(n) ? `Take ${escapeHtml(n)} off this photo` : `Tag ${escapeHtml(n)} in this photo`}">${escapeHtml(n)}</button>`).join('') +
+            `<button class="ss-person ss-person-more" data-more title="${this.peopleOpen ? 'Just the people in this photo' : 'Tag someone in this photo'}">${this.peopleOpen ? 'Done' : '+'}</button>`;
+        el.classList.toggle('open', this.peopleOpen);
+        el.hidden = false;
+    }
+
+    peopleClick(event) {
+        event.stopPropagation();
+        const btn = event.target.closest('button');
+        if (!btn) return;
+        if (btn.dataset.more != null) {
+            this.peopleOpen = !this.peopleOpen;
+            this.renderPeople();
+        } else if (btn.dataset.name) {
+            this.togglePerson(btn.dataset.name);
+        }
+        this.resetInterval();   // time to tap more than one
+    }
+
+    async togglePerson(name) {
+        const data = this.currentPhotoData;
+        if (!data) return;
+        const uri = data.originalUrl || data.url;
+        const before = data.tags || [];
+        const on = before.some(t => t.toLowerCase() === name.toLowerCase());
+        const tags = on ? before.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...before, name];
+        const setTags = list => {
+            data.tags = list;
+            // The same photo in the slideshow's list, so it's right next time round
+            for (const item of this.items || []) {
+                if ((data.key && item.key === data.key) || (item.uri || item.res) === uri) item.tags = [...list];
+            }
+        };
+        setTags(tags);
+        this.peopleTouched.add(name);
+        this.renderPeople();
+        try {
+            const res = await fetch('/api/file-tags', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ uri, tags }),
+            });
+            if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+            if (typeof showBrowserTags === 'function') showBrowserTags(i => i.uri === uri || (data.key && i.tagKey === data.key), tags);
+            if (!on && typeof allLibraryTags !== 'undefined' && !allLibraryTags.includes(name)) allLibraryTags = [...allLibraryTags, name].sort();
+        } catch (err) {
+            if (this.currentPhotoData === data) { setTags(before); this.renderPeople(); }
+            showToast(`Couldn't save the tags: ${err.message}`, 'error', 4000);
+        }
     }
 
     refreshNowPlayingLabel() {

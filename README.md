@@ -23,6 +23,7 @@ A web based home hub to manage and play your music, video and photo files. Send 
 * Send from other local DLNA servers (Subsonic, MiniDLNA/ReadyDLNA, etc.)
 * Display a slideshow of photos. Modes are: All, On this day, Favorites, Recent, Music (album art of playing track)
 * Tag photos with the people in them: teach it who's who from a few faces, then let it tag a whole folder. Recognition runs in your browser, so photos never leave your network (see [Face Tagging](#face-tagging)).
+* Find duplicate photos in a folder (exact copies, and resized or re-saved ones) and delete the extra copies, keeping the best (see [Finding Duplicate Photos](#finding-duplicate-photos)).
 * Album art can be retrieved from discogs (via a Discogs API key)
 * Lyrics from LRCLIB shown in the slideshow's Music mode. Sync'd as closely as possible.
 * Identify untagged music tracks via AcoustID and fill in Title/Artist/Album/Year (via an AcoustID API key).
@@ -253,6 +254,7 @@ Stop the server (Ctrl+C in its terminal, or stop the service if you set one up),
 * Starts after the app has been idle for a while and moves to the next photo on a timer. Set both in Settings > General (0 turns either timer off). It won't start while a game is in progress.
 * iPhone Live Photos can play in the slideshow: check **Include videos** in Settings > General. When files are imported, a video with a photo of the same name beside it (a Live Photo's video) is filed next to the photo in the pictures folder rather than with the videos, and the slideshow plays it in place of the photo. Any other video in the slideshow's folder is included too. A video plays silently unless **Play video sound** is on; a short one stays on its last frame for the rest of the photo time, and a long one is cut short after **Play each video for up to** seconds.
 * In the photo browser's grid view, each photo's tags (such as the people [Face Tagging](#face-tagging) found) show under its name: the first three, then how many more. Rest the mouse on them to see them all.
+* Along the bottom of the slideshow, the people tagged in the photo showing (the people [Face Tagging](#face-tagging) knows). Tap a name to take them off the photo, or **+** to show everyone and tap someone on; **Done** goes back to just those in the photo. Changes are saved straight away, and the photo browser's grid shows them too.
 * In the photo browser, Live Photos have a **LIVE** badge, and resting the mouse on one in the grid plays its clip. Opening one plays its clip once and then settles on the photo; press and hold the photo to play it again, with sound.
 * Apply rotation to photos and the server will remember.
 * Delete a photo to hide it from the slideshow in future.
@@ -288,6 +290,24 @@ Good to know:
 * Faces are found and recognised in the browser (with [face-api](https://github.com/vladmandic/face-api)). The server only keeps the people's names and face measurements (128 numbers per face), the scan results and the tags. Use Chrome, Edge or Safari on a computer for big folders; it's slower on a phone or tablet, and dragging faces needs a mouse.
 * HEIC photos are scanned when ffmpeg is installed (it converts them for the browser).
 * The people it knows are backed up and restored with **Tags and photos**. The scan results aren't backed up; photos are just scanned again.
+
+
+## Finding Duplicate Photos
+
+On a photo folder of the local library, the ☰ menu's **Find Duplicates...** looks through every photo in the folder and the folders inside it for copies, and offers to delete the extra ones.
+
+1. Choose what to look for under **Find**:
+   * **Identical files only**: the very same file, saved more than once.
+   * **Same photo** (the default): also copies that have been resized or re-saved, such as a smaller copy sent by message or exported from another app.
+   * **Look-alikes too**: also photos that are very nearly the same, such as burst shots or small edits. Check these before deleting.
+2. Each group shows its copies side by side with their folder, size in pixels and file size. The best copy is marked **Best**: the one with the most pixels, then the biggest file, then the oldest, then the plainest name (not "copy" or "(1)").
+3. Extra copies are ticked for deleting where it's safe to guess: identical files, and smaller copies of the same photo. Look-alikes are never ticked for you. Click a photo to tick or untick it, or **Keep Best** to tick all but the best. At least one copy in each group is always kept.
+4. **Delete N Photos** deletes the ticked photos from the library, after asking. This can't be undone.
+
+Good to know:
+* Each photo is fingerprinted once, from a tiny grey shrink of it, so looking again is quick; only new or changed photos are looked at. Finding can be stopped and carried on later.
+* Only photos that could be exact copies (same file size and fingerprint) are read in full to compare their bytes.
+* A Live Photo's video isn't deleted with its photo.
 
 ## Tablet/Phone mode
 * Player / server switchable panes.

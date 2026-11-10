@@ -13351,3 +13351,209 @@ input:checked+.slider:before {
     font-size: 0.85rem;
     font-weight: 600;
 }
+
+/* Find Duplicates dialog */
+.modal-content.dup-content {
+    max-width: 900px;
+}
+
+#dup-mode {
+    flex: 0 1 auto;
+    min-width: 0;
+    padding: 0.3rem 0.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--card-border);
+    background: rgba(0, 0, 0, 0.25);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.dup-group {
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    padding: 0.6rem 0.75rem 0.75rem;
+}
+
+.dup-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.dup-group-head > span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    flex: 1;
+}
+
+.dup-group-head .btn-control {
+    padding: 0.25rem 0.6rem;
+    font-size: 0.8rem;
+}
+
+.dup-alike .dup-group-head strong {
+    color: #f59e0b;
+}
+
+.dup-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 0.6rem;
+}
+
+.dup-tile {
+    cursor: pointer;
+    border-radius: 0.7rem;
+    padding: 0.35rem;
+    border: 2px solid transparent;
+    min-width: 0;
+    transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dup-tile:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.dup-tile:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: 2px;
+}
+
+.dup-thumb {
+    position: relative;
+    aspect-ratio: 4 / 3;
+    border-radius: 0.5rem;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.35);
+}
+
+.dup-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.dup-best,
+.dup-mark {
+    position: absolute;
+    top: 0.3rem;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.dup-best {
+    left: 0.3rem;
+    background: #10b981;
+}
+
+.dup-mark {
+    right: 0.3rem;
+    background: var(--accent, #ef4444);
+    display: none;
+}
+
+.dup-tile.marked {
+    border-color: var(--accent, #ef4444);
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.dup-tile.marked .dup-mark {
+    display: block;
+}
+
+.dup-tile.marked img {
+    opacity: 0.55;
+}
+
+.dup-name,
+.dup-meta {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dup-name {
+    margin-top: 0.3rem;
+    font-size: 0.8rem;
+}
+
+.dup-meta {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.btn-control.dup-delete:not(:disabled) {
+    background: var(--accent, #ef4444);
+    border-color: var(--accent, #ef4444);
+}
+
+/* Slideshow: people tagged in the photo, along the bottom */
+.ss-people {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 16px;   /* below the photo details and the controls */
+    pointer-events: none;
+    z-index: 10002;
+}
+
+.ss-people[hidden],
+.screensaver-overlay.sky-mode .ss-people {
+    display: none;
+}
+
+.ss-person {
+    pointer-events: auto;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    color: rgba(255, 255, 255, 0.55);
+    font: 500 15px/1.3 'Inter', sans-serif;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ss-person.on {
+    background: rgba(99, 102, 241, 0.75);
+    border-color: rgba(165, 180, 252, 0.8);
+    color: #fff;
+}
+
+.ss-person:hover {
+    border-color: rgba(255, 255, 255, 0.6);
+}
+
+.ss-person-more {
+    min-width: 34px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Showing everyone: a backing so the names read over any photo */
+.ss-people.open {
+    pointer-events: auto;
+    max-height: 40vh;
+    overflow-y: auto;
+}
+
+@media (orientation: landscape) and (min-height: 480px) {
+    /* Under the photo, clear of the side panel */
+    .ss-people {
+        right: var(--ss-panel-w);
+        padding: 0 24px;
+    }
+}
+
