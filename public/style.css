@@ -13274,3 +13274,11 @@ input:checked+.slider:before {
 .face-maybe-group .face-group-head strong {
     color: #f59e0b;
 }
+
+/* A file browser row while it's being deleted */
+.browser-item.browser-item-deleting {
+    opacity: 0.35;
+    pointer-events: none;
+    filter: grayscale(1);
+    transition: opacity 0.2s ease;
+}

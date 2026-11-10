@@ -4787,14 +4787,15 @@ app.post('/api/delete', express.json(), async (req, res) => {
             return res.status(404).json({ error: 'File not found' });
         }
 
-        const stats = fs.statSync(filePath);
-        if (stats.isDirectory()) {
-            fs.rmSync(filePath, { recursive: true, force: true });
-            console.log(`Deleted directory: ${filePath}`);
-        } else {
-            fs.unlinkSync(filePath);
-            console.log(`Deleted file: ${filePath}`);
-        }
+        const isDir = fs.statSync(filePath).isDirectory();
+        // On Windows something else (Explorer, the search indexer, a virus scanner) often has a
+        // folder open for a moment after its files change, which makes the delete fail part-way
+        // (EPERM/EBUSY) or leaves it listed while it's "pending delete". So try again a few times,
+        // then wait for it to really be gone, so the listing the browser reloads doesn't still show it.
+        await fs.promises.rm(filePath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+        for (let i = 0; i < 30 && fs.existsSync(filePath); i++) await sleep(100);
+        if (fs.existsSync(filePath)) console.warn(`[DELETE] ${filePath} is still there after deleting; something else has it open`);
+        console.log(`Deleted ${isDir ? 'directory' : 'file'}: ${filePath}`);
         forgetPeerShares(filePath);
         res.json({ success: true });
     } catch (err) {

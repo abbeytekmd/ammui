@@ -481,13 +481,13 @@ async function unmatchFace(faceIndex) {
     renderFaceTag();
 }
 
-// A tile: on a recognised person or a group it switches the face in or out; a face seen only
-// once is named on its own.
+// A tile: on a recognised person it switches the face in or out of the tagging; on a maybe it's a
+// yes; on a face no one is known for, it asks who it is.
 function clickFaceTile(faceIndex) {
     const face = _faceTag?.faces[faceIndex];
     if (!face) return;
     if (face.maybe) return confirmFaceMaybes([face]);
-    if (!face.match && face.cluster?.faces.length === 1) {
+    if (!face.match) {
         const name = prompt('Who is this?', '');
         if (name?.trim()) teachFaces(name, [face]);
         return;
@@ -634,6 +634,7 @@ function detachFace(face) {
 function attachFace(face, cluster) {
     face.match = null;
     face.maybe = null;
+    face.off = false;   // there's no leaving out among the unknown faces (a click there names it)
     face.cluster = cluster;
     cluster.faces.push(face);
     const n = cluster.faces.length;
@@ -748,7 +749,7 @@ function renderFaceTag() {
 
     const groups = state.clusters.filter(c => c.faces.length > 1).sort((a, b) => b.faces.length - a.faces.length);
     if (groups.length) {
-        html += `<h3 class="face-section-title">Not recognised <span>name a group to teach it; click a face that doesn't belong, or drag it to another group</span></h3>`;
+        html += `<h3 class="face-section-title">Not recognised <span>name a group to teach it, click a face to name just that one, or drag it to another group</span></h3>`;
         for (const c of groups.slice(0, FACE_GROUPS_SHOWN)) {
             html += `<div class="face-group" data-drop-cluster="${c.id}" ondragover="faceDragOver(event)" ondragleave="faceDragLeave(event)" ondrop="faceDrop(event)"><div class="face-group-head">` +
                 `<input type="text" id="face-cluster-name-${c.id}" list="face-tag-names" maxlength="100" placeholder="Who is this?" autocomplete="off" onkeydown="if(event.key==='Enter') nameFaceCluster(${c.id})">` +

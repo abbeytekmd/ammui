@@ -475,12 +475,22 @@ async function enrichWithDiscogs(items) {
     }
 }
 
+// Ids of library items deleted in the last few seconds. Windows can keep listing a deleted folder
+// for a moment while something else still has it open, so listings leave them out meanwhile.
+const recentlyDeletedIds = new Set();
+
+function rememberDeleted(id) {
+    recentlyDeletedIds.add(id);
+    setTimeout(() => recentlyDeletedIds.delete(id), 10000);
+}
+
 async function browse(udn, objectId) {
     browserItems.innerHTML = '<div class="loading">Browsing...</div>';
     try {
         const response = await fetch(`/api/browse/${encodeURIComponent(udn)}?objectId=${encodeURIComponent(objectId)}`);
         if (!response.ok) throw new Error('Failed to browse server');
         const data = await response.json();
+        if (recentlyDeletedIds.size && udn === LOCAL_SERVER_UDN) data.items = data.items.filter(i => !recentlyDeletedIds.has(i.id));
         await enrichWithDiscogs(data.items);
         renderBrowser(data.items);
     } catch (err) {
@@ -1448,6 +1458,11 @@ async function deleteTrack(index, event) {
         return;
     }
 
+    // A big folder takes a few seconds to delete: the row fades straight away so it's clear it's going
+    const row = browserItems.querySelector(`[data-item-index="${index}"]`);
+    row?.classList.add('browser-item-deleting');
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+
     try {
         const response = await fetch('/api/delete', {
             method: 'POST',
@@ -1463,6 +1478,10 @@ async function deleteTrack(index, event) {
         console.log(`[DELETE] Successfully deleted: ${title}`);
         showToast(`Deleted: ${title}`, 'success', 2000);
 
+        // Gone from the list straight away, then the folder is listed again
+        rememberDeleted(id);
+        row?.remove();
+
         // Refresh the browser view
         const lastFolder = browsePath[browsePath.length - 1];
         if (lastFolder) {
@@ -1470,6 +1489,7 @@ async function deleteTrack(index, event) {
         }
     } catch (err) {
         console.error('[DELETE] Error:', err);
+        row?.classList.remove('browser-item-deleting');
         showToast(`Delete failed: ${err.message}`);
     } finally {
         // Close any open menus
