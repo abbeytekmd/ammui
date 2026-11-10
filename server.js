@@ -8344,9 +8344,12 @@ app.post('/api/faces/people', express.json({ limit: '2mb' }), (req, res) => {
     const samples = (Array.isArray(req.body?.samples) ? req.body.samples : []).filter(s => isFaceDescriptor(s?.descriptor)).slice(0, 50);
     if (!name) return res.status(400).json({ error: 'A name is required' });
     if (name.length > 100) return res.status(400).json({ error: 'Names must be up to 100 characters' });
-    if (!samples.length) return res.status(400).json({ error: 'No faces given' });
+    // No faces at all just adds the person (from the slideshow's people bar), for faces to be given later
+    if (!samples.length && req.body?.samples?.length) return res.status(400).json({ error: 'No faces given' });
     const { person, sampleIds } = addFaceSamples(name, samples);
-    terminalLog(`[FACES] Learned ${samples.length} face${samples.length === 1 ? '' : 's'} of "${person.name}" (${person.samples} in all)`);
+    terminalLog(samples.length
+        ? `[FACES] Learned ${samples.length} face${samples.length === 1 ? '' : 's'} of "${person.name}" (${person.samples} in all)`
+        : `[FACES] Added "${person.name}"`);
     res.json({ person, sampleIds });
 });
 

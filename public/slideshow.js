@@ -1195,6 +1195,7 @@ class Slideshow {
         const names = this.peopleOpen ? this.peopleNames : this.peopleNames.filter(n => isIn(n) || this.peopleTouched.has(n));
         el.innerHTML = names.map(n =>
             `<button class="ss-person${isIn(n) ? ' on' : ''}" data-name="${escapeHtml(n)}" aria-pressed="${isIn(n)}" title="${isIn(n) ? `Take ${escapeHtml(n)} off this photo` : `Tag ${escapeHtml(n)} in this photo`}">${escapeHtml(n)}</button>`).join('') +
+            (this.peopleOpen ? `<button class="ss-person ss-person-new" data-new title="Someone not on the list yet">New...</button>` : '') +
             `<button class="ss-person ss-person-more" data-more title="${this.peopleOpen ? 'Just the people in this photo' : 'Tag someone in this photo'}">${this.peopleOpen ? 'Done' : '+'}</button>`;
         el.classList.toggle('open', this.peopleOpen);
         el.hidden = false;
@@ -1207,10 +1208,39 @@ class Slideshow {
         if (btn.dataset.more != null) {
             this.peopleOpen = !this.peopleOpen;
             this.renderPeople();
+        } else if (btn.dataset.new != null) {
+            this.addNewPerson();
         } else if (btn.dataset.name) {
             this.togglePerson(btn.dataset.name);
         }
         this.resetInterval();   // time to tap more than one
+    }
+
+    // Someone not on the list: added to the people Tag Faces knows (with no faces yet, so it can be
+    // shown who they are later) and tagged in this photo.
+    async addNewPerson() {
+        const data = this.currentPhotoData;
+        const typed = prompt('Who is in this photo?', '')?.trim();
+        this.resetInterval();
+        if (!typed || !data) return;
+        let name = this.peopleNames.find(n => n.toLowerCase() === typed.toLowerCase());
+        if (!name) {
+            try {
+                const res = await fetch('/api/faces/people', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: typed, samples: [] }),
+                });
+                const result = await res.json();
+                if (!res.ok) throw new Error(result.error || res.statusText);
+                name = result.person.name;
+                if (!this.peopleNames.includes(name)) this.peopleNames = [...this.peopleNames, name].sort((a, b) => a.localeCompare(b));
+            } catch (err) {
+                return showToast(`Couldn't add ${typed}: ${err.message}`, 'error', 4000);
+            }
+        }
+        if (this.currentPhotoData !== data) return;
+        if ((data.tags || []).some(t => t.toLowerCase() === name.toLowerCase())) return this.renderPeople();
+        await this.togglePerson(name);
     }
 
     async togglePerson(name) {

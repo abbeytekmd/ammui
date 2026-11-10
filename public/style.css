@@ -13557,3 +13557,8 @@ input:checked+.slider:before {
     }
 }
 
+
+.ss-person-new {
+    border-style: dashed;
+    color: rgba(255, 255, 255, 0.85);
+}
