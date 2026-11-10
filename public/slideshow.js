@@ -24,6 +24,14 @@ const SS_TRANSITIONS = {
     pop:        { outMs: 500, inMs: 900,  out: { s: 0.85, o: 0 }, in: { s: 0.3, o: 0 }, easeIn: 'cubic-bezier(.34,1.56,.64,1)' },
 };
 
+// A photo's tags. Items from the file browser keep their favourite apart (item.fav), so it's put
+// back with the rest: saving the tags from the slideshow mustn't lose it.
+function slideshowItemTags(item) {
+    const tags = [...(item.tags || [])];
+    if (item.fav && !tags.includes('fav')) tags.unshift('fav');
+    return tags;
+}
+
 class Slideshow {
     constructor() {
         this.items = [];
@@ -591,7 +599,7 @@ class Slideshow {
                     latitude: item.latitude,
                     longitude: item.longitude,
                     camera: item.camera || '',
-                    tags: item.tags || [],
+                    tags: slideshowItemTags(item),
                     key: item.key,
                     isVideo: !!item.isVideo,
                     liveVideo: item.liveVideo || null,
@@ -751,7 +759,7 @@ class Slideshow {
                 latitude: item.latitude,
                 longitude: item.longitude,
                 camera: item.camera || '',
-                tags: item.tags || [],
+                tags: slideshowItemTags(item),
                 key: item.key,
                 isVideo: !!item.isVideo,
                 liveVideo: item.liveVideo || null,
@@ -1256,7 +1264,12 @@ class Slideshow {
             data.tags = list;
             // The same photo in the slideshow's list, so it's right next time round
             for (const item of this.items || []) {
-                if ((data.key && item.key === data.key) || (item.uri || item.res) === uri) item.tags = [...list];
+                if (!((data.key && item.key === data.key) || (item.uri || item.res) === uri)) continue;
+                if (item.tagKey) {
+                    // A file browser item, which keeps its favourite apart from its other tags
+                    item.fav = list.includes('fav') || undefined;
+                    item.tags = list.filter(t => t !== 'fav');
+                } else item.tags = [...list];
             }
         };
         setTags(tags);
@@ -1474,11 +1487,21 @@ class Slideshow {
             });
             if (res.ok) {
                 showToast(newState ? 'Added to Favourites' : 'Removed', 'success', 2000);
+                // The photo showing too, so tagging someone next saves the favourite as it is now
+                const shown = this.currentPhotoData;
+                if (shown && (shown.originalUrl || shown.url) === urlToFav) {
+                    const others = (shown.tags || []).filter(t => t !== 'fav');
+                    shown.tags = newState ? ['fav', ...others] : others;
+                }
                 // Update in-memory item so the heart stays correct next time around
                 if (this.items && this.index >= 0 && this.index < this.items.length) {
                     const item = this.items[this.index];
                     if (!item.tags) item.tags = [];
-                    if (newState) {
+                    if (item.tagKey) {
+                        // A file browser item keeps its favourite apart from its other tags
+                        item.fav = newState || undefined;
+                        item.tags = item.tags.filter(t => t !== 'fav');
+                    } else if (newState) {
                         if (!item.tags.includes('fav')) item.tags.push('fav');
                     } else {
                         item.tags = item.tags.filter(t => t !== 'fav');
