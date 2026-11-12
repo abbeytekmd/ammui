@@ -61,6 +61,7 @@ class Slideshow {
         this.sunsetHandled = null; // the sunset the sky has been put up for already (so switching it off sticks)
         this.videoShowing = false; // the video element is up instead of the photo
         this.slideIsVideo = false; // the slide being shown (or faded to) is a video
+        this.soundBtn = document.getElementById('ss-video-sound'); // floats over a playing video slide
         this.bg = document.getElementById('screensaver-bg');
         this.info = document.getElementById('screensaver-info');
         this.favBtn = document.getElementById('btn-ss-favourite');
@@ -136,6 +137,26 @@ class Slideshow {
         this.video.addEventListener('click', () => {
             if (this.videoShowing && !this.slideIsVideo) this.playLive(this.currentPhotoData, !this.video.muted);
         });
+        // The sound button's icon follows the video, including when the browser forces it muted
+        this.video.addEventListener('volumechange', () => this.updateSoundButton());
+    }
+
+    // The sound button shows only while a video slide is up, crossed out when it's muted
+    updateSoundButton() {
+        if (!this.soundBtn) return;
+        this.soundBtn.hidden = !(this.isActive && this.videoShowing && this.slideIsVideo);
+        this.soundBtn.classList.toggle('is-muted', this.video.muted);
+    }
+
+    // The sound button: on or off for this video, and for the videos after it in this slideshow
+    // (until the General settings are applied again)
+    toggleVideoSound() {
+        if (!this.videoShowing) return;
+        const v = this.video;
+        v.muted = !v.muted;
+        this.videoSound = !v.muted;
+        if (v.paused && !v.ended) v.play().catch(() => { });
+        this.updateSoundButton();
     }
 
     resetIdleTimer(e) {
@@ -1045,6 +1066,7 @@ class Slideshow {
             v.style.opacity = 0;
             v.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
             v.muted = !this.videoSound;
+            this.updateSoundButton();
             let startedAt = 0;
             v.onplaying = () => {
                 v.onplaying = null;
@@ -1113,6 +1135,7 @@ class Slideshow {
         v.style.display = 'none';
         v.style.transition = '';
         this.img.style.display = '';
+        this.updateSoundButton();
     }
 
     updateInfoUI(data) {

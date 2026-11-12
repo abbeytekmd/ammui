@@ -2655,6 +2655,23 @@
         <div id="screensaver-bg" class="screensaver-bg"></div>
         <img id="screensaver-img" class="screensaver-img" alt="Screensaver" src="">
         <video id="screensaver-video" class="screensaver-video" playsinline muted preload="auto" style="display: none;"></video>
+        <!-- Over a playing video slide: turn its sound on or off (slideshow.js) -->
+        <button id="ss-video-sound" class="ss-video-sound" hidden title="Sound on/off"
+            onclick="event.stopPropagation(); slideshow.toggleVideoSound();" ontouchstart="event.stopPropagation()"
+            ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()" onmouseup="event.stopPropagation()">
+            <svg class="ss-sound-on" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />
+                <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                <path d="M18.5 5.5a9 9 0 0 1 0 13" />
+            </svg>
+            <svg class="ss-sound-off" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />
+                <line x1="16" y1="9" x2="22" y2="15" />
+                <line x1="22" y1="9" x2="16" y2="15" />
+            </svg>
+        </button>
         <!-- Headlines scrolling along the top, when the news ticker is on (filled by slideshow.js) -->
         <div id="ss-ticker" class="ss-ticker" hidden onclick="event.stopPropagation()"><div class="ss-ticker-track"></div></div>
         <!-- People tagged in the photo, along the bottom; tap to take off, + to tag someone (slideshow.js) -->

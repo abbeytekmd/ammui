@@ -13562,6 +13562,53 @@ input:checked+.slider:before {
     }
 }
 
+/* Slideshow: sound on/off, floating over a playing video slide at the bottom right */
+.ss-video-sound {
+    position: absolute;
+    right: calc(20px + env(safe-area-inset-right));
+    bottom: calc(60px + env(safe-area-inset-bottom));
+    z-index: 10005;
+    width: 52px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(6px);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.ss-video-sound:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: scale(1.08);
+}
+
+.ss-video-sound[hidden],
+.screensaver-overlay.sky-mode .ss-video-sound {
+    display: none;
+}
+
+.ss-video-sound .ss-sound-on,
+.ss-video-sound.is-muted .ss-sound-off {
+    display: block;
+}
+
+.ss-video-sound .ss-sound-off,
+.ss-video-sound.is-muted .ss-sound-on {
+    display: none;
+}
+
+@media (orientation: landscape) and (min-height: 480px) {
+    /* Over the photo's column, clear of the side panel */
+    .ss-video-sound {
+        right: calc(var(--ss-panel-w) + 20px);
+    }
+}
+
 
 .ss-person-new {
     border-style: dashed;
