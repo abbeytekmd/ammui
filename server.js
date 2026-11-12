@@ -43,7 +43,7 @@ import {
     logPlay, getTopTracks, getTopAlbums,
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
-    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getKeysByTag,
+    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getPeopleTagNames, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
     markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, resolveMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
@@ -8253,7 +8253,8 @@ app.post('/api/file-tags', (req, res) => {
 });
 
 app.get('/api/tags', (req, res) => {
-    res.json({ tags: getAllTags() });
+    // ?kind=music or photo narrows them; `people` (lower-cased) says which tags are people's names
+    res.json({ tags: getAllTags(req.query.kind), people: getPeopleTagNames() });
 });
 
 // { id, add: [tags], remove: [tags] }: adds tags to (or removes them from) every music file in a

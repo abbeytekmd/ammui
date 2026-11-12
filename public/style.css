@@ -7210,6 +7210,14 @@ p.subtitle {
     color: var(--text);
 }
 
+/* A tag that's a person face tagging knows: a small person icon before the name */
+.tag-person-icon {
+    flex: none;
+    vertical-align: -1px;
+    margin-right: 0.3em;
+    opacity: 0.8;
+}
+
 .mismatch {
     background: rgba(239, 68, 68, 0.1) !important;
     color: #f87171 !important;

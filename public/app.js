@@ -1040,7 +1040,7 @@ async function openFolderTagModal(index, event) {
     input.focus();
 
     try {
-        const { tags = [] } = await (await fetch('/api/tags')).json();
+        const { tags = [] } = await (await fetch('/api/tags?kind=music')).json(); // it tags music files
         allLibraryTags = tags;
         document.getElementById('folder-tag-list').innerHTML = tags.map(t => `<option value="${escapeHtml(t)}"></option>`).join('');
     } catch (e) { /* suggestions are optional */ }
@@ -4712,7 +4712,7 @@ async function openPlayTagModal() {
     playTagModal.style.display = 'flex';
 
     try {
-        const response = await fetch('/api/tags');
+        const response = await fetch('/api/tags?kind=music');
         if (!response.ok) throw new Error('Failed to load tags');
         const data = await response.json();
 
@@ -10764,12 +10764,16 @@ async function openFileInfoModal(trackData) {
         suggestionsContainer.style.display = 'none';
     }
 
-    // Fetch all library tags for auto-complete
+    // Fetch the library's tags for auto-complete: music ones for a track, so people's names from
+    // face tagging don't crowd them out, and photo ones for a photo or video
     try {
-        const tagRes = await fetch('/api/tags');
+        const kind = isImageItem(trackData) || isVideoItem(trackData) ? 'photo' : 'music';
+        const tagRes = await fetch(`/api/tags?kind=${kind}`);
         if (tagRes.ok) {
             const tagData = await tagRes.json();
             allLibraryTags = tagData.tags || [];
+            tagPeopleNames = new Set(tagData.people || []);
+            renderFileTags();
             updateTagSuggestions();
         }
     } catch (e) {
@@ -11796,9 +11800,21 @@ function updateTagSuggestions() {
     container.style.display = 'flex';
     container.innerHTML = matches.map(tag => `
         <div class="tag-suggestion" onclick="addSuggestion('${tag.replace(/'/g, "\\'")}')">
-            ${tag}
+            ${tagLabelHtml(tag)}
         </div>
     `).join('');
+}
+
+// The people face tagging knows, lower-cased, so their tags show with a person icon in the info box
+let tagPeopleNames = new Set();
+
+const TAG_PERSON_ICON = `<svg class="tag-person-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"></circle>
+    <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path></svg>`;
+
+function tagLabelHtml(tag) {
+    const person = tagPeopleNames.has(tag.toLowerCase());
+    return `${person ? TAG_PERSON_ICON : ''}${escapeHtml(tag)}`;
 }
 
 async function addSuggestion(tag) {
@@ -11840,8 +11856,8 @@ function renderFileTags() {
     if (!container) return;
 
     container.innerHTML = currentFileTags.map(tag => `
-        <div class="tag-badge">
-            ${tag}
+        <div class="tag-badge${tagPeopleNames.has(tag.toLowerCase()) ? ' is-person' : ''}" title="${tagPeopleNames.has(tag.toLowerCase()) ? 'Person' : ''}">
+            ${tagLabelHtml(tag)}
             <span class="tag-remove" onclick="removeFileTag('${tag.replace(/'/g, "\\'")}')">✕</span>
         </div>
     `).join('');

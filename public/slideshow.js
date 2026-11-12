@@ -244,8 +244,23 @@ class Slideshow {
             ? `<b class="ss-ticker-source">${escapeHtml(h.source)}</b>` : ''}${escapeHtml(h.title)}</span>`).join('');
         track.innerHTML = items + items;
         track.style.animation = 'none';
+        this.tickerWidth = 0;
+        this.sizeTicker(track);
+        // While the ticker is hidden (the sky is up) it has no width to time the scroll by, so it's
+        // timed again once it shows, and whenever its width changes (fonts loading, say)
+        if (!this.tickerObserver && window.ResizeObserver) {
+            this.tickerObserver = new ResizeObserver(() => this.sizeTicker(track));
+            this.tickerObserver.observe(track);
+        }
+    }
+
+    // The scroll's duration from the track's width, so it moves at a steady speed
+    sizeTicker(track) {
+        const width = track.scrollWidth; // reading its width lays it out, restarting the animation
+        if (!width || width === this.tickerWidth || !track.innerHTML) return;
+        this.tickerWidth = width;
         const pxPerSecond = 90;
-        const seconds = Math.max(track.scrollWidth / 2 / pxPerSecond, 10); // reading its width lays it out, restarting the animation
+        const seconds = Math.max(width / 2 / pxPerSecond, 10);
         track.style.animation = `ss-ticker-scroll ${seconds}s linear infinite`;
     }
 
