@@ -43,7 +43,7 @@ import {
     logPlay, getTopTracks, getTopAlbums,
     getSetting, setSetting,
     saveAllDevices, getAllDevices,
-    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getPeopleTagNames, getKeysByTag,
+    setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getPeopleTagNames, getTagUsage, renameTag, deleteTag, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
     markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, resolveMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
@@ -8255,6 +8255,34 @@ app.post('/api/file-tags', (req, res) => {
 app.get('/api/tags', (req, res) => {
     // ?kind=music or photo narrows them; `people` (lower-cased) says which tags are people's names
     res.json({ tags: getAllTags(req.query.kind), people: getPeopleTagNames() });
+});
+
+// For Settings → Tags: { tags: [{ tag, files, music, photos }], people: [lower-cased names] }
+app.get('/api/tags/usage', (req, res) => {
+    res.json({ tags: getTagUsage().filter(t => t.tag !== 'fav'), people: getPeopleTagNames() });
+});
+
+// { from, to }: renames a tag on every file (and the person, if it's someone face tagging knows)
+app.post('/api/tags/rename', express.json(), (req, res) => {
+    const from = String(req.body?.from || '');
+    const to = String(req.body?.to || '').trim();
+    if (!from || !to) return res.status(400).json({ error: 'Give the tag and its new name' });
+    if (to.length > 100) return res.status(400).json({ error: 'Tags must be up to 100 characters' });
+    if (from === 'fav' || to === 'fav') return res.status(400).json({ error: '"fav" is the favourite heart and can\'t be renamed' });
+    const files = renameTag(from, to);
+    settings.fileTags = getAllFileTags();
+    terminalLog(`[TAGS] Renamed "${from}" to "${to}" on ${files} file(s)`);
+    res.json({ success: true, files });
+});
+
+// { tag }: takes a tag off every file
+app.post('/api/tags/delete', express.json(), (req, res) => {
+    const tag = String(req.body?.tag || '');
+    if (!tag || tag === 'fav') return res.status(400).json({ error: 'Give a tag to delete' });
+    const files = deleteTag(tag);
+    settings.fileTags = getAllFileTags();
+    terminalLog(`[TAGS] Deleted "${tag}" from ${files} file(s)`);
+    res.json({ success: true, files });
 });
 
 // { id, add: [tags], remove: [tags] }: adds tags to (or removes them from) every music file in a

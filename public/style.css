@@ -4184,6 +4184,33 @@ p.subtitle {
     white-space: nowrap;
 }
 
+/* Settings → Tags */
+.tags-settings-filter {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+}
+
+.tags-settings-kind {
+    flex: none;
+    width: 1rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-weight: 700;
+}
+
+.tags-settings-kind .tag-person-icon {
+    margin: 0;
+    vertical-align: -1px;
+}
+
 /* Colour is shown here but changed from the Calendar tab's sidebar */
 .calendar-settings-dot {
     width: 0.8rem;

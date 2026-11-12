@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=102">
+    <link rel="stylesheet" href="style.css?v=103">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -1149,6 +1149,7 @@
                 <button class="settings-tab" onclick="switchSettingsTab('integrations', this)">Integrations</button>
                 <button class="settings-tab" onclick="switchSettingsTab('calendars', this)">Calendars</button>
                 <button class="settings-tab" onclick="switchSettingsTab('games', this)">Family</button>
+                <button class="settings-tab" onclick="switchSettingsTab('tags', this)">Tags</button>
                 <button class="settings-tab" onclick="switchSettingsTab('backup', this)">Backup</button>
                 <button class="settings-tab" data-tab="peerlink" onclick="switchSettingsTab('peerlink', this)">Peer Link</button>
                 <button class="settings-tab" onclick="switchSettingsTab('updates', this)">Updates<span id="update-badge-tab" class="update-badge update-badge-inline" style="display: none;"></span></button>
@@ -1563,6 +1564,20 @@
                             <button type="button" class="btn-control btn-small primary" onclick="addGamePlayer()">Add</button>
                         </div>
                         <div id="game-players-status" class="calendar-status"></div>
+                    </div>
+                </div>
+                <div id="settings-tags" class="settings-panel">
+                    <div class="manage-section">
+                        <h3>Tags</h3>
+                        <p class="settings-hint">Every tag on your music and photos. Click a name to correct it: it
+                            changes on every file that has it, and renaming it to a tag that already exists merges the
+                            two. A person's name changes in face tagging too.</p>
+                        <input type="search" id="tags-settings-filter" class="tags-settings-filter" placeholder="Find a tag..."
+                            autocomplete="off" aria-label="Find a tag" oninput="renderTagSettings()">
+                        <div id="tags-settings-list" class="calendar-settings-list">
+                            <span class="settings-hint">Loading...</span>
+                        </div>
+                        <div id="tags-settings-status" class="calendar-status"></div>
                     </div>
                 </div>
                 <div id="settings-backup" class="settings-panel">
@@ -3217,7 +3232,7 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=92"></script>
+    <script src="app.js?v=93"></script>
     <script src="peers.js?v=3"></script>
     <script src="slideshow.js?v=25"></script>
     <script src="timers.js?v=2"></script>

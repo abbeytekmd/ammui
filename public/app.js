@@ -4860,6 +4860,105 @@ function switchSettingsTab(tab, btnEl) {
     if (tab.toLowerCase() === 'startup') loadStartupSettings();
     if (tab.toLowerCase() === 'smarthome') loadPlugSettings();
     if (tab.toLowerCase() === 'peerlink') loadPeerLinkSettings();
+    if (tab.toLowerCase() === 'tags') loadTagSettings();
+}
+
+// Settings → Tags: every tag with how many files have it, to correct a name or delete it everywhere
+let tagSettingsList = [];
+
+async function loadTagSettings() {
+    const listEl = document.getElementById('tags-settings-list');
+    if (!listEl) return;
+    try {
+        const data = await (await fetch('/api/tags/usage')).json();
+        tagSettingsList = data.tags || [];
+        tagPeopleNames = new Set(data.people || []);
+        renderTagSettings();
+    } catch (err) {
+        listEl.innerHTML = '<span class="settings-hint">Could not load the tags.</span>';
+    }
+}
+
+function renderTagSettings() {
+    const listEl = document.getElementById('tags-settings-list');
+    if (!listEl) return;
+    const find = (document.getElementById('tags-settings-filter')?.value || '').trim().toLowerCase();
+    const shown = tagSettingsList.filter(t => !find || t.tag.toLowerCase().includes(find));
+    if (!shown.length) {
+        listEl.innerHTML = `<span class="settings-hint">${tagSettingsList.length ? 'No tags match.' : 'No tags yet.'}</span>`;
+        return;
+    }
+    const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+    listEl.innerHTML = shown.map(t => {
+        const i = tagSettingsList.indexOf(t);
+        const person = tagPeopleNames.has(t.tag.toLowerCase());
+        const what = [t.music ? plural(t.music, 'track') : '', t.photos ? plural(t.photos, 'photo') : '',
+            t.files - t.music - t.photos ? plural(t.files - t.music - t.photos, 'other file') : ''].filter(Boolean).join(', ');
+        return `
+            <div class="calendar-settings-row tags-settings-row">
+                <span class="tags-settings-kind" title="${person ? 'Person' : 'Tag'}">${person ? TAG_PERSON_ICON : '#'}</span>
+                <input type="text" class="calendar-name-input" value="${escapeHtml(t.tag)}" maxlength="100"
+                    onchange="renameTagEverywhere(${i}, this)" onkeydown="if(event.key==='Enter') this.blur()" title="Rename">
+                <span class="calendar-settings-host">${what}</span>
+                <button class="btn-control btn-small" onclick="deleteTagEverywhere(${i})" title="Take this tag off every file">Delete</button>
+            </div>`;
+    }).join('');
+}
+
+async function renameTagEverywhere(index, input) {
+    const t = tagSettingsList[index];
+    const to = input.value.trim();
+    if (!t) return;
+    if (!to || to === t.tag) { input.value = t.tag; return; }
+    if (to === 'fav') {
+        input.value = t.tag;
+        return setCalendarSettingsStatus('tags-settings-status', '"fav" is kept for the favourite heart.', true);
+    }
+    const existing = tagSettingsList.find(o => o !== t && o.tag.toLowerCase() === to.toLowerCase());
+    if (existing && !confirm(`"${existing.tag}" is already a tag. Merge "${t.tag}" into it?`)) { input.value = t.tag; return; }
+    try {
+        const res = await fetch('/api/tags/rename', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ from: t.tag, to })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        // A merge that differed only in case leaves the old spelling too: rename that one as well
+        if (existing && existing.tag !== to) {
+            await fetch('/api/tags/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ from: existing.tag, to })
+            });
+        }
+        setCalendarSettingsStatus('tags-settings-status', `Renamed "${t.tag}" to "${to}" on ${data.files} file${data.files === 1 ? '' : 's'}.`, false);
+        await loadTagSettings();
+    } catch (err) {
+        input.value = t.tag;
+        setCalendarSettingsStatus('tags-settings-status', `Couldn't rename it: ${err.message}`, true);
+    }
+}
+
+async function deleteTagEverywhere(index) {
+    const t = tagSettingsList[index];
+    if (!t) return;
+    if (!confirm(`Take "${t.tag}" off all ${t.files} file${t.files === 1 ? '' : 's'} that have it?`)) return;
+    try {
+        const res = await fetch('/api/tags/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tag: t.tag })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed');
+        const person = tagPeopleNames.has(t.tag.toLowerCase());
+        setCalendarSettingsStatus('tags-settings-status', `Deleted "${t.tag}" from ${data.files} file${data.files === 1 ? '' : 's'}.` +
+            (person ? ' They\'re still known to face tagging, which can tag them again.' : ''), false);
+        await loadTagSettings();
+    } catch (err) {
+        setCalendarSettingsStatus('tags-settings-status', `Couldn't delete it: ${err.message}`, true);
+    }
 }
 
 // Settings → Startup: a command the server runs once it's up, usually opening a browser.
