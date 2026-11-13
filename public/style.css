@@ -3916,7 +3916,7 @@ p.subtitle {
     gap: 0.75rem;
 }
 
-/* The calendar meals stopping a delete; each opens its day */
+/* The items and calendar meals stopping a delete; each opens it */
 .item-builder-uses {
     display: flex;
     flex-direction: column;
@@ -11751,13 +11751,10 @@ input:checked+.slider:before {
     will-change: transform;
 }
 
-/* At least the bar's width (set by slideshow.js), so one headline shows at a time and the next
-   waits off to the right. Held still while a story is open or under a mouse (slideshow.js). */
+/* Held still while a story is open or under a mouse (slideshow.js) */
 .ss-ticker-item {
     flex: none;
-    box-sizing: border-box;
-    min-width: var(--ss-ticker-w, 100vw);
-    padding-right: 120px;
+    padding-right: 1.6em;
     color: rgba(255, 255, 255, 0.92);
     font-size: 27px;   /* most of the bar's 44px, leaving a slim margin above and below */
     line-height: 1.2;
@@ -11847,6 +11844,13 @@ input:checked+.slider:before {
     .ticker-story-title {
         font-size: 1.3rem;
     }
+}
+
+/* A dot between headlines */
+.ss-ticker-item::after {
+    content: '\2022';
+    padding-left: 1.6em;
+    color: var(--accent, #fcd34d);
 }
 
 .ss-ticker-source {

@@ -215,10 +215,9 @@ class Slideshow {
         }
     }
 
-    // Shows the headlines one at a time: each slides quickly in from the right, then holds for a few
-    // seconds to be read. Each headline is at least the bar's width, so only one shows at a time. The
-    // track holds them twice, so after the last one the first slides in again, and the track then
-    // jumps back to the start unseen.
+    // The headlines in a line, moving right to left: the line moves quickly until the next headline
+    // reaches the left edge, then holds for a few seconds to read it. The track holds them twice, so
+    // after the last one the first comes round again, and the track then jumps back to the start unseen.
     showTicker(headlines) {
         const el = this.tickerEl;
         if (!el) return;
@@ -248,20 +247,13 @@ class Slideshow {
         const items = headlines.map((h, i) => `<span class="ss-ticker-item" data-index="${i}"><span class="ss-ticker-text">${
             sources.size > 1 && h.source ? `<b class="ss-ticker-source">${escapeHtml(h.source)}</b>` : ''}${escapeHtml(h.title)}</span></span>`).join('');
         track.innerHTML = items + items;
-        this.sizeTicker();
         this.startTickerSteps();
-        // While the ticker is hidden (the sky is up) it has no width, so it's sized again once it
+        // While the ticker is hidden (the sky is up) it has no width, so it's placed again once it
         // shows, and whenever its width changes (rotating, say)
         if (!this.tickerObserver && window.ResizeObserver) {
-            this.tickerObserver = new ResizeObserver(() => { this.sizeTicker(); this.placeTicker(false); });
+            this.tickerObserver = new ResizeObserver(() => this.placeTicker(false));
             this.tickerObserver.observe(el);
         }
-    }
-
-    // Each headline takes at least the bar's width, so the next one waits off to the right
-    sizeTicker() {
-        const width = this.tickerEl?.clientWidth;
-        if (width) this.tickerEl.style.setProperty('--ss-ticker-w', `${width}px`);
     }
 
     get tickerTrack() { return this.tickerEl?.querySelector('.ss-ticker-track'); }
@@ -285,11 +277,12 @@ class Slideshow {
     }
 
     // Moves the track to show the current headline: its start just inside the left fade, or for one
-    // too long for the bar, its end just inside the right fade
+    // too long for the bar, its end just inside the right fade. Animated, it moves fast (a steady
+    // speed, but at least half a second), and returns how long the move takes in ms.
     placeTicker(animate) {
         const el = this.tickerEl, track = this.tickerTrack, pos = this.tickerPos;
         const item = track?.children[pos?.index];
-        if (!item || !el.clientWidth) return;
+        if (!item || !el.clientWidth) return 0;
         const fade = 40; // the mask's fade at each end
         let x = fade - item.offsetLeft;
         if (pos.atEnd) {
@@ -297,8 +290,11 @@ class Slideshow {
             x = el.clientWidth - fade - item.offsetLeft - textWidth;
         }
         const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-        track.style.transition = animate && !reduceMotion ? 'transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
+        const ms = animate && !reduceMotion ? Math.round(Math.max(500, Math.abs(x - (this.tickerX ?? x)) / 1.5)) : 0;
+        track.style.transition = ms ? `transform ${ms}ms cubic-bezier(0.45, 0, 0.25, 1)` : 'none';
         track.style.transform = `translateX(${x}px)`;
+        this.tickerX = x;
+        return ms;
     }
 
     tickerStep() {
@@ -328,8 +324,8 @@ class Slideshow {
             pos.atEnd = false;
             hold = this.tickerHoldMs(pos.index);
         }
-        this.placeTicker(true);
-        this._tickerStepTimer = setTimeout(() => this.tickerStep(), hold + 700);
+        const moveMs = this.placeTicker(true);
+        this._tickerStepTimer = setTimeout(() => this.tickerStep(), hold + moveMs);
     }
 
     // For the set time after sunset the sky shows instead of the photos, and then they come back.

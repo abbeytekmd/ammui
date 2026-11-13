@@ -4465,27 +4465,30 @@ app.put('/api/ingredients/:id', express.json(), (req, res) => {
     res.json(saved);
 });
 
-// The calendar meals an item is on, checked before offering to delete it
-app.get('/api/ingredients/:id/meals', (req, res) => {
-    res.json({ meals: mealsUsingIngredient(req.params.id) });
+// What stops an item being deleted: the items it's part of and the calendar meals it's on, listed so
+// each can be changed to use something else. error is '' when there are none.
+function ingredientUses(id) {
+    const items = itemsUsingIngredient(id);
+    const meals = mealsUsingIngredient(id);
+    const reasons = [];
+    if (items.length) reasons.push(`part of ${items.length === 1 ? 'another item' : `${items.length} other items`}`);
+    if (meals.length) reasons.push(`in ${meals.length === 1 ? 'a meal' : `${meals.length} meals`} on the calendar`);
+    const error = reasons.length
+        ? `It's ${reasons.join(' and ')}. Change ${items.length + meals.length === 1 ? 'it' : 'them'} to use something else first.`
+        : '';
+    return { items, meals, error };
+}
+
+// Checked before offering to delete an item
+app.get('/api/ingredients/:id/uses', (req, res) => {
+    res.json(ingredientUses(req.params.id));
 });
 
 app.delete('/api/ingredients/:id', (req, res) => {
-    const users = itemsUsingIngredient(req.params.id);
-    if (users.length) {
-        const shown = users.slice(0, 3).join(', ') + (users.length > 3 ? ` and ${users.length - 3} more` : '');
-        return res.status(409).json({ error: `It's part of ${shown}. Take it out of ${users.length === 1 ? 'that item' : 'those items'} first.` });
-    }
     const ingredient = getIngredient(req.params.id);
     if (!ingredient) return res.status(404).json({ error: 'Item not found' });
-    // On meals on the calendar: those are listed so they can be changed to use something else
-    const meals = mealsUsingIngredient(req.params.id);
-    if (meals.length) {
-        return res.status(409).json({
-            error: `It's in ${meals.length === 1 ? 'a meal' : `${meals.length} meals`} on the calendar. Change ${meals.length === 1 ? 'it' : 'them'} to use something else first.`,
-            meals
-        });
-    }
+    const uses = ingredientUses(req.params.id);
+    if (uses.error) return res.status(409).json(uses);
     if (onShoppingList(ingredient.name)) return res.status(409).json({ error: "It's on the shopping list. Take it off there first." });
     deleteIngredient(req.params.id);
     res.json({ success: true });
