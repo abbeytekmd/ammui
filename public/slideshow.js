@@ -215,14 +215,19 @@ class Slideshow {
         }
     }
 
-    // Scrolls the headlines from right to left at a steady speed, however many there are. The track
-    // holds them twice, so moving it left by half its width brings it back to where it started.
+    // Shows the headlines one at a time: each slides quickly in from the right, then holds for a few
+    // seconds to be read. Each headline is at least the bar's width, so only one shows at a time. The
+    // track holds them twice, so after the last one the first slides in again, and the track then
+    // jumps back to the start unseen.
     showTicker(headlines) {
         const el = this.tickerEl;
         if (!el) return;
         this.tickerHeadlines = headlines; // what a tap on one opens (its summary shows straight away)
         const key = JSON.stringify(headlines.map(h => [h.title, h.source]));
-        if (key === this.tickerKey) return;
+        if (key === this.tickerKey) {
+            if (headlines.length && !this._tickerStepTimer) this.startTickerSteps(); // back from a stop
+            return;
+        }
         this.tickerKey = headlines.length ? key : '';
         const on = headlines.length > 0;
         el.hidden = !on;
@@ -238,30 +243,93 @@ class Slideshow {
                 if (headline) openTickerStory(headline);
             };
         }
-        if (!on) { track.innerHTML = ''; return; }
+        if (!on) { this.stopTickerSteps(); track.innerHTML = ''; return; }
         const sources = new Set(headlines.map(h => h.source).filter(Boolean));
-        const items = headlines.map((h, i) => `<span class="ss-ticker-item" data-index="${i}">${sources.size > 1 && h.source
-            ? `<b class="ss-ticker-source">${escapeHtml(h.source)}</b>` : ''}${escapeHtml(h.title)}</span>`).join('');
+        const items = headlines.map((h, i) => `<span class="ss-ticker-item" data-index="${i}"><span class="ss-ticker-text">${
+            sources.size > 1 && h.source ? `<b class="ss-ticker-source">${escapeHtml(h.source)}</b>` : ''}${escapeHtml(h.title)}</span></span>`).join('');
         track.innerHTML = items + items;
-        track.style.animation = 'none';
-        this.tickerWidth = 0;
-        this.sizeTicker(track);
-        // While the ticker is hidden (the sky is up) it has no width to time the scroll by, so it's
-        // timed again once it shows, and whenever its width changes (fonts loading, say)
+        this.sizeTicker();
+        this.startTickerSteps();
+        // While the ticker is hidden (the sky is up) it has no width, so it's sized again once it
+        // shows, and whenever its width changes (rotating, say)
         if (!this.tickerObserver && window.ResizeObserver) {
-            this.tickerObserver = new ResizeObserver(() => this.sizeTicker(track));
-            this.tickerObserver.observe(track);
+            this.tickerObserver = new ResizeObserver(() => { this.sizeTicker(); this.placeTicker(false); });
+            this.tickerObserver.observe(el);
         }
     }
 
-    // The scroll's duration from the track's width, so it moves at a steady speed
-    sizeTicker(track) {
-        const width = track.scrollWidth; // reading its width lays it out, restarting the animation
-        if (!width || width === this.tickerWidth || !track.innerHTML) return;
-        this.tickerWidth = width;
-        const pxPerSecond = 90;
-        const seconds = Math.max(width / 2 / pxPerSecond, 10);
-        track.style.animation = `ss-ticker-scroll ${seconds}s linear infinite`;
+    // Each headline takes at least the bar's width, so the next one waits off to the right
+    sizeTicker() {
+        const width = this.tickerEl?.clientWidth;
+        if (width) this.tickerEl.style.setProperty('--ss-ticker-w', `${width}px`);
+    }
+
+    get tickerTrack() { return this.tickerEl?.querySelector('.ss-ticker-track'); }
+
+    startTickerSteps() {
+        this.stopTickerSteps();
+        this.tickerPos = { index: 0, atEnd: false };
+        this.placeTicker(false);
+        this._tickerStepTimer = setTimeout(() => this.tickerStep(), this.tickerHoldMs(0));
+    }
+
+    stopTickerSteps() {
+        clearTimeout(this._tickerStepTimer);
+        this._tickerStepTimer = null;
+    }
+
+    // Long enough to read the headline: a few seconds, more for a long one
+    tickerHoldMs(index) {
+        const title = this.tickerHeadlines?.[index % (this.tickerHeadlines.length || 1)]?.title || '';
+        return Math.min(2500 + title.length * 45, 9000);
+    }
+
+    // Moves the track to show the current headline: its start just inside the left fade, or for one
+    // too long for the bar, its end just inside the right fade
+    placeTicker(animate) {
+        const el = this.tickerEl, track = this.tickerTrack, pos = this.tickerPos;
+        const item = track?.children[pos?.index];
+        if (!item || !el.clientWidth) return;
+        const fade = 40; // the mask's fade at each end
+        let x = fade - item.offsetLeft;
+        if (pos.atEnd) {
+            const textWidth = item.firstElementChild.offsetWidth;
+            x = el.clientWidth - fade - item.offsetLeft - textWidth;
+        }
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        track.style.transition = animate && !reduceMotion ? 'transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)' : 'none';
+        track.style.transform = `translateX(${x}px)`;
+    }
+
+    tickerStep() {
+        const el = this.tickerEl, track = this.tickerTrack, n = this.tickerHeadlines?.length || 0;
+        if (!this.isActive || !track || !n) return this.stopTickerSteps();
+        // Held while a story is open, under a mouse (so a headline is easy to click), or hidden
+        const paused = this.overlay?.classList.contains('ticker-paused') || !el.clientWidth
+            || (window.matchMedia?.('(hover: hover) and (pointer: fine)').matches && el.matches(':hover'));
+        if (paused) { this._tickerStepTimer = setTimeout(() => this.tickerStep(), 1000); return; }
+
+        const pos = this.tickerPos;
+        // Past the last headline onto the copy of the first: jump back to the real first, unseen
+        if (pos.index >= n) {
+            pos.index -= n;
+            this.placeTicker(false);
+            void track.offsetWidth; // lays it out there before the next move animates
+        }
+        const item = track.children[pos.index];
+        const tooLong = item.firstElementChild.offsetWidth > el.clientWidth - 80;
+        let hold;
+        if (tooLong && !pos.atEnd) {
+            // A long headline: slide along to read its end, then hold again
+            pos.atEnd = true;
+            hold = 3000;
+        } else {
+            pos.index++;
+            pos.atEnd = false;
+            hold = this.tickerHoldMs(pos.index);
+        }
+        this.placeTicker(true);
+        this._tickerStepTimer = setTimeout(() => this.tickerStep(), hold + 700);
     }
 
     // For the set time after sunset the sky shows instead of the photos, and then they come back.
@@ -427,6 +495,7 @@ class Slideshow {
         clearInterval(this._agendaTimer);
         clearInterval(this._sunTimer);
         clearInterval(this._tickerTimer);
+        this.stopTickerSteps();
         if (this.storyOpen) closeTickerStory();
         console.log('[SLIDESHOW] Stopping...');
         this._browserCurrentHidden = false;

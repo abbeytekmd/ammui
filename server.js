@@ -55,7 +55,7 @@ import {
     getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient,
-    itemsUsingIngredient, itemPartsLoop,
+    itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
@@ -4465,6 +4465,11 @@ app.put('/api/ingredients/:id', express.json(), (req, res) => {
     res.json(saved);
 });
 
+// The calendar meals an item is on, checked before offering to delete it
+app.get('/api/ingredients/:id/meals', (req, res) => {
+    res.json({ meals: mealsUsingIngredient(req.params.id) });
+});
+
 app.delete('/api/ingredients/:id', (req, res) => {
     const users = itemsUsingIngredient(req.params.id);
     if (users.length) {
@@ -4473,6 +4478,14 @@ app.delete('/api/ingredients/:id', (req, res) => {
     }
     const ingredient = getIngredient(req.params.id);
     if (!ingredient) return res.status(404).json({ error: 'Item not found' });
+    // On meals on the calendar: those are listed so they can be changed to use something else
+    const meals = mealsUsingIngredient(req.params.id);
+    if (meals.length) {
+        return res.status(409).json({
+            error: `It's in ${meals.length === 1 ? 'a meal' : `${meals.length} meals`} on the calendar. Change ${meals.length === 1 ? 'it' : 'them'} to use something else first.`,
+            meals
+        });
+    }
     if (onShoppingList(ingredient.name)) return res.status(409).json({ error: "It's on the shopping list. Take it off there first." });
     deleteIngredient(req.params.id);
     res.json({ success: true });

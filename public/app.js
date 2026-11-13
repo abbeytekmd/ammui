@@ -8771,6 +8771,7 @@ function popItemBuilder() {
     document.getElementById('item-builder-heading').textContent = heading;
     itemBuilderField('delete-btn').style.display = builder.id ? '' : 'none';
     setCalendarSettingsStatus('item-builder-status', '', false);
+    showItemBuilderUses([]);
     clearTimeout(itemBuilderLookupTimer);
     setItemBuilderKind(builder.kind);
     onItemBuilderNameInput();
@@ -8804,6 +8805,7 @@ function openItemBuilder(item = null, options = {}) {
     itemBuilderField('part-search').value = '';
     itemBuilderField('delete-btn').style.display = item ? '' : 'none';
     setCalendarSettingsStatus('item-builder-status', '', false);
+    showItemBuilderUses([]);
     itemBuilder.savedJson = itemBuilderSnapshot();
     setItemBuilderKind(itemBuilder.kind);
     onItemBuilderNameInput();
@@ -9215,18 +9217,71 @@ async function saveItemBuilder() {
     }
 }
 
+// An item on meals on the calendar can't be deleted: they're listed instead, so each can be changed
+// to use something else
 async function deleteItemBuilderItem() {
     const b = itemBuilder;
     if (!b?.id) return;
-    if (!confirm(`Delete "${b.originalName}"? It's also taken out of the meals on the calendar and the meal plan.`)) return;
+    const url = `/api/ingredients/${encodeURIComponent(b.id)}`;
     try {
-        await sendIngredient(`/api/ingredients/${encodeURIComponent(b.id)}`, 'DELETE');
+        const { meals } = await fetch(`${url}/meals`).then(r => r.json());
+        if (itemBuilder !== b) return;
+        if (meals?.length) return showItemBuilderUses(meals);
+        showItemBuilderUses([]);
+        if (!confirm(`Delete "${b.originalName}"? It's also taken out of the meal plan.`)) return;
+        const res = await fetch(url, { method: 'DELETE' });
+        const data = await res.json();
+        if (!res.ok) {
+            if (data.meals?.length && itemBuilder === b) return showItemBuilderUses(data.meals, data.error);
+            throw new Error(data.error || 'Failed to delete');
+        }
         closeItemBuilder(true);
         await loadIngredients();
         b.onSaved?.(null);
     } catch (err) {
         setCalendarSettingsStatus('item-builder-status', err.message, true);
     }
+}
+
+function showItemBuilderUses(meals, error) {
+    const el = itemBuilderField('uses');
+    el.hidden = !meals.length;
+    if (!meals.length) { el.innerHTML = ''; return; }
+    const n = meals.length;
+    setCalendarSettingsStatus('item-builder-status', error ||
+        `It's in ${n === 1 ? 'a meal' : `${n} meals`} on the calendar. Change ${n === 1 ? 'it' : 'them'} to use something else first.`, true);
+    const shortDate = ymd => {
+        const [y, m, d] = ymd.split('-').map(Number);
+        const date = new Date(y, m - 1, d);
+        return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short',
+            ...(y === new Date().getFullYear() ? {} : { year: 'numeric' }) });
+    };
+    el.innerHTML = `<p class="item-builder-uses-heading">Used in</p>` + meals.map(m => `
+        <button type="button" class="item-builder-use" data-date="${escapeHtml(m.date)}" title="Open this day on the Meals calendar">
+            <span class="item-builder-use-date">${escapeHtml(shortDate(m.date))}</span>
+            <span class="item-builder-use-name">${escapeHtml(m.title || m.parts.join(', ') || 'Meal')}${
+                m.repeat ? ` <span class="item-builder-use-repeat" title="${escapeHtml(describeCalendarRepeat(m.repeat))}">(repeats)</span>` : ''}</span>
+        </button>`).join('');
+    el.querySelectorAll('.item-builder-use').forEach(btn => btn.onclick = () => goToMealDay(btn.dataset.date));
+}
+
+// Leaves the item for the Meals calendar, at the day of a meal it's on, with that day open
+function goToMealDay(date) {
+    // Closes this item and any it was opened from, unless one is kept to save its changes first
+    while (itemBuilder) {
+        const b = itemBuilder;
+        closeItemBuilder();
+        if (itemBuilder === b) return;
+    }
+    if (document.getElementById('calendar-entry-modal').style.display !== 'none') closeCalendarEntryModal();
+    const [y, m, d] = date.split('-').map(Number);
+    const day = new Date(y, m - 1, d);
+    if (appView !== 'recipes') showRecipes('calendar');
+    else setMealsTab('calendar');
+    calendarMonth = new Date(y, m - 1, 1);
+    calendarWeekStart = startOfCalendarWeek(day);
+    renderCalendar();
+    openMealDayView(date);
 }
 
 // --- Recipes tab: calories. Each ingredient stores kcal and grams of protein, carbs and fat per

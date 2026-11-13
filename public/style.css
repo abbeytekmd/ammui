@@ -3916,6 +3916,61 @@ p.subtitle {
     gap: 0.75rem;
 }
 
+/* The calendar meals stopping a delete; each opens its day */
+.item-builder-uses {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+}
+
+.item-builder-uses[hidden] {
+    display: none;
+}
+
+.item-builder-uses-heading {
+    margin: 0 0 0.2rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.item-builder-use {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.6rem 0.9rem;
+    text-align: left;
+    color: inherit;
+    font: inherit;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    cursor: pointer;
+}
+
+.item-builder-use:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.item-builder-use-date {
+    flex: none;
+    min-width: 7.5em;
+    color: var(--accent, #fcd34d);
+    font-weight: 600;
+}
+
+.item-builder-use-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.item-builder-use-repeat {
+    color: var(--text-muted);
+    font-size: 0.85em;
+}
+
 /* Calories for a row's amount; click to look them up or change them */
 .recipe-kcal {
     flex: 0 0 4.5rem;
@@ -11696,25 +11751,25 @@ input:checked+.slider:before {
     will-change: transform;
 }
 
+/* At least the bar's width (set by slideshow.js), so one headline shows at a time and the next
+   waits off to the right. Held still while a story is open or under a mouse (slideshow.js). */
 .ss-ticker-item {
+    flex: none;
+    box-sizing: border-box;
+    min-width: var(--ss-ticker-w, 100vw);
+    padding-right: 120px;
     color: rgba(255, 255, 255, 0.92);
     font-size: 27px;   /* most of the bar's 44px, leaving a slim margin above and below */
     line-height: 1.2;
     font-weight: 500;
-    padding-right: 1.6em;
     cursor: pointer;
 }
 
-/* Held still while a story is open, and under a mouse so a headline is easy to click */
-.screensaver-overlay.ticker-paused .ss-ticker-track {
-    animation-play-state: paused !important;
+.ss-ticker-text {
+    display: inline-block;
 }
 
 @media (hover: hover) and (pointer: fine) {
-    .ss-ticker:hover .ss-ticker-track {
-        animation-play-state: paused !important;
-    }
-
     .ss-ticker-item:hover {
         color: #fff;
         text-decoration: underline;
@@ -11794,13 +11849,6 @@ input:checked+.slider:before {
     }
 }
 
-/* A dot between headlines */
-.ss-ticker-item::after {
-    content: '\2022';
-    padding-left: 1.6em;
-    color: var(--accent, #fcd34d);
-}
-
 .ss-ticker-source {
     color: var(--accent, #fcd34d);
     font-weight: 700;
@@ -11808,11 +11856,6 @@ input:checked+.slider:before {
     font-size: 0.75em;
     letter-spacing: 0.06em;
     margin-right: 0.6em;
-}
-
-@keyframes ss-ticker-scroll {
-    from { transform: translateX(0); }
-    to { transform: translateX(-50%); }
 }
 
 @media (orientation: landscape) and (min-height: 480px) {
@@ -11824,12 +11867,6 @@ input:checked+.slider:before {
 
     .ss-side-panel {
         padding-top: var(--ss-ticker-h);
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .ss-ticker-track {
-        animation: none !important;
     }
 }
 
