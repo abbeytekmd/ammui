@@ -15036,6 +15036,8 @@ let petrolLayer = null; // the station pins
 let petrolHere = null; // { dot, circle }
 let petrolFitted = ''; // the place and radius the map was last fitted to
 const petrolPins = new Map(); // station id -> marker
+let petrolSelected = null; // the station whose history shows along the bottom
+let petrolHistory = null; // its /api/fuel/history reply
 
 function showPetrol() {
     setAppView('petrol');
@@ -15054,6 +15056,7 @@ function setPetrolFuel(fuel, redraw = true) {
         btn.setAttribute('aria-selected', btn.dataset.fuel === fuel ? 'true' : 'false');
     });
     if (redraw && petrolData?.stations) renderPetrol(petrolData);
+    if (redraw) drawPetrolHistory();
 }
 
 function setPetrolRadius(miles) {
@@ -15162,6 +15165,7 @@ function renderPetrol(data) {
     body.hidden = false;
     drawPetrolMap(data);
     drawPetrolList(data);
+    if (petrolSelected) loadPetrolHistory();
 }
 
 // Stations selling the chosen fuel, cheapest first, each banded by where its price sits between the cheapest and dearest
@@ -15234,6 +15238,7 @@ function drawPetrolMap(data) {
             html: `<div class="petrol-pin ${s.band}">${petrolPrice(s.prices[petrolFuel].price)}</div>`,
         });
         const pin = L.marker([s.lat, s.lon], { icon, title: s.name, riseOnHover: true }).bindPopup(petrolPopup(s)).addTo(petrolLayer);
+        pin.on('click', () => selectPetrolStation(s.id));
         petrolPins.set(s.id, pin);
     }
     if (open) petrolPins.get(open)?.openPopup();
@@ -15259,7 +15264,7 @@ function drawPetrolList(data) {
     list.innerHTML = ranked.map(s => {
         const p = s.prices[petrolFuel];
         const changed = p.updated ? ` · <span class="${petrolIsStale(p.updated) ? 'stale' : ''}">changed ${petrolAge(p.updated)}</span>` : '';
-        return `<button type="button" class="petrol-row" onclick="focusPetrolStation('${s.id}')">
+        return `<button type="button" class="petrol-row${s.id === petrolSelected ? ' selected' : ''}" data-id="${escapeAttr(s.id)}" onclick="focusPetrolStation('${escapeAttr(s.id)}')">
             <span class="petrol-row-price ${s.band}">${petrolPrice(p.price)}</span>
             <span class="petrol-row-text">
                 <span class="petrol-row-name">${escapeHtml(s.name)}</span>
@@ -15270,11 +15275,147 @@ function drawPetrolList(data) {
 }
 
 function focusPetrolStation(id) {
+    selectPetrolStation(id);
     const pin = petrolPins.get(id);
     if (!pin) return;
     petrolMap.setView(pin.getLatLng(), Math.max(petrolMap.getZoom(), 15));
     pin.openPopup();
 }
+
+// --- The chosen station's price day by day, in a strip along the bottom ---
+function selectPetrolStation(id) {
+    if (petrolSelected !== id) petrolHistory = null;
+    const opening = !petrolSelected;
+    petrolSelected = id;
+    document.querySelectorAll('#petrol-list .petrol-row').forEach(row => row.classList.toggle('selected', row.dataset.id === id));
+    drawPetrolHistory();
+    if (opening) petrolMap?.invalidateSize(); // the map gets shorter
+    loadPetrolHistory();
+}
+
+function closePetrolHistory() {
+    petrolSelected = null;
+    petrolHistory = null;
+    document.querySelectorAll('#petrol-list .petrol-row.selected').forEach(row => row.classList.remove('selected'));
+    drawPetrolHistory();
+    petrolMap?.invalidateSize();
+}
+
+async function loadPetrolHistory() {
+    const id = petrolSelected;
+    try {
+        const res = await fetch(`/api/fuel/history/${encodeURIComponent(id)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (petrolSelected === id) petrolHistory = data;
+    } catch (err) {
+        if (petrolSelected === id) petrolHistory = { id, error: err.message };
+    }
+    if (petrolSelected === id) drawPetrolHistory();
+}
+
+const PETROL_HISTORY_MIN_DAYS = 14;
+const PETROL_HISTORY_MAX_DAYS = 90;
+const petrolDayMs = day => Date.parse(`${day}T00:00:00Z`);
+const petrolDayAdd = (day, n) => new Date(petrolDayMs(day) + n * 86400000).toISOString().slice(0, 10);
+const petrolDayLabel = (day, weekday) => new Date(petrolDayMs(day)).toLocaleDateString(undefined,
+    { timeZone: 'UTC', day: 'numeric', month: 'short', ...(weekday ? { weekday: 'short' } : {}) });
+
+// The changes ([[day, price], ...]) carried forward into one price per day up to today; days before the first are null
+function petrolDailyPrices(changes, today) {
+    const span = Math.round((petrolDayMs(today) - petrolDayMs(changes[0][0])) / 86400000) + 1;
+    const n = Math.min(PETROL_HISTORY_MAX_DAYS, Math.max(PETROL_HISTORY_MIN_DAYS, span));
+    const days = [];
+    let i = 0, price = null;
+    for (let k = n - 1; k >= 0; k--) {
+        const day = petrolDayAdd(today, -k);
+        const before = price;
+        while (i < changes.length && changes[i][0] <= day) price = changes[i++][1];
+        days.push({ day, price, changed: before !== null && price !== before });
+    }
+    return days;
+}
+
+function drawPetrolHistory() {
+    const box = document.getElementById('petrol-history');
+    box.hidden = !petrolSelected;
+    if (!petrolSelected) return;
+    const station = petrolData?.stations?.find(s => s.id === petrolSelected);
+    const name = escapeHtml(station?.name || petrolHistory?.name || '');
+    const fuel = PETROL_FUELS[petrolFuel];
+    const head = extra => `<div class="petrol-history-head"><strong>${name}</strong><span>${fuel}, day by day</span>${extra || ''}
+        <button type="button" class="petrol-history-close" onclick="closePetrolHistory()" title="Close" aria-label="Close">×</button></div>`;
+    if (!petrolHistory || petrolHistory.id !== petrolSelected) {
+        box.innerHTML = head() + '<div class="petrol-history-chart"><span class="spinner"></span></div>';
+        return;
+    }
+    if (petrolHistory.error) { box.innerHTML = head(`<span>Couldn't load: ${escapeHtml(petrolHistory.error)}</span>`); return; }
+    const changes = petrolHistory.history[petrolFuel];
+    if (!changes?.length) { box.innerHTML = head(`<span>No ${fuel.toLowerCase()} price here.</span>`); return; }
+
+    const days = petrolDailyPrices(changes, petrolHistory.today);
+    const known = days.filter(d => d.price !== null);
+    const prices = known.map(d => d.price);
+    const lo = Math.min(...prices), hi = Math.max(...prices);
+    const first = known[0], last = known[known.length - 1];
+    const diff = last.price - first.price;
+    const trend = known.length < 2 ? '' : diff === 0 ? `No change since ${petrolDayLabel(first.day)}`
+        : `${diff > 0 ? 'Up' : 'Down'} ${Math.abs(diff).toFixed(1)}p since ${petrolDayLabel(first.day)}`;
+    const range = lo === hi ? '' : ` · Low ${petrolPrice(lo)}, high ${petrolPrice(hi)}`;
+    const since = days[0].price === null ? ` · Kept from ${petrolDayLabel(first.day)}` : '';
+    box.innerHTML = head(`<span>${trend}${range}${since}</span>`) + '<div class="petrol-history-chart"></div>';
+
+    const chart = box.querySelector('.petrol-history-chart');
+    const W = chart.clientWidth, H = chart.clientHeight;
+    const pad = { l: 46, r: 8, t: 24, b: 18 };
+    // Some room above and below, and at least 4p tall so a penny's change isn't drawn as a cliff
+    const mid = (lo + hi) / 2, half = Math.max(2, (hi - lo) / 2 * 1.15);
+    const yMin = mid - half, yMax = mid + half;
+    const step = (W - pad.l - pad.r) / days.length;
+    const x = i => pad.l + i * step;
+    const y = p => pad.t + (yMax - p) / (yMax - yMin) * (H - pad.t - pad.b);
+
+    // A step line: each day's price held flat across that day
+    const start = days.findIndex(d => d.price !== null);
+    let line = '';
+    for (let i = start; i < days.length; i++) line += `${i === start ? 'M' : 'L'}${x(i)},${y(days[i].price)}H${x(i + 1)}`;
+    const area = `${line}V${H - pad.b}H${x(start)}Z`;
+    const ticks = [yMin + (yMax - yMin) * 0.15, mid, yMax - (yMax - yMin) * 0.15];
+    const grid = ticks.map(t => `<line class="grid" x1="${pad.l}" x2="${W - pad.r}" y1="${y(t)}" y2="${y(t)}"/>
+        <text class="axis" x="${pad.l - 6}" y="${y(t) + 4}" text-anchor="end">${t.toFixed(1)}p</text>`).join('');
+    const labelEvery = Math.ceil(days.length / Math.max(2, Math.floor((W - pad.l) / 70)));
+    const xLabels = days.map((d, i) => (days.length - 1 - i) % labelEvery ? '' :
+        `<text class="axis" x="${x(i) + step / 2}" y="${H - 4}" text-anchor="middle">${petrolDayLabel(d.day)}</text>`).join('');
+    const marks = days.map((d, i) => d.changed ? `<circle class="change" cx="${x(i)}" cy="${y(d.price)}" r="3.5"/>` : '').join('');
+    chart.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${fuel} price at ${name} each day">
+            ${grid}<path class="area" d="${area}"/><path class="line" d="${line}"/>${marks}${xLabels}
+            <g class="hover" visibility="hidden"><line class="cross" y1="${pad.t}" y2="${H - pad.b}"/><circle class="dot" r="4.5"/></g>
+            <rect x="${pad.l}" y="0" width="${Math.max(0, W - pad.l - pad.r)}" height="${H}" fill="transparent"/>
+        </svg><div class="petrol-history-tip" hidden></div>`;
+
+    // Hover (or touch) for any day's price
+    const svg = chart.querySelector('svg'), hover = svg.querySelector('.hover'), tip = chart.querySelector('.petrol-history-tip');
+    const cross = hover.querySelector('.cross'), dot = hover.querySelector('.dot');
+    const hide = () => { hover.setAttribute('visibility', 'hidden'); tip.hidden = true; };
+    const show = e => {
+        const d = days[Math.floor((e.clientX - svg.getBoundingClientRect().left - pad.l) / step)];
+        if (!d || d.price === null) { hide(); return; }
+        const cx = x(days.indexOf(d)) + step / 2;
+        cross.setAttribute('x1', cx);
+        cross.setAttribute('x2', cx);
+        dot.setAttribute('cx', cx);
+        dot.setAttribute('cy', y(d.price));
+        hover.setAttribute('visibility', 'visible');
+        tip.innerHTML = `${petrolDayLabel(d.day, true)} · <strong>${petrolPrice(d.price)}</strong>`;
+        tip.style.left = `${Math.min(Math.max(cx, 70), W - 70)}px`;
+        tip.hidden = false;
+    };
+    svg.addEventListener('pointermove', show);
+    svg.addEventListener('pointerdown', show);
+    svg.addEventListener('pointerleave', hide);
+}
+
+window.addEventListener('resize', () => { if (appView === 'petrol' && petrolSelected) drawPetrolHistory(); });
 
 // tado°: signing in is done on tado's own site, by opening the link and confirming the code shown,
 // while the server waits for it. Checked every few seconds until it's done.

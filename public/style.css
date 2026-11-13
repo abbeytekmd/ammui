@@ -12521,6 +12521,7 @@ input:checked+.slider:before {
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(0, 1fr) 20rem;
+    grid-template-rows: minmax(0, 1fr) auto;
     gap: 1rem;
 }
 
@@ -12586,8 +12587,86 @@ input:checked+.slider:before {
     cursor: pointer;
 }
 
-.petrol-row:hover {
+.petrol-row:hover,
+.petrol-row.selected {
     border-color: var(--primary);
+}
+
+.petrol-row.selected {
+    box-shadow: inset 3px 0 0 var(--primary);
+}
+
+/* The chosen station's price day by day, along the bottom */
+.petrol-history {
+    grid-column: 1 / -1;
+    padding: 0.6rem 1rem 0.4rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.75rem;
+    background: var(--card-bg);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+.petrol-history[hidden] {
+    display: none;
+}
+
+.petrol-history-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.petrol-history-head strong {
+    color: var(--text);
+    font-size: 0.95rem;
+}
+
+.petrol-history-head .petrol-history-close {
+    margin-left: auto;
+    padding: 0 0.4rem;
+    border: none;
+    background: none;
+    color: var(--text-muted);
+    font-size: 1.2rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.petrol-history-chart {
+    position: relative;
+    height: 8.5rem;
+    margin-top: 0.3rem;
+}
+
+.petrol-history-chart svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.petrol-history-chart .grid { stroke: var(--card-border); stroke-width: 1; }
+.petrol-history-chart .axis { fill: var(--text-muted); font-size: 11px; }
+.petrol-history-chart .line { fill: none; stroke: var(--primary); stroke-width: 2; stroke-linejoin: round; }
+.petrol-history-chart .area { fill: var(--primary); opacity: 0.12; }
+.petrol-history-chart .change { fill: var(--primary); stroke: var(--card-bg); stroke-width: 2; }
+.petrol-history-chart .cross { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.petrol-history-chart .dot { fill: var(--primary); stroke: var(--card-bg); stroke-width: 2; }
+
+.petrol-history-tip {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.4rem;
+    background: var(--card-bg);
+    color: var(--text);
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .petrol-row-price {
@@ -12695,7 +12774,7 @@ input:checked+.slider:before {
 
     .petrol-body {
         grid-template-columns: 1fr;
-        grid-template-rows: 22rem auto;
+        grid-template-rows: 22rem auto auto;
     }
 
     .petrol-list {

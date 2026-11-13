@@ -7171,6 +7171,13 @@ app.get('/api/fuel', async (req, res) => {
     res.json(await fuelPrices.nearby({ lat, lon, radius }));
 });
 
+// One station's day-by-day prices
+app.get('/api/fuel/history/:id', (req, res) => {
+    const h = fuelPrices.history(req.params.id);
+    if (!h) return res.status(404).json({ error: 'No such station' });
+    res.json(h);
+});
+
 app.get('/api/fuel/account', (req, res) => {
     res.json(fuelPrices.getAccount());
 });
