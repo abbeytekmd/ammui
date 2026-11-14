@@ -15505,7 +15505,7 @@ let healthData = null;
 let healthTimer = null;
 let healthTab = null; // 'family' or a person's id
 try { healthTab = localStorage.getItem('healthTab'); } catch { /* not kept; fine */ }
-const healthLinking = new Set(); // people whose tab is waiting for the address Google sent them to
+const healthLinking = new Map(); // person id -> 'callback' (waiting for Google to come back here) or 'paste'
 
 function showHealth() {
     setAppView('health');
@@ -15893,7 +15893,7 @@ function healthFood(p) {
 const healthAvatar = name => `<div class="plug-card-icon health-avatar">${escapeHtml((name.trim()[0] || '?').toUpperCase())}</div>`;
 
 function healthLinkCard(p) {
-    const waiting = healthLinking.has(p.id);
+    const waiting = healthLinking.get(p.id); // 'callback' | 'paste' | undefined
     return `
         <div class="plug-card health-card unavailable">
             <div class="plug-card-head">
@@ -15903,7 +15903,15 @@ function healthLinkCard(p) {
                     <div class="plug-card-status">${escapeHtml(p.error || 'Not linked to Google Health')}</div>
                 </div>
             </div>
-            ${waiting ? `
+            ${waiting === 'callback' ? `
+                <p class="settings-hint">Sign in with ${escapeHtml(p.name)}'s Google account in the tab that opened and tick every box to allow
+                    access. This page updates by itself when it's done.</p>
+                <div class="health-link-actions">
+                    <button type="button" class="btn-control btn-small" onclick="startHealthLink('${p.id}')">Open Sign-in Again</button>
+                    <button type="button" class="btn-control btn-small" onclick="startHealthLink('${p.id}', true)"
+                        title="If Google says redirect_uri_mismatch, the callback address isn't added to your Google Cloud client">Paste the Address Instead</button>
+                    <button type="button" class="btn-control btn-small" onclick="cancelHealthLink('${p.id}')">Cancel</button>
+                </div>` : waiting ? `
                 <p class="settings-hint">Sign in with ${escapeHtml(p.name)}'s Google account in the tab that opened and tick every box to allow
                     access. It ends on google.com: copy the whole address from the address bar and paste it here.</p>
                 <div class="input-with-button">
@@ -15911,23 +15919,32 @@ function healthLinkCard(p) {
                     <button type="button" class="btn-control btn-small primary" onclick="finishHealthLink('${p.id}', this)">Link</button>
                 </div>
                 <div class="health-link-actions">
-                    <button type="button" class="btn-control btn-small" onclick="startHealthLink('${p.id}')">Open Sign-in Again</button>
+                    <button type="button" class="btn-control btn-small" onclick="startHealthLink('${p.id}', true)">Open Sign-in Again</button>
                     <button type="button" class="btn-control btn-small" onclick="cancelHealthLink('${p.id}')">Cancel</button>
                 </div>` : `
                 <div><button type="button" class="btn-control btn-small primary" onclick="startHealthLink('${p.id}')">Link Google Account</button></div>`}
         </div>`;
 }
 
-async function startHealthLink(id) {
+// Google will only send a sign-in back to localhost (or a public domain), so only a browser on the AMMUI
+// machine itself has it come straight back; anywhere else the address it lands on is pasted in.
+const healthOnThisMachine = () => ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+const HEALTH_LINK_CHECK_MS = 3000;
+const HEALTH_LINK_WAIT_MS = 15 * 60 * 1000;
+let healthLinkTimer = null;
+
+async function startHealthLink(id, paste = false) {
     // The tab is opened straight away (before the fetch) so the browser doesn't block it as a pop-up
     const tab = window.open('', '_blank');
     try {
-        const res = await fetch(`/api/health/connect/${encodeURIComponent(id)}`);
+        const callback = !paste && healthOnThisMachine();
+        const res = await fetch(`/api/health/connect/${encodeURIComponent(id)}${callback ? '?callback=1' : ''}`);
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || res.statusText);
         if (tab) tab.location.href = data.url;
         else window.open(data.url, '_blank');
-        healthLinking.add(id);
+        healthLinking.set(id, data.callback ? 'callback' : 'paste');
+        if (data.callback) watchHealthLinks(Date.now());
         if (healthData) renderHealth(healthData);
     } catch (err) {
         tab?.close();
@@ -15939,6 +15956,37 @@ function cancelHealthLink(id) {
     healthLinking.delete(id);
     if (healthData) renderHealth(healthData);
 }
+
+// While someone is signing in through the callback: the callback page announces it on a BroadcastChannel
+// (same origin only), and in case this page is on another origin (http, another port) it's also checked
+async function checkHealthLinks() {
+    const waiting = [...healthLinking].filter(([, how]) => how === 'callback').map(([id]) => id);
+    if (!waiting.length) return false;
+    try {
+        const res = await fetch('/api/health');
+        if (!res.ok) return true;
+        healthData = await res.json();
+        for (const id of waiting) {
+            if (healthData.people.find(p => p.id === id)?.connected) {
+                healthLinking.delete(id);
+                showToast(`${healthData.people.find(p => p.id === id).name} is linked to Google Health`, 'success');
+            }
+        }
+        if (appView === 'health') renderHealth(healthData);
+    } catch { /* tried again shortly */ }
+    return [...healthLinking.values()].includes('callback');
+}
+
+function watchHealthLinks(since) {
+    clearTimeout(healthLinkTimer);
+    healthLinkTimer = setTimeout(async () => {
+        if (await checkHealthLinks() && Date.now() - since < HEALTH_LINK_WAIT_MS) watchHealthLinks(since);
+    }, HEALTH_LINK_CHECK_MS);
+}
+
+try {
+    new BroadcastChannel('ammui-health').onmessage = () => checkHealthLinks();
+} catch { /* no BroadcastChannel: the regular check still sees it */ }
 
 async function finishHealthLink(id, btn) {
     const input = btn.closest('.health-card').querySelector('.health-code');
@@ -15979,6 +16027,7 @@ async function loadGoogleHealthClient() {
     try {
         const client = await (await fetch('/api/health/account')).json();
         document.getElementById('google-health-client-id').value = client.clientId || '';
+        if (client.callbackUri) document.getElementById('google-health-callback-uri').textContent = client.callbackUri;
         const secret = document.getElementById('google-health-client-secret');
         secret.value = '';
         secret.placeholder = client.hasSecret ? 'Client secret saved (leave blank to keep)' : 'Client secret';

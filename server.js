@@ -445,7 +445,7 @@ energy.init({ getSetting, setSetting });
 tado.init({ getSetting, setSetting });
 homeConnect.init({ getSetting, setSetting });
 fuelPrices.init({ getSetting, setSetting, cachePath: path.join(baseDataDir, 'cache', 'fuel-prices.json') });
-googleHealth.init({ getSetting, setSetting, encrypt: encryptSecret, decrypt: decryptSecret });
+googleHealth.init({ getSetting, setSetting, encrypt: encryptSecret, decrypt: decryptSecret, callback: `${httpsOrigin('localhost')}/api/health/callback` });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -7275,11 +7275,12 @@ app.post('/api/health/account', express.json(), (req, res) => {
     res.json(googleHealth.setClient(req.body || {}));
 });
 
-// The Google sign-in page for linking one family member's account
+// The Google sign-in page for linking one family member's account: { url, callback }. callback=1 (asked for by
+// a browser on this machine) has Google come back to /api/health/callback, so nothing needs pasting.
 app.get('/api/health/connect/:playerId', (req, res) => {
     if (!getGamePlayer(req.params.playerId)) return res.status(404).json({ error: 'No such family member' });
     try {
-        res.json({ url: googleHealth.connectUrl(req.params.playerId) });
+        res.json(googleHealth.connectUrl(req.params.playerId, { callback: req.query.callback === '1' }));
     } catch (err) {
         res.status(err.status || 500).json({ error: err.message });
     }
@@ -7293,6 +7294,27 @@ app.post('/api/health/connect/:playerId', express.json(), async (req, res) => {
     } catch (err) {
         res.status(err.status || 500).json({ error: err.message });
     }
+});
+
+// Where Google sends a sign-in started with callback=1: links the account, then says so and closes the tab.
+// The Health tab hears about it (BroadcastChannel, or by checking) and shows the person's figures.
+app.get('/api/health/callback', async (req, res) => {
+    let ok = true, message;
+    try {
+        const playerId = await googleHealth.connectFromCallback(req.query);
+        const name = getGamePlayer(playerId)?.name;
+        message = `${name ? `${name} is` : 'The account is'} linked to Google Health. You can close this tab.`;
+    } catch (err) {
+        ok = false;
+        message = err.message;
+    }
+    const safe = String(message).replace(/[&<>"]/g, c => `&#${c.charCodeAt(0)};`);
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Google Health</title><style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0f172a;color:#f8fafc;
+font-family:system-ui,sans-serif;padding:16px;text-align:center}h1{font-size:1.3rem;color:${ok ? '#22c55e' : '#ef4444'}}p{color:#94a3b8;max-width:32rem}</style></head>
+<body><div><h1>${ok ? 'Linked' : "Couldn't link"}</h1><p>${safe}</p></div>
+<script>try{new BroadcastChannel('ammui-health').postMessage(${JSON.stringify({ linked: ok })})}catch(e){}${ok ? 'setTimeout(function(){window.close()},1500);' : ''}</script>
+</body></html>`);
 });
 
 app.delete('/api/health/connect/:playerId', (req, res) => {
