@@ -16344,6 +16344,47 @@ async function showGames() {
     if (token !== wordLoadToken) return;
     if (!gamePlayers.some(u => u.id === gamePlayerId)) gamePlayerId = null;
     await loadWordGame();
+    if (!gamePlayerId) loadWordResults();
+}
+
+// Everyone's attempts today: this server's family and players on servers linked over the peer link.
+// Only this server's players can be picked to play here; the others are shown, labelled with their
+// server, and played only on their own. Colours only, so nobody sees the word. Refreshed every minute.
+const WORD_RESULTS_MS = 60 * 1000;
+let wordResultsTimer = null;
+
+async function loadWordResults() {
+    clearTimeout(wordResultsTimer);
+    if (appView !== 'games' || !wordList) return;
+    const day = wordToday();
+    try {
+        const res = await fetch(`/api/games/today?day=${day}`);
+        if (res.ok) renderWordResults(day, (await res.json()).players);
+    } catch { /* tried again shortly */ }
+    if (appView === 'games') wordResultsTimer = setTimeout(loadWordResults, WORD_RESULTS_MS);
+}
+
+function renderWordResults(day, players) {
+    const el = document.getElementById('word-results');
+    // Just the one person here and nobody linked: nothing to compare with
+    el.hidden = players.length < 2;
+    if (el.hidden) return;
+    const answer = wordAnswer(day);
+    const score = p => p.status === 'won' ? `${p.guesses.length}/${WORD_GUESSES}`
+        : p.status === 'lost' ? `X/${WORD_GUESSES}` : p.status === 'playing' ? 'Playing' : 'Not yet';
+    // This server's family first, then each linked server's, finished games before unfinished
+    const order = { won: 0, lost: 1, playing: 2, none: 3 };
+    const sorted = [...players].sort((a, b) => (!!a.server - !!b.server) || (a.server || '').localeCompare(b.server || '')
+        || order[a.status] - order[b.status] || (a.status === 'won' ? a.guesses.length - b.guesses.length : 0));
+    el.innerHTML = sorted.map(p => `
+        <div class="word-result${p.id === gamePlayerId ? ' mine' : ''}${p.server ? ' linked' : ''}"
+            title="${escapeHtml(p.name)}${p.server ? ` (plays on ${escapeHtml(p.server)})` : ''}: ${score(p)}">
+            <div class="word-result-grid">${p.guesses.map(g => `<div class="word-result-row">${
+                wordScore(g, answer).map(s => `<i class="${s}"></i>`).join('')}</div>`).join('')}</div>
+            <div class="word-result-name">${escapeHtml(p.name)}</div>
+            ${p.server ? `<div class="word-result-server">${escapeHtml(p.server)}</div>` : ''}
+            <div class="word-result-score ${p.status}">${score(p)}</div>
+        </div>`).join('');
 }
 
 function selectGamePlayer(id) {
@@ -16371,6 +16412,7 @@ async function loadWordGame() {
         wordGame = { day, guesses: data.guesses, status: data.status };
         wordStats = data.stats;
         renderWord();
+        loadWordResults();
     } catch (err) {
         if (token === wordLoadToken) wordMessage(`Couldn't load the game: ${err.message}`, 0);
     }
@@ -16454,6 +16496,7 @@ async function wordSubmit() {
         wordStats = data.stats;
         wordTyped = '';
         renderWord(true);
+        setTimeout(loadWordResults, WORD_REVEAL_MS); // once the tiles have turned
     } catch (err) {
         if (game === wordGame) wordMessage(`Couldn't save the guess: ${err.message}`, 4000);
     } finally {

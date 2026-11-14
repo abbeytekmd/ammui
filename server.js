@@ -59,12 +59,14 @@ import {
     itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
+    listWordGamesSince, savePeerGameSnapshot, listPeerGameSnapshots,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
     listPasswords, getPassword, savePassword, deletePassword,
     getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans, getPhotoHash, setPhotoHash,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
+import { GAMES_SERVICE, GAMES_SERVICE_VERSION, SNAPSHOT_DAYS, KEEP_MS as PEER_GAMES_KEEP_MS, gamesServiceRouter, GameResultsSync } from './lib/peer-services/games.js';
 import { MEDIA_SERVICE, MEDIA_SERVICE_VERSION, ShareRules, cleanLibraryPath, mediaServiceRouter, PeerMediaServer, mountPeerMediaRoutes } from './lib/peer-services/media.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
@@ -3276,6 +3278,26 @@ peerListener.addService({
         resolveArt: dir => resolveFolderArt(dir, { findDiscogsArtUrl, getCachedArt }),
     }),
 });
+// Word game results, swapped with linked servers so each Games tab shows everyone's attempts. This
+// server's id in them is random and kept, so a renamed server is still recognised as the same one.
+let gameServerId = getSetting('gameServerId', null);
+if (!gameServerId) setSetting('gameServerId', gameServerId = crypto.randomUUID());
+const localGameDay = () => {
+    const d = new Date();
+    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 86400000;
+};
+const localGameSnapshot = () => ({
+    server: { id: gameServerId, name: settings.deviceName || 'AMMUI' },
+    players: listGamePlayers(),
+    games: listWordGamesSince(localGameDay() - SNAPSHOT_DAYS), // a day extra for a server a timezone behind
+});
+const linkedGamePlayers = () => listPeerGameSnapshots(Date.now() - PEER_GAMES_KEEP_MS)
+    .flatMap(s => s.players.map(p => ({ ...p, server: s.server })));
+peerListener.addService({
+    name: GAMES_SERVICE,
+    version: GAMES_SERVICE_VERSION,
+    router: gamesServiceRouter({ snapshot: localGameSnapshot, receive: savePeerGameSnapshot, ownId: () => gameServerId }),
+});
 let peerListenerQueue = Promise.resolve();
 const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
     .then(() => peerListener.apply())
@@ -3328,6 +3350,8 @@ function syncPeerDevices() {
     if (changed) saveDevices();
 }
 peerLinks.on('change', syncPeerDevices);
+const gameSync = new GameResultsSync({ peers: peerLinks, snapshot: localGameSnapshot, receive: savePeerGameSnapshot, ownId: () => gameServerId });
+gameSync.start();
 syncPeerDevices();
 
 const peerError = (res, err) => {
@@ -4297,12 +4321,34 @@ app.post('/api/games/players', express.json(), (req, res) => {
     if (!name) return res.status(400).json({ error: 'Enter a name' });
     if (name.length > 40) return res.status(400).json({ error: 'That name is too long' });
     if (findGamePlayerByName(name)) return res.status(400).json({ error: `"${name}" is already in the family` });
+    // A player on a linked server only plays there: their name can't be taken to play as them here
+    const linked = linkedGamePlayers().find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (linked) return res.status(400).json({ error: `"${linked.name}" plays on ${linked.server.name}. Choose another name.` });
     res.json(addGamePlayer(crypto.randomUUID(), name));
+    gameSync.pushSoon();
 });
 
 app.delete('/api/games/players/:id', (req, res) => {
     if (!deleteGamePlayer(req.params.id)) return res.status(404).json({ error: 'Player not found' });
     res.json({ success: true });
+    gameSync.pushSoon();
+});
+
+// Everyone's game on a day: this server's players (playable here) then those on linked servers (only
+// shown). { players: [{ id, name, server: null | name, guesses, status: none | playing | won | lost }] }
+app.get('/api/games/today', (req, res) => {
+    const day = gameDay(req.query.day);
+    if (day === null) return res.status(400).json({ error: 'day is required' });
+    gameSync.syncIfStale();
+    const local = listGamePlayers().map(p => {
+        const g = getWordGame(p.id, day);
+        return { id: p.id, name: p.name, server: null, guesses: g.guesses, status: g.guesses.length ? g.status : 'none' };
+    });
+    const linked = listPeerGameSnapshots(Date.now() - PEER_GAMES_KEEP_MS).flatMap(s => s.players.map(p => {
+        const g = s.games.find(x => x.player === p.id && x.day === day);
+        return { id: `${s.server.id}/${p.id}`, name: p.name, server: s.server.name, guesses: g?.guesses || [], status: g ? g.status : 'none' };
+    }));
+    res.json({ players: [...local, ...linked] });
 });
 
 function gameDay(value) {
@@ -4333,6 +4379,7 @@ app.put('/api/games/players/:id/game', express.json(), (req, res) => {
         return res.status(409).json({ error: 'This game was already played', ...saved, stats: getWordGameStats(req.params.id, day) });
     }
     saveWordGame(req.params.id, day, guesses, status);
+    gameSync.pushSoon();
     res.json({ guesses, status, stats: getWordGameStats(req.params.id, day) });
 });
 

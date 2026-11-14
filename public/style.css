@@ -13937,3 +13937,92 @@ input:checked+.slider:before {
     font-weight: 700;
     font-variant-numeric: tabular-nums;
 }
+
+/* Daily Word: everyone's attempts today as small colour grids, linked servers' players labelled with theirs */
+.word-results {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+    max-width: 100%;
+}
+
+.word-results[hidden] {
+    display: none;
+}
+
+.word-result {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    min-width: 4.5rem;
+    max-width: 7rem;
+    padding: 0.45rem 0.5rem;
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+    background: var(--card-bg);
+}
+
+.word-result.mine {
+    border-color: var(--primary);
+}
+
+.word-result.linked {
+    border-style: dashed;
+}
+
+.word-result-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.word-result-row {
+    display: flex;
+    gap: 2px;
+}
+
+.word-result-row i {
+    width: 0.55rem;
+    height: 0.55rem;
+    border-radius: 2px;
+    background: var(--word-absent);
+}
+
+.word-result-row i.correct {
+    background: var(--word-correct);
+}
+
+.word-result-row i.present {
+    background: var(--word-present);
+}
+
+.word-result-name {
+    max-width: 100%;
+    font-size: 0.8rem;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.word-result-server {
+    max-width: 100%;
+    margin-top: -0.2rem;
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.word-result-score {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.word-result-score.won {
+    color: var(--word-correct);
+    font-weight: 700;
+}
