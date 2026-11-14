@@ -15475,21 +15475,37 @@ function drawPetrolHistory() {
 
 window.addEventListener('resize', () => { if (appView === 'petrol' && petrolSelected) drawPetrolHistory(); });
 
-// Health tab: each family member's steps, activity, heart rate, sleep and weight from the Google Health
-// API, read by the server (lib/google-health.js). Each person links their own Google account from their
-// card: Google's sign-in opens in a new tab and lands on google.com with a code in the address, which is
-// pasted back here. Today's steps head the page as a family leaderboard.
+// Health tab: everything Google Health has for each family member, read by the server
+// (lib/google-health.js). A tab for each person, and a Family tab first with today's steps as a
+// leaderboard and everyone's day side by side. A person's tab has their day at a glance, then
+// activity, heart, sleep, workouts, body, and food and water, each shown only when there's data.
+// Each person links their own Google account from their tab: Google's sign-in opens in a new tab and
+// lands on google.com with a code in the address, which is pasted back here.
 const HEALTH_REFRESH_MS = 15 * 60 * 1000;
-const HEALTH_COLOURS = { steps: 'var(--primary)', activity: '#22c55e', heart: '#ef4444', sleep: '#8b5cf6' };
+const HEALTH_COLOURS = { steps: 'var(--primary)', activity: '#22c55e', heart: '#ef4444', sleep: '#8b5cf6', body: '#0ea5e9', food: '#f59e0b' };
 const SLEEP_STAGES = [
     { keys: ['DEEP'], name: 'Deep', colour: '#4338ca' },
     { keys: ['LIGHT', 'ASLEEP'], name: 'Light', colour: '#818cf8' },
     { keys: ['REM'], name: 'REM', colour: '#22d3ee' },
     { keys: ['AWAKE', 'RESTLESS'], name: 'Awake', colour: '#f59e0b' },
 ];
+// Heart rate zones (time in zone, zone limits) and active zone minutes' zones
+const HEART_ZONES = [
+    { key: 'LIGHT', name: 'Light', colour: '#94a3b8' },
+    { key: 'MODERATE', name: 'Moderate', colour: '#22c55e' },
+    { key: 'VIGOROUS', name: 'Vigorous', colour: '#f59e0b' },
+    { key: 'PEAK', name: 'Peak', colour: '#ef4444' },
+];
+const AZM_ZONES = [
+    { key: 'fatBurn', name: 'Fat burn', colour: '#f59e0b' },
+    { key: 'cardio', name: 'Cardio', colour: '#f97316' },
+    { key: 'peak', name: 'Peak', colour: '#ef4444' },
+];
 let healthData = null;
 let healthTimer = null;
-const healthLinking = new Set(); // people whose card is waiting for the address Google sent them to
+let healthTab = null; // 'family' or a person's id
+try { healthTab = localStorage.getItem('healthTab'); } catch { /* not kept; fine */ }
+const healthLinking = new Set(); // people whose tab is waiting for the address Google sent them to
 
 function showHealth() {
     setAppView('health');
@@ -15505,7 +15521,7 @@ async function refreshHealth(force = false) {
 
 async function loadHealth(force) {
     const status = document.getElementById('health-status');
-    if (!healthData) status.textContent = 'Reading from Google Health...';
+    if (!healthData || force) status.textContent = 'Reading from Google Health...';
     try {
         const res = await fetch(`/api/health${force ? '?refresh=1' : ''}`);
         if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
@@ -15516,50 +15532,109 @@ async function loadHealth(force) {
     }
 }
 
+function selectHealthTab(id) {
+    healthTab = id;
+    try { localStorage.setItem('healthTab', id); } catch { /* not kept; fine */ }
+    if (healthData) renderHealth(healthData);
+    document.getElementById('health-view').scrollTop = 0;
+}
+
+// ─── Formatting ──────────────────────────────────────────────────────────────
+
 const healthNumber = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString([], { maximumFractionDigits: digits, minimumFractionDigits: digits });
 const healthToday = p => p.days?.[p.days.length - 1] || {};
-const healthHours = mins => mins == null ? '–' : `${Math.floor(mins / 60)}h ${String(Math.round(mins % 60)).padStart(2, '0')}m`;
+const healthHours = mins => mins == null ? '–' : mins < 60 ? `${Math.round(mins)}m` : `${Math.floor(mins / 60)}h ${String(Math.round(mins % 60)).padStart(2, '0')}m`;
 const healthDayLabel = date => new Date(`${date}T12:00:00`).toLocaleDateString([], { weekday: 'narrow' });
+const healthWhen = iso => new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const healthWords = s => s ? s.toLowerCase().replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()) : '';
+const healthPace = secPerKm => secPerKm ? `${Math.floor(secPerKm / 60)}:${String(Math.round(secPerKm % 60)).padStart(2, '0')} /km` : null;
 const healthAverage = list => {
     const vals = list.filter(v => v != null && v > 0);
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 };
+const healthHas = (days, key) => days.some(d => d[key] != null && d[key] !== 0);
+// The latest day with a reading of key: { date, value } or null
+const healthLatest = (days, key) => {
+    for (let i = days.length - 1; i >= 0; i--) if (days[i][key] != null) return { date: days[i].date, value: days[i][key] };
+    return null;
+};
 const healthStageMinutes = (night, stage) => stage.keys.reduce((t, k) => t + (night.stages[k] || 0), 0);
+const healthAgo = date => {
+    const today = healthData?.people.find(p => p.days)?.days.at(-1)?.date;
+    return date === today ? 'today' : shortDate(date);
+};
+
+// ─── Rendering ───────────────────────────────────────────────────────────────
 
 function renderHealth(data) {
     const status = document.getElementById('health-status');
-    const grid = document.getElementById('health-grid');
-    const leaders = document.getElementById('health-leaders');
-    leaders.hidden = true;
+    const tabs = document.getElementById('health-tabs');
+    const body = document.getElementById('health-body');
     if (!data.configured) {
         status.textContent = "Google Health isn't set up yet. Press Google Health Setup to add your Google Cloud client.";
-        grid.innerHTML = '';
+        tabs.hidden = true;
+        body.innerHTML = '';
         return;
     }
     if (!data.people.length) {
-        status.textContent = 'Add the family in Settings → Family first, then link each person to their Google account here.';
-        grid.innerHTML = '';
+        status.textContent = 'Add the family in Settings → Family first, then link each person to their Google account on their tab here.';
+        tabs.hidden = true;
+        body.innerHTML = '';
         return;
     }
     status.textContent = '';
-    renderHealthLeaders(data.people.filter(p => p.connected && p.days));
-    grid.innerHTML = data.people.map(p => p.connected && p.days ? healthCard(p) : healthLinkCard(p)).join('');
+    if (healthTab !== 'family' && !data.people.some(p => p.id === healthTab)) healthTab = 'family';
+    tabs.hidden = false;
+    tabs.innerHTML = [{ id: 'family', name: 'Family' }, ...data.people].map(p => {
+        const unlinked = p.id !== 'family' && !(p.connected && p.days);
+        return `<button type="button" role="tab" class="${p.id === healthTab ? 'active' : ''}${unlinked ? ' health-tab-unlinked' : ''}"
+            aria-selected="${p.id === healthTab}" onclick="selectHealthTab('${escapeHtml(p.id)}')"
+            ${unlinked ? 'title="Not linked to Google Health yet"' : ''}>${escapeHtml(p.name)}</button>`;
+    }).join('');
+    if (healthTab === 'family') {
+        body.innerHTML = healthFamily(data.people);
+        return;
+    }
+    const p = data.people.find(x => x.id === healthTab);
+    body.innerHTML = p.connected && p.days ? healthPerson(p) : healthLinkCard(p);
 }
 
-// Today's steps, most first, each with a bar against the day's leader
-function renderHealthLeaders(people) {
-    const leaders = document.getElementById('health-leaders');
-    if (!people.length) return;
-    const ranked = people.map(p => ({ name: p.name, steps: healthToday(p).steps || 0 })).sort((a, b) => b.steps - a.steps);
+// Family: today's steps as a leaderboard, then everyone's day side by side
+function healthFamily(people) {
+    const linked = people.filter(p => p.connected && p.days);
+    if (!linked.length) {
+        return `<div class="plug-card"><div class="plug-card-status">Nobody is linked to Google Health yet. Pick a person's tab above to link their Google account.</div></div>`;
+    }
+    const ranked = linked.map(p => ({ p, steps: healthToday(p).steps || 0 })).sort((a, b) => b.steps - a.steps);
     const top = Math.max(ranked[0].steps, 1);
-    leaders.innerHTML = `<div class="energy-pane-title">Steps today</div>` + ranked.map((r, i) => `
-        <div class="health-leader">
+    const board = ranked.map((r, i) => `
+        <button type="button" class="health-leader" onclick="selectHealthTab('${escapeHtml(r.p.id)}')">
             <span class="health-rank">${i + 1}</span>
-            <span class="health-leader-name">${escapeHtml(r.name)}</span>
+            <span class="health-leader-name">${escapeHtml(r.p.name)}</span>
             <span class="health-leader-bar"><span style="width:${Math.max(1, (r.steps / top) * 100)}%"></span></span>
             <span class="health-leader-steps">${healthNumber(r.steps)}</span>
-        </div>`).join('');
-    leaders.hidden = false;
+        </button>`).join('');
+    const columns = [
+        { name: 'Steps', get: p => healthNumber(healthToday(p).steps) },
+        { name: 'Distance', get: p => healthToday(p).distanceKm != null ? `${healthNumber(healthToday(p).distanceKm, 1)} km` : '–' },
+        { name: 'Active zone', get: p => healthToday(p).activeZoneMinutes != null ? `${healthNumber(healthToday(p).activeZoneMinutes)} min` : '–' },
+        { name: 'Calories', get: p => healthNumber(healthToday(p).kcal) },
+        { name: 'Resting HR', get: p => { const r = healthLatest(p.days, 'restingHeartRate'); return r ? `${healthNumber(r.value)} bpm` : '–'; } },
+        { name: 'Sleep', get: p => healthHours(p.sleep?.at(-1)?.minutesAsleep) },
+        { name: '7-day steps', get: p => healthNumber(p.days.slice(-7).reduce((s, d) => s + (d.steps || 0), 0)) },
+    ];
+    const unlinked = people.filter(p => !(p.connected && p.days));
+    return `
+        <div class="health-leaders"><div class="energy-pane-title">Steps today</div>${board}</div>
+        <div class="plug-card health-section">
+            <div class="health-section-title">Everyone today</div>
+            <div class="health-table-wrap"><table class="health-table">
+                <thead><tr><th></th>${columns.map(c => `<th>${c.name}</th>`).join('')}</tr></thead>
+                <tbody>${linked.map(p => `<tr onclick="selectHealthTab('${escapeHtml(p.id)}')">
+                    <th>${escapeHtml(p.name)}</th>${columns.map(c => `<td>${c.get(p)}</td>`).join('')}</tr>`).join('')}</tbody>
+            </table></div>
+            ${unlinked.length ? `<div class="energy-section-label">Not linked yet: ${unlinked.map(p => escapeHtml(p.name)).join(', ')}</div>` : ''}
+        </div>`;
 }
 
 // Daily bars on their own scale, the last one (today, or last night) highlighted
@@ -15573,92 +15648,56 @@ function healthBars(items, { value, title, label = d => healthDayLabel(d.date) }
     }).join('')}</div>`;
 }
 
-// "▲ 12% more than the 7-day average": more is good news here, so up is green
-function healthCompare(now, earlier, what) {
+// A bar split into parts ([{ name, colour, value }]) with a legend under it; fmt formats each value
+function healthSplitBar(parts, fmt) {
+    const shown = parts.filter(s => s.value > 0);
+    if (!shown.length) return '';
+    return `
+        <div class="health-split-bar">${shown.map(s =>
+            `<span style="flex:${s.value};background:${s.colour}" title="${s.name}: ${fmt(s.value)}"></span>`).join('')}</div>
+        <div class="health-split-legend">${shown.map(s =>
+            `<span><i style="background:${s.colour}"></i>${s.name} ${fmt(s.value)}</span>`).join('')}</div>`;
+}
+
+// "▲ 12% more than the 7-day average". upIsGood says which way is good news (green).
+function healthCompare(now, earlier, what, upIsGood = true) {
     const avg = healthAverage(earlier);
     if (now == null || !avg) return '';
     const change = Math.round((now / avg - 1) * 100);
     const text = change === 0 ? `Same as the ${what} average` : `${Math.abs(change)}% ${change > 0 ? 'more' : 'less'} than the ${what} average`;
-    return `<div class="energy-compare health-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+    const good = change === 0 ? '' : (change > 0) === upIsGood ? 'good' : 'bad';
+    return `<div class="energy-compare health-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''} ${good}">${text}</div>`;
 }
 
-function healthStepsPane(p) {
-    const today = healthToday(p);
-    const week = p.days.slice(-8, -1).map(d => d.steps);
+// A pane: title, big figure (with an optional figure on the right), then whatever else
+function healthPane(colour, title, big, side, ...rest) {
     return `
-        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.steps}">
-            <div class="energy-pane-title">Steps</div>
-            <div class="energy-figures"><span class="energy-big">${healthNumber(today.steps)}</span>
-                <span class="energy-cost">${healthNumber(today.distanceKm, 1)} km</span></div>
-            ${healthCompare(today.steps, week, '7-day')}
-            ${healthBars(p.days, { value: d => d.steps, title: d => `${shortDate(d.date)}: ${healthNumber(d.steps)} steps` })}
+        <div class="energy-pane" style="--energy-colour:${colour}">
+            <div class="energy-pane-title">${title}</div>
+            ${big != null ? `<div class="energy-figures"><span class="energy-big">${big}</span>${side ? `<span class="energy-cost">${side}</span>` : ''}</div>` : ''}
+            ${rest.filter(Boolean).join('')}
         </div>`;
 }
 
-function healthActivityPane(p) {
-    const today = healthToday(p);
-    const week = p.days.slice(-7);
-    const sum = key => week.reduce((s, d) => s + (d[key] || 0), 0);
-    const stat = (label, v, unit) => `<div class="health-stat"><span class="health-stat-value">${v}${unit ? ` <small>${unit}</small>` : ''}</span><span class="health-stat-label">${label}</span></div>`;
+// One topic (Activity, Heart...) as a card of panes; left out when it has nothing in it
+function healthSection(title, colour, panes, footer = '') {
+    const inner = panes.filter(Boolean).join('');
+    if (!inner && !footer) return '';
     return `
-        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.activity}">
-            <div class="energy-pane-title">Activity today</div>
-            <div class="health-stats">
-                ${stat('Calories', healthNumber(today.kcal), 'kcal')}
-                ${stat('Active zone', healthNumber(today.activeZoneMinutes), 'min')}
-                ${stat('Distance', healthNumber(today.distanceKm, 1), 'km')}
-            </div>
-            <div class="energy-section-label">Last 7 days: ${healthNumber(sum('steps'))} steps · ${healthNumber(sum('distanceKm'), 1)} km · ${healthNumber(sum('activeZoneMinutes'))} active zone minutes</div>
-            ${p.weight ? `<div class="energy-section-label">Weight ${healthNumber(p.weight.kg, 1)} kg (${shortDate(p.weight.date)})</div>` : ''}
+        <div class="plug-card health-section" style="--energy-colour:${colour}">
+            <div class="health-section-title">${title}</div>
+            ${inner ? `<div class="energy-panes">${inner}</div>` : ''}
+            ${footer}
         </div>`;
 }
 
-function healthHeartPane(p) {
-    const withResting = p.days.filter(d => d.restingHeartRate);
-    const latest = withResting[withResting.length - 1];
-    const today = healthToday(p);
-    if (!latest && today.heartRateAvg == null) return '';
-    return `
-        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.heart}">
-            <div class="energy-pane-title">Heart</div>
-            <div class="energy-figures"><span class="energy-big">${latest ? `${healthNumber(latest.restingHeartRate)} <small>bpm resting</small>` : '–'}</span></div>
-            ${today.heartRateAvg != null ? `<div class="energy-section-label">Today: average ${healthNumber(today.heartRateAvg)} bpm, ${healthNumber(today.heartRateMin)}–${healthNumber(today.heartRateMax)}</div>` : ''}
-            ${withResting.length > 1 ? healthBars(p.days, {
-                value: d => d.restingHeartRate,
-                title: d => `${shortDate(d.date)}: ${d.restingHeartRate ? `${healthNumber(d.restingHeartRate)} bpm resting` : 'no reading'}`,
-            }) : ''}
-        </div>`;
-}
+const healthTile = (label, value, unit, sub = '') => value == null ? '' : `
+    <div class="health-stat"><span class="health-stat-value">${value}${unit ? ` <small>${unit}</small>` : ''}</span>
+        <span class="health-stat-label">${label}</span>${sub ? `<span class="health-stat-sub">${sub}</span>` : ''}</div>`;
 
-function healthSleepPane(p) {
-    const nights = p.sleep || [];
-    const last = nights[nights.length - 1];
-    if (!last) return '';
-    const stages = SLEEP_STAGES.map(st => ({ ...st, mins: healthStageMinutes(last, st) })).filter(st => st.mins);
-    const stageBar = stages.length ? `
-            <div class="health-sleep-bar">${stages.map(st =>
-                `<span style="flex:${st.mins};background:${st.colour}" title="${st.name}: ${healthHours(st.mins)}"></span>`).join('')}</div>
-            <div class="health-sleep-legend">${stages.map(st =>
-                `<span><i style="background:${st.colour}"></i>${st.name} ${healthHours(st.mins)}</span>`).join('')}</div>` : '';
-    const recent = nights.slice(-7).map(n => ({ ...n, date: n.end.slice(0, 10) }));
-    return `
-        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.sleep}">
-            <div class="energy-pane-title">Last night's sleep</div>
-            <div class="energy-figures"><span class="energy-big">${healthHours(last.minutesAsleep)}</span>
-                <span class="energy-cost">${clockTime(last.start)}–${clockTime(last.end)}</span></div>
-            ${stageBar}
-            ${recent.length > 1 ? healthBars(recent, {
-                value: n => n.minutesAsleep,
-                title: n => `${shortDate(n.date)}: ${healthHours(n.minutesAsleep)} asleep`,
-            }) : ''}
-        </div>`;
-}
-
-const healthAvatar = name => `<div class="plug-card-icon health-avatar">${escapeHtml((name.trim()[0] || '?').toUpperCase())}</div>`;
-
-function healthCard(p) {
+function healthPerson(p) {
     const status = p.error ? `Couldn't update: ${p.error}` : `Updated ${clockTime(p.updated)}`;
-    const missing = p.missing?.length ? `<div class="energy-section-label">Not available: ${escapeHtml(p.missing.join(', '))}</div>` : '';
+    const missing = p.missing?.length ? `<div class="energy-section-label">Not available (not recorded, or not allowed when linking): ${escapeHtml(p.missing.join(', '))}</div>` : '';
     return `
         <div class="plug-card health-card">
             <div class="plug-card-head">
@@ -15670,10 +15709,188 @@ function healthCard(p) {
                 <button type="button" class="btn-control btn-small health-unlink" onclick="unlinkHealth('${p.id}', this)"
                     title="Stop reading ${escapeHtml(p.name)}'s figures from Google Health">Unlink</button>
             </div>
-            <div class="energy-panes">${healthStepsPane(p)}${healthActivityPane(p)}${healthHeartPane(p)}${healthSleepPane(p)}</div>
+            ${healthTodayTiles(p)}
             ${missing}
-        </div>`;
+        </div>
+        ${healthActivity(p)}
+        ${healthHeart(p)}
+        ${healthSleep(p)}
+        ${healthWorkouts(p)}
+        ${healthBody(p)}
+        ${healthFood(p)}`;
 }
+
+function healthTodayTiles(p) {
+    const t = healthToday(p);
+    const night = p.sleep?.at(-1);
+    const resting = healthLatest(p.days, 'restingHeartRate');
+    const tiles = [
+        healthTile('Steps', t.steps != null ? healthNumber(t.steps) : null),
+        healthTile('Distance', t.distanceKm != null ? healthNumber(t.distanceKm, 1) : null, 'km'),
+        healthTile('Floors', t.floors != null ? healthNumber(t.floors) : null),
+        healthTile('Calories', t.kcal != null ? healthNumber(t.kcal) : null, 'kcal', t.activeKcal != null ? `${healthNumber(t.activeKcal)} active` : ''),
+        healthTile('Active zone', t.activeZoneMinutes != null ? healthNumber(t.activeZoneMinutes) : null, 'min'),
+        healthTile('Sitting', t.sedentaryMinutes != null ? healthHours(t.sedentaryMinutes) : null),
+        healthTile('Resting HR', resting ? healthNumber(resting.value) : null, 'bpm'),
+        healthTile('Sleep', night ? healthHours(night.minutesAsleep) : null, '', night ? 'last night' : ''),
+        healthTile('Water', t.waterMl ? healthNumber(t.waterMl) : null, 'ml'),
+    ].join('');
+    return tiles ? `<div class="health-stats health-today">${tiles}</div>` : '';
+}
+
+function healthActivity(p) {
+    const days = p.days;
+    const t = healthToday(p);
+    const week = days.slice(-7);
+    const sum = key => week.reduce((s, d) => s + (d[key] || 0), 0);
+    const steps = healthHas(days, 'steps') && healthPane(HEALTH_COLOURS.steps, 'Steps', healthNumber(t.steps),
+        t.distanceKm != null ? `${healthNumber(t.distanceKm, 1)} km` : '',
+        healthCompare(t.steps, days.slice(-8, -1).map(d => d.steps), '7-day'),
+        healthBars(days, { value: d => d.steps, title: d => `${shortDate(d.date)}: ${healthNumber(d.steps)} steps, ${healthNumber(d.distanceKm, 1)} km` }),
+        `<div class="energy-section-label">Last 7 days: ${healthNumber(sum('steps'))} steps · ${healthNumber(sum('distanceKm'), 1)} km</div>`);
+    const azm = healthHas(days, 'activeZoneMinutes') && healthPane(HEALTH_COLOURS.activity, 'Active zone minutes', healthNumber(t.activeZoneMinutes), 'today',
+        t.activeZoneParts ? healthSplitBar(AZM_ZONES.map(z => ({ ...z, value: t.activeZoneParts[z.key] })), v => `${v}m`) : '',
+        healthBars(days, { value: d => d.activeZoneMinutes, title: d => `${shortDate(d.date)}: ${healthNumber(d.activeZoneMinutes)} active zone minutes` }),
+        `<div class="energy-section-label">Last 7 days: ${healthNumber(sum('activeZoneMinutes'))} minutes</div>`);
+    const levels = t.activeMinutes && Object.entries(t.activeMinutes).filter(([, v]) => v > 0);
+    const calories = healthHas(days, 'kcal') && healthPane(HEALTH_COLOURS.food, 'Calories burned', healthNumber(t.kcal),
+        t.activeKcal != null ? `${healthNumber(t.activeKcal)} active` : '',
+        healthCompare(t.kcal, days.slice(-8, -1).map(d => d.kcal), '7-day'),
+        healthBars(days, { value: d => d.kcal, title: d => `${shortDate(d.date)}: ${healthNumber(d.kcal)} kcal${d.activeKcal != null ? `, ${healthNumber(d.activeKcal)} active` : ''}` }),
+        levels?.length ? `<div class="energy-section-label">Active today: ${levels.map(([k, v]) => `${healthWords(k)} ${healthHours(v)}`).join(' · ')}</div>` : '');
+    const climbing = (healthHas(days, 'floors') || healthHas(days, 'elevationM')) && healthPane(HEALTH_COLOURS.body, 'Floors climbed',
+        healthNumber(t.floors), t.elevationM != null ? `${healthNumber(t.elevationM)} m up` : '',
+        healthBars(days, { value: d => d.floors, title: d => `${shortDate(d.date)}: ${healthNumber(d.floors)} floors, ${healthNumber(d.elevationM)} m` }));
+    const sitting = healthHas(days, 'sedentaryMinutes') && healthPane('#64748b', 'Time sitting', healthHours(t.sedentaryMinutes), 'today',
+        healthCompare(t.sedentaryMinutes, days.slice(-8, -1).map(d => d.sedentaryMinutes), '7-day', false),
+        healthBars(days, { value: d => d.sedentaryMinutes, title: d => `${shortDate(d.date)}: ${healthHours(d.sedentaryMinutes)} sitting` }));
+    return healthSection('Activity', HEALTH_COLOURS.activity, [steps, azm, calories, climbing, sitting]);
+}
+
+function healthHeart(p) {
+    const days = p.days;
+    const t = healthToday(p);
+    const resting = healthLatest(days, 'restingHeartRate');
+    const restingPane = resting && healthPane(HEALTH_COLOURS.heart, 'Resting heart rate', `${healthNumber(resting.value)} <small>bpm</small>`, healthAgo(resting.date),
+        healthCompare(resting.value, days.slice(0, -1).map(d => d.restingHeartRate), '2-week', false),
+        healthBars(days, { value: d => d.restingHeartRate, title: d => `${shortDate(d.date)}: ${d.restingHeartRate ? `${d.restingHeartRate} bpm` : 'no reading'}` }));
+    const hrv = healthLatest(days, 'hrvMs');
+    const hrvDay = hrv && days.find(d => d.date === hrv.date);
+    const hrvPane = hrv && healthPane('#ec4899', 'Heart rate variability', `${healthNumber(hrv.value)} <small>ms</small>`, healthAgo(hrv.date),
+        healthCompare(hrv.value, days.slice(0, -1).map(d => d.hrvMs), '2-week'),
+        healthBars(days, { value: d => d.hrvMs, title: d => `${shortDate(d.date)}: ${d.hrvMs ? `${d.hrvMs} ms` : 'no reading'}` }),
+        hrvDay?.sleepingHeartRate || hrvDay?.hrvDeepSleepMs ? `<div class="energy-section-label">${[
+            hrvDay.sleepingHeartRate ? `Sleeping heart rate ${hrvDay.sleepingHeartRate} bpm` : '',
+            hrvDay.hrvDeepSleepMs ? `deep sleep HRV ${hrvDay.hrvDeepSleepMs} ms` : ''].filter(Boolean).join(' · ')}</div>` : '');
+    const zoneMins = t.heartZoneMinutes;
+    const todayPane = (t.heartRateAvg != null || zoneMins) && healthPane(HEALTH_COLOURS.heart, 'Heart rate today',
+        t.heartRateAvg != null ? `${healthNumber(t.heartRateAvg)} <small>bpm average</small>` : null,
+        t.heartRateMin != null ? `${healthNumber(t.heartRateMin)}–${healthNumber(t.heartRateMax)}` : '',
+        zoneMins ? `<div class="energy-section-label">Time in each zone</div>${healthSplitBar(HEART_ZONES.map(z => ({ ...z, value: zoneMins[z.key] || 0 })), healthHours)}` : '',
+        p.heartZones ? `<div class="energy-section-label">Zones: ${p.heartZones.filter(z => z.min != null)
+            .map(z => `${healthWords(z.zone)} ${z.min}${z.max ? `–${z.max}` : '+'}`).join(' · ')} bpm</div>` : '',
+        healthHas(days, 'heartRateAvg') ? healthBars(days, { value: d => d.heartRateAvg, title: d => `${shortDate(d.date)}: average ${healthNumber(d.heartRateAvg)} bpm (${healthNumber(d.heartRateMin)}–${healthNumber(d.heartRateMax)})` }) : '');
+    return healthSection('Heart', HEALTH_COLOURS.heart, [restingPane, hrvPane, todayPane]);
+}
+
+function healthSleep(p) {
+    const nights = p.sleep || [];
+    const last = nights.at(-1);
+    const days = p.days;
+    let lastPane = '';
+    if (last) {
+        const parts = SLEEP_STAGES.map(st => ({ ...st, value: healthStageMinutes(last, st) }));
+        const recent = nights.map(n => ({ ...n, date: n.end.slice(0, 10) }));
+        const extra = [
+            last.minutesInBed ? `In bed ${healthHours(last.minutesInBed)}` : '',
+            last.minutesAwake ? `awake ${healthHours(last.minutesAwake)}` : '',
+            last.awakenings ? `${last.awakenings} short awakenings` : '',
+        ].filter(Boolean).join(' · ');
+        lastPane = healthPane(HEALTH_COLOURS.sleep, "Last night's sleep", healthHours(last.minutesAsleep), `${clockTime(last.start)}–${clockTime(last.end)}`,
+            healthCompare(last.minutesAsleep, nights.slice(0, -1).map(n => n.minutesAsleep), 'week'),
+            healthSplitBar(parts, healthHours),
+            extra ? `<div class="energy-section-label">${extra}</div>` : '',
+            recent.length > 1 ? healthBars(recent, { value: n => n.minutesAsleep, title: n => `${shortDate(n.date)}: ${healthHours(n.minutesAsleep)} asleep` }) : '');
+    }
+    const breathing = healthLatest(days, 'breathingRate');
+    const spo2 = healthLatest(days, 'spo2Avg');
+    const temp = healthLatest(days, 'skinTempChange');
+    const spo2Day = spo2 && days.find(d => d.date === spo2.date);
+    const tiles = [
+        breathing && healthTile('Breathing rate', healthNumber(breathing.value, 1), 'per min', healthAgo(breathing.date)),
+        spo2 && healthTile('Blood oxygen', healthNumber(spo2.value, 1), '%', spo2Day.spo2Low != null ? `${healthNumber(spo2Day.spo2Low)}–${healthNumber(spo2Day.spo2High)}%, ${healthAgo(spo2.date)}` : healthAgo(spo2.date)),
+        temp && healthTile('Skin temperature', `${temp.value > 0 ? '+' : ''}${healthNumber(temp.value, 1)}`, '°C', `from usual, ${healthAgo(temp.date)}`),
+    ].filter(Boolean).join('');
+    const nightPane = tiles && healthPane(HEALTH_COLOURS.sleep, 'While asleep', null, null, `<div class="health-stats">${tiles}</div>`,
+        healthHas(days, 'spo2Avg') ? healthBars(days, { value: d => d.spo2Avg ? d.spo2Avg - 85 : null, title: d => `${shortDate(d.date)}: ${d.spo2Avg ? `${d.spo2Avg}% blood oxygen` : 'no reading'}` }) : '');
+    return healthSection('Sleep', HEALTH_COLOURS.sleep, [lastPane, nightPane]);
+}
+
+function healthWorkouts(p) {
+    const list = p.exercise || [];
+    if (!list.length) return '';
+    const rows = list.map(e => {
+        const bits = [
+            e.minutes != null ? healthHours(e.minutes) : '',
+            e.distanceKm ? `${healthNumber(e.distanceKm, 2)} km` : '',
+            healthPace(e.paceSecPerKm) || '',
+            e.kcal ? `${healthNumber(e.kcal)} kcal` : '',
+            e.heartRateAvg ? `${e.heartRateAvg} bpm avg` : '',
+            e.activeZoneMinutes ? `${e.activeZoneMinutes} AZM` : '',
+            e.steps ? `${healthNumber(e.steps)} steps` : '',
+            e.elevationM ? `${healthNumber(e.elevationM)} m up` : '',
+        ].filter(Boolean);
+        return `<div class="health-workout">
+            <div class="health-workout-name">${escapeHtml(e.name === e.type ? healthWords(e.type) : e.name)}</div>
+            <div class="health-workout-when">${healthWhen(e.start)}</div>
+            <div class="health-workout-figures">${bits.map(b => `<span>${b}</span>`).join('')}</div>
+        </div>`;
+    }).join('');
+    const total = list.reduce((s, e) => s + (e.minutes || 0), 0);
+    return healthSection(`Workouts <span class="health-section-note">${list.length} in 2 weeks · ${healthHours(total)}</span>`, HEALTH_COLOURS.activity, [],
+        `<div class="health-workouts">${rows}</div>`);
+}
+
+function healthBody(p) {
+    const b = p.body || {};
+    const weights = b.weights || [];
+    const fats = b.bodyFats || [];
+    const w = weights.at(-1);
+    const weightPane = w && healthPane(HEALTH_COLOURS.body, 'Weight', `${healthNumber(w.value, 1)} <small>kg</small>`, healthAgo(w.date),
+        weights.length > 1 ? `<div class="energy-compare">${(() => {
+            const change = w.value - weights[0].value;
+            return `${change > 0 ? '+' : ''}${healthNumber(change, 1)} kg since ${shortDate(weights[0].date)}`;
+        })()}</div>` : '',
+        weights.length > 1 ? (() => {
+            // From just under the lightest reading, so a kilo or two shows
+            const recent = weights.slice(-30);
+            const floor = Math.floor(Math.min(...recent.map(x => x.value))) - 1;
+            return healthBars(recent, { value: x => x.value - floor, title: x => `${shortDate(x.date)}: ${x.value} kg`, label: () => '' });
+        })() : '');
+    const f = fats.at(-1);
+    const tiles = [
+        f && healthTile('Body fat', healthNumber(f.value, 1), '%', healthAgo(f.date)),
+        b.heightCm && healthTile('Height', healthNumber(b.heightCm), 'cm'),
+        b.bmi && healthTile('BMI', healthNumber(b.bmi, 1)),
+        b.vo2Max && healthTile('Cardio fitness', healthNumber(b.vo2Max.value, 1), 'VO₂ max', [healthWords(b.vo2Max.level), healthAgo(b.vo2Max.date)].filter(Boolean).join(', ')),
+    ].filter(Boolean).join('');
+    const statsPane = tiles && healthPane(HEALTH_COLOURS.body, 'Body', null, null, `<div class="health-stats">${tiles}</div>`);
+    return healthSection('Body', HEALTH_COLOURS.body, [weightPane, statsPane]);
+}
+
+function healthFood(p) {
+    const days = p.days;
+    const t = healthToday(p);
+    const water = healthHas(days, 'waterMl') && healthPane('#0ea5e9', 'Water', `${healthNumber(t.waterMl)} <small>ml</small>`, 'today',
+        healthBars(days, { value: d => d.waterMl, title: d => `${shortDate(d.date)}: ${healthNumber(d.waterMl)} ml` }));
+    const food = healthHas(days, 'foodKcal') && healthPane(HEALTH_COLOURS.food, 'Food logged', `${healthNumber(t.foodKcal)} <small>kcal</small>`, 'today',
+        t.carbsG != null || t.fatG != null ? `<div class="energy-section-label">Carbs ${healthNumber(t.carbsG)} g · fat ${healthNumber(t.fatG)} g</div>` : '',
+        t.kcal && t.foodKcal ? `<div class="energy-section-label">${t.foodKcal > t.kcal ? `${healthNumber(t.foodKcal - t.kcal)} kcal more eaten than burned` : `${healthNumber(t.kcal - t.foodKcal)} kcal more burned than eaten`} so far</div>` : '',
+        healthBars(days, { value: d => d.foodKcal, title: d => `${shortDate(d.date)}: ${healthNumber(d.foodKcal)} kcal logged` }));
+    return healthSection('Food & water', HEALTH_COLOURS.food, [water, food]);
+}
+
+const healthAvatar = name => `<div class="plug-card-icon health-avatar">${escapeHtml((name.trim()[0] || '?').toUpperCase())}</div>`;
 
 function healthLinkCard(p) {
     const waiting = healthLinking.has(p.id);
@@ -15687,8 +15904,8 @@ function healthLinkCard(p) {
                 </div>
             </div>
             ${waiting ? `
-                <p class="settings-hint">Sign in with ${escapeHtml(p.name)}'s Google account in the tab that opened and allow access.
-                    It ends on google.com: copy the whole address from the address bar and paste it here.</p>
+                <p class="settings-hint">Sign in with ${escapeHtml(p.name)}'s Google account in the tab that opened and tick every box to allow
+                    access. It ends on google.com: copy the whole address from the address bar and paste it here.</p>
                 <div class="input-with-button">
                     <input type="text" class="health-code" placeholder="https://www.google.com/?state=...&amp;code=..." autocomplete="off" spellcheck="false">
                     <button type="button" class="btn-control btn-small primary" onclick="finishHealthLink('${p.id}', this)">Link</button>

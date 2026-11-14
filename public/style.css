@@ -13771,12 +13771,6 @@ input:checked+.slider:before {
 }
 
 /* Health: each family member's steps and health figures from Google Health, laid out like the Energy cards */
-.health-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 620px), 1fr));
-    gap: 1rem;
-    align-items: start;
-}
 
 .health-avatar {
     background: var(--primary);
@@ -13849,30 +13843,8 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
-.health-sleep-bar {
-    display: flex;
-    height: 0.75rem;
-    border-radius: 0.4rem;
-    overflow: hidden;
-    gap: 2px;
-}
 
-.health-sleep-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25rem 0.9rem;
-    margin-top: -0.4rem;
-    font-size: 0.75rem;
-    color: var(--text-muted);
-}
 
-.health-sleep-legend i {
-    display: inline-block;
-    width: 0.6rem;
-    height: 0.6rem;
-    border-radius: 2px;
-    margin-right: 0.3rem;
-}
 
 .health-link-actions {
     display: flex;
@@ -14025,4 +13997,182 @@ input:checked+.slider:before {
 .word-result-score.won {
     color: var(--word-correct);
     font-weight: 700;
+}
+
+/* Health: a tab per person (and Family first), each a column of topic cards */
+.health-tabs {
+    flex-wrap: wrap;
+    align-self: flex-start;
+    max-width: 100%;
+}
+
+.health-tabs[hidden] {
+    display: none;
+}
+
+.health-tabs button {
+    flex: none;
+    padding: 0.5rem 1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.health-tabs button.health-tab-unlinked:not(.active) {
+    opacity: 0.6;
+    font-style: italic;
+}
+
+.health-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.health-section-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--energy-colour, var(--text-muted));
+}
+
+.health-section-note {
+    margin-left: 0.5rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-muted);
+}
+
+.health-section .energy-panes {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+}
+
+.health-today {
+    grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+}
+
+.health-stat-sub {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
+/* More is better for some figures and worse for others: healthCompare says which */
+.health-compare.good::before {
+    color: #22c55e;
+}
+
+.health-compare.bad::before {
+    color: #ef4444;
+}
+
+.health-split-bar {
+    display: flex;
+    height: 0.75rem;
+    border-radius: 0.4rem;
+    overflow: hidden;
+    gap: 2px;
+}
+
+.health-split-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.9rem;
+    margin-top: -0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.health-split-legend i {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 2px;
+    margin-right: 0.3rem;
+}
+
+button.health-leader {
+    width: 100%;
+    padding: 0.2rem 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.health-table-wrap {
+    overflow-x: auto;
+}
+
+.health-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.health-table th,
+.health-table td {
+    padding: 0.5rem 0.6rem;
+    text-align: right;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--card-border);
+}
+
+.health-table thead th {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.health-table th:first-child {
+    text-align: left;
+}
+
+.health-table tbody tr {
+    cursor: pointer;
+}
+
+.health-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.health-workouts {
+    display: flex;
+    flex-direction: column;
+}
+
+.health-workout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.15rem 1rem;
+    padding: 0.6rem 0;
+    border-top: 1px solid var(--card-border);
+}
+
+.health-workout:first-child {
+    border-top: none;
+}
+
+.health-workout-name {
+    font-weight: 700;
+}
+
+.health-workout-when {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+.health-workout-figures {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.9rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
 }

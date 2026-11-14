@@ -772,8 +772,8 @@
                 </div>
             </div>
             <div id="health-status" class="smarthome-status"></div>
-            <div id="health-leaders" class="health-leaders" hidden></div>
-            <div id="health-grid" class="health-grid"></div>
+            <div id="health-tabs" class="nutrition-sources health-tabs" role="tablist" aria-label="Who" hidden></div>
+            <div id="health-body" class="health-body"></div>
         </section>
 
         <!-- Alarms tab: countdown timers and alarms at a time of day (built by timers.js) -->
@@ -1507,8 +1507,8 @@
                             <p class="settings-hint">Shows each family member's steps, heart rate, sleep and weight on the
                                 Health tab, from the <a href="https://developers.google.com/health/setup" target="_blank"
                                     rel="noopener">Google Health API</a> (Fitbit and Pixel Watch). In a Google Cloud project,
-                                switch on the Google Health API, add its read-only activity, health metrics and sleep scopes
-                                on the Data Access page, add each person's Google account as a Test user, and make an OAuth
+                                switch on the Google Health API, add its read-only activity and fitness, health metrics and
+                                measurements, sleep and nutrition scopes on the Data Access page, add each person's Google account as a Test user, and make an OAuth
                                 client of the <em>Web application</em> kind with <code>https://www.google.com</code> as its
                                 redirect URI. Then link each person from the Health tab. While the project is in Testing,
                                 Google ends each link after 7 days.</p>
