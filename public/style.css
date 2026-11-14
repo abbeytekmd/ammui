@@ -13769,3 +13769,171 @@ input:checked+.slider:before {
     border-style: dashed;
     color: rgba(255, 255, 255, 0.85);
 }
+
+/* Health: each family member's steps and health figures from Google Health, laid out like the Energy cards */
+.health-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 620px), 1fr));
+    gap: 1rem;
+    align-items: start;
+}
+
+.health-avatar {
+    background: var(--primary);
+    color: white;
+    font-weight: 800;
+    font-size: 1.1rem;
+}
+
+.health-card.unavailable .health-avatar {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-muted);
+}
+
+.health-unlink {
+    margin-left: auto;
+}
+
+.health-card .energy-big small {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+/* More is better here, so the arrows are the other way round to Energy's */
+.health-compare.up::before {
+    content: '▲ ';
+    color: #22c55e;
+}
+
+.health-compare.down::before {
+    content: '▼ ';
+    color: #ef4444;
+}
+
+.health-bars .energy-day-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.health-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.5rem;
+}
+
+.health-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.6rem;
+    border: 1px solid var(--card-border);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.health-stat-value {
+    font-size: 1.15rem;
+    font-weight: 800;
+    color: var(--energy-colour);
+}
+
+.health-stat-value small {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.health-stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.health-sleep-bar {
+    display: flex;
+    height: 0.75rem;
+    border-radius: 0.4rem;
+    overflow: hidden;
+    gap: 2px;
+}
+
+.health-sleep-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.9rem;
+    margin-top: -0.4rem;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.health-sleep-legend i {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 2px;
+    margin-right: 0.3rem;
+}
+
+.health-link-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+/* Today's steps, everyone in a row with a bar against the leader */
+.health-leaders {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--card-border);
+    border-radius: 1rem;
+    background: var(--card-bg);
+}
+
+.health-leaders[hidden] {
+    display: none;
+}
+
+.health-leader {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(4rem, 10rem) 1fr auto;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.health-rank {
+    font-weight: 800;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.energy-pane-title + .health-leader .health-rank {
+    color: #f59e0b;
+}
+
+.health-leader-name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.health-leader-bar {
+    height: 0.6rem;
+    border-radius: 0.3rem;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+
+.health-leader-bar span {
+    display: block;
+    height: 100%;
+    border-radius: 0.3rem;
+    background: var(--primary);
+}
+
+.health-leader-steps {
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}

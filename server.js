@@ -38,6 +38,7 @@ import * as energy from './lib/smart-home/glow.js';
 import * as tado from './lib/smart-home/tado.js';
 import * as homeConnect from './lib/smart-home/homeconnect.js';
 import * as fuelPrices from './lib/fuel-prices.js';
+import * as googleHealth from './lib/google-health.js';
 import exifr from 'exifr';
 import {
     logPlay, getTopTracks, getTopAlbums,
@@ -442,6 +443,7 @@ energy.init({ getSetting, setSetting });
 tado.init({ getSetting, setSetting });
 homeConnect.init({ getSetting, setSetting });
 fuelPrices.init({ getSetting, setSetting, cachePath: path.join(baseDataDir, 'cache', 'fuel-prices.json') });
+googleHealth.init({ getSetting, setSetting, encrypt: encryptSecret, decrypt: decryptSecret });
 // Browsing a server we couldn't place at startup may let more saved entries be converted.
 let mediaKeyRefreshTimer = null;
 onNewMediaServer(() => {
@@ -3102,6 +3104,8 @@ app.get('/api/peer/keys', (req, res) => {
     if (glow?.username && glow?.password) keys.glowAccount = { username: glow.username, password: glow.password };
     const fuelFinder = fuelPrices.getCredentials();
     if (fuelFinder) keys.fuelFinderAccount = fuelFinder;
+    const healthClient = googleHealth.getCredentials();
+    if (healthClient) keys.googleHealthClient = healthClient;
     if (settings.email.host) keys.email = { ...settings.email };
     console.log(`API keys requested by ${from}: sent ${Object.keys(keys).length}.`);
     res.json({ name: settings.deviceName || 'AMMUI', keys });
@@ -3161,6 +3165,11 @@ app.post('/api/settings/import-keys', express.json(), async (req, res) => {
         // Saved even if signing in fails here; the Petrol tab shows the error
         await fuelPrices.setAccount(fuelFinder).catch(() => { });
         imported.push('fuelFinderAccount');
+    }
+    const healthClient = keys?.googleHealthClient;
+    if (typeof healthClient?.clientId === 'string' && healthClient.clientId.trim() && typeof healthClient.clientSecret === 'string' && healthClient.clientSecret) {
+        googleHealth.setClient(healthClient);
+        imported.push('googleHealthClient');
     }
     const email = keys?.email;
     if (typeof email?.host === 'string' && email.host.trim()) {
@@ -7204,6 +7213,43 @@ app.post('/api/fuel/account', express.json(), async (req, res) => {
     } catch (err) {
         smartHomeError(res, err);
     }
+});
+
+// Steps and health figures for each family member, from the Google Health API (see lib/google-health.js)
+app.get('/api/health', async (req, res) => {
+    res.json(await googleHealth.getSummary(listGamePlayers(), { refresh: req.query.refresh === '1' }));
+});
+
+app.get('/api/health/account', (req, res) => {
+    res.json(googleHealth.getClient());
+});
+
+app.post('/api/health/account', express.json(), (req, res) => {
+    res.json(googleHealth.setClient(req.body || {}));
+});
+
+// The Google sign-in page for linking one family member's account
+app.get('/api/health/connect/:playerId', (req, res) => {
+    if (!getGamePlayer(req.params.playerId)) return res.status(404).json({ error: 'No such family member' });
+    try {
+        res.json({ url: googleHealth.connectUrl(req.params.playerId) });
+    } catch (err) {
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
+// { code }: the address Google sent them to after signing in (or just its code)
+app.post('/api/health/connect/:playerId', express.json(), async (req, res) => {
+    if (!getGamePlayer(req.params.playerId)) return res.status(404).json({ error: 'No such family member' });
+    try {
+        res.json(await googleHealth.connect(req.params.playerId, req.body?.code));
+    } catch (err) {
+        res.status(err.status || 500).json({ error: err.message });
+    }
+});
+
+app.delete('/api/health/connect/:playerId', (req, res) => {
+    res.json(googleHealth.disconnect(req.params.playerId));
 });
 
 // Update API routes

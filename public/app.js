@@ -3894,7 +3894,7 @@ async function importKeysFromDevice() {
             ? `Copied ${data.imported.map(k => labels[k]).join(', ')} from ${data.source}`
             : `${data.source} has no keys set`, data.imported.length ? 'success' : 'info', 3000);
         if (data.s3Verified === false) showToast(`The S3 details from ${data.source} were copied but the connection test failed here`, 'error');
-        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadFuelFinderAccount(), loadEmailSettings(), fetchS3Settings()]);
+        await Promise.all([loadDiscogsToken(), loadAcoustidKey(), loadYoutubeKey(), loadUsdaKey(), loadFuelFinderAccount(), loadGoogleHealthClient(), loadEmailSettings(), fetchS3Settings()]);
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
@@ -4661,6 +4661,7 @@ function openServerSettingsModal() {
         loadYoutubeKey();
         loadUsdaKey();
         loadFuelFinderAccount();
+        loadGoogleHealthClient();
         loadEmailSettings();
         loadKeySources();
         loadKeySharing();
@@ -6082,7 +6083,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', health: 'health-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
 
 function setAppView(view) {
     appView = view;
@@ -15473,6 +15474,332 @@ function drawPetrolHistory() {
 }
 
 window.addEventListener('resize', () => { if (appView === 'petrol' && petrolSelected) drawPetrolHistory(); });
+
+// Health tab: each family member's steps, activity, heart rate, sleep and weight from the Google Health
+// API, read by the server (lib/google-health.js). Each person links their own Google account from their
+// card: Google's sign-in opens in a new tab and lands on google.com with a code in the address, which is
+// pasted back here. Today's steps head the page as a family leaderboard.
+const HEALTH_REFRESH_MS = 15 * 60 * 1000;
+const HEALTH_COLOURS = { steps: 'var(--primary)', activity: '#22c55e', heart: '#ef4444', sleep: '#8b5cf6' };
+const SLEEP_STAGES = [
+    { keys: ['DEEP'], name: 'Deep', colour: '#4338ca' },
+    { keys: ['LIGHT', 'ASLEEP'], name: 'Light', colour: '#818cf8' },
+    { keys: ['REM'], name: 'REM', colour: '#22d3ee' },
+    { keys: ['AWAKE', 'RESTLESS'], name: 'Awake', colour: '#f59e0b' },
+];
+let healthData = null;
+let healthTimer = null;
+const healthLinking = new Set(); // people whose card is waiting for the address Google sent them to
+
+function showHealth() {
+    setAppView('health');
+    refreshHealth();
+}
+
+async function refreshHealth(force = false) {
+    clearTimeout(healthTimer);
+    if (appView !== 'health') return;
+    if (!document.hidden || force) await loadHealth(force);
+    if (appView === 'health') healthTimer = setTimeout(refreshHealth, HEALTH_REFRESH_MS);
+}
+
+async function loadHealth(force) {
+    const status = document.getElementById('health-status');
+    if (!healthData) status.textContent = 'Reading from Google Health...';
+    try {
+        const res = await fetch(`/api/health${force ? '?refresh=1' : ''}`);
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.statusText);
+        healthData = await res.json();
+        renderHealth(healthData);
+    } catch (err) {
+        status.textContent = `Couldn't read health figures: ${err.message}`;
+    }
+}
+
+const healthNumber = (v, digits = 0) => v == null ? '–' : Number(v).toLocaleString([], { maximumFractionDigits: digits, minimumFractionDigits: digits });
+const healthToday = p => p.days?.[p.days.length - 1] || {};
+const healthHours = mins => mins == null ? '–' : `${Math.floor(mins / 60)}h ${String(Math.round(mins % 60)).padStart(2, '0')}m`;
+const healthDayLabel = date => new Date(`${date}T12:00:00`).toLocaleDateString([], { weekday: 'narrow' });
+const healthAverage = list => {
+    const vals = list.filter(v => v != null && v > 0);
+    return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+};
+const healthStageMinutes = (night, stage) => stage.keys.reduce((t, k) => t + (night.stages[k] || 0), 0);
+
+function renderHealth(data) {
+    const status = document.getElementById('health-status');
+    const grid = document.getElementById('health-grid');
+    const leaders = document.getElementById('health-leaders');
+    leaders.hidden = true;
+    if (!data.configured) {
+        status.textContent = "Google Health isn't set up yet. Press Google Health Setup to add your Google Cloud client.";
+        grid.innerHTML = '';
+        return;
+    }
+    if (!data.people.length) {
+        status.textContent = 'Add the family in Settings → Family first, then link each person to their Google account here.';
+        grid.innerHTML = '';
+        return;
+    }
+    status.textContent = '';
+    renderHealthLeaders(data.people.filter(p => p.connected && p.days));
+    grid.innerHTML = data.people.map(p => p.connected && p.days ? healthCard(p) : healthLinkCard(p)).join('');
+}
+
+// Today's steps, most first, each with a bar against the day's leader
+function renderHealthLeaders(people) {
+    const leaders = document.getElementById('health-leaders');
+    if (!people.length) return;
+    const ranked = people.map(p => ({ name: p.name, steps: healthToday(p).steps || 0 })).sort((a, b) => b.steps - a.steps);
+    const top = Math.max(ranked[0].steps, 1);
+    leaders.innerHTML = `<div class="energy-pane-title">Steps today</div>` + ranked.map((r, i) => `
+        <div class="health-leader">
+            <span class="health-rank">${i + 1}</span>
+            <span class="health-leader-name">${escapeHtml(r.name)}</span>
+            <span class="health-leader-bar"><span style="width:${Math.max(1, (r.steps / top) * 100)}%"></span></span>
+            <span class="health-leader-steps">${healthNumber(r.steps)}</span>
+        </div>`).join('');
+    leaders.hidden = false;
+}
+
+// Daily bars on their own scale, the last one (today, or last night) highlighted
+function healthBars(items, { value, title, label = d => healthDayLabel(d.date) }) {
+    const peak = Math.max(...items.map(d => value(d) || 0), 1);
+    return `<div class="energy-week health-bars">${items.map((d, i) => {
+        const v = value(d) || 0;
+        return `<div class="energy-day ${i === items.length - 1 ? 'today' : ''}" title="${escapeHtml(title(d))}">
+            <div class="energy-day-bar"><span style="height:${v ? Math.max(2, (v / peak) * 100) : 0}%"></span></div>
+            <div class="energy-day-label">${label(d)}</div></div>`;
+    }).join('')}</div>`;
+}
+
+// "▲ 12% more than the 7-day average": more is good news here, so up is green
+function healthCompare(now, earlier, what) {
+    const avg = healthAverage(earlier);
+    if (now == null || !avg) return '';
+    const change = Math.round((now / avg - 1) * 100);
+    const text = change === 0 ? `Same as the ${what} average` : `${Math.abs(change)}% ${change > 0 ? 'more' : 'less'} than the ${what} average`;
+    return `<div class="energy-compare health-compare ${change > 0 ? 'up' : change < 0 ? 'down' : ''}">${text}</div>`;
+}
+
+function healthStepsPane(p) {
+    const today = healthToday(p);
+    const week = p.days.slice(-8, -1).map(d => d.steps);
+    return `
+        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.steps}">
+            <div class="energy-pane-title">Steps</div>
+            <div class="energy-figures"><span class="energy-big">${healthNumber(today.steps)}</span>
+                <span class="energy-cost">${healthNumber(today.distanceKm, 1)} km</span></div>
+            ${healthCompare(today.steps, week, '7-day')}
+            ${healthBars(p.days, { value: d => d.steps, title: d => `${shortDate(d.date)}: ${healthNumber(d.steps)} steps` })}
+        </div>`;
+}
+
+function healthActivityPane(p) {
+    const today = healthToday(p);
+    const week = p.days.slice(-7);
+    const sum = key => week.reduce((s, d) => s + (d[key] || 0), 0);
+    const stat = (label, v, unit) => `<div class="health-stat"><span class="health-stat-value">${v}${unit ? ` <small>${unit}</small>` : ''}</span><span class="health-stat-label">${label}</span></div>`;
+    return `
+        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.activity}">
+            <div class="energy-pane-title">Activity today</div>
+            <div class="health-stats">
+                ${stat('Calories', healthNumber(today.kcal), 'kcal')}
+                ${stat('Active zone', healthNumber(today.activeZoneMinutes), 'min')}
+                ${stat('Distance', healthNumber(today.distanceKm, 1), 'km')}
+            </div>
+            <div class="energy-section-label">Last 7 days: ${healthNumber(sum('steps'))} steps · ${healthNumber(sum('distanceKm'), 1)} km · ${healthNumber(sum('activeZoneMinutes'))} active zone minutes</div>
+            ${p.weight ? `<div class="energy-section-label">Weight ${healthNumber(p.weight.kg, 1)} kg (${shortDate(p.weight.date)})</div>` : ''}
+        </div>`;
+}
+
+function healthHeartPane(p) {
+    const withResting = p.days.filter(d => d.restingHeartRate);
+    const latest = withResting[withResting.length - 1];
+    const today = healthToday(p);
+    if (!latest && today.heartRateAvg == null) return '';
+    return `
+        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.heart}">
+            <div class="energy-pane-title">Heart</div>
+            <div class="energy-figures"><span class="energy-big">${latest ? `${healthNumber(latest.restingHeartRate)} <small>bpm resting</small>` : '–'}</span></div>
+            ${today.heartRateAvg != null ? `<div class="energy-section-label">Today: average ${healthNumber(today.heartRateAvg)} bpm, ${healthNumber(today.heartRateMin)}–${healthNumber(today.heartRateMax)}</div>` : ''}
+            ${withResting.length > 1 ? healthBars(p.days, {
+                value: d => d.restingHeartRate,
+                title: d => `${shortDate(d.date)}: ${d.restingHeartRate ? `${healthNumber(d.restingHeartRate)} bpm resting` : 'no reading'}`,
+            }) : ''}
+        </div>`;
+}
+
+function healthSleepPane(p) {
+    const nights = p.sleep || [];
+    const last = nights[nights.length - 1];
+    if (!last) return '';
+    const stages = SLEEP_STAGES.map(st => ({ ...st, mins: healthStageMinutes(last, st) })).filter(st => st.mins);
+    const stageBar = stages.length ? `
+            <div class="health-sleep-bar">${stages.map(st =>
+                `<span style="flex:${st.mins};background:${st.colour}" title="${st.name}: ${healthHours(st.mins)}"></span>`).join('')}</div>
+            <div class="health-sleep-legend">${stages.map(st =>
+                `<span><i style="background:${st.colour}"></i>${st.name} ${healthHours(st.mins)}</span>`).join('')}</div>` : '';
+    const recent = nights.slice(-7).map(n => ({ ...n, date: n.end.slice(0, 10) }));
+    return `
+        <div class="energy-pane" style="--energy-colour:${HEALTH_COLOURS.sleep}">
+            <div class="energy-pane-title">Last night's sleep</div>
+            <div class="energy-figures"><span class="energy-big">${healthHours(last.minutesAsleep)}</span>
+                <span class="energy-cost">${clockTime(last.start)}–${clockTime(last.end)}</span></div>
+            ${stageBar}
+            ${recent.length > 1 ? healthBars(recent, {
+                value: n => n.minutesAsleep,
+                title: n => `${shortDate(n.date)}: ${healthHours(n.minutesAsleep)} asleep`,
+            }) : ''}
+        </div>`;
+}
+
+const healthAvatar = name => `<div class="plug-card-icon health-avatar">${escapeHtml((name.trim()[0] || '?').toUpperCase())}</div>`;
+
+function healthCard(p) {
+    const status = p.error ? `Couldn't update: ${p.error}` : `Updated ${clockTime(p.updated)}`;
+    const missing = p.missing?.length ? `<div class="energy-section-label">Not available: ${escapeHtml(p.missing.join(', '))}</div>` : '';
+    return `
+        <div class="plug-card health-card">
+            <div class="plug-card-head">
+                ${healthAvatar(p.name)}
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(p.name)}</div>
+                    <div class="plug-card-status">${escapeHtml(status)}</div>
+                </div>
+                <button type="button" class="btn-control btn-small health-unlink" onclick="unlinkHealth('${p.id}', this)"
+                    title="Stop reading ${escapeHtml(p.name)}'s figures from Google Health">Unlink</button>
+            </div>
+            <div class="energy-panes">${healthStepsPane(p)}${healthActivityPane(p)}${healthHeartPane(p)}${healthSleepPane(p)}</div>
+            ${missing}
+        </div>`;
+}
+
+function healthLinkCard(p) {
+    const waiting = healthLinking.has(p.id);
+    return `
+        <div class="plug-card health-card unavailable">
+            <div class="plug-card-head">
+                ${healthAvatar(p.name)}
+                <div class="plug-card-title">
+                    <div class="plug-card-name">${escapeHtml(p.name)}</div>
+                    <div class="plug-card-status">${escapeHtml(p.error || 'Not linked to Google Health')}</div>
+                </div>
+            </div>
+            ${waiting ? `
+                <p class="settings-hint">Sign in with ${escapeHtml(p.name)}'s Google account in the tab that opened and allow access.
+                    It ends on google.com: copy the whole address from the address bar and paste it here.</p>
+                <div class="input-with-button">
+                    <input type="text" class="health-code" placeholder="https://www.google.com/?state=...&amp;code=..." autocomplete="off" spellcheck="false">
+                    <button type="button" class="btn-control btn-small primary" onclick="finishHealthLink('${p.id}', this)">Link</button>
+                </div>
+                <div class="health-link-actions">
+                    <button type="button" class="btn-control btn-small" onclick="startHealthLink('${p.id}')">Open Sign-in Again</button>
+                    <button type="button" class="btn-control btn-small" onclick="cancelHealthLink('${p.id}')">Cancel</button>
+                </div>` : `
+                <div><button type="button" class="btn-control btn-small primary" onclick="startHealthLink('${p.id}')">Link Google Account</button></div>`}
+        </div>`;
+}
+
+async function startHealthLink(id) {
+    // The tab is opened straight away (before the fetch) so the browser doesn't block it as a pop-up
+    const tab = window.open('', '_blank');
+    try {
+        const res = await fetch(`/api/health/connect/${encodeURIComponent(id)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        if (tab) tab.location.href = data.url;
+        else window.open(data.url, '_blank');
+        healthLinking.add(id);
+        if (healthData) renderHealth(healthData);
+    } catch (err) {
+        tab?.close();
+        showToast(err.message, 'error');
+    }
+}
+
+function cancelHealthLink(id) {
+    healthLinking.delete(id);
+    if (healthData) renderHealth(healthData);
+}
+
+async function finishHealthLink(id, btn) {
+    const input = btn.closest('.health-card').querySelector('.health-code');
+    btn.disabled = true;
+    try {
+        const res = await fetch(`/api/health/connect/${encodeURIComponent(id)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: input.value }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || res.statusText);
+        healthLinking.delete(id);
+        showToast('Linked to Google Health', 'success');
+        await loadHealth(false);
+    } catch (err) {
+        showToast(err.message, 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function unlinkHealth(id, btn) {
+    const person = healthData?.people.find(p => p.id === id);
+    if (!confirm(`Stop reading ${person ? `${person.name}'s` : 'these'} figures from Google Health?`)) return;
+    btn.disabled = true;
+    try {
+        await fetch(`/api/health/connect/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        await loadHealth(false);
+    } catch (err) {
+        showToast(err.message, 'error');
+        btn.disabled = false;
+    }
+}
+
+// Google Health (Settings → Integrations): the OAuth client the Health tab signs people in with
+async function loadGoogleHealthClient() {
+    try {
+        const client = await (await fetch('/api/health/account')).json();
+        document.getElementById('google-health-client-id').value = client.clientId || '';
+        const secret = document.getElementById('google-health-client-secret');
+        secret.value = '';
+        secret.placeholder = client.hasSecret ? 'Client secret saved (leave blank to keep)' : 'Client secret';
+    } catch (err) {
+        document.getElementById('google-health-status').textContent = `Couldn't load: ${err.message}`;
+    }
+}
+
+async function saveGoogleHealthClient(btn) {
+    const status = document.getElementById('google-health-status');
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/health/account', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                clientId: document.getElementById('google-health-client-id').value,
+                clientSecret: document.getElementById('google-health-client-secret').value,
+            })
+        });
+        if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+        await loadGoogleHealthClient();
+        status.textContent = 'Saved. Link each person from the Health tab.';
+        if (appView === 'health') refreshHealth(true);
+    } catch (err) {
+        status.textContent = `Failed: ${err.message}`;
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function openGoogleHealthSettings() {
+    openServerSettingsModal();
+    const tab = [...document.querySelectorAll('#server-settings-modal .settings-tab')]
+        .find(b => b.textContent.trim().toLowerCase() === 'integrations');
+    if (tab) switchSettingsTab('integrations', tab);
+    document.getElementById('google-health-settings').scrollIntoView({ block: 'center' });
+}
 
 // tado°: signing in is done on tado's own site, by opening the link and confirming the code shown,
 // while the server waits for it. Checked every few seconds until it's done.

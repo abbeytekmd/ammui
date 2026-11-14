@@ -77,6 +77,13 @@
                     </svg>
                     <span>Petrol</span>
                 </button>
+                <button type="button" class="lib-tab" data-mode="health" onclick="showHealth()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 12h4l2-5 4 10 2-5h6"></path>
+                    </svg>
+                    <span>Health</span>
+                </button>
                 <button type="button" class="lib-tab" data-mode="games" onclick="showGames()">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -751,6 +758,22 @@
                 </div>
                 <div id="petrol-history" class="petrol-history" hidden></div>
             </div>
+        </section>
+
+        <!-- Health tab: each family member's steps, heart rate, sleep and weight from Google Health (built by app.js) -->
+        <section id="health-view" class="smarthome-view health-view" hidden>
+            <div class="smarthome-header">
+                <h2>Health</h2>
+                <div class="smarthome-actions">
+                    <button type="button" class="btn-control btn-small" onclick="refreshHealth(true)"
+                        title="Read everyone's figures from Google again">Refresh</button>
+                    <button type="button" class="btn-control btn-small" onclick="openGoogleHealthSettings()"
+                        title="Set the Google Health client id and secret">Google Health Setup</button>
+                </div>
+            </div>
+            <div id="health-status" class="smarthome-status"></div>
+            <div id="health-leaders" class="health-leaders" hidden></div>
+            <div id="health-grid" class="health-grid"></div>
         </section>
 
         <!-- Alarms tab: countdown timers and alarms at a time of day (built by timers.js) -->
@@ -1468,6 +1491,25 @@
                                     href="https://www.developer.fuel-finder.service.gov.uk/fuel-finder/public-api"
                                     target="_blank" rel="noopener">Fuel Finder developer site</a> to get a free client ID
                                 and secret. It only answers from UK internet connections.</p>
+                        </div>
+
+                        <div class="settings-group" id="google-health-settings" style="margin-top: 1.5rem;">
+                            <label for="google-health-client-id">Google Health (Steps &amp; Health)</label>
+                            <input type="text" id="google-health-client-id" placeholder="OAuth client ID" autocomplete="off" spellcheck="false">
+                            <input type="password" id="google-health-client-secret" placeholder="Client secret" autocomplete="new-password"
+                                style="margin-top: 0.5rem;">
+                            <div style="display:flex; align-items:center; gap:0.75rem; flex-wrap:wrap; margin-top: 0.5rem;">
+                                <button class="btn-control btn-small primary" onclick="saveGoogleHealthClient(this)">Save</button>
+                                <span id="google-health-status" class="settings-hint" style="margin:0;"></span>
+                            </div>
+                            <p class="settings-hint">Shows each family member's steps, heart rate, sleep and weight on the
+                                Health tab, from the <a href="https://developers.google.com/health/setup" target="_blank"
+                                    rel="noopener">Google Health API</a> (Fitbit and Pixel Watch). In a Google Cloud project,
+                                switch on the Google Health API, add its read-only activity, health metrics and sleep scopes
+                                on the Data Access page, add each person's Google account as a Test user, and make an OAuth
+                                client of the <em>Web application</em> kind with <code>https://www.google.com</code> as its
+                                redirect URI. Then link each person from the Health tab. While the project is in Testing,
+                                Google ends each link after 7 days.</p>
                         </div>
                     </div>
                     <div class="manage-section">
