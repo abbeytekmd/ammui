@@ -11189,6 +11189,14 @@ input:checked+.slider:before {
     flex: 1;
     min-height: 12rem;
     align-self: stretch;
+    display: flex;
+    gap: 0.75rem;
+}
+
+/* The board fills what the results column beside it leaves */
+.word-board-fit {
+    flex: 1;
+    min-width: 0;
     container-type: size;
     display: flex;
     align-items: center;
@@ -13911,12 +13919,16 @@ input:checked+.slider:before {
 }
 
 /* Daily Word: everyone's attempts today as small colour grids, linked servers' players labelled with theirs */
+/* A column down the right of the board, scrolling if there are more than fit */
 .word-results {
+    flex: none;
     display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
+    flex-direction: column;
+    align-self: stretch;
     gap: 0.5rem;
-    max-width: 100%;
+    max-width: 7rem;
+    overflow-y: auto;
+    padding-right: 0.25rem;
 }
 
 .word-results[hidden] {

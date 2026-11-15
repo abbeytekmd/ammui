@@ -6304,7 +6304,7 @@ function drawCalendarEvents() {
 
     document.querySelectorAll('#calendar-grid .calendar-day').forEach(cell => {
         const dayEvents = byDay.get(cell.dataset.date) || [];
-        const list = calendarMeals ? mealCalendarPersonEvents(dayEvents) : dayEvents;
+        const list = calendarMeals ? mealCalendarPersonEvents(dayEvents, cell.dataset.date) : dayEvents;
         cell.querySelectorAll('.calendar-event, .calendar-more').forEach(el => el.remove());
         // A "+1 more" row would take the same space as the one event it hides, so show that instead
         const maxEvents = calendarMaxEventsPerDay();
@@ -6356,7 +6356,9 @@ function drawCalendarEvents() {
 // A day on the Meals calendar: one row per person, with the calories of all their meals that day
 // (the meals are in its tooltip and the day view). A meal not set for anyone counts for everyone
 // picked; with no family set up, it's shown under who it says it's for, or Everyone.
-function mealCalendarPersonEvents(list) {
+// Where Google Health has the person's active calories for the day, the row shows
+// MEALS − ACTIVITY = RESULT.
+function mealCalendarPersonEvents(list, date) {
     const picked = mealDayFamily.filter(f => !mealDayPeople || mealDayPeople.has(f.id));
     const people = new Map(); // key -> { name, rows, meals, planned }
     const add = (key, name, ev, rows) => {
@@ -6377,12 +6379,35 @@ function mealCalendarPersonEvents(list) {
     }
     // In the family's order, then anyone else
     const order = id => { const i = mealDayFamily.findIndex(f => f.id === id); return i < 0 ? Infinity : i; };
-    return [...people.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([, p]) => {
+    const n = v => Math.round(v).toLocaleString();
+    return [...people.entries()].sort((a, b) => order(a[0]) - order(b[0])).map(([key, p]) => {
         const t = sumNutrition(p.rows);
-        const label = t.counted ? `${p.name} · ${Math.round(t.kcal).toLocaleString()} kcal` : p.name;
+        const active = mealCalendarActiveKcal(key, date);
+        const label = !t.counted ? p.name
+            : active ? `${p.name} · ${n(t.kcal)} − ${n(active)} = ${n(t.kcal - active)} kcal`
+            : `${p.name} · ${n(t.kcal)} kcal`;
+        const about = t.counted && active ? `${n(t.kcal)} kcal eaten − ${n(active)} kcal active (Google Health) = ${n(t.kcal - active)} kcal` : '';
         return { allDay: true, planned: p.planned, mealPerson: true, title: label,
-            tooltip: [label, ...p.meals, p.planned ? 'From the meal plan. Click the day to add it.' : ''].filter(Boolean).join('\n') };
+            tooltip: [label, about, ...p.meals, p.planned ? 'From the meal plan. Click the day to add it.' : ''].filter(Boolean).join('\n') };
     });
+}
+
+// A family member's active calories burned on a day, from Google Health (null if not linked or
+// not known). Uses the Health tab's figures, read again when they're older than its refresh time.
+let mealCalendarHealthAt = 0;
+function mealCalendarActiveKcal(personId, date) {
+    const day = healthData?.people?.find(p => p.id === personId)?.days?.find(d => d.date === date);
+    return day?.activeKcal || null;
+}
+
+function loadMealCalendarHealth() {
+    if (Date.now() - mealCalendarHealthAt < HEALTH_REFRESH_MS) return;
+    mealCalendarHealthAt = Date.now();
+    fetch('/api/health').then(r => r.ok ? r.json() : null).then(data => {
+        if (!data) return;
+        healthData = data;
+        if (calendarMeals) drawCalendarEvents();
+    }).catch(() => { mealCalendarHealthAt = 0; });
 }
 
 function entryToCalendarEvent(entry) {
@@ -7139,6 +7164,7 @@ function loadMealDayFamily() {
         mealDayPeople = familyStillThere(mealDayPeople, mealDayFamily);
         renderCalendarMealsFamily();
         if (calendarMeals) drawCalendarEvents(); // redraws the day too
+        if (calendarMeals) loadMealCalendarHealth();
         else if (mealDayDate) renderMealDayView();
     }).catch(() => { });
 }
@@ -7766,6 +7792,13 @@ const MEAL_STATS_MEASURES = [
     { key: 'units', label: 'Alcohol', unit: 'units a day', guides: [{ value: 2, label: '2 (14 a week)' }],
         about: 'No more than 14 units a week, spread over 3 or more days' },
 ];
+// Shown when anyone picked is linked to Google Health: the active calories they burned, and what
+// they ate less that
+const MEAL_STATS_HEALTH_MEASURES = [
+    { key: 'active', label: 'Activity', unit: 'active kcal a day', guides: [], about: 'Active calories burned, from Google Health' },
+    { key: 'net', label: 'Net calories', unit: 'kcal a day, eaten − active', guides: [], about: 'Calories eaten less active calories burned' },
+];
+const MEAL_STATS_KCAL_KEYS = new Set(['kcal', 'active', 'net']);
 let mealStatsDays = 7; // 7 or 30, the days up to and including today
 try { if (localStorage.getItem('mealStatsDays') === '30') mealStatsDays = 30; } catch (e) { }
 let mealStatsEntries = null; // the last 30 days' meals from the calendar, or null until loaded
@@ -7784,7 +7817,8 @@ async function loadMealStats() {
         const [entryData, family] = await Promise.all([
             fetch(`/api/calendar-entries?start=${start}&end=${end}`).then(r => r.json()),
             fetch('/api/games/players').then(r => r.json()).catch(() => []),
-            loadMealNutritionData()
+            loadMealNutritionData(),
+            fetch('/api/health').then(r => r.ok ? r.json() : null).then(data => { if (data) healthData = data; }).catch(() => { })
         ]);
         if (token !== mealStatsToken) return;
         if (!entryData.entries) throw new Error(entryData.error || 'Failed to load the meals');
@@ -7812,29 +7846,39 @@ function setMealStatsPeople(people) {
 // As on a day's view: a meal counts if it's for one of the people picked or not set for anyone
 const mealStatsForPerson = entry => mealForPeople(mealStatsPeople, entry.meal.family);
 
-// The period's days, oldest first: { date, d, logged (any meals), t (sumNutrition of them) }
+// The period's days, oldest first: { date, d, logged (any meals), t (sumNutrition of them),
+// active (Google Health's active kcal, averaged over the people picked who have it, or null) }
 function mealStatsDayList() {
     const today = new Date();
+    const health = (healthData?.people || []).filter(p => p.days && (!mealStatsPeople || mealStatsPeople.has(p.id)));
     return Array.from({ length: mealStatsDays }, (_, i) => {
         const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (mealStatsDays - 1 - i));
         const date = calendarDateKey(d);
         const meals = mealStatsEntries.filter(entry => entry.date === date && mealStatsForPerson(entry));
-        return { date, d, logged: meals.length > 0, t: sumNutrition(meals.flatMap(entry => mealDayRows(entry.meal))) };
+        const burned = health.map(p => p.days.find(x => x.date === date)?.activeKcal).filter(v => v > 0);
+        return { date, d, logged: meals.length > 0, t: sumNutrition(meals.flatMap(entry => mealDayRows(entry.meal))),
+            active: burned.length ? burned.reduce((a, b) => a + b, 0) / burned.length : null };
     });
 }
+
+// The measures to show: the health ones too when there's anything from Google Health
+const mealStatsMeasures = days => days.some(d => d.active != null)
+    ? [...MEAL_STATS_MEASURES, ...MEAL_STATS_HEALTH_MEASURES] : MEAL_STATS_MEASURES;
 
 // A day's figure for a measure, or null if it has none (no meals, nothing with calories set, or
 // protein, carbs and fat set on none of what's counted)
 function mealStatsValue(day, key) {
     const t = day.t;
+    if (key === 'active') return day.active;
     if (!day.logged || !t.counted) return null;
+    if (key === 'net') return day.active == null ? null : t.kcal - day.active;
     if (key === 'kcal') return t.kcal;
     if (key === 'units') return t.alcohol / ALCOHOL_GRAMS_PER_UNIT;
     return t.noMacros.length < t.counted ? t[key] : null;
 }
 
 function formatMealStat(key, value) {
-    if (key === 'kcal') return formatKcal(value);
+    if (MEAL_STATS_KCAL_KEYS.has(key)) return formatKcal(value);
     if (key === 'units') {
         const units = Math.round(value * 10) / 10;
         return `${units} unit${units === 1 ? '' : 's'}`;
@@ -7862,7 +7906,7 @@ function mealStatsTile(m, days) {
         : m.key === 'units' ? `${Math.round(avg * 7 * 10) / 10} a week` : formatMealStat(m.key, avg).replace(' kcal', '');
     return `
         <div class="meal-stats-tile">
-            <span class="meal-stats-tile-label">${m.label}${m.key === 'kcal' && values.length ? ' (kcal)' : ''}</span>
+            <span class="meal-stats-tile-label">${m.label}${MEAL_STATS_KCAL_KEYS.has(m.key) && values.length ? ' (kcal)' : ''}</span>
             <span class="meal-stats-tile-value${values.length ? '' : ' muted'}">${escapeHtml(value)}</span>
             <span class="meal-stats-tile-guide">${values.length ? escapeHtml(m.about) : 'No figures set'}</span>
         </div>`;
@@ -7918,9 +7962,10 @@ function renderMealStats() {
         return;
     }
     const missing = [...new Set(days.flatMap(d => d.t.missing))];
+    const measures = mealStatsMeasures(days);
     const tableRows = days.map((d, i) => `
         <tr><td>${escapeHtml(d.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
-            ${MEAL_STATS_MEASURES.map(m => {
+            ${measures.map(m => {
                 const v = mealStatsValue(d, m.key);
                 return `<td class="num">${v == null ? '' : escapeHtml(formatMealStat(m.key, v))}</td>`;
             }).join('')}</tr>`).join('');
@@ -7928,13 +7973,13 @@ function renderMealStats() {
         <p class="settings-hint">Daily averages ${mealStatsPeople?.size === 1 ? `for ${escapeHtml(who)}` : 'per person'} over the
             ${logged} day${logged === 1 ? '' : 's'} with meals on the calendar in the last ${period} (including today).
             Days with no meals are left out. Lines show UK guidance for an adult.</p>
-        <div class="meal-stats-tiles">${MEAL_STATS_MEASURES.map(m => mealStatsTile(m, days)).join('')}</div>
-        <div class="meal-stats-charts">${MEAL_STATS_MEASURES.map(m => mealStatsChart(m, days)).join('')}</div>
+        <div class="meal-stats-tiles">${measures.map(m => mealStatsTile(m, days)).join('')}</div>
+        <div class="meal-stats-charts">${measures.map(m => mealStatsChart(m, days)).join('')}</div>
         ${missing.length ? `<p class="settings-hint">Not counted, as they have no calories set: ${escapeHtml(missing.join(', '))}</p>` : ''}
         <details class="meal-stats-table">
             <summary>Show as a table</summary>
             <div class="meal-day-scroll"><table class="meal-day-table">
-                <thead><tr><th>Day</th>${MEAL_STATS_MEASURES.map(m => `<th class="num">${m.label}</th>`).join('')}</tr></thead>
+                <thead><tr><th>Day</th>${measures.map(m => `<th class="num">${m.label}</th>`).join('')}</tr></thead>
                 <tbody>${tableRows}</tbody>
             </table></div>
         </details>
@@ -7951,7 +7996,10 @@ function showMealStatsTip(col) {
     const day = mealStatsDayRows[Number(col.dataset.i)];
     if (!tip || !day) return;
     const v = mealStatsValue(day, col.dataset.key);
-    const what = v != null ? formatMealStat(col.dataset.key, v) : day.logged ? 'No figures set' : 'No meals on the calendar';
+    const key = col.dataset.key;
+    const what = v != null ? formatMealStat(key, v)
+        : key === 'active' || (key === 'net' && day.logged && day.t.counted) ? 'Nothing from Google Health'
+        : day.logged ? 'No figures set' : 'No meals on the calendar';
     tip.innerHTML = `<b>${escapeHtml(day.d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</b>${escapeHtml(what)}`;
     tip.hidden = false;
     const body = document.getElementById('meal-stats-body').getBoundingClientRect();
