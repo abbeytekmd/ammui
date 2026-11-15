@@ -7267,6 +7267,15 @@ app.get('/api/health', async (req, res) => {
     res.json(await googleHealth.getSummary(listGamePlayers(), { refresh: req.query.refresh === '1' }));
 });
 
+// Active calories for each linked family member over any days (?start=YYYY-MM-DD&end=YYYY-MM-DD, end
+// not included), for the Meals calendar and stats, which can reach further back than /api/health
+app.get('/api/health/active', async (req, res) => {
+    const { start, end } = req.query;
+    const valid = d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d);
+    if (!valid(start) || !valid(end)) return res.status(400).json({ error: 'start and end must be YYYY-MM-DD' });
+    res.json(await googleHealth.getActiveCalories(listGamePlayers(), start, end));
+});
+
 app.get('/api/health/account', (req, res) => {
     res.json(googleHealth.getClient());
 });

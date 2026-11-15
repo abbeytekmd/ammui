@@ -6393,21 +6393,50 @@ function mealCalendarPersonEvents(list, date) {
 }
 
 // A family member's active calories burned on a day, from Google Health (null if not linked or
-// not known). Uses the Health tab's figures, read again when they're older than its refresh time.
-let mealCalendarHealthAt = 0;
+// not known). Meals reads them for just the days it shows (/api/health/active), which can reach
+// further back than the Health tab's figures; those are used too where they're newer.
+const mealHealthActive = {}; // personId -> { 'YYYY-MM-DD': kcal or null }
+const mealHealthAsked = new Map(); // 'start/end' -> when it was last read
 function mealCalendarActiveKcal(personId, date) {
-    const day = healthData?.people?.find(p => p.id === personId)?.days?.find(d => d.date === date);
-    return day?.activeKcal || null;
+    const tab = healthData?.people?.find(p => p.id === personId)?.days?.find(d => d.date === date)?.activeKcal;
+    return tab || mealHealthActive[personId]?.[date] || null;
 }
 
+// The linked people with active calories read for any of Meals' days
+const mealHealthPeople = () => new Set([...Object.keys(mealHealthActive),
+    ...(healthData?.people || []).filter(p => p.days).map(p => p.id)]);
+
+// Reads the active calories for the days from start up to (not including) end, Dates or
+// 'YYYY-MM-DD', unless they were read in the last little while. Resolves true if anything came back.
+async function loadMealHealthActive(start, end) {
+    const range = `${typeof start === 'string' ? start : calendarDateKey(start)}/${typeof end === 'string' ? end : calendarDateKey(end)}`;
+    if (Date.now() - (mealHealthAsked.get(range) || 0) < HEALTH_REFRESH_MS) return false;
+    mealHealthAsked.set(range, Date.now());
+    const [from, to] = range.split('/');
+    try {
+        const res = await fetch(`/api/health/active?start=${from}&end=${to}`);
+        const data = res.ok ? await res.json() : null;
+        if (!data?.configured) return false;
+        let any = false;
+        for (const p of data.people) {
+            if (!p.days) continue;
+            mealHealthActive[p.id] = { ...mealHealthActive[p.id], ...p.days };
+            any = true;
+        }
+        return any;
+    } catch (e) {
+        mealHealthAsked.delete(range);
+        return false;
+    }
+}
+
+// The days the Meals calendar is showing
 function loadMealCalendarHealth() {
-    if (Date.now() - mealCalendarHealthAt < HEALTH_REFRESH_MS) return;
-    mealCalendarHealthAt = Date.now();
-    fetch('/api/health').then(r => r.ok ? r.json() : null).then(data => {
-        if (!data) return;
-        healthData = data;
-        if (calendarMeals) drawCalendarEvents();
-    }).catch(() => { mealCalendarHealthAt = 0; });
+    const loaded = calendarLoaded;
+    if (!calendarMeals || !loaded) return;
+    loadMealHealthActive(loaded.gridStart, loaded.gridEnd).then(any => {
+        if (any && calendarMeals && calendarLoaded === loaded) drawCalendarEvents();
+    });
 }
 
 function entryToCalendarEvent(entry) {
@@ -6448,6 +6477,7 @@ async function loadCalendarEvents(gridStart, gridEnd, token) {
             const mealEvents = (entryData.entries || []).filter(entry => entry.meal).map(entryToCalendarEvent);
             calendarLoaded = { cals: [], events: [...mealEvents, ...plannedMealEvents(mealEvents, gridStart, gridEnd)], gridStart, gridEnd };
             drawCalendarEvents();
+            loadMealCalendarHealth();
             statusEl.className = 'calendar-status';
             statusEl.textContent = mealPlan?.startDate && mealPlan.days.length
                 ? 'Click a day to see its meals and plan more. Faded meals are from the Meal Plan.'
@@ -7818,7 +7848,7 @@ async function loadMealStats() {
             fetch(`/api/calendar-entries?start=${start}&end=${end}`).then(r => r.json()),
             fetch('/api/games/players').then(r => r.json()).catch(() => []),
             loadMealNutritionData(),
-            fetch('/api/health').then(r => r.ok ? r.json() : null).then(data => { if (data) healthData = data; }).catch(() => { })
+            loadMealHealthActive(start, end)
         ]);
         if (token !== mealStatsToken) return;
         if (!entryData.entries) throw new Error(entryData.error || 'Failed to load the meals');
@@ -7850,12 +7880,12 @@ const mealStatsForPerson = entry => mealForPeople(mealStatsPeople, entry.meal.fa
 // active (Google Health's active kcal, averaged over the people picked who have it, or null) }
 function mealStatsDayList() {
     const today = new Date();
-    const health = (healthData?.people || []).filter(p => p.days && (!mealStatsPeople || mealStatsPeople.has(p.id)));
+    const health = [...mealHealthPeople()].filter(id => !mealStatsPeople || mealStatsPeople.has(id));
     return Array.from({ length: mealStatsDays }, (_, i) => {
         const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (mealStatsDays - 1 - i));
         const date = calendarDateKey(d);
         const meals = mealStatsEntries.filter(entry => entry.date === date && mealStatsForPerson(entry));
-        const burned = health.map(p => p.days.find(x => x.date === date)?.activeKcal).filter(v => v > 0);
+        const burned = health.map(id => mealCalendarActiveKcal(id, date)).filter(v => v > 0);
         return { date, d, logged: meals.length > 0, t: sumNutrition(meals.flatMap(entry => mealDayRows(entry.meal))),
             active: burned.length ? burned.reduce((a, b) => a + b, 0) / burned.length : null };
     });
