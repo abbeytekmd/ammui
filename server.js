@@ -3230,7 +3230,7 @@ function peerShareRel(absPath) {
 function movePeerShares(fromAbs, toAbs, { keepOwn = true } = {}) {
     const from = peerShareRel(fromAbs);
     if (!from) return;
-    const to = peerShareRel(toAbs);
+    const to = toAbs ? peerShareRel(toAbs) : null;
     const flags = peerShareFlags();
     let changed = false;
     for (const [key, value] of Object.entries(flags)) {
