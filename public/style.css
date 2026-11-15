@@ -2633,6 +2633,14 @@ p.subtitle {
     border-top: 2px solid var(--card-border);
 }
 
+/* Under the day's total: each person's eaten − active (Google Health) = net */
+.meal-day-table tfoot tr.meal-day-active-row td {
+    padding-top: 0.35rem;
+    font-weight: 600;
+    font-size: 0.9rem;
+    border-top: none;
+}
+
 .meal-day-actions {
     text-align: right;
     white-space: nowrap;

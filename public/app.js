@@ -7171,7 +7171,26 @@ const mealNutrition = parts => sumNutrition(parts.flatMap(mealPartRows));
 // changed and deleted from here, in their own dialogs over it. ---
 let mealDayDate = null; // the day showing (YYYY-MM-DD), or null
 let mealDayFamily = [];  // the family, as tabs along the top: [{ id, name }]
-let mealDayPeople = null; // the family members whose food is showing: a Set of ids, or null for everyone (kept between days, and the Meals calendar's too)
+let mealDayPeople = null; // the family members whose food is showing: a Set of ids, or null for everyone (the same as Stats', see setMealPeople)
+
+// Who's turned off on Meals' family bars (calendar, day and Stats alike), kept in this browser until
+// they're turned back on. Kept as who's off, so someone new to the family starts on.
+let mealPeopleOff = new Set();
+try { mealPeopleOff = new Set(JSON.parse(localStorage.getItem('mealPeopleOff') || '[]')); } catch (e) { }
+
+// The people picked from this family: a Set of ids, or null for everyone
+function mealPeopleFor(family) {
+    const on = family.filter(f => !mealPeopleOff.has(f.id)).map(f => f.id);
+    return on.length === family.length ? null : new Set(on);
+}
+
+// Picking people on any of Meals' bars picks them on all of them, and remembers it
+function setMealPeople(people, family) {
+    mealPeopleOff = new Set(people ? family.filter(f => !people.has(f.id)).map(f => f.id) : []);
+    try { localStorage.setItem('mealPeopleOff', JSON.stringify([...mealPeopleOff])); } catch (e) { }
+    mealDayPeople = mealPeopleFor(mealDayFamily);
+    mealStatsPeople = mealPeopleFor(mealStatsFamily);
+}
 let mealDayOpen = new Set(); // the meals showing their items, by mealDayKey (kept while the day's open)
 
 // A meal's key, to find it again once the day's redrawn: the day's own meal by its entry, a planned one by its plan day and name
@@ -7191,7 +7210,7 @@ function openMealDayView(date) {
 function loadMealDayFamily() {
     fetch('/api/games/players').then(r => r.json()).then(family => {
         mealDayFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
-        mealDayPeople = familyStillThere(mealDayPeople, mealDayFamily);
+        mealDayPeople = mealPeopleFor(mealDayFamily);
         renderCalendarMealsFamily();
         if (calendarMeals) drawCalendarEvents(); // redraws the day too
         if (calendarMeals) loadMealCalendarHealth();
@@ -7201,7 +7220,7 @@ function loadMealDayFamily() {
 
 // Choosing people on the calendar or a day shows just their meals on both
 function setMealDayPeople(people) {
-    mealDayPeople = people;
+    setMealPeople(people, mealDayFamily);
     renderCalendarMealsFamily();
     if (calendarMeals) drawCalendarEvents();
     else if (mealDayDate) renderMealDayView();
@@ -7247,9 +7266,6 @@ function renderFamilyBar(el, family, people, onChange) {
 }
 
 const familyEveryone = (family, people) => !people || family.every(f => people.has(f.id));
-
-// The people picked who are still in the family (everyone stays everyone)
-const familyStillThere = (people, family) => people && new Set([...people].filter(id => family.some(f => f.id === id)));
 
 // Whether a meal for these family members ([{ id }]) is for the people picked: it's for one of
 // them, or not set for anyone (as a planned meal isn't) while anyone's picked
@@ -7386,7 +7402,7 @@ function renderMealDayView() {
                 <th class="num">Fat</th><th class="num">Alcohol</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
             <tfoot><tr><td colspan="2">${mealDayPeople?.size === 1 ? `Day total for ${escapeHtml(who)}` : 'Day total per person'}${planned ? ' <span class="meal-day-meal-about">(with the planned meal)</span>' : ''}</td>
-                ${mealDayCells(sumNutrition(dayRows))}<td></td></tr></tfoot>
+                ${mealDayCells(sumNutrition(dayRows))}<td></td></tr>${mealDayActiveRows(date, events)}</tfoot>
         </table></div>`;
     // A click on a meal's row, other than on its buttons, shows or hides its items under it
     body.querySelectorAll('tr.meal-day-meal').forEach(row => {
@@ -7415,6 +7431,24 @@ function renderMealDayView() {
         renderMealDayPictures();
         showShoppingPictures();
     }
+}
+
+// Under the day's total, a row for each person picked whom Google Health has active calories for
+// that day: what they ate (the meals for them, or for no one in particular) less what they burned
+function mealDayActiveRows(date, events) {
+    const n = v => Math.round(v).toLocaleString();
+    return mealDayFamily.filter(f => !mealDayPeople || mealDayPeople.has(f.id)).map(f => {
+        const active = mealCalendarActiveKcal(f.id, date);
+        if (!active) return '';
+        const t = sumNutrition(events.filter(ev => {
+            const family = (ev.entry?.meal || ev.planned).family;
+            return !family?.length || family.some(x => x.id === f.id);
+        }).flatMap(ev => mealDayRows(ev.entry?.meal || ev.planned)));
+        const sum = t.counted ? `${n(t.kcal)} eaten − ${n(active)} active` : `${n(active)} active`;
+        return `<tr class="meal-day-active-row" title="Active calories burned, from Google Health">
+            <td colspan="2">${escapeHtml(f.name)} <span class="meal-day-meal-about">${sum}</span></td>
+            <td class="num">${t.counted ? n(t.kcal - active) : ''}</td><td colspan="5"></td></tr>`;
+    }).join('');
 }
 
 // An open meal's items, under its row: each with its picture, quantity and figures per person
@@ -7854,7 +7888,7 @@ async function loadMealStats() {
         if (!entryData.entries) throw new Error(entryData.error || 'Failed to load the meals');
         mealStatsEntries = entryData.entries.filter(entry => entry.meal);
         mealStatsFamily = Array.isArray(family) ? family.map(f => ({ id: f.id, name: f.name })) : [];
-        mealStatsPeople = familyStillThere(mealStatsPeople, mealStatsFamily);
+        mealStatsPeople = mealPeopleFor(mealStatsFamily);
         renderMealStats();
     } catch (err) {
         if (token !== mealStatsToken) return;
@@ -7869,8 +7903,12 @@ function setMealStatsDays(days) {
 }
 
 function setMealStatsPeople(people) {
-    mealStatsPeople = people;
+    setMealPeople(people, mealStatsFamily);
     renderMealStats();
+    // The calendar and an open day pick the same people
+    renderCalendarMealsFamily();
+    if (calendarMeals && calendarLoaded) drawCalendarEvents();
+    else if (mealDayDate) renderMealDayView();
 }
 
 // As on a day's view: a meal counts if it's for one of the people picked or not set for anyone
