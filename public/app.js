@@ -16678,10 +16678,14 @@ async function loadWordResults() {
     if (appView === 'games') wordResultsTimer = setTimeout(loadWordResults, WORD_RESULTS_MS);
 }
 
+// The last results drawn, to redraw straight away when the player changes: { day, players }
+let wordResultsLast = null;
+
+// This server's players are buttons that pick who's playing (there's no separate list of names)
 function renderWordResults(day, players) {
     const el = document.getElementById('word-results');
-    // Just the one person here and nobody linked: nothing to compare with
-    el.hidden = players.length < 2;
+    wordResultsLast = { day, players };
+    el.hidden = !players.length;
     if (el.hidden) return;
     const answer = wordAnswer(day);
     const score = p => p.status === 'won' ? `${p.guesses.length}/${WORD_GUESSES}`
@@ -16690,21 +16694,27 @@ function renderWordResults(day, players) {
     const order = { won: 0, lost: 1, playing: 2, none: 3 };
     const sorted = [...players].sort((a, b) => (!!a.server - !!b.server) || (a.server || '').localeCompare(b.server || '')
         || order[a.status] - order[b.status] || (a.status === 'won' ? a.guesses.length - b.guesses.length : 0));
-    el.innerHTML = sorted.map(p => `
-        <div class="word-result${p.id === gamePlayerId ? ' mine' : ''}${p.server ? ' linked' : ''}"
-            title="${escapeHtml(p.name)}${p.server ? ` (plays on ${escapeHtml(p.server)})` : ''}: ${score(p)}">
+    el.innerHTML = sorted.map(p => {
+        const inner = `
             <div class="word-result-grid">${p.guesses.map(g => `<div class="word-result-row">${
                 wordScore(g, answer).map(s => `<i class="${s}"></i>`).join('')}</div>`).join('')}</div>
             <div class="word-result-name">${escapeHtml(p.name)}</div>
             ${p.server ? `<div class="word-result-server">${escapeHtml(p.server)}</div>` : ''}
-            <div class="word-result-score ${p.status}">${score(p)}</div>
-        </div>`).join('');
+            <div class="word-result-score ${p.status}">${score(p)}</div>`;
+        const cls = `word-result${!p.server && p.id === gamePlayerId ? ' mine' : ''}${p.server ? ' linked' : ''}`;
+        return p.server
+            ? `<div class="${cls}" title="${escapeHtml(p.name)} (plays on ${escapeHtml(p.server)}): ${score(p)}">${inner}</div>`
+            : `<button type="button" class="${cls}" aria-pressed="${p.id === gamePlayerId}"
+                title="${escapeHtml(p.name)}: ${score(p)}${p.id === gamePlayerId ? '' : '. Click to play as them.'}"
+                onclick="selectGamePlayer('${escapeHtml(p.id)}')">${inner}</button>`;
+    }).join('');
 }
 
 function selectGamePlayer(id) {
     if (wordSaving) return;
     gamePlayerId = id;
     try { localStorage.setItem('gamePlayer', id); } catch { }
+    if (wordResultsLast) renderWordResults(wordResultsLast.day, wordResultsLast.players);
     loadWordGame();
 }
 
@@ -16834,9 +16844,8 @@ function renderGamePlayers() {
             <button type="button" class="btn-control btn-small primary" onclick="openGamePlayerSettings()">Add Family</button>`;
         return;
     }
-    el.innerHTML = `<span class="game-players-label">${gamePlayerId ? 'Playing:' : 'Who\'s playing?'}</span>` +
-        gamePlayers.map(u => `<button type="button" class="game-player${u.id === gamePlayerId ? ' active' : ''}"
-            onclick="selectGamePlayer('${escapeHtml(u.id)}')">${escapeHtml(u.name)}</button>`).join('');
+    // Players are picked by clicking their attempts (renderWordResults)
+    el.innerHTML = '';
 }
 
 function openGamePlayerSettings() {

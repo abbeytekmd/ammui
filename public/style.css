@@ -11134,6 +11134,10 @@ input:checked+.slider:before {
     gap: 0.5rem;
 }
 
+.game-players:empty {
+    display: none;
+}
+
 .game-players-label {
     color: var(--text-muted);
     font-size: 0.9rem;
@@ -11189,14 +11193,6 @@ input:checked+.slider:before {
     flex: 1;
     min-height: 12rem;
     align-self: stretch;
-    display: flex;
-    gap: 0.75rem;
-}
-
-/* The board fills what the results column beside it leaves */
-.word-board-fit {
-    flex: 1;
-    min-width: 0;
     container-type: size;
     display: flex;
     align-items: center;
@@ -13919,16 +13915,37 @@ input:checked+.slider:before {
 }
 
 /* Daily Word: everyone's attempts today as small colour grids, linked servers' players labelled with theirs */
-/* A column down the right of the board, scrolling if there are more than fit */
+/* Everyone's attempts, which are also how a player is picked: this server's are buttons */
 .word-results {
-    flex: none;
     display: flex;
-    flex-direction: column;
-    align-self: stretch;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.5rem;
-    max-width: 7rem;
-    overflow-y: auto;
-    padding-right: 0.25rem;
+    max-width: 100%;
+}
+
+button.word-result {
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+
+button.word-result:hover {
+    border-color: var(--text-muted);
+}
+
+button.word-result.mine {
+    border-width: 2px;
+    border-color: var(--primary);
+    padding: calc(0.45rem - 1px) calc(0.5rem - 1px);
+}
+
+.games-view.no-player button.word-result {
+    animation: word-result-pick 1.6s ease-in-out infinite;
+}
+
+@keyframes word-result-pick {
+    50% { border-color: var(--primary); }
 }
 
 .word-results[hidden] {
