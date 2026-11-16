@@ -7315,13 +7315,15 @@ function mealDayPicture(item) {
 // The single items the day view shows, for looking their pictures up
 function mealDayPictureNames() {
     const names = [];
+    const add = (item, seen) => {
+        if (!item) return;
+        if (!item.parts) return names.push(item.name);
+        if (seen.has(item.id)) return;
+        const inner = new Set(seen).add(item.id);
+        for (const p of item.parts) add(itemById(p.itemId), inner);
+    };
     for (const ev of mealDayEvents(mealDayDate)) {
-        for (const part of (ev.entry?.meal || ev.planned).parts) {
-            const item = itemById(part.id);
-            if (!item) continue;
-            if (!item.parts) names.push(item.name);
-            else for (const p of item.parts) if (!itemById(p.itemId)?.parts) names.push(p.name);
-        }
+        for (const part of (ev.entry?.meal || ev.planned).parts) add(itemById(part.id), new Set());
     }
     return names;
 }
@@ -7392,7 +7394,7 @@ function renderMealDayView() {
                 </td>
                 ${mealDayCells(sumNutrition(mealRows))}
                 <td class="meal-day-actions"><div class="meal-day-actions-row">${actions}</div></td>
-            </tr>${open ? mealDayItemRows(meal) : ''}`;
+            </tr>${open ? mealDayItemRows(meal, mealDayKey(ev)) : ''}`;
     }).join('');
     body.innerHTML = !events.length
         ? `<p class="settings-hint meal-day-empty">${mealDayPeople?.size === 0 ? 'No one is picked. Pick someone above to see their meals.'
@@ -7409,6 +7411,15 @@ function renderMealDayView() {
         row.onclick = e => {
             if (e.target.closest('button')) return;
             const key = mealDayKey(events[Number(row.dataset.i)]);
+            mealDayOpen.has(key) ? mealDayOpen.delete(key) : mealDayOpen.add(key);
+            renderMealDayView();
+        };
+    });
+    // Likewise an item made of others shows or hides what it's made of
+    body.querySelectorAll('tr.meal-day-branch').forEach(row => {
+        row.onclick = e => {
+            if (e.target.closest('button')) return;
+            const key = row.dataset.key;
             mealDayOpen.has(key) ? mealDayOpen.delete(key) : mealDayOpen.add(key);
             renderMealDayView();
         };
@@ -7451,40 +7462,54 @@ function mealDayActiveRows(date, events) {
     }).join('');
 }
 
-// An open meal's items, under its row: each with its picture, quantity and figures per person
-// (times how many of the meal there are, as the meal's row). One made of others lists what one
-// of it is made of underneath, as the item has it.
-function mealDayItemRows(meal) {
+// An open meal's items, under its row, as a tree: each with its picture, quantity and figures per
+// person (times how many of the meal there are, as the meal's row). One made of others has its own
+// arrow; opened, what it's made of shows under it with their figures, down to the single items.
+function mealDayItemRows(meal, mealKey) {
     const mealTimes = meal.times || 1;
     const rows = [];
-    for (const part of meal.parts) {
-        const item = itemById(part.id);
-        const qty = mealPartQuantity(part, item);
-        const times = mealPartTimes(part, item);
-        const count = times !== 1 ? `<span class="meal-day-times">${formatTimes(times)}</span>` : '';
+    // One row, then (while it's open) what it's made of. times: how many of the item the row's
+    // figures count, which its parts are counted for too.
+    const node = ({ item, name, qtyText, qtyOwn, count, nutrition, times, depth, key, seen }) => {
+        const kids = item?.parts && !seen.has(item.id) ? item.parts : null;
+        const open = !!kids && mealDayOpen.has(key);
+        const countHtml = count !== 1 ? `<span class="meal-day-times">${formatTimes(count)}</span>` : '';
+        const qtyTitle = depth ? "The quantity it's made with" : qtyOwn ? "This meal's own quantity" : "The item's own quantity";
         rows.push(`
-            <tr class="meal-day-item-row">
+            <tr class="meal-day-item-row${depth ? ' meal-day-sub' : ''}${kids ? ' meal-day-branch' : ''}${open ? ' open' : ''}"
+                ${kids ? `data-key="${escapeAttr(key)}" aria-expanded="${open}" title="${open ? 'Click to hide what it\'s made of' : 'Click to see what it\'s made of'}"` : ''}>
                 <td class="meal-day-pic-cell">${mealDayPicture(item)}</td>
-                <td class="meal-day-meal-cell"><span class="meal-day-item">${escapeHtml(item?.name || part.name)}${confirmedStar(item)}</span>
-                    <span class="meal-day-qty-row">${count}<span class="${qty.own ? 'meal-day-own' : ''}"
-                        title="${qty.own ? "This meal's own quantity" : "The item's own quantity"}">${escapeHtml(qty.text)}</span></span></td>
-                ${mealDayCells(sumNutrition(mealPartRows(part).map(r => ({ name: r.name, result: scaleNutrition(r.result, mealTimes) }))))}
+                <td class="meal-day-meal-cell" style="padding-left: calc(0.6rem + ${depth * 1.2}rem)">
+                    <span class="meal-day-chevron${kids ? '' : ' blank'}" aria-hidden="true">${MEAL_DAY_CHEVRON_ICON}</span><span
+                    class="meal-day-item">${escapeHtml(item?.name || name)}${confirmedStar(item)}</span>
+                    <span class="meal-day-qty-row">${countHtml}<span class="${qtyOwn ? 'meal-day-own' : ''}"
+                        title="${qtyTitle}">${escapeHtml(qtyText)}</span></span></td>
+                ${mealDayCells(sumNutrition(nutrition))}
                 <td class="meal-day-actions"><div class="meal-day-actions-row">${item ? `<button type="button" class="btn-control ghost meal-day-icon-btn"
                     data-act="edit-item" data-id="${escapeAttr(item.id)}" title="Edit item" aria-label="Edit item">${MEAL_DAY_EDIT_ICON}</button>` : ''}</div></td>
             </tr>`);
-        for (const p of item?.parts || []) {
+        if (!open) return;
+        const inner = new Set(seen).add(item.id);
+        kids.forEach((p, j) => {
             const child = itemById(p.itemId);
-            const childQty = child?.parts ? '' : [p.amount, p.unit].filter(Boolean).join(' ');
-            rows.push(`
-            <tr class="meal-day-item-row meal-day-sub">
-                <td class="meal-day-pic-cell">${mealDayPicture(child)}</td>
-                <td class="meal-day-meal-cell"><span class="meal-day-item">${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
-                    <span class="meal-day-qty-row">${escapeHtml(childQty)}</span></td>
-                <td colspan="5"></td>
-                <td></td>
-            </tr>`);
-        }
-    }
+            const base = { item: child, name: p.name, qtyOwn: false, depth: depth + 1, key: `${key}|${j}`, seen: inner };
+            if (child?.parts) {
+                const n = partTimes(p.amount);
+                node({ ...base, qtyText: '', count: n, times: times * n, nutrition: itemNutritionRows(child, '', '', times * n, inner) });
+            } else {
+                node({ ...base, qtyText: [p.amount, p.unit].filter(Boolean).join(' '), count: 1, times,
+                    nutrition: child ? itemNutritionRows(child, p.amount, p.unit, times, inner) : [{ name: p.name, result: { missing: 'nutrition' } }] });
+            }
+        });
+    };
+    meal.parts.forEach((part, i) => {
+        const item = itemById(part.id);
+        const qty = mealPartQuantity(part, item);
+        const count = mealPartTimes(part, item);
+        node({ item, name: part.name, qtyText: qty.text, qtyOwn: qty.own, count, times: mealTimes * count, depth: 0,
+            key: `${mealKey}|${i}`, seen: new Set(),
+            nutrition: mealPartRows(part).map(r => ({ name: r.name, result: scaleNutrition(r.result, mealTimes) })) });
+    });
     // The last one closes the meal off with the line a meal's row has
     if (rows.length) rows[rows.length - 1] = rows[rows.length - 1].replace('meal-day-item-row', 'meal-day-item-row last');
     return rows.join('');

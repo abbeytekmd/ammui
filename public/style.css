@@ -2481,8 +2481,18 @@ p.subtitle {
     transition: transform 0.15s;
 }
 
-.meal-day-meal.open .meal-day-chevron {
+.meal-day-meal.open .meal-day-chevron,
+.meal-day-branch.open .meal-day-chevron {
     transform: rotate(90deg);
+}
+
+/* An item made of others opens like a meal; a single item keeps the arrow's room so names line up */
+.meal-day-branch {
+    cursor: pointer;
+}
+
+.meal-day-chevron.blank {
+    visibility: hidden;
 }
 
 /* An open meal's items, under it: compact, and in from the meal's name */
@@ -2573,10 +2583,6 @@ p.subtitle {
     padding-bottom: 0.2rem;
     font-size: 0.82rem;
     color: var(--text-muted);
-}
-
-.meal-day-sub .meal-day-item {
-    padding-left: 0.75rem;
 }
 
 .meal-day-own {
