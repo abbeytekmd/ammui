@@ -8645,12 +8645,11 @@ input:checked+.slider:before {
     }
 
     .screensaver-music-bar,
-    .ss-sun,
     .ss-agenda {
         order: -1;
     }
 
-    /* The next sunrise and sunset, a line of its own above the calendar */
+    /* The next sunrise and sunset, a line of its own just above the controls */
     .ss-sun:not(:empty) {
         display: flex;
         flex-wrap: wrap;   /* the two side by side, or one above the other when even that's too wide */

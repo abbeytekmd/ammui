@@ -2847,8 +2847,6 @@
                 </button>
             </div>
             <div id="ss-now-playing-label" class="ss-now-playing-label" style="display:none;"></div>
-            <!-- The next sunrise and sunset, above the calendar (filled by slideshow.js from the night sky's location) -->
-            <div id="ss-sun" class="ss-sun"></div>
             <!-- Today's and tomorrow's calendar, in the side panel (filled by slideshow.js); a tap goes to the Calendar tab -->
             <div id="ss-agenda" class="ss-agenda" onclick="event.stopPropagation(); stopSlideshow(); showCalendar();"></div>
             <div class="screensaver-info" id="screensaver-info"></div>
@@ -2860,6 +2858,8 @@
             <div id="ss-map-window" class="ss-map-window" style="display:none;">
                 <div id="ss-map" class="ss-map"></div>
             </div>
+            <!-- The next sunrise and sunset, just above the controls (filled by slideshow.js from the night sky's location) -->
+            <div id="ss-sun" class="ss-sun"></div>
             <div class="screensaver-controls" onclick="event.stopPropagation()" ontouchstart="event.stopPropagation()"
                 ontouchend="event.stopPropagation()" onmousedown="event.stopPropagation()"
                 onmouseup="event.stopPropagation()">

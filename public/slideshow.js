@@ -598,7 +598,7 @@ class Slideshow {
         }
     }
 
-    // The next sunrise and sunset above the calendar, soonest first, from the night sky's location
+    // The next sunrise and sunset above the controls, soonest first, from the night sky's location
     // (whether or not the sky itself is on); left empty, and so hidden, without a location
     loadSun() {
         const el = document.getElementById('ss-sun');
