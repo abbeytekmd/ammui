@@ -3985,6 +3985,71 @@ p.subtitle {
     font-size: 0.85em;
 }
 
+/* Used in: every item and meal an item is in, each with its quantity there to change */
+.item-quantities-content {
+    max-width: 640px;
+}
+
+.item-quantities-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.item-quantities-list .item-builder-uses-heading:not(:first-child) {
+    margin-top: 0.6rem;
+}
+
+.item-quantities-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem 0.75rem;
+    padding: 0.35rem 0.6rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.6rem;
+}
+
+.item-quantities-inputs {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex: none;
+}
+
+.item-quantities-inputs input {
+    min-width: 0;
+    padding: 0.35rem 0.5rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.4rem;
+}
+
+.item-quantities-inputs input:focus {
+    outline: none;
+    border-color: var(--accent, #fcd34d);
+}
+
+.item-quantities-inputs input.invalid {
+    border-color: #ef4444;
+}
+
+.item-quantities-inputs input.recipe-amount {
+    width: 4rem;
+}
+
+.item-quantities-inputs input.recipe-unit {
+    width: 5rem;
+}
+
+.item-quantities-inputs .item-builder-times {
+    flex: none;
+}
+
 /* Calories for a row's amount; click to look them up or change them */
 .recipe-kcal {
     flex: 0 0 4.5rem;

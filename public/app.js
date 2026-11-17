@@ -1561,9 +1561,8 @@ async function addAllToPlaylist() {
     btn.textContent = 'Queuing...';
 
     try {
-        for (const track of tracks) {
-            await addToPlaylist(track.uri, track.title, track.artist, track.album, track.duration, track.protocolInfo, false);
-        }
+        const { added, skipped } = await appendTracksToPlaylist(tracks, (done, total) => { btn.textContent = `Queuing ${done}/${total}...`; });
+        if (!skipped) showToast(`Added ${added} track${added === 1 ? '' : 's'}`, 'success', 2000);
 
         // Switch once at the end for mobile
         if (window.innerWidth <= 800) {
@@ -1571,48 +1570,59 @@ async function addAllToPlaylist() {
         }
     } catch (err) {
         console.error('Failed to add some tracks:', err);
+        showToast(`Failed to add tracks: ${err.message}`);
     } finally {
         btn.classList.remove('disabled');
         btn.innerHTML = originalContent; // Restore icon and text
     }
 }
 
-// Clears the selected renderer's playlist, queues the tracks in order and starts the first one.
-// Callers hold window._isProcessingPlayAction.
-async function replacePlaylistAndPlay(tracks) {
-    await clearPlaylist();
-
-    let firstTrackId = null;
-    for (let i = 0; i < tracks.length; i++) {
-        const track = tracks[i];
-        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
+// Adds tracks to the end of the selected renderer's playlist, a batch to a request (a Sonos takes
+// them 16 at a time from each). onProgress(done, total) follows along. Returns { firstId, added,
+// skipped }: skipped are left out once a Sonos queue's 1,000 is full.
+const PLAYLIST_SEND_BATCH = 100;
+async function sendTracksToPlaylist(tracks, onProgress) {
+    let firstId = null, added = 0, skipped = 0;
+    for (let i = 0; i < tracks.length; i += PLAYLIST_SEND_BATCH) {
+        const batch = tracks.slice(i, i + PLAYLIST_SEND_BATCH).map(t => ({
+            uri: t.uri, title: t.title, artist: t.artist, album: t.album, duration: t.duration,
+            protocolInfo: t.protocolInfo, albumArtUrl: t.albumArtUrl, pathStr: t.pathStr,
+        }));
+        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert-many`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                uri: track.uri,
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                duration: track.duration,
-                protocolInfo: track.protocolInfo,
-                albumArtUrl: track.albumArtUrl
-            })
+            body: JSON.stringify({ tracks: batch })
         });
-
-        if (!response.ok) {
-            const errData = await response.json();
-            throw new Error(errData.error || `Failed to add track ${i + 1}`);
-        }
-
-        const data = await response.json();
-        if (i === 0) firstTrackId = data.newId;
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || `Failed to add tracks ${i + 1}-${i + batch.length}`);
+        if (firstId == null) firstId = data.firstId ?? null;
+        added += data.added || 0;
+        onProgress?.(Math.min(i + batch.length, tracks.length), tracks.length);
+        // Once the queue's full, the rest won't fit either
+        if (data.skipped) { skipped = tracks.length - i - batch.length + data.skipped; break; }
     }
+    return { firstId, added, skipped };
+}
 
+function showQueueFullToast(added, skipped) {
+    if (skipped) showToast(`The queue is full: added ${added}, left out the last ${skipped} (a Sonos queue holds 1,000 tracks)`, 'error', 6000);
+}
+
+// Clears the selected renderer's playlist, queues the tracks in order and starts the first one.
+// The first goes on its own so it plays straight away; the rest follow while it does.
+// Callers hold window._isProcessingPlayAction.
+async function replacePlaylistAndPlay(tracks, onProgress) {
+    await clearPlaylist();
+    if (!tracks.length) return;
+
+    const first = await sendTracksToPlaylist(tracks.slice(0, 1));
     await fetchPlaylist(selectedRendererUdn);
+    if (first.firstId) await playPlaylistItem(first.firstId, false, true);
+    if (tracks.length === 1) return;
 
-    if (firstTrackId) {
-        await playPlaylistItem(firstTrackId, false, true);
-    }
+    const rest = await sendTracksToPlaylist(tracks.slice(1), (done, total) => onProgress?.(done + 1, total + 1));
+    await fetchPlaylist(selectedRendererUdn);
+    showQueueFullToast(first.added + rest.added, rest.skipped);
 }
 
 async function playAll() {
@@ -1661,7 +1671,7 @@ async function playAll() {
     btn.textContent = 'Preparing...';
 
     try {
-        await replacePlaylistAndPlay(tracks);
+        await replacePlaylistAndPlay(tracks, (done, total) => { btn.textContent = `Queuing ${done}/${total}...`; });
 
         // On mobile, switch to playlist view
         if (window.innerWidth <= 800) {
@@ -2029,24 +2039,11 @@ Switch to ${secureUrl} ?`)) {
 }
 
 // Adds tracks to the end of the selected renderer's playlist without interrupting what's playing.
-async function appendTracksToPlaylist(tracks) {
-    for (const track of tracks) {
-        const response = await fetch(`/api/playlist/${encodeURIComponent(selectedRendererUdn)}/insert`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                uri: track.uri,
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                duration: track.duration,
-                protocolInfo: track.protocolInfo,
-                albumArtUrl: track.albumArtUrl
-            })
-        });
-        if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || 'Failed to add track');
-    }
+async function appendTracksToPlaylist(tracks, onProgress) {
+    const result = await sendTracksToPlaylist(tracks, onProgress);
     await fetchPlaylist(selectedRendererUdn);
+    showQueueFullToast(result.added, result.skipped);
+    return result;
 }
 
 // Plays the track `step` places from the current one in the playlist (1 = next, -1 = previous).
@@ -8912,6 +8909,7 @@ function popItemBuilder() {
     }
     document.getElementById('item-builder-heading').textContent = heading;
     itemBuilderField('delete-btn').style.display = builder.id ? '' : 'none';
+    itemBuilderField('quantities-btn').style.display = builder.id ? '' : 'none';
     setCalendarSettingsStatus('item-builder-status', '', false);
     showItemBuilderUses(null);
     clearTimeout(itemBuilderLookupTimer);
@@ -8946,6 +8944,7 @@ function openItemBuilder(item = null, options = {}) {
     clearTimeout(itemBuilderLookupTimer);
     itemBuilderField('part-search').value = '';
     itemBuilderField('delete-btn').style.display = item ? '' : 'none';
+    itemBuilderField('quantities-btn').style.display = item ? '' : 'none';
     setCalendarSettingsStatus('item-builder-status', '', false);
     showItemBuilderUses(null);
     itemBuilder.savedJson = itemBuilderSnapshot();
@@ -9441,6 +9440,145 @@ function goToMealDay(date) {
     calendarWeekStart = startOfCalendarWeek(day);
     renderCalendar();
     openMealDayView(date);
+}
+
+// --- Used in: every item and calendar meal the item being changed is in, each with the quantity it
+// uses there, to change them all in one place. In an item that's its amount and unit there (how many
+// for one made of others); on a meal any amount and unit of its own (blank for the item's) and how many. ---
+let itemQuantities = null; // { itemId, items: [{ id, name, position, amount, unit }], meals: [{ id, date, title, repeat, amount, unit, times }], savedJson }
+
+const itemQuantitiesSnapshot = () => JSON.stringify({ items: itemQuantities.items, meals: itemQuantities.meals });
+const itemQuantitiesDirty = () => !!itemQuantities && itemQuantitiesSnapshot() !== itemQuantities.savedJson;
+const setItemQuantitiesStatus = (text, isError) => setCalendarSettingsStatus('item-quantities-status', text, isError);
+
+async function openItemQuantities() {
+    const b = itemBuilder;
+    if (!b?.id) return;
+    const item = itemById(b.id);
+    document.getElementById('item-quantities-item').textContent = item?.name || b.originalName;
+    document.getElementById('item-quantities-list').innerHTML = '<p class="settings-hint">Loading...</p>';
+    setItemQuantitiesStatus('', false);
+    itemQuantities = null;
+    bringModalToFront('item-quantities-modal');
+    document.getElementById('item-quantities-modal').style.display = 'flex';
+    try {
+        const res = await fetch(`/api/ingredients/${encodeURIComponent(b.id)}/quantities`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to load');
+        setItemQuantities(b.id, data);
+    } catch (err) {
+        document.getElementById('item-quantities-list').innerHTML = '';
+        setItemQuantitiesStatus(err.message, true);
+    }
+}
+
+function setItemQuantities(itemId, data) {
+    const item = itemById(itemId);
+    itemQuantities = {
+        itemId,
+        items: (data.items || []).map(u => ({ id: u.id, name: u.name, position: u.position, amount: u.amount || '', unit: u.unit || '' })),
+        // One made of others keeps just how many of it on a meal
+        meals: (data.meals || []).map(m => {
+            const part = { id: itemId, amount: m.amount, unit: m.unit, times: m.times };
+            return { id: m.id, date: m.date, title: m.title, repeat: m.repeat,
+                amount: item?.parts ? '' : m.amount || '', unit: item?.parts ? '' : m.unit || '', times: mealPartTimes(part, item) };
+        }),
+    };
+    itemQuantities.savedJson = itemQuantitiesSnapshot();
+    renderItemQuantities();
+}
+
+function renderItemQuantities() {
+    const q = itemQuantities;
+    const el = document.getElementById('item-quantities-list');
+    const item = itemById(q.itemId);
+    const group = !!item?.parts;
+    if (!q.items.length && !q.meals.length) {
+        el.innerHTML = '<p class="settings-hint">This item isn\'t in any other items or meals on the calendar.</p>';
+        return;
+    }
+    const shortDate = ymd => {
+        const [y, m, d] = ymd.split('-').map(Number);
+        return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short',
+            ...(y === new Date().getFullYear() ? {} : { year: 'numeric' }) });
+    };
+    const amountInputs = (u, placeholderAmount, placeholderUnit) => group
+        ? `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(u.amount)}" maxlength="20" placeholder="1" aria-label="How many" title="How many">
+            <span class="item-builder-times">×</span>`
+        : `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(u.amount)}" maxlength="20" placeholder="${escapeAttr(placeholderAmount)}" aria-label="Amount">
+            <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(u.unit)}" maxlength="40" placeholder="${escapeAttr(placeholderUnit)}" list="recipe-units" aria-label="Unit">`;
+    // On a meal, blank uses the item's own quantity, shown as the placeholder
+    const mealInputs = u => (group ? '' : amountInputs(u, item?.amount || 'Amount', item?.unit || 'Unit') + '<span class="item-builder-times">×</span>')
+        + `<input type="text" class="recipe-amount" data-field="times" value="${escapeAttr(String(Number(u.times.toFixed(2))))}" maxlength="6" aria-label="How many" title="How many">`
+        + (group ? '<span class="item-builder-times">×</span>' : '');
+    el.innerHTML =
+        (q.items.length ? `<p class="item-builder-uses-heading">Part of</p>` + q.items.map((u, i) => `
+        <div class="item-quantities-row" data-kind="items" data-i="${i}">
+            <span class="item-quantities-inputs">${amountInputs(u, 'Amount', 'Unit')}</span>
+            <span class="item-builder-use-name">${escapeHtml(u.name)}</span>
+        </div>`).join('') : '') +
+        (q.meals.length ? `<p class="item-builder-uses-heading">In meals on the calendar${group ? '' : ' <span class="calendar-entry-tags-hint">— leave blank for the item\'s own quantity</span>'}</p>` + q.meals.map((m, i) => `
+        <div class="item-quantities-row" data-kind="meals" data-i="${i}">
+            <span class="item-quantities-inputs">${mealInputs(m)}</span>
+            <span class="item-builder-use-date">${escapeHtml(shortDate(m.date))}</span>
+            ${m.title ? `<span class="item-builder-use-name">${escapeHtml(m.title)}</span>` : ''}
+            ${m.repeat ? `<span class="item-builder-use-repeat" title="${escapeAttr(describeCalendarRepeat(m.repeat))}">(repeats)</span>` : ''}
+        </div>`).join('') : '');
+    el.querySelectorAll('.item-quantities-row').forEach(row => {
+        const u = q[row.dataset.kind][Number(row.dataset.i)];
+        row.querySelectorAll('input').forEach(input => {
+            input.oninput = () => {
+                if (input.dataset.field === 'times') {
+                    const n = parseAmount(input.value);
+                    input.classList.toggle('invalid', !(n > 0 && n <= 99));
+                    if (n > 0 && n <= 99) u.times = n;
+                } else u[input.dataset.field] = input.value;
+            };
+            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); saveItemQuantities(); } };
+        });
+    });
+}
+
+async function saveItemQuantities() {
+    const q = itemQuantities;
+    if (!q) return;
+    if (document.querySelector('#item-quantities-list input.invalid')) {
+        setItemQuantitiesStatus('How many must be more than 0 and at most 99.', true);
+        return;
+    }
+    const saved = JSON.parse(q.savedJson);
+    const same = (a, b, keys) => keys.every(k => String(a[k]).trim() === String(b[k]).trim());
+    const items = q.items.filter((u, i) => !same(u, saved.items[i], ['amount', 'unit']))
+        .map(u => ({ id: u.id, position: u.position, amount: u.amount.trim(), unit: u.unit.trim() }));
+    const meals = q.meals.filter((m, i) => !same(m, saved.meals[i], ['amount', 'unit', 'times']))
+        .map(m => ({ id: m.id, amount: m.amount.trim(), unit: m.unit.trim(), times: m.times }));
+    if (!items.length && !meals.length) { closeItemQuantities(true); return; }
+    const btn = document.getElementById('item-quantities-save-btn');
+    btn.disabled = true;
+    try {
+        await sendIngredient(`/api/ingredients/${encodeURIComponent(q.itemId)}/quantities`, 'PUT', { items, meals });
+        // Items set aside under this one keep their parts as they are, so they get the new amounts too
+        for (const { builder } of itemBuilderStack) {
+            for (const u of items) {
+                const part = builder.id === u.id && builder.parts[u.position];
+                if (part?.itemId === q.itemId) Object.assign(part, { amount: u.amount, unit: u.unit });
+            }
+        }
+        closeItemQuantities(true);
+        await loadIngredients();
+        renderCalendar();
+        showToast(`Changed ${items.length + meals.length} quantit${items.length + meals.length === 1 ? 'y' : 'ies'}`, 'success', 2500);
+    } catch (err) {
+        setItemQuantitiesStatus(err.message, true);
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+function closeItemQuantities(force = false) {
+    if (!force && itemQuantitiesDirty() && !confirm('Discard the changes to these quantities?')) return;
+    document.getElementById('item-quantities-modal').style.display = 'none';
+    itemQuantities = null;
 }
 
 // --- Recipes tab: calories. Each ingredient stores kcal and grams of protein, carbs and fat per

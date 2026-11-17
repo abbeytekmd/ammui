@@ -56,7 +56,7 @@ import {
     getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient,
-    itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop,
+    itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop, ingredientQuantityUses, setIngredientQuantityUses,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     listWordGamesSince, savePeerGameSnapshot, listPeerGameSnapshots,
@@ -2347,6 +2347,41 @@ app.post('/api/playlist/:udn/insert', express.json(), async (req, res) => {
     }
 });
 
+// Adds tracks to the end of a renderer's playlist in one go: { tracks: [{ uri, title, artist, album,
+// duration, protocolInfo, albumArtUrl, pathStr }] }. A Sonos gets them 16 to a request, up to the 1,000
+// its queue holds; anything else one at a time. Returns { firstId, added, skipped }.
+app.post('/api/playlist/:udn/insert-many', express.json({ limit: '10mb' }), async (req, res) => {
+    const { udn } = req.params;
+    const tracks = (Array.isArray(req.body.tracks) ? req.body.tracks : []).filter(t => t?.uri);
+    if (!tracks.length) return res.status(400).json({ error: 'No tracks to add' });
+
+    const device = Array.from(devices.values())
+        .filter(d => d.udn === udn)
+        .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0))[0];
+    if (!device || device.loading) return res.status(404).json({ error: 'Device not found or still discovering' });
+
+    const clean = t => ({ uri: t.uri, title: t.title, artist: t.artist, album: t.album, duration: t.duration,
+        protocolInfo: t.protocolInfo, albumArtUrl: t.albumArtUrl });
+    tracks.forEach(t => cacheUriPath(t.uri, t.pathStr));
+    let added = 0;
+    try {
+        const renderer = getRenderer(device);
+        const result = typeof renderer.appendTracks === 'function' ? await renderer.appendTracks(tracks.map(clean)) : null;
+        if (result) return res.json(result);
+        // As /insert does, after whatever is last each time
+        let firstId = null;
+        for (const t of tracks) {
+            const ids = await renderer.getIdArray();
+            const newId = await renderer.insertTrack(clean(t), ids.length > 0 ? ids[ids.length - 1] : 0);
+            if (added++ === 0) firstId = newId;
+        }
+        res.json({ firstId, added, skipped: 0 });
+    } catch (err) {
+        console.error(`Insert of ${tracks.length} tracks failed after ${added}:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Find-as-you-type backed by the library index. The first search on a server builds the
 // index (one full crawl); after that it is a database query.
 app.get('/api/library-index/:udn/search', async (req, res) => {
@@ -2441,11 +2476,12 @@ app.get('/api/browse-recursive/:udn', async (req, res) => {
 async function queueFolderTracks(renderer, tracks, pathStr, lastId) {
     let added = 0;
     let firstError = null;
-    for (const track of tracks) {
+    const playable = tracks.filter(track => {
         const cls = track.class || '';
         const mime = (track.protocolInfo || '').split(':')[2] || '';
-        if (!track.uri || /imageItem|playlistItem|textItem/.test(cls) || /^(image|text)\//.test(mime)) continue;
-
+        return track.uri && !/imageItem|playlistItem|textItem/.test(cls) && !/^(image|text)\//.test(mime);
+    });
+    for (const track of playable) {
         try {
             if (track._path) {
                 const parsedPath = JSON.parse(track._path);
@@ -2458,6 +2494,7 @@ async function queueFolderTracks(renderer, tracks, pathStr, lastId) {
             cacheUriPath(track.uri, pathStr);
         }
 
+        if (renderer.sonosDevice) continue; // added all together below
         try {
             const newId = await renderer.insertTrack(track, lastId);
             lastId = newId;
@@ -2466,6 +2503,12 @@ async function queueFolderTracks(renderer, tracks, pathStr, lastId) {
             firstError = firstError || err;
             console.warn(`[QUEUE] Skipped "${track.title}" (${track.uri}): ${err.message.slice(0, 200)}`);
         }
+    }
+    // A Sonos takes them 16 to a request, to the end of its queue (as many as its 1,000 have room for)
+    if (renderer.sonosDevice && playable.length) {
+        const result = await renderer.appendTracks(playable);
+        if (result.skipped) console.warn(`[QUEUE] The Sonos queue is full: ${result.skipped} track(s) left out`);
+        return result.added;
     }
     if (added === 0 && firstError) throw firstError;
     return added;
@@ -4538,6 +4581,27 @@ function ingredientUses(id) {
 // Checked before offering to delete an item
 app.get('/api/ingredients/:id/uses', (req, res) => {
     res.json(ingredientUses(req.params.id));
+});
+
+// Every item and calendar meal an item is used in, at the quantity it's used at there
+app.get('/api/ingredients/:id/quantities', (req, res) => {
+    if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Item not found' });
+    res.json(ingredientQuantityUses(req.params.id));
+});
+
+// Changes those quantities: { items: [{ id, position, amount, unit }], meals: [{ id, amount, unit, times }] }
+app.put('/api/ingredients/:id/quantities', express.json(), (req, res) => {
+    if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Item not found' });
+    const text = v => String(v ?? '').trim();
+    const list = v => Array.isArray(v) ? v : [];
+    const items = list(req.body.items).map(u => ({ id: text(u?.id), position: Number(u?.position), amount: text(u?.amount), unit: text(u?.unit) }));
+    const meals = list(req.body.meals).map(u => ({ id: text(u?.id), amount: text(u?.amount), unit: text(u?.unit), times: u?.times == null ? 1 : Number(u.times) }));
+    if (items.length + meals.length > 1000) return res.status(400).json({ error: 'Too many changes' });
+    if ([...items, ...meals].some(u => !u.id || u.amount.length > 20 || u.unit.length > 40)) return res.status(400).json({ error: 'An amount or unit is too long' });
+    if (items.some(u => !Number.isInteger(u.position) || u.position < 0)) return res.status(400).json({ error: 'Invalid item' });
+    if (meals.some(u => !Number.isFinite(u.times) || u.times <= 0 || u.times > 99)) return res.status(400).json({ error: 'How many must be more than 0 and at most 99' });
+    const changed = setIngredientQuantityUses(req.params.id, { items, meals });
+    res.json({ changed, ...ingredientQuantityUses(req.params.id) });
 });
 
 app.delete('/api/ingredients/:id', (req, res) => {
