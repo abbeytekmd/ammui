@@ -3825,6 +3825,23 @@ p.subtitle {
     width: 5.5rem;
 }
 
+/* How many of an item's own quantity a part of one made of others is */
+.item-part-multiple {
+    flex: 0 0 auto;
+    padding: 0.3rem 0.4rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.4rem;
+    cursor: pointer;
+}
+
+.item-part-multiple option {
+    color: #111;
+}
+
 .item-builder-times {
     flex: 0 0 5.5rem;
     color: var(--text-muted);
@@ -14282,4 +14299,80 @@ button.health-leader {
     gap: 0.2rem 0.9rem;
     font-size: 0.85rem;
     color: var(--text-muted);
+}
+
+/* Fix Track Order: the release found, and each file's number now and as it would be */
+.track-order-content {
+    max-width: 860px;
+}
+
+.track-order-release {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.track-order-release select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.45rem 0.6rem;
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--card-border);
+    border-radius: 0.5rem;
+}
+
+.track-order-release select option {
+    color: #111;
+}
+
+.track-order-scroll {
+    overflow-x: auto;
+}
+
+.track-order-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.track-order-table th,
+.track-order-table td {
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+    border-bottom: 1px solid var(--card-border);
+    vertical-align: baseline;
+}
+
+.track-order-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.8rem;
+}
+
+.track-order-table .num {
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.track-order-table tr.unchanged td,
+.track-order-table tr.no-match td {
+    color: var(--text-muted);
+}
+
+.track-order-subfolder,
+.track-order-same,
+.track-order-none {
+    color: var(--text-muted);
+    font-size: 0.85em;
+}
+
+.track-order-unsure {
+    color: #f59e0b;
+    font-weight: 700;
+    cursor: help;
 }

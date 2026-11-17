@@ -9,6 +9,8 @@ import axios from 'axios';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import xml2js from 'xml2js';
+import { previewTrackOrder } from './lib/track-order.js';
+import { parseAmount } from './lib/quantities.js';
 import Renderer from './lib/renderer.js';
 import { createMediaServer, registerMediaServerKind } from './lib/media-server.js';
 import { buildIndex, isBuilding, markDirty, startIndexScheduler } from './lib/library-index.js';
@@ -56,7 +58,7 @@ import {
     getMealPlan, setMealPlanSettings, saveMealPlanDay,
     calendarEntryOccursOn, skipCalendarEntryOccurrence,
     listIngredients, getIngredient, findIngredientIdByName, saveIngredient, setIngredientMacros, setIngredientAlcohol, deleteIngredient,
-    itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop, ingredientQuantityUses, setIngredientQuantityUses,
+    itemsUsingIngredient, mealsUsingIngredient, itemPartsLoop, ingredientQuantityUses, setIngredientQuantityUses, PART_TIMES_UNIT,
     getCachedShoppingProduct, setCachedShoppingProduct, getShoppingProductPick, setShoppingProductPick, deleteShoppingProductPick,
     listGamePlayers, getGamePlayer, findGamePlayerByName, addGamePlayer, deleteGamePlayer, getWordGame, saveWordGame, getWordGameStats,
     listWordGamesSince, savePeerGameSnapshot, listPeerGameSnapshots,
@@ -464,7 +466,7 @@ function findDeviceByUdn(udn) {
 // local search index stale, so schedule a rebuild once the request has succeeded.
 app.use('/api', (req, res, next) => {
     const changesLibrary = req.method === 'POST' &&
-        (/^\/(upload|upload-local-file|delete|slideshow\/hidden\/delete-file|slideshow\/hidden\/delete-all-local)$/.test(req.path) || req.path.startsWith('/local/'));
+        (/^\/(upload|upload-local-file|delete|slideshow\/hidden\/delete-file|slideshow\/hidden\/delete-all-local)$/.test(req.path) || (req.path.startsWith('/local/') && req.path !== '/local/track-order/preview'));
     if (changesLibrary) {
         res.on('finish', () => {
             if (res.statusCode < 400) markDirty(SERVER_UDN, findDeviceByUdn);
@@ -4452,13 +4454,21 @@ function cleanIngredient(body, id) {
     return typeof nutrition === 'string' ? nutrition : { name, amount, unit, confirmed, parts, nutrition };
 }
 
+// How many of an item a part is, as saved ("1.5"), from what was sent ('' is one), or null if it isn't one
+function partMultiple(value) {
+    const text = String(value ?? '').trim();
+    const n = text ? parseAmount(text) : 1;
+    return n > 0 && n <= 99 ? String(Number(n.toFixed(3))) : null;
+}
+
 // The items an item is made of: [{ id, amount, unit }] in order (an item can be in it more than
 // once). Returns a string saying what's wrong.
 function cleanItemParts(list, id) {
     if (!Array.isArray(list)) return 'Invalid items';
-    const parts = list.map(p => ({ id: String(p?.id || ''), amount: String(p?.amount ?? '').trim(), unit: String(p?.unit ?? '').trim() }));
+    // Each is how many of that item's own quantity ('' is one), kept with "×" for its unit
+    const parts = list.map(p => ({ id: String(p?.id || ''), amount: partMultiple(p?.amount), unit: PART_TIMES_UNIT }));
     if (parts.length > 200) return 'Too many items';
-    if (parts.some(p => p.amount.length > 20 || p.unit.length > 40)) return 'An amount or unit is too long';
+    if (parts.some(p => p.amount == null)) return 'How many of each item must be more than 0 and at most 99';
     if (parts.some(p => !p.id || !getIngredient(p.id))) return 'An item no longer exists';
     if (id && (parts.some(p => p.id === id) || itemPartsLoop(id, parts.map(p => p.id)))) return "An item can't be made of itself";
     return parts;
@@ -4594,7 +4604,8 @@ app.put('/api/ingredients/:id/quantities', express.json(), (req, res) => {
     if (!getIngredient(req.params.id)) return res.status(404).json({ error: 'Item not found' });
     const text = v => String(v ?? '').trim();
     const list = v => Array.isArray(v) ? v : [];
-    const items = list(req.body.items).map(u => ({ id: text(u?.id), position: Number(u?.position), amount: text(u?.amount), unit: text(u?.unit) }));
+    const items = list(req.body.items).map(u => ({ id: text(u?.id), position: Number(u?.position), amount: partMultiple(u?.amount), unit: PART_TIMES_UNIT }));
+    if (items.some(u => u.amount == null)) return res.status(400).json({ error: 'How many must be more than 0 and at most 99' });
     const meals = list(req.body.meals).map(u => ({ id: text(u?.id), amount: text(u?.amount), unit: text(u?.unit), times: u?.times == null ? 1 : Number(u.times) }));
     if (items.length + meals.length > 1000) return res.status(400).json({ error: 'Too many changes' });
     if ([...items, ...meals].some(u => !u.id || u.amount.length > 20 || u.unit.length > 40)) return res.status(400).json({ error: 'An amount or unit is too long' });
@@ -10181,6 +10192,86 @@ app.post('/api/local/identify-tags-from-filename', express.json(), async (req, r
         console.error('[IDENTIFY-TAGS] Server error:', err);
         res.status(500).json({ error: err.message });
     }
+});
+
+// --- Fix Track Order (a music folder's menu): looks the album up and proposes each track's
+// number, later discs carrying on from earlier ones (see lib/track-order.js); apply writes them ---
+function localFolderFromId(id) {
+    const localDir = path.join(__dirname, 'local');
+    const target = path.join(localDir, path.normalize(String(id || '')).replace(/^(\.\.(\/|\\|$))+/, ''));
+    if (!target.startsWith(localDir + path.sep)) return null;
+    try { return fs.statSync(target).isDirectory() ? target : null; } catch { return null; }
+}
+
+// { id, source?, releaseId? }: the folder, and a release to use instead of the best found
+app.post('/api/local/track-order/preview', express.json(), async (req, res) => {
+    const dir = localFolderFromId(req.body.id);
+    if (!dir) return res.status(404).json({ error: 'Folder not found' });
+    try {
+        const choice = req.body.releaseId ? { source: req.body.source, id: req.body.releaseId } : null;
+        const result = await previewTrackOrder(dir, { discogsToken: settings.discogsToken, choice });
+        if (result.error) return res.status(404).json(result);
+        console.log(`[TRACK-ORDER] "${path.basename(dir)}": ${result.release.source} "${result.release.title}" (${result.release.discs.join('+')} tracks), `
+            + `${result.files.filter(f => f.proposed).length}/${result.files.length} files matched`);
+        res.json(result);
+    } catch (err) {
+        console.error('[TRACK-ORDER] Preview failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Writes a track's number and disc ("13/25", "2/2"): MP3s by their ID3 tag, others by FFmpeg
+// copying the audio as it is into a file with the new tags, which then replaces the old
+const RETAG_WITH_FFMPEG = new Set(['.flac', '.m4a', '.ogg', '.opus']);
+async function writeTrackOrderTags(filePath, { track, trackOf, disc, discOf }) {
+    const ext = path.extname(filePath).toLowerCase();
+    const trackText = `${track}/${trackOf}`, discText = `${disc}/${discOf}`;
+    if (ext === '.mp3') {
+        if (NodeID3.update({ trackNumber: trackText, partOfSet: discText }, filePath, ID3_OPTS) !== true) throw new Error('NodeID3 failed to write tags');
+        stripId3v1(filePath);
+        return;
+    }
+    if (!RETAG_WITH_FFMPEG.has(ext)) throw new Error(`Can't write tags to ${ext} files`);
+    if (ffmpegUnavailable) throw new Error(`FFmpeg is needed to retag ${ext} files`);
+    const tmp = path.join(path.dirname(filePath), `.retag-${crypto.randomUUID()}${ext}`);
+    const args = ['-hide_banner', '-loglevel', 'error', '-y', '-i', filePath, '-map', '0', '-c', 'copy', '-map_metadata', '0',
+        '-metadata', `track=${trackText}`, '-metadata', `disc=${discText}`];
+    // Vorbis comments keep the totals in tags of their own, which would otherwise be left as they were
+    if (ext !== '.m4a') args.push('-metadata', `TRACKTOTAL=${trackOf}`, '-metadata', `DISCTOTAL=${discOf}`);
+    try {
+        await execFileAsync('ffmpeg', [...args, tmp], { windowsHide: true, maxBuffer: 4 * 1024 * 1024 });
+        await fs.promises.rename(tmp, filePath);
+    } catch (err) {
+        await fs.promises.rm(tmp, { force: true }).catch(() => { });
+        throw new Error(err.stderr?.trim().split('\n').pop() || err.message);
+    }
+}
+
+// { id, changes: [{ rel, track, trackOf, disc, discOf }] }: rel is a file's path within the folder
+app.post('/api/local/track-order/apply', express.json({ limit: '2mb' }), async (req, res) => {
+    const dir = localFolderFromId(req.body.id);
+    if (!dir) return res.status(404).json({ error: 'Folder not found' });
+    const whole = v => Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 9999;
+    const changes = Array.isArray(req.body.changes) ? req.body.changes : [];
+    if (!changes.length) return res.status(400).json({ error: 'Nothing to change' });
+    if (changes.some(c => !whole(c.track) || !whole(c.trackOf) || !whole(c.disc) || !whole(c.discOf))) {
+        return res.status(400).json({ error: 'Track and disc numbers must be whole numbers' });
+    }
+    let written = 0;
+    const failed = [];
+    for (const c of changes) {
+        const filePath = path.join(dir, path.normalize(String(c.rel || '')).replace(/^(\.\.(\/|\\|$))+/, ''));
+        if (!filePath.startsWith(dir + path.sep) || !fs.existsSync(filePath)) { failed.push({ rel: c.rel, error: 'File not found' }); continue; }
+        try {
+            await writeTrackOrderTags(filePath, { track: Number(c.track), trackOf: Number(c.trackOf), disc: Number(c.disc), discOf: Number(c.discOf) });
+            written++;
+        } catch (err) {
+            console.warn(`[TRACK-ORDER] "${c.rel}": ${err.message}`);
+            failed.push({ rel: c.rel, error: err.message });
+        }
+    }
+    console.log(`[TRACK-ORDER] "${path.basename(dir)}": ${written} file(s) retagged${failed.length ? `, ${failed.length} failed` : ''}`);
+    res.json({ written, failed });
 });
 
 // Many MP3s carry an old ID3v1 tag (last 128 bytes) alongside the ID3v2 one NodeID3 edits, and

@@ -2753,6 +2753,17 @@ function renderBrowser(items) {
                                     </svg>
                                     Identify ID3 Tags from Filename
                                 </button>
+                                <button class="dropdown-item" onclick="openTrackOrderModal(${index}, event)">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <line x1="10" y1="6" x2="21" y2="6"></line>
+                                        <line x1="10" y1="12" x2="21" y2="12"></line>
+                                        <line x1="10" y1="18" x2="21" y2="18"></line>
+                                        <path d="M4 6h1v4"></path>
+                                        <path d="M4 10h2"></path>
+                                        <path d="M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"></path>
+                                    </svg>
+                                    Fix Track Order...
+                                </button>
                                 <button class="dropdown-item" onclick="openFolderTagModal(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                         <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
@@ -7490,12 +7501,13 @@ function mealDayItemRows(meal, mealKey) {
         kids.forEach((p, j) => {
             const child = itemById(p.itemId);
             const base = { item: child, name: p.name, qtyOwn: false, depth: depth + 1, key: `${key}|${j}`, seen: inner };
+            // Each is how many of that item's own quantity
+            const n = partTimes(p.amount);
             if (child?.parts) {
-                const n = partTimes(p.amount);
                 node({ ...base, qtyText: '', count: n, times: times * n, nutrition: itemNutritionRows(child, '', '', times * n, inner) });
             } else {
-                node({ ...base, qtyText: [p.amount, p.unit].filter(Boolean).join(' '), count: 1, times,
-                    nutrition: child ? itemNutritionRows(child, p.amount, p.unit, times, inner) : [{ name: p.name, result: { missing: 'nutrition' } }] });
+                node({ ...base, qtyText: child ? [child.amount, child.unit].filter(Boolean).join(' ') : '', count: n, times,
+                    nutrition: child ? itemNutritionRows(child, child.amount, child.unit, times * n, inner) : [{ name: p.name, result: { missing: 'nutrition' } }] });
             }
         });
     };
@@ -9174,11 +9186,8 @@ function renderItemBuilderParts() {
         const group = !!child?.parts;
         return `
         <li class="item-builder-part" data-i="${i}">
-            ${group ? `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="1" aria-label="How many" title="How many">
-                <span class="item-builder-times">×</span>`
-                : `<input type="text" class="recipe-amount" data-field="amount" value="${escapeAttr(p.amount)}" maxlength="20" placeholder="Amount" aria-label="Amount">
-                <input type="text" class="recipe-unit" data-field="unit" value="${escapeAttr(p.unit)}" maxlength="40" placeholder="Unit" list="recipe-units" aria-label="Unit">`}
-            <span class="item-builder-part-name" title="${group ? `Made of ${escapeAttr(itemSummary(child))}` : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
+            ${partMultipleSelect(p.amount)}
+            <span class="item-builder-part-name" title="${child ? escapeAttr(group ? `Made of ${itemSummary(child)}` : `Its own quantity: ${itemSummary(child) || 'none set'}`) : ''}">${group ? ITEM_GROUP_ICON : ''}${escapeHtml(child?.name || p.name)}${confirmedStar(child)}</span>
             <span class="recipe-kcal" data-kcal></span>
             ${child ? '<button type="button" class="recipe-ingredient-btn" data-act="edit" title="Edit this item">✎</button>' : ''}
             <button type="button" class="recipe-ingredient-btn" data-act="up" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
@@ -9188,13 +9197,10 @@ function renderItemBuilderParts() {
     }).join('');
     list.querySelectorAll('.item-builder-part').forEach(row => {
         const i = Number(row.dataset.i);
-        row.querySelectorAll('input').forEach(input => {
-            input.oninput = () => {
-                b.parts[i][input.dataset.field] = input.value;
-                refreshItemBuilderCalories();
-            };
-            input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); itemBuilderField('part-search').focus(); } };
-        });
+        row.querySelector('select').onchange = e => {
+            b.parts[i].amount = e.target.value;
+            refreshItemBuilderCalories();
+        };
         row.querySelectorAll('.recipe-ingredient-btn').forEach(btn => {
             btn.onclick = () => {
                 const act = btn.dataset.act;
@@ -9227,7 +9233,8 @@ function renderItemBuilderParts() {
 function itemPartRows(part) {
     const child = itemById(part.itemId);
     if (!child) return [{ name: part.name, result: { missing: 'nutrition' } }];
-    return child.parts ? itemNutritionRows(child, '', '', partTimes(part.amount)) : itemNutritionRows(child, part.amount, part.unit);
+    const n = partTimes(part.amount);
+    return child.parts ? itemNutritionRows(child, '', '', n) : itemNutritionRows(child, child.amount, child.unit, n);
 }
 
 // Calories on each part and the total for one person, without redrawing the rows (so typing in
@@ -9298,7 +9305,7 @@ function addItemBuilderPart(match) {
         return;
     }
     const item = match;
-    b.parts.push({ itemId: item.id, name: item.name, amount: item.parts ? '' : item.amount, unit: item.parts ? '' : item.unit });
+    b.parts.push({ itemId: item.id, name: item.name, amount: '1', unit: PART_TIMES_UNIT });
     const search = itemBuilderField('part-search');
     search.value = '';
     search.focus();
@@ -9326,7 +9333,7 @@ async function saveItemBuilder() {
         name, confirmed: itemBuilderField('confirmed').checked,
         amount: group ? '' : itemBuilderField('amount').value.trim(),
         unit: group ? '' : itemBuilderField('unit').value.trim(),
-        parts: group ? b.parts.map(p => ({ id: p.itemId, amount: p.amount.trim(), unit: p.unit.trim() })) : [],
+        parts: group ? b.parts.map(p => ({ id: p.itemId, amount: p.amount.trim(), unit: PART_TIMES_UNIT })) : [],
     };
     if (!group) body.nutrition = b.nutrition;
     const btn = itemBuilderField('save-btn');
@@ -9476,7 +9483,7 @@ function setItemQuantities(itemId, data) {
     const item = itemById(itemId);
     itemQuantities = {
         itemId,
-        items: (data.items || []).map(u => ({ id: u.id, name: u.name, position: u.position, amount: u.amount || '', unit: u.unit || '' })),
+        items: (data.items || []).map(u => ({ id: u.id, name: u.name, position: u.position, amount: String(partTimes(u.amount)), unit: PART_TIMES_UNIT })),
         // One made of others keeps just how many of it on a meal
         meals: (data.meals || []).map(m => {
             const part = { id: itemId, amount: m.amount, unit: m.unit, times: m.times };
@@ -9514,7 +9521,7 @@ function renderItemQuantities() {
     el.innerHTML =
         (q.items.length ? `<p class="item-builder-uses-heading">Part of</p>` + q.items.map((u, i) => `
         <div class="item-quantities-row" data-kind="items" data-i="${i}">
-            <span class="item-quantities-inputs">${amountInputs(u, 'Amount', 'Unit')}</span>
+            <span class="item-quantities-inputs">${partMultipleSelect(u.amount, 'data-field="amount"')}</span>
             <span class="item-builder-use-name">${escapeHtml(u.name)}</span>
         </div>`).join('') : '') +
         (q.meals.length ? `<p class="item-builder-uses-heading">In meals on the calendar${group ? '' : ' <span class="calendar-entry-tags-hint">— leave blank for the item\'s own quantity</span>'}</p>` + q.meals.map((m, i) => `
@@ -9526,6 +9533,8 @@ function renderItemQuantities() {
         </div>`).join('') : '');
     el.querySelectorAll('.item-quantities-row').forEach(row => {
         const u = q[row.dataset.kind][Number(row.dataset.i)];
+        const select = row.querySelector('select');
+        if (select) select.onchange = () => { u.amount = select.value; };
         row.querySelectorAll('input').forEach(input => {
             input.oninput = () => {
                 if (input.dataset.field === 'times') {
@@ -9548,8 +9557,8 @@ async function saveItemQuantities() {
     }
     const saved = JSON.parse(q.savedJson);
     const same = (a, b, keys) => keys.every(k => String(a[k]).trim() === String(b[k]).trim());
-    const items = q.items.filter((u, i) => !same(u, saved.items[i], ['amount', 'unit']))
-        .map(u => ({ id: u.id, position: u.position, amount: u.amount.trim(), unit: u.unit.trim() }));
+    const items = q.items.filter((u, i) => !same(u, saved.items[i], ['amount']))
+        .map(u => ({ id: u.id, position: u.position, amount: u.amount.trim(), unit: PART_TIMES_UNIT }));
     const meals = q.meals.filter((m, i) => !same(m, saved.meals[i], ['amount', 'unit', 'times']))
         .map(m => ({ id: m.id, amount: m.amount.trim(), unit: m.unit.trim(), times: m.times }));
     if (!items.length && !meals.length) { closeItemQuantities(true); return; }
@@ -9696,8 +9705,19 @@ function scaleNutrition(result, k) {
     return out;
 }
 
-// How many of an item made of others a part means ('' is one)
+// How many of an item's own quantity a part of one made of others is ('' is one). Saved as its
+// amount, with "×" for its unit; picked from PART_MULTIPLES.
 const partTimes = amount => parseAmount(amount) ?? 1;
+const PART_TIMES_UNIT = '×';
+const PART_MULTIPLES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 5, 6]; // as lib/quantities.js
+
+// The choice of how many for a part, at amount (one not offered, kept from before, is offered too)
+function partMultipleSelect(amount, attrs = '') {
+    const current = partTimes(amount);
+    const choices = PART_MULTIPLES.includes(current) ? PART_MULTIPLES : [...PART_MULTIPLES, current].sort((a, b) => a - b);
+    return `<select class="item-part-multiple" aria-label="How many" title="How many of its own quantity" ${attrs}>${
+        choices.map(m => `<option value="${m}"${m === current ? ' selected' : ''}>${m} ×</option>`).join('')}</select>`;
+}
 
 // Every single item in an item at the amounts it uses, as [{ name, result }] (each result from
 // ingredientCalories) for sumNutrition. A single item is counted at amount/unit; one made of
@@ -9710,8 +9730,9 @@ function itemNutritionRows(item, amount, unit, times = 1, seen = new Set()) {
     return item.parts.flatMap(p => {
         const child = itemById(p.itemId);
         if (!child) return [{ name: p.name, result: { missing: 'nutrition' } }];
-        return child.parts ? itemNutritionRows(child, '', '', times * partTimes(p.amount), inner)
-            : itemNutritionRows(child, p.amount, p.unit, times, inner);
+        // Each is how many of that item's own quantity
+        const n = times * partTimes(p.amount);
+        return child.parts ? itemNutritionRows(child, '', '', n, inner) : itemNutritionRows(child, child.amount, child.unit, n, inner);
     });
 }
 
@@ -11746,6 +11767,158 @@ async function identifyTracksFromFilename(index, event) {
     } catch (e) {
         console.error(e);
         showToast('Identify from filename failed: ' + e.message);
+    }
+}
+
+// --- Fix Track Order: looks a music folder's album up (MusicBrainz, or Discogs) and shows the
+// track and disc number it would give each file, later discs carrying on from earlier ones so
+// the tracks sort in album order; ticked rows are written on Apply ---
+let trackOrder = null; // { item, data (from the preview), picked: Set of rels }
+
+function openTrackOrderModal(index, event) {
+    if (event) event.stopPropagation();
+    document.querySelectorAll('.dropdown-menu.active').forEach(m => m.classList.remove('active'));
+    const item = currentBrowserItems[index];
+    if (!item) return;
+    trackOrder = { item, data: null, picked: new Set() };
+    document.getElementById('track-order-folder').textContent = item.title;
+    document.getElementById('track-order-apply-btn').disabled = true;
+    document.getElementById('track-order-modal').style.display = 'flex';
+    loadTrackOrderPreview();
+}
+
+function closeTrackOrderModal() {
+    document.getElementById('track-order-modal').style.display = 'none';
+    trackOrder = null;
+}
+
+// choice: { source, id } of another release to use instead
+async function loadTrackOrderPreview(choice = null) {
+    const t = trackOrder;
+    const body = document.getElementById('track-order-body');
+    body.innerHTML = '<p class="settings-hint">Looking up the album... (MusicBrainz answers one request a second, so this can take a few)</p>';
+    setCalendarSettingsStatus('track-order-status', '', false);
+    const btn = document.getElementById('track-order-apply-btn');
+    btn.disabled = true;
+    btn.textContent = 'Apply';
+    try {
+        const res = await fetch('/api/local/track-order/preview', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: t.item.id, ...(choice ? { source: choice.source, releaseId: choice.id } : {}) })
+        });
+        const data = await res.json();
+        if (trackOrder !== t) return;
+        if (!res.ok) throw new Error(data.error || 'Lookup failed');
+        t.data = data;
+        // Ticked to start with: every matched file whose numbers would change
+        t.picked = new Set(data.files.filter(f => f.proposed && !trackOrderUnchanged(f)).map(f => f.rel));
+        renderTrackOrder();
+    } catch (err) {
+        if (trackOrder !== t) return;
+        body.innerHTML = '';
+        setCalendarSettingsStatus('track-order-status', err.message, true);
+    }
+}
+
+const trackOrderUnchanged = f => !!f.proposed && f.current.track === f.proposed.track && (f.current.disc || 1) === f.proposed.disc;
+
+function renderTrackOrder() {
+    const { data, picked } = trackOrder;
+    const r = data.release;
+    const sourceName = s => s === 'discogs' ? 'Discogs' : 'MusicBrainz';
+    const when = c => [c.date, c.country].filter(Boolean).join(', ');
+    const label = c => `${c.title}${c.artist ? ` — ${c.artist}` : ''}${when(c) ? ` (${when(c)})` : ''}`
+        + ` · ${c.discs.length > 1 ? `${c.discs.length} discs, ${c.discs.join('+')} tracks` : `${c.discs[0]} tracks`} · ${sourceName(c.source)}`;
+    const matched = data.files.filter(f => f.proposed).length;
+    const multiDisc = r.discs.length > 1;
+    const folders = data.files.some(f => f.folder);
+    const body = document.getElementById('track-order-body');
+    body.innerHTML = `
+        <div class="track-order-release">
+            <select id="track-order-release" aria-label="Release">${data.candidates.map(c =>
+                `<option value="${escapeAttr(c.source + ':' + c.id)}"${c.source === r.source && c.id === r.id ? ' selected' : ''}>${escapeHtml(label(c))}</option>`).join('')}</select>
+            <a href="${escapeAttr(r.url)}" target="_blank" rel="noopener" class="btn-control ghost btn-small" title="Open this release on ${sourceName(r.source)}">View</a>
+        </div>
+        <p class="settings-hint">${matched} of ${data.files.length} file${data.files.length === 1 ? '' : 's'} matched.${multiDisc
+            ? ` Numbered through all ${r.discs.length} discs (disc 2 starts at ${r.discs[0] + 1}), so they play in album order.` : ''}${
+            data.otherFolders?.length ? ` Not included (not disc folders): ${escapeHtml(data.otherFolders.join(', '))}.` : ''}</p>
+        <div class="track-order-scroll">
+        <table class="track-order-table">
+            <thead><tr>
+                <th><input type="checkbox" id="track-order-all" aria-label="All" title="All"></th>
+                <th class="num">Now</th><th class="num">New</th>${multiDisc ? '<th class="num" title="Disc · its track">Disc</th>' : ''}<th>File</th><th>On the release</th>
+            </tr></thead>
+            <tbody>${data.files.map((f, i) => {
+                const p = f.proposed;
+                const same = trackOrderUnchanged(f);
+                const unsure = p && p.score < 0.9;
+                return `<tr class="${!p ? 'no-match' : same ? 'unchanged' : ''}">
+                    <td><input type="checkbox" data-i="${i}" ${p ? '' : 'disabled'} ${picked.has(f.rel) ? 'checked' : ''} aria-label="Change this one"></td>
+                    <td class="num">${f.current.track ?? '–'}</td>
+                    <td class="num">${p ? `<strong>${p.track}</strong>` : '–'}</td>
+                    ${multiDisc ? `<td class="num">${p ? `${p.disc} · ${p.discTrack}` : '–'}</td>` : ''}
+                    <td>${folders && f.folder ? `<span class="track-order-subfolder">${escapeHtml(f.folder)}/</span>` : ''}${escapeHtml(f.title || f.name)}</td>
+                    <td>${p ? `${escapeHtml(p.matchedTitle)}${unsure ? ' <span class="track-order-unsure" title="Not a close match: check it">?</span>' : ''}${same ? ' <span class="track-order-same">already right</span>' : ''}`
+                        : '<span class="track-order-none">No match — left as it is</span>'}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>
+        </div>`;
+    document.getElementById('track-order-release').onchange = e => {
+        const [source, ...id] = e.target.value.split(':');
+        loadTrackOrderPreview({ source, id: id.join(':') });
+    };
+    const boxes = [...body.querySelectorAll('tbody input[type="checkbox"]')];
+    const all = document.getElementById('track-order-all');
+    const sync = () => {
+        const enabled = boxes.filter(b => !b.disabled);
+        all.checked = enabled.length > 0 && enabled.every(b => b.checked);
+        all.indeterminate = !all.checked && enabled.some(b => b.checked);
+        const btn = document.getElementById('track-order-apply-btn');
+        btn.disabled = !picked.size;
+        btn.textContent = picked.size ? `Apply (${picked.size})` : 'Apply';
+    };
+    boxes.forEach(b => b.onchange = () => {
+        const rel = data.files[Number(b.dataset.i)].rel;
+        if (b.checked) picked.add(rel); else picked.delete(rel);
+        sync();
+    });
+    all.onchange = () => {
+        boxes.filter(b => !b.disabled).forEach(b => { b.checked = all.checked; b.onchange(); });
+    };
+    sync();
+}
+
+async function applyTrackOrder() {
+    const t = trackOrder;
+    if (!t?.data || !t.picked.size) return;
+    const changes = t.data.files.filter(f => f.proposed && t.picked.has(f.rel)).map(f => ({
+        rel: f.rel, track: f.proposed.track, trackOf: f.proposed.trackOf, disc: f.proposed.disc, discOf: f.proposed.discOf,
+    }));
+    const btn = document.getElementById('track-order-apply-btn');
+    btn.disabled = true;
+    btn.textContent = `Writing ${changes.length}...`;
+    try {
+        const res = await fetch('/api/local/track-order/apply', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: t.item.id, changes })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Failed to write tags');
+        if (data.failed?.length) {
+            console.warn('[TRACK-ORDER] Failed:', data.failed);
+            setCalendarSettingsStatus('track-order-status',
+                `${data.written} retagged, ${data.failed.length} failed: ${data.failed.slice(0, 3).map(f => `${f.rel} (${f.error})`).join('; ')}`, true);
+            btn.textContent = 'Apply';
+            btn.disabled = false;
+        } else {
+            showToast(`"${t.item.title}": ${data.written} track${data.written === 1 ? '' : 's'} renumbered`, 'success', 3000);
+            closeTrackOrderModal();
+        }
+        if (browsePath?.length && selectedServerUdn) await browse(selectedServerUdn, browsePath[browsePath.length - 1].id);
+    } catch (err) {
+        setCalendarSettingsStatus('track-order-status', err.message, true);
+        btn.textContent = 'Apply';
+        btn.disabled = false;
     }
 }
 

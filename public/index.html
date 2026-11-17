@@ -3246,6 +3246,31 @@
         </div>
     </div>
 
+    <!-- Music folder menu: Fix Track Order. The album's track list looked up, and the number each
+         file would get (filled by app.js) -->
+    <div id="track-order-modal" class="modal-overlay" style="display: none;"
+        onclick="if(event.target===this)closeTrackOrderModal()">
+        <div class="modal-content track-order-content">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Fix Track Order</h2>
+                    <p id="track-order-folder" class="subtitle"></p>
+                </div>
+                <div class="item-builder-header-actions">
+                    <button type="button" id="track-order-apply-btn" class="btn-control primary" onclick="applyTrackOrder()" disabled>Apply</button>
+                    <button class="btn-close" onclick="closeTrackOrderModal()" title="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="track-order-status" class="calendar-status item-builder-status"></div>
+            <div class="modal-body" id="track-order-body"></div>
+        </div>
+    </div>
+
     <div id="shopping-picker-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeShoppingPicker()">
         <div class="modal-content shopping-picker-content">
             <div class="modal-header">
