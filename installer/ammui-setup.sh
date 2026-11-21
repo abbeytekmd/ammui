@@ -4,17 +4,19 @@
 #
 # It installs anything missing (Node.js, Git and the optional ffmpeg, yt-dlp and
 # fpcalc helpers), fetches the latest AMMUI code from GitHub, installs its
-# packages, adds menu entries and a background service, and starts the server.
+# packages, adds menu entries and a system service that starts AMMUI with the computer, sets
+# the browser to open when you log in, and starts the server.
 #
 # Usage:  bash ammui-setup.sh [install folder]   (default: ~/ammui)
 #    or:  curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | bash
 #
 # Environment switches: AMMUI_NO_EXTRAS=1 skips ffmpeg/yt-dlp/fpcalc,
 # AMMUI_NO_RUN=1 sets everything up without starting the server,
-# AMMUI_NO_STARTUP=1 does not run AMMUI as a service that starts with the computer.
+# AMMUI_NO_STARTUP=1 adds no service or login entry (AMMUI then runs only when started).
 #
-# Run it as your normal user: it asks for your password (sudo) only for system
-# packages and certificate trust. Run as root, it installs a system-wide service.
+# Run it as the user who will log in and use AMMUI, not as root: the service runs as that user,
+# and the browser (if Settings > Startup sets one) opens when they log in to the desktop. It
+# asks for your password (sudo) for system packages, the service and certificate trust.
 # ---------------------------------------------------------------------------
 
 set -u
@@ -322,43 +324,52 @@ install_helpers() {
     fi
 }
 
-# --- Service (start with the computer) ---------------------------------------
-# A systemd user service (or a system one when run as root). It is told AMMUI_SUPERVISED=1, so
-# Update & Restart in the app just exits and systemd starts the new version.
+# --- Starting with the computer, and the browser at login -------------------------
+# The server runs as a system service, started at boot, as this user (so it keeps using this
+# user's AMMUI folder, Node.js and certificates). It has no desktop, so an autostart entry opens
+# the browser when this user logs in (scripts/startup-browser.js runs the Settings > Startup
+# command). Without systemd or sudo, the autostart entry starts the server itself instead.
 
-SYSTEMCTL=''
-UNIT_FILE=''
-JOURNAL_CMD=''
-if have systemctl; then
-    if [ "$IS_ROOT" -eq 1 ]; then
-        if systemctl show-environment >/dev/null 2>&1; then
-            SYSTEMCTL='systemctl'; UNIT_FILE="/etc/systemd/system/$SERVICE_NAME.service"; JOURNAL_CMD="journalctl -u $SERVICE_NAME -f"
-        fi
-    elif systemctl --user show-environment >/dev/null 2>&1; then
-        SYSTEMCTL='systemctl --user'; UNIT_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME.service"; JOURNAL_CMD="journalctl --user -u $SERVICE_NAME -f"
+UNIT_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/ammui.desktop"
+LAUNCHER="$APP_DATA_DIR/ammui-server"
+SERVER_LOG="$APP_DATA_DIR/server.log"
+STARTUP_MODE=''   # service, login (the server starts at login) or none; set by install_startup
+
+use_startup() { [ "${AMMUI_NO_STARTUP:-}" != 1 ]; }
+have_systemd() { [ -d /run/systemd/system ] && have systemctl; }
+service_installed() { [ -f "$UNIT_FILE" ]; }
+
+# Earlier versions of this installer ran AMMUI as a systemd user service
+remove_old_user_service() {
+    local unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$SERVICE_NAME.service"
+    if [ -f "$unit" ]; then
+        systemctl --user disable --now "$SERVICE_NAME" >/dev/null 2>&1
+        rm -f "$unit"
+        systemctl --user daemon-reload >/dev/null 2>&1
+        info 'Removed the AMMUI user service added by an older installer.'
     fi
-fi
+    if [ -f "$APP_DATA_DIR/.linger-enabled" ]; then
+        loginctl disable-linger "$USER" 2>/dev/null || as_root loginctl disable-linger "$USER" 2>/dev/null
+        rm -f "$APP_DATA_DIR/.linger-enabled"
+    fi
+    return 0
+}
 
-use_service() { [ -n "$SYSTEMCTL" ] && [ "${AMMUI_NO_STARTUP:-}" != 1 ]; }
+remove_service() {
+    service_installed || return 0
+    as_root systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1
+    as_root rm -f "$UNIT_FILE" && as_root systemctl daemon-reload
+    info 'Removed the AMMUI service, so it no longer starts with the computer.'
+}
 
+# Writes and enables the service; fails (leaving nothing behind) when it can't
 install_service() {
-    if [ -z "$SYSTEMCTL" ]; then
-        warn 'systemd is not available here, so AMMUI will not start with the computer. Start it from the AMMUI Server menu entry.'
-        return
-    fi
-    if [ "${AMMUI_NO_STARTUP:-}" = 1 ]; then
-        if [ -f "$UNIT_FILE" ]; then
-            $SYSTEMCTL disable --now "$SERVICE_NAME" >/dev/null 2>&1
-            rm -f "$UNIT_FILE"; $SYSTEMCTL daemon-reload
-            info 'Removed the AMMUI service, so it no longer starts with the computer.'
-        fi
-        return
-    fi
-    local node_dir wanted
-    node_dir="$(dirname "$(command -v node)")"
-    if [ "$IS_ROOT" -eq 1 ]; then wanted=multi-user.target; else wanted=default.target; fi
-    mkdir -p "$(dirname "$UNIT_FILE")"
-    cat > "$UNIT_FILE" <<EOF
+    { have_systemd && can_be_root; } || return 1
+    local node_dir; node_dir="$(dirname "$(command -v node)")"
+    info 'Adding the AMMUI service, which starts AMMUI with the computer (you may be asked for your password).'
+    # The log is the server's output: the one before the last restart is kept as server.log.old
+    as_root tee "$UNIT_FILE" >/dev/null <<EOF || return 1
 # Written by ammui-setup.sh
 [Unit]
 Description=AMMUI Media Hub
@@ -366,32 +377,73 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+User=$USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$node_dir/node server.js
-Environment="PATH=$node_dir:$INSTALL_DIR:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/bin/sh -c 'mv -f "$SERVER_LOG" "$SERVER_LOG.old" 2>/dev/null; exec node server.js >"$SERVER_LOG" 2>&1'
+Environment="HOME=$HOME"
+Environment="PATH=$node_dir:$INSTALL_DIR:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin"
 Environment=AMMUI_SUPERVISED=1
+Environment=AMMUI_BROWSER_AT_LOGIN=1
 Restart=always
 RestartSec=3
 
 [Install]
-WantedBy=$wanted
+WantedBy=multi-user.target
 EOF
-    $SYSTEMCTL daemon-reload
-    $SYSTEMCTL enable "$SERVICE_NAME" >/dev/null 2>&1 || { warn 'Could not enable the AMMUI service.'; return; }
-    info "Added the '$SERVICE_NAME' service, which runs AMMUI in the background."
-    if [ "$IS_ROOT" -eq 0 ]; then
-        # Without lingering a user service only runs while that user is logged in.
-        if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" = yes ]; then
-            info 'AMMUI will start when the computer starts.'
-        elif loginctl enable-linger "$USER" 2>/dev/null || as_root loginctl enable-linger "$USER" 2>/dev/null; then
-            touch "$APP_DATA_DIR/.linger-enabled"   # so the uninstaller turns it off again
-            info 'AMMUI will start when the computer starts, before anyone logs in.'
-        else
-            info 'AMMUI will start when you log in.'
-        fi
-    else
-        info 'AMMUI will start when the computer starts.'
+    if as_root systemctl daemon-reload && as_root systemctl enable "$SERVICE_NAME" >/dev/null 2>&1; then return 0; fi
+    as_root rm -f "$UNIT_FILE"; as_root systemctl daemon-reload
+    return 1
+}
+
+write_autostart() {   # write_autostart NAME COMMENT
+    mkdir -p "$(dirname "$AUTOSTART_FILE")"
+    cat > "$AUTOSTART_FILE" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$1
+Comment=$2 Written by ammui-setup.sh.
+Exec="$LAUNCHER" --login
+Icon=$APP_ICON
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+EOF
+}
+
+# Offers to open AMMUI in a browser at login when Settings > Startup has nothing set yet,
+# choosing the browser installed here (Firefox first)
+offer_login_browser() {
+    { [ -n "$(desktop_dir)" ] || [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } || return 0   # no desktop
+    local current chosen
+    current="$(cd "$INSTALL_DIR" && node scripts/startup-browser.js --show 2>/dev/null)"
+    if [ -n "$current" ]; then info "When $USER logs in, AMMUI runs: $current (change it in Settings > Startup)."; return 0; fi
+    ask_yes "Open AMMUI in a browser whenever $USER logs in?" Y || {
+        info 'No browser will open at login. To have one open, use Settings > Startup.'; return 0; }
+    chosen="$(cd "$INSTALL_DIR" && node scripts/startup-browser.js --default 2>/dev/null)"
+    if [ -n "$chosen" ]; then info "AMMUI will open in $chosen when $USER logs in. Change it in Settings > Startup."
+    else warn 'No browser was found (Firefox, Chrome, Chromium or Edge). Choose one later in Settings > Startup.'; fi
+}
+
+install_startup() {
+    remove_old_user_service
+    if ! use_startup; then
+        STARTUP_MODE=none
+        remove_service
+        if [ -f "$AUTOSTART_FILE" ]; then rm -f "$AUTOSTART_FILE"; info 'AMMUI no longer starts when you log in.'; fi
+        return
     fi
+    if install_service; then
+        STARTUP_MODE=service
+        write_autostart 'AMMUI Browser' 'Opens AMMUI in the browser set in Settings > Startup.'
+        info "AMMUI will start with the computer, and open in a browser when $USER logs in if Settings > Startup says to."
+    else
+        STARTUP_MODE=login
+        if have_systemd; then warn 'Could not add the AMMUI service (sudo is needed), so AMMUI will start when you log in instead.'
+        else warn 'systemd is not available here, so AMMUI will start when you log in instead of with the computer.'; fi
+        write_autostart 'AMMUI Server' 'Starts the AMMUI server in the background.'
+        info "AMMUI will start in the background whenever $USER logs in (and open a browser then, if Settings > Startup says to)."
+    fi
+    offer_login_browser
 }
 
 # --- Icon, menu entries and uninstaller ------------------------------------------
@@ -411,27 +463,77 @@ trust_desktop_file() {
 }
 
 write_launcher() {
-    # The 'AMMUI Server' menu entry runs this: it starts the service and shows its log, or,
-    # without the service, runs the server in the terminal window (close it to stop AMMUI).
-    local node_dir; node_dir="$(dirname "$(command -v node)")"
-    {
-        printf '#!/bin/sh\n# Starts the AMMUI server. Written by ammui-setup.sh.\n'
-        printf 'cd %s || exit 1\n' "'$INSTALL_DIR'"
-        if [ -n "$SYSTEMCTL" ]; then cat <<EOF
-if [ -f '$UNIT_FILE' ] && $SYSTEMCTL is-enabled --quiet $SERVICE_NAME 2>/dev/null; then
-    $SYSTEMCTL start $SERVICE_NAME
+    # Run by the login autostart (--login), the 'AMMUI Server' menu entry (no argument) and the
+    # uninstaller (--stop). With the service it opens the browser at login, and the menu entry
+    # starts the service if need be and shows the log. Without it, --login starts the server in
+    # the background (the pid file holds its supervisor's process id), and the menu entry shows
+    # the log of one already running or else runs the server in the terminal window.
+    local node_dir service=0; node_dir="$(dirname "$(command -v node)")"
+    [ "$STARTUP_MODE" = service ] && service=1
+    cat > "$LAUNCHER" <<EOF
+#!/bin/sh
+# Starts AMMUI. Written by ammui-setup.sh.
+#   ammui-server          show the log of the server running in the background, or start it
+#   ammui-server --login  run at login: opens the browser set in Settings > Startup$([ "$service" = 0 ] && printf ',\n#                         starting the server in the background first')
+#   ammui-server --stop   stop the server
+SERVICE=$service
+PIDFILE='$APP_DATA_DIR/server.pid'
+LOG='$SERVER_LOG'
+PATH='$node_dir':'$INSTALL_DIR':"\$HOME/.local/bin:\$PATH"
+export PATH
+
+running() {
+    pid="\$(cat "\$PIDFILE" 2>/dev/null)"
+    [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null && grep -q server.js "/proc/\$pid/cmdline" 2>/dev/null
+}
+
+stop() {
+    running || return 0
+    # Stop the server; its supervisor then exits by itself
+    pkill -TERM -P "\$pid" 2>/dev/null
+    i=0
+    while kill -0 "\$pid" 2>/dev/null && [ \$i -lt 20 ]; do sleep 0.5; i=\$((i + 1)); done
+    kill "\$pid" 2>/dev/null
+    rm -f "\$PIDFILE"
+}
+
+show_log() {
     echo 'AMMUI is running in the background: $(https_url localhost)'
-    echo 'Showing its log. Closing this window does not stop AMMUI; to stop it run: $SYSTEMCTL stop $SERVICE_NAME'
-    exec $JOURNAL_CMD
+    echo "Showing its log. Closing this window leaves it running; to stop it run: \$0 --stop"
+    exec tail -n 50 -F "\$LOG"
+}
+
+cd '$INSTALL_DIR' || exit 1
+
+if [ "\$SERVICE" = 1 ]; then
+    case "\${1:-}" in
+        --login) exec node scripts/startup-browser.js >'$APP_DATA_DIR/startup-browser.log' 2>&1 ;;
+        --stop) sudo systemctl stop $SERVICE_NAME ;;
+        *)
+            systemctl is-active --quiet $SERVICE_NAME || sudo systemctl start $SERVICE_NAME || exit 1
+            show_log ;;
+    esac
+    exit
 fi
+
+case "\${1:-}" in
+    --stop)
+        stop ;;
+    --login|--background)
+        # A server left running from an earlier login has that session's desktop, now gone,
+        # so start afresh: it then opens the startup browser on this one.
+        stop
+        echo \$\$ > "\$PIDFILE"
+        rm -f "\$LOG"
+        exec node server.js </dev/null >"\$LOG" 2>&1 ;;
+    *)
+        running && show_log
+        printf '\033]0;AMMUI server - close this window to stop\007'
+        echo \$\$ > "\$PIDFILE"
+        exec node server.js ;;
+esac
 EOF
-        fi
-        cat <<EOF
-printf '\033]0;AMMUI server - close this window to stop\007'
-PATH='$node_dir':"\$PATH" exec node server.js
-EOF
-    } > "$APP_DATA_DIR/ammui-server"
-    chmod +x "$APP_DATA_DIR/ammui-server"
+    chmod +x "$LAUNCHER"
 }
 
 new_menu_entries() {
@@ -510,8 +612,9 @@ write_uninstaller() {
         printf 'INSTALL_DIR=%q\n' "$INSTALL_DIR"
         printf 'APP_DATA_DIR=%q\n' "$APP_DATA_DIR"
         printf 'APPS_DIR=%q\n' "$APPS_DIR"
+        printf 'AUTOSTART_FILE=%q\n' "$AUTOSTART_FILE"
+        printf 'LAUNCHER=%q\n' "$LAUNCHER"
         printf 'UNIT_FILE=%q\n' "$UNIT_FILE"
-        printf 'SYSTEMCTL=%q\n' "$SYSTEMCTL"
         printf 'HTTP_PORT=%q\n' "$HTTP_PORT"
         printf 'HTTPS_PORT=%q\n' "$HTTPS_PORT"
         cat <<'EOF'
@@ -528,7 +631,7 @@ finish() { echo; echo "$1"; read -r -p 'Press Enter to close ' _ </dev/tty; exit
 
 echo 'Uninstall AMMUI'
 echo
-ask_yes 'Remove AMMUI from this computer? This stops the AMMUI server and removes its service and menu entries.' Y || exit 0
+ask_yes 'Remove AMMUI from this computer? This stops the AMMUI server and removes its service, login entry and menu entries.' Y || exit 0
 delete_folder=0
 if [ -d "$INSTALL_DIR" ]; then
     echo
@@ -543,11 +646,21 @@ echo
 echo 'Uninstalling AMMUI'
 
 # Stop the server and the kiosk browser, which hold files in the folders being removed.
-if [ -n "$SYSTEMCTL" ] && [ -f "$UNIT_FILE" ]; then
-    info 'Stopping and removing the AMMUI service.'
-    $SYSTEMCTL disable --now ammui >/dev/null 2>&1
-    rm -f "$UNIT_FILE"
-    $SYSTEMCTL daemon-reload
+if [ -f "$UNIT_FILE" ]; then
+    info 'Stopping and removing the AMMUI service (you may be asked for your password).'
+    as_root systemctl disable --now ammui >/dev/null 2>&1
+    as_root rm -f "$UNIT_FILE"
+    as_root systemctl daemon-reload
+fi
+[ -f "$AUTOSTART_FILE" ] && { rm -f "$AUTOSTART_FILE"; info 'Removed the AMMUI login entry.'; }
+[ -x "$LAUNCHER" ] && ! [ -f "$UNIT_FILE" ] && "$LAUNCHER" --stop
+# A systemd user service added by an older installer
+unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/ammui.service"
+if [ -f "$unit" ]; then
+    info 'Stopping and removing the old AMMUI service.'
+    systemctl --user disable --now ammui >/dev/null 2>&1
+    rm -f "$unit"
+    systemctl --user daemon-reload >/dev/null 2>&1
 fi
 for port in "$HTTP_PORT" "$HTTPS_PORT"; do
     pid="$(ss -ltnpH "sport = :$port" 2>/dev/null | sed -n 's/.*"node",pid=\([0-9]*\).*/\1/p' | head -n1)"
@@ -666,9 +779,22 @@ listening_pid() {   # listening_pid PORT -> "pid name", or "? ?" when the owner 
 
 stop_running_server() {
     # The server has to be stopped to update it, and a second copy could not open the ports.
-    if [ -n "$SYSTEMCTL" ] && $SYSTEMCTL is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        info 'Stopping the AMMUI service that is already running.'
-        $SYSTEMCTL stop "$SERVICE_NAME"
+    remove_old_user_service
+    if service_installed && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        info 'Stopping the AMMUI service (you may be asked for your password).'
+        as_root systemctl stop "$SERVICE_NAME"
+    fi
+    # One started by the launcher (at login, or by an earlier run of this installer). Stopping the
+    # server lets its supervisor exit by itself.
+    local spid
+    spid="$(cat "$APP_DATA_DIR/server.pid" 2>/dev/null)"
+    if [ -n "$spid" ] && kill -0 "$spid" 2>/dev/null && grep -q server.js "/proc/$spid/cmdline" 2>/dev/null; then
+        info 'Stopping the AMMUI server that is already running.'
+        pkill -TERM -P "$spid" 2>/dev/null
+        local i
+        for ((i = 0; i < 20; i++)); do kill -0 "$spid" 2>/dev/null || break; sleep 0.5; done
+        kill "$spid" 2>/dev/null
+        rm -f "$APP_DATA_DIR/server.pid"
     fi
     # The ports it was using (the saved ones). Another program on one isn't a problem:
     # choose_ports picks free ones later.
@@ -774,20 +900,36 @@ open_if_unnamed() {
 
 start_server() {
     step 'Starting AMMUI'
-    if use_service; then
+    if [ "$STARTUP_MODE" = service ]; then
         # This first start leaves opening the page to the installer, once the certificate is
         # trusted (see openToName in server.js). The service takes its environment as it starts.
-        $SYSTEMCTL set-environment AMMUI_INSTALLER=1 2>/dev/null
-        $SYSTEMCTL start "$SERVICE_NAME"; local started=$?
-        $SYSTEMCTL unset-environment AMMUI_INSTALLER 2>/dev/null
-        [ "$started" -eq 0 ] || fail "The AMMUI service did not start. See: $JOURNAL_CMD"
+        as_root systemctl set-environment AMMUI_INSTALLER=1 2>/dev/null
+        as_root systemctl start "$SERVICE_NAME"; local started=$?
+        as_root systemctl unset-environment AMMUI_INSTALLER 2>/dev/null
+        [ "$started" -eq 0 ] || fail "The AMMUI service did not start. See: systemctl status $SERVICE_NAME, and $SERVER_LOG"
         print_addresses
         if wait_for_port ''; then grant_certificate_trust; open_if_unnamed
-        else warn "AMMUI has not opened its port yet. See its log: $JOURNAL_CMD"; fi
+        else warn "AMMUI has not opened its port yet. See its log: $SERVER_LOG"; fi
         printf '\n'
-        green 'AMMUI is running in the background and starts with the computer.'
-        info "Log: $JOURNAL_CMD"
-        info "Stop: $SYSTEMCTL stop $SERVICE_NAME    Start: $SYSTEMCTL start $SERVICE_NAME"
+        green 'AMMUI is running as a service and starts with the computer.'
+        info "Log: $SERVER_LOG (or use AMMUI Server in the menu)"
+        info "Stop: sudo systemctl stop $SERVICE_NAME    Start: sudo systemctl start $SERVICE_NAME"
+        return
+    fi
+    if [ "$STARTUP_MODE" = login ]; then
+        # Started in the background as the next login will start it, in its own session so it
+        # carries on when this terminal closes. This first start leaves opening the page to the
+        # installer, once the certificate is trusted (see openToName in server.js).
+        if have setsid; then AMMUI_INSTALLER=1 setsid "$LAUNCHER" --login </dev/null >/dev/null 2>&1 &
+        else AMMUI_INSTALLER=1 nohup "$LAUNCHER" --login </dev/null >/dev/null 2>&1 &
+        fi
+        print_addresses
+        if wait_for_port ''; then grant_certificate_trust; open_if_unnamed
+        else warn "AMMUI has not opened its port yet. See its log: $SERVER_LOG"; fi
+        printf '\n'
+        green "AMMUI is running in the background, and starts whenever $USER logs in."
+        info "Log: $SERVER_LOG (or use AMMUI Server in the menu)"
+        info "Stop: $LAUNCHER --stop    Start: $LAUNCHER --login"
         return
     fi
 
@@ -818,7 +960,7 @@ main() {
     printf '%sAMMUI setup%s\n' "$C_GREEN" "$C_OFF"
     info "Install folder: $INSTALL_DIR"
     [ "$(uname -s)" = Linux ] || fail 'This installer is for Linux. On Windows use ammui-setup.cmd.'
-    [ "$IS_ROOT" -eq 1 ] && warn 'Running as root: AMMUI will be installed for root, with a system service.'
+    [ "$IS_ROOT" -eq 1 ] && fail 'Run this as the user who will log in and use AMMUI, not as root or with sudo: the AMMUI service runs as that user, and the browser opens when they log in. To set it up for another user, run it as them (for example: sudo -iu USERNAME, then run the installer).'
     can_be_root || warn 'sudo is not available, so system packages cannot be installed.'
 
     if ! have curl && ! have wget; then
@@ -837,7 +979,7 @@ main() {
     install_packages
     choose_ports
     install_helpers
-    install_service
+    install_startup
     new_menu_entries
     new_kiosk_entry
     write_uninstaller

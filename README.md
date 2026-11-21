@@ -120,7 +120,7 @@ Open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | bash
 ```
 
-Or download [ammui-setup.sh](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.sh) and run `bash ammui-setup.sh`. Run it as your normal user, not with `sudo`: it asks for your password only when it needs to install system packages or trust the certificate. It works on Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch, openSUSE and most other distributions (apt, dnf, pacman or zypper).
+Or download [ammui-setup.sh](https://github.com/abbeytekmd/ammui/raw/main/installer/ammui-setup.sh) and run `bash ammui-setup.sh`. Run it as your normal user, not with `sudo`: it asks for your password only when it needs to install system packages, add the AMMUI service or trust the certificate. It works on Debian, Ubuntu, Raspberry Pi OS, Fedora, Arch, openSUSE and most other distributions (apt, dnf, pacman or zypper).
 
 Like the Windows installer it's a one-off, and running it again updates AMMUI and repairs anything missing.
 
@@ -137,8 +137,9 @@ Like the Windows installer it's a one-off, and running it again updates AMMUI an
 
 It also adds:
 
-* An **`ammui` systemd service** that runs AMMUI in the background and starts it with the computer, even before anyone logs in (so it suits a headless box). Update & Restart in the app restarts it through systemd. View its log with `journalctl --user -u ammui -f`; stop and start it with `systemctl --user stop ammui` / `systemctl --user start ammui`.
-* **AMMUI Server** in the applications menu and on the desktop: starts the service if it isn't running and shows its log. Without systemd it runs the server in a terminal window instead (close the window to stop AMMUI).
+* An **`ammui` system service** that starts AMMUI with the computer, before anyone logs in, so players can reach it on a headless box too. It runs as you (so it uses your `~/ammui` folder), and Update & Restart in the app restarts it through systemd. Its log is `~/.local/share/ammui/server.log` (the one before the last restart is `server.log.old`); stop and start it with `sudo systemctl stop ammui` / `sudo systemctl start ammui`.
+* A **login entry** (`~/.config/autostart/ammui.desktop`) that opens AMMUI in a browser when you log in to the desktop, using the command in **Settings > Startup**. If nothing is set there yet, the installer offers to set it to the browser it finds (Firefox first, then Chrome, Chromium or Edge). Set the computer to log you in automatically if it's a dedicated display.
+* **AMMUI Server** in the applications menu and on the desktop: starts the service if it isn't running and shows its log.
 * **AMMUI Kiosk** in the applications menu and on the desktop, if Chrome, Chromium or Edge is installed: opens AMMUI full screen, for a dedicated display such as a Raspberry Pi with a touchscreen. Press Alt+F4 to close it.
 * **Uninstall AMMUI** in the applications menu (see [Uninstalling](#uninstalling)).
 
@@ -150,12 +151,12 @@ If a firewall (ufw or firewalld) is running, allow TCP ports 80 and 443 (or the 
 
 * Install somewhere other than `~/ammui`: `bash ammui-setup.sh /srv/ammui` (or `curl ... | bash -s -- /srv/ammui`).
 * `AMMUI_NO_EXTRAS=1` skips ffmpeg, yt-dlp and fpcalc.
-* `AMMUI_NO_STARTUP=1` doesn't set up the service (and removes it if an earlier run added it); the installer then runs AMMUI in the terminal until you press Ctrl+C.
+* `AMMUI_NO_STARTUP=1` doesn't add the service or the login entry (and removes them if an earlier run added them); the installer then runs AMMUI in the terminal until you press Ctrl+C.
 * `AMMUI_NO_RUN=1` sets everything up without starting the server.
 
 Set them before the command, e.g. `curl -fsSL https://raw.githubusercontent.com/abbeytekmd/ammui/main/installer/ammui-setup.sh | AMMUI_NO_EXTRAS=1 bash`.
 
-Run as root (for example in a container), it installs for root with a system-wide service instead: use `journalctl -u ammui` and `systemctl stop ammui`.
+Run it as the user who will log in and use AMMUI; it refuses to run as root. To set it up for another account, run it as that user (for example `sudo -iu kiosk`, then the command above). Without systemd, or without sudo to add the service, the login entry starts the server too, so AMMUI then runs only while you're logged in. Running it over an install from an older installer removes the old per-user `ammui` service.
 
 ### Other platforms (manual install)
 
@@ -245,7 +246,7 @@ powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\AMMUI\uninstall.ps1"
 
 ### Linux
 
-Choose **Uninstall AMMUI** in the applications menu, or run `bash ~/.local/share/ammui/uninstall.sh`. As on Windows it asks whether to delete the AMMUI folder (default: keep it), then stops and removes the service, the menu and desktop entries, the certificate trust, and `~/.local/share/ammui` (including the copy of Node.js the installer added, if any). Git and system packages such as ffmpeg are left installed.
+Choose **Uninstall AMMUI** in the applications menu, or run `bash ~/.local/share/ammui/uninstall.sh`. As on Windows it asks whether to delete the AMMUI folder (default: keep it), then stops the server and removes the service, the login entry, the menu and desktop entries, the certificate trust, and `~/.local/share/ammui` (including the copy of Node.js the installer added, if any). Git and system packages such as ffmpeg are left installed.
 
 ### Other platforms
 

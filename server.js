@@ -3605,9 +3605,10 @@ function startupPresets() {
     return Object.fromEntries(STARTUP_BROWSERS.map(b => [b, { normal: startupCommand(b, false), kiosk: startupCommand(b, true) }]));
 }
 
-// On Linux the server normally runs as a systemd service, started at boot before anyone logs in
-// and never given the desktop's DISPLAY / WAYLAND_DISPLAY / session bus, so a browser started from
-// it has nowhere to open. These are the desktop session's variables, once there is one: from the
+// On Linux the server often runs as a systemd service, started at boot before anyone logs in, or
+// is started over SSH: either way it has no DISPLAY / WAYLAND_DISPLAY / session bus, so a browser
+// started from it (Run Now in Settings > Startup) has nowhere to open.
+// These are the desktop session's variables, once there is one: from the
 // systemd user manager (which GNOME, KDE and others fill in when the session starts), else from
 // the sockets the session makes. {} when the server already has a display; null when there's none.
 const DESKTOP_ENV_NAMES = ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'XDG_DATA_DIRS'];
@@ -3706,7 +3707,7 @@ const restartMarkerPath = path.join(baseDataDir, '.restarting');
 function openToName() {
     const url = `http://localhost:${port}/`; // goes on to HTTPS once that's listening
     const waiting = `This server has no name yet: open ${url} in a browser to name it, then it will start up.`;
-    if (settings.startup.command || process.env.AMMUI_INSTALLER === '1') return console.log(waiting);
+    if (settings.startup.command || process.env.AMMUI_INSTALLER === '1' || browserOpensAtLogin) return console.log(waiting);
     const command = process.platform === 'win32' ? `start "" "${url}"`
         : process.platform === 'darwin' ? `open "${url}"`
         : (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) && resolveLikeSpawn('xdg-open') ? `xdg-open "${url}"`
@@ -3716,7 +3717,13 @@ function openToName() {
     runStartupCommand(command);
 }
 
+// The Linux installer runs the server as a system service at boot and opens the browser when the
+// user logs in (scripts/startup-browser.js, from their desktop's autostart), so the service leaves
+// both the startup command and the page to name the server to that. Run Now in Settings still works.
+const browserOpensAtLogin = process.env.AMMUI_BROWSER_AT_LOGIN === '1';
+
 function runStartupOnBoot() {
+    if (browserOpensAtLogin) return console.log('[STARTUP] The startup command runs when someone logs in to the desktop.');
     try {
         const age = Date.now() - fs.statSync(restartMarkerPath).mtimeMs;
         fs.unlinkSync(restartMarkerPath);
