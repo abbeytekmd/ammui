@@ -3426,6 +3426,8 @@ function updateStatus(status) {
         if (slider && document.activeElement !== slider) slider.value = status.volume;
         if (ssSlider && document.activeElement !== ssSlider) ssSlider.value = status.volume;
         if (valueSpan) valueSpan.textContent = `${status.volume}%`;
+        // Not straight after a change here: the poll may have left before the new volume was sent
+        if (Date.now() - lastVolumeChangeAt > 2000) applyBrowserPlayerVolume(status.volume);
     }
 }
 
@@ -3471,12 +3473,14 @@ function syncLocalPlayback(status) {
         video.src = mediaUrl(isVideo ? browserPlayableVideoUrl(resolvedUri) : resolvedUri);
         video.setAttribute('data-track-id', status.trackId);
         video.setAttribute('data-is-local-player', 'true');
+        // The Browser player's own volume (the main slider), not the one for videos opened on their own
+        const mainSlider = document.getElementById('volume-slider');
+        applyBrowserPlayerVolume(status.volume ?? mainSlider?.value);
 
         if (isVideo) {
             document.getElementById('video-modal').style.display = 'flex';
             document.getElementById('video-modal-title').textContent = currentTrack.title;
             // Same explicit volume control as openVideoModal — native controls often hide it on tablets.
-            video.volume = localVideoVolume;
             const volumeGroup = document.getElementById('video-modal-volume');
             if (volumeGroup) volumeGroup.style.display = '';
             syncLocalVideoVolumeUI();
@@ -4171,6 +4175,12 @@ function setLocalVideoVolume(value) {
     const volume = Math.max(0, Math.min(100, parseInt(value, 10) || 0)) / 100;
     video.muted = false;
     video.volume = volume;
+    // Playing as the Browser player: this is that player's volume, so the main slider follows
+    if (selectedRendererUdn === BROWSER_PLAYER_UDN && video.getAttribute('data-is-local-player') === 'true') {
+        updateVolume(Math.round(volume * 100));
+        updateLocalVideoVolumeIcon(volume === 0);
+        return;
+    }
     localVideoVolume = volume;
     localStorage.setItem('localVideoVolume', String(volume));
     updateLocalVideoVolumeIcon(volume === 0);
@@ -10438,12 +10448,25 @@ async function fetchVolume() {
         if (slider) slider.value = data.volume;
         if (ssSlider) ssSlider.value = data.volume;
         if (valueSpan) valueSpan.textContent = `${data.volume}%`;
+        applyBrowserPlayerVolume(data.volume);
         rendererFailureCount = 0;
         // setRendererOffline(false, 'fetchVolume'); // Only fetchStatus should turn it online
     } catch (err) {
         console.error('Failed to fetch volume:', err);
         setRendererOffline(true, 'fetchVolume');
     }
+}
+
+// The Browser player's volume is kept on the server like any player's, but the sound comes out of
+// this page's <video> element, so it has to be applied here too (0-100).
+let lastVolumeChangeAt = 0;
+function applyBrowserPlayerVolume(value) {
+    if (selectedRendererUdn !== BROWSER_PLAYER_UDN) return;
+    const video = document.getElementById('video-player');
+    const v = Number(value);
+    if (!video || !Number.isFinite(v)) return;
+    video.volume = Math.max(0, Math.min(100, v)) / 100;
+    syncLocalVideoVolumeUI();
 }
 
 async function updateVolume(value) {
@@ -10454,6 +10477,8 @@ async function updateVolume(value) {
     if (slider) slider.value = value;
     if (ssSlider) ssSlider.value = value;
     if (valueSpan) valueSpan.textContent = `${value}%`;
+    lastVolumeChangeAt = Date.now();
+    applyBrowserPlayerVolume(value);
 
     // Debounce volume updates to avoid flooding the network
     if (volumeDebounceTimeout) clearTimeout(volumeDebounceTimeout);
