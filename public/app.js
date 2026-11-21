@@ -2681,7 +2681,7 @@ function renderBrowser(items) {
                         </button>
                         <div class="dropdown-menu" style="top: 100%; right: 0; min-width: 12rem;">
                             ${isLocalServer ? `
-                                ${typeof peerShareMenuHtml === 'function' ? peerShareMenuHtml(item.id) : ''}
+                                ${typeof peerShareMenuHtml === 'function' ? peerShareMenuHtml(item.id, isContainer) : ''}
                                 ${isContainer && currentBrowserMode === 'photo' ? `
                                 <button class="dropdown-item" onclick="identifyFolderPictureDatesFromFilename(${index}, event)">
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

@@ -69,7 +69,7 @@ import {
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
 import { PeerListener, PeerConnections, PeerError, derivePeerKey, DEFAULT_PEER_PORT, MIN_PEER_PASSWORD } from './lib/peer-link.js';
 import { GAMES_SERVICE, GAMES_SERVICE_VERSION, SNAPSHOT_DAYS, KEEP_MS as PEER_GAMES_KEEP_MS, gamesServiceRouter, GameResultsSync } from './lib/peer-services/games.js';
-import { MEDIA_SERVICE, MEDIA_SERVICE_VERSION, ShareRules, cleanLibraryPath, mediaServiceRouter, PeerMediaServer, mountPeerMediaRoutes } from './lib/peer-services/media.js';
+import { MEDIA_SERVICE, MEDIA_SERVICE_VERSION, ShareRules, libraryTagIndex, cleanLibraryPath, mediaServiceRouter, PeerMediaServer, mountPeerMediaRoutes } from './lib/peer-services/media.js';
 import AirPlayManager from './lib/airplay-manager.js';
 import { normaliseFeedUrl, checkFeed, forgetFeed, getCalendarEvents } from './lib/calendar-feeds.js';
 import { getTickerHeadlines, getTickerStory, cleanFeedUrl, DEFAULT_TICKER_FEEDS } from './lib/news-ticker.js';
@@ -3257,10 +3257,35 @@ const peerShareFlags = () => {
     const flags = getSetting('peerShares', null);
     return flags && typeof flags === 'object' ? flags : {};
 };
-let peerShareRules = new ShareRules(peerShareFlags());
-function savePeerShareFlags(flags) {
+// Tag filters on folders switched on: { "music/Party": ["dance"] } shares only the files in it
+// tagged with one of them (see ShareRules)
+const peerShareFilters = () => {
+    const filters = getSetting('peerShareTags', null);
+    return filters && typeof filters === 'object' ? filters : {};
+};
+let peerShareRules = new ShareRules(peerShareFlags(), peerShareFilters());
+function savePeerShareFlags(flags, filters = peerShareFilters()) {
+    // A filter only means something on a folder that's switched on
+    for (const p of Object.keys(filters)) if (flags[p] !== 'on') delete filters[p];
     setSetting('peerShares', flags);
-    peerShareRules = new ShareRules(flags);
+    setSetting('peerShareTags', filters);
+    peerShareRules = new ShareRules(flags, filters);
+}
+// The rules with the library's tags as they are now, when any filter needs them
+const currentPeerShareRules = () => peerShareRules.filtered
+    ? peerShareRules.withTags(libraryTagIndex(settings.fileTags, localMediaKey('')))
+    : peerShareRules;
+// A tag renamed (to `to`) or deleted (`to` null) everywhere: filters follow it. A filter left with
+// no tags stays, sharing nothing, rather than opening up to everything in the folder.
+function renamePeerShareTag(from, to) {
+    const filters = peerShareFilters();
+    let changed = false;
+    for (const [p, tags] of Object.entries(filters)) {
+        if (!tags.includes(from)) continue;
+        filters[p] = [...new Set(tags.map(t => t === from ? to : t).filter(Boolean))];
+        changed = true;
+    }
+    if (changed) savePeerShareFlags(peerShareFlags(), filters);
 }
 
 // Library path ("music/Artist") of a path on disk under local/, or null if it's not in a section
@@ -3277,17 +3302,20 @@ function movePeerShares(fromAbs, toAbs, { keepOwn = true } = {}) {
     if (!from) return;
     const to = toAbs ? peerShareRel(toAbs) : null;
     const flags = peerShareFlags();
+    const filters = peerShareFilters();
     let changed = false;
-    for (const [key, value] of Object.entries(flags)) {
-        const inside = key.startsWith(from + '/');
-        if (key !== from && !inside) continue;
-        delete flags[key];
-        changed = true;
-        if (!to || (!inside && !keepOwn)) continue;
-        const moved = to + key.slice(from.length);
-        if (!(moved in flags)) flags[moved] = value;
+    for (const map of [flags, filters]) {
+        for (const [key, value] of Object.entries(map)) {
+            const inside = key.startsWith(from + '/');
+            if (key !== from && !inside) continue;
+            delete map[key];
+            changed = true;
+            if (!to || (!inside && !keepOwn)) continue;
+            const moved = to + key.slice(from.length);
+            if (!(moved in map)) map[moved] = value;
+        }
     }
-    if (changed) savePeerShareFlags(flags);
+    if (changed) savePeerShareFlags(flags, filters);
 }
 
 const forgetPeerShares = absPath => movePeerShares(absPath, null);
@@ -3318,7 +3346,7 @@ peerListener.addService({
     version: MEDIA_SERVICE_VERSION,
     router: mediaServiceRouter({
         libraryRoot: localLibraryRoot,
-        getShares: () => peerShareRules,
+        getShares: currentPeerShareRules,
         listChildren: listLibraryChildren,
         resolveArt: dir => resolveFolderArt(dir, { findDiscogsArtUrl, getCachedArt }),
     }),
@@ -3440,22 +3468,32 @@ app.post('/api/settings/peer-listener', express.json(), async (req, res) => {
 });
 
 app.get('/api/peer-shares', (req, res) => {
-    res.json({ flags: peerShareFlags() });
+    res.json({ flags: peerShareFlags(), tags: peerShareFilters() });
 });
 
-// { path: "music/Artist", value: "on" | "off" | "inherit" }
+// { path: "music/Artist", value: "on" | "off" | "inherit", tags?: [...] }. `tags` (with "on")
+// sets the folder's tag filter, [] removes it; left out, an existing filter stays while it's on.
 app.post('/api/peer-shares', express.json(), (req, res) => {
-    const { path: wanted, value } = req.body || {};
+    const { path: wanted, value, tags } = req.body || {};
     if (!['on', 'off', 'inherit'].includes(value)) return res.status(400).json({ error: 'value must be on, off or inherit' });
+    if (tags !== undefined && (!Array.isArray(tags) || tags.length > 200 || tags.some(t => typeof t !== 'string' || !t || t.length > 100))) {
+        return res.status(400).json({ error: 'tags must be a list of tag names' });
+    }
     let rel;
     try { rel = cleanLibraryPath(wanted); } catch (e) { rel = ''; }
     if (!rel) return res.status(400).json({ error: 'Only folders and files in music, pictures and videos can be shared' });
     const flags = peerShareFlags();
+    const filters = peerShareFilters();
     if (value === 'inherit') delete flags[rel];
     else flags[rel] = value;
-    savePeerShareFlags(flags);
-    console.log(`[PEER] Sharing of ${rel}: ${value === 'inherit' ? 'as its folder' : value}.`);
-    res.json({ flags });
+    if (value === 'on' && tags) {
+        if (tags.length) filters[rel] = [...new Set(tags)];
+        else delete filters[rel];
+    }
+    savePeerShareFlags(flags, filters);
+    const filterNote = filters[rel] ? ` (only files tagged ${filters[rel].map(t => `"${t}"`).join(' or ')})` : '';
+    console.log(`[PEER] Sharing of ${rel}: ${value === 'inherit' ? 'as its folder' : value}${filterNote}.`);
+    res.json({ flags, tags: filters });
 });
 
 app.get('/api/peer-links', (req, res) => {
@@ -3567,16 +3605,93 @@ function startupPresets() {
     return Object.fromEntries(STARTUP_BROWSERS.map(b => [b, { normal: startupCommand(b, false), kiosk: startupCommand(b, true) }]));
 }
 
-function runStartupCommand(command = settings.startup.command) {
+// On Linux the server normally runs as a systemd service, started at boot before anyone logs in
+// and never given the desktop's DISPLAY / WAYLAND_DISPLAY / session bus, so a browser started from
+// it has nowhere to open. These are the desktop session's variables, once there is one: from the
+// systemd user manager (which GNOME, KDE and others fill in when the session starts), else from
+// the sockets the session makes. {} when the server already has a display; null when there's none.
+const DESKTOP_ENV_NAMES = ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_SESSION_TYPE', 'XDG_CURRENT_DESKTOP', 'XDG_DATA_DIRS'];
+
+async function linuxDesktopEnv() {
+    if (process.env.DISPLAY || process.env.WAYLAND_DISPLAY) return {};
+    const env = {};
+    try {
+        const { stdout } = await execFileAsync('systemctl', ['--user', 'show-environment'], { timeout: 5000 });
+        for (const line of stdout.split('\n')) {
+            const eq = line.indexOf('=');
+            const name = line.slice(0, eq);
+            if (eq > 0 && DESKTOP_ENV_NAMES.includes(name)) env[name] = line.slice(eq + 1).replace(/^\$?'(.*)'$/, '$1');
+        }
+    } catch { /* not a user service, or no user manager */ }
+    if (env.DISPLAY || env.WAYLAND_DISPLAY) return env;
+
+    const runtime = process.env.XDG_RUNTIME_DIR || (process.getuid ? `/run/user/${process.getuid()}` : null);
+    const exists = p => { try { fs.statSync(p); return true; } catch { return false; } };
+    const found = {};
+    if (runtime && exists(path.join(runtime, 'wayland-0'))) Object.assign(found, { WAYLAND_DISPLAY: 'wayland-0', XDG_RUNTIME_DIR: runtime });
+    if (exists('/tmp/.X11-unix/X0')) found.DISPLAY = ':0';
+    if (!found.DISPLAY && !found.WAYLAND_DISPLAY) return null;
+    if (runtime && exists(path.join(runtime, 'bus'))) found.DBUS_SESSION_BUS_ADDRESS = `unix:path=${path.join(runtime, 'bus')}`;
+    return found;
+}
+
+// Waits (up to `maxMs`) for a desktop to start: the startup command runs at boot, and an
+// automatic login can take a minute or two after the server is up
+async function waitForLinuxDesktop(maxMs = 10 * 60 * 1000) {
+    const until = Date.now() + maxMs;
+    let said = false;
+    for (;;) {
+        const env = await linuxDesktopEnv();
+        if (env) {
+            // Give a desktop that has only just appeared time to finish starting
+            if (said) await new Promise(r => setTimeout(r, 8000));
+            return env;
+        }
+        if (Date.now() > until) return null;
+        if (!said) {
+            console.log('[STARTUP] No desktop yet: the startup command will run once someone is logged in to one.');
+            said = true;
+        }
+        await new Promise(r => setTimeout(r, 3000));
+    }
+}
+
+let startupDesktopWait = null;
+
+async function runStartupCommand(command = settings.startup.command) {
     if (!command) return;
-    console.log(`[STARTUP] Running: ${command}`);
+    let extraEnv = {};
+    if (process.platform === 'linux') {
+        if (process.getuid?.() === 0) {
+            console.warn('[STARTUP] The server is running as root (a system service), which can\'t open windows on a user\'s desktop. Install AMMUI as the user who logs in instead.');
+        }
+        // One wait at a time: Run Now pressed meanwhile shares it rather than opening twice
+        if (!startupDesktopWait) startupDesktopWait = waitForLinuxDesktop().finally(() => { startupDesktopWait = null; });
+        extraEnv = await startupDesktopWait;
+        if (!extraEnv) return console.warn('[STARTUP] No desktop appeared within 10 minutes, so the startup command was not run.');
+    }
+    console.log(`[STARTUP] Running: ${command}${Object.keys(extraEnv).length ? ` (on the desktop: ${extraEnv.WAYLAND_DISPLAY || extraEnv.DISPLAY})` : ''}`);
+    // What the command prints goes to a log, so a browser that won't start says why
+    const logPath = path.join(baseDataDir, 'startup-command.log');
+    let logFd = 'ignore';
+    try { logFd = fs.openSync(logPath, 'w'); } catch { /* no log, then */ }
     try {
         // Detached and not waited on: a browser started this way keeps running until it's closed
-        const child = spawn(command, { shell: true, detached: true, windowsHide: true, stdio: 'ignore' });
+        const child = spawn(command, {
+            shell: true, detached: true, windowsHide: true,
+            stdio: ['ignore', logFd, logFd],
+            env: { ...process.env, ...extraEnv },
+        });
         child.on('error', err => console.error('[STARTUP] Command failed:', err.message));
+        child.on('exit', code => {
+            // A browser that hands the window to one already running exits at once with 0
+            if (code) console.warn(`[STARTUP] The command exited with code ${code}; see ${logPath}`);
+        });
         child.unref();
     } catch (err) {
         console.error('[STARTUP] Command failed:', err.message);
+    } finally {
+        if (typeof logFd === 'number') try { fs.closeSync(logFd); } catch { }
     }
 }
 
@@ -8493,6 +8608,7 @@ app.post('/api/tags/rename', express.json(), (req, res) => {
     if (from === 'fav' || to === 'fav') return res.status(400).json({ error: '"fav" is the favourite heart and can\'t be renamed' });
     const files = renameTag(from, to);
     settings.fileTags = getAllFileTags();
+    renamePeerShareTag(from, to);
     terminalLog(`[TAGS] Renamed "${from}" to "${to}" on ${files} file(s)`);
     res.json({ success: true, files });
 });
@@ -8503,6 +8619,7 @@ app.post('/api/tags/delete', express.json(), (req, res) => {
     if (!tag || tag === 'fav') return res.status(400).json({ error: 'Give a tag to delete' });
     const files = deleteTag(tag);
     settings.fileTags = getAllFileTags();
+    renamePeerShareTag(tag, null);
     terminalLog(`[TAGS] Deleted "${tag}" from ${files} file(s)`);
     res.json({ success: true, files });
 });

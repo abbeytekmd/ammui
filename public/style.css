@@ -13010,6 +13010,64 @@ input:checked+.slider:before {
     content: ' (On)';
     font-weight: 500;
 }
+/* A folder shared only for some tags: a small dot on its badge, and the tag picker */
+.peer-share-badge.filtered {
+    position: relative;
+}
+.peer-share-badge.filtered::after {
+    content: '';
+    position: absolute;
+    right: -3px;
+    bottom: -2px;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+}
+.peer-share-tags-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.peer-share-tags-search {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0.5rem 0;
+    padding: 0.45rem 0.6rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--card-border);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+}
+.peer-share-tags-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    max-height: 50vh;
+    overflow-y: auto;
+    padding: 0.25rem 0;
+}
+.peer-share-tag-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--card-border);
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 0.85rem;
+}
+.peer-share-tag-option:has(input:checked) {
+    border-color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.peer-share-tags-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
 .peer-link-list {
     list-style: none;
     margin: 0;

@@ -24,8 +24,16 @@ const peerAgo = ms => {
 // takes its folder's setting). The sections themselves are off unless switched on, so nothing is
 // shared until something is. Set from the ⋯ menu in Media; listed in Settings → Peer Link.
 
+// A folder switched On can also have a tag filter: then only the files in it with one of those
+// tags are shared.
+
 const PEER_SHARE_SECTIONS = ['music', 'pictures', 'videos'];
 let peerShareFlags = null; // { "music/Artist": "on" | "off" }, null until loaded
+let peerShareTags = {};    // { "music/Artist": ["tag", ...] }: tag filters on folders switched on
+
+const peerShareTagText = tags => tags.length
+    ? `only files tagged ${tags.map(t => `“${t}”`).join(' or ')}`
+    : 'a tag filter with no tags left, so nothing in it';
 
 const peerShareable = id => typeof id === 'string' && PEER_SHARE_SECTIONS.includes(id.split('/')[0]);
 
@@ -50,10 +58,13 @@ function peerShareBadgeInner(id) {
     // Only what's been set On or Off here is marked; As Parent (the default) isn't, so a shared
     // folder's contents don't each carry the icon
     if (!st.explicit) return '';
-    const title = st.value === 'on'
-        ? 'Shared on the peer link, with everything in it unless switched off there'
-        : 'Not shared on the peer link (switched off here)';
-    return `<span class="peer-share-badge ${st.value}${st.explicit ? ' explicit' : ''}" title="${peerShareAttr(title)}">${PEER_SHARE_ICON}</span>`;
+    const filter = st.value === 'on' ? peerShareTags[st.from] : null;
+    const title = filter
+        ? `Shared on the peer link: ${peerShareTagText(filter)}`
+        : st.value === 'on'
+            ? 'Shared on the peer link, with everything in it unless switched off there'
+            : 'Not shared on the peer link (switched off here)';
+    return `<span class="peer-share-badge ${st.value}${st.explicit ? ' explicit' : ''}${filter ? ' filtered' : ''}" title="${peerShareAttr(title)}">${PEER_SHARE_ICON}</span>`;
 }
 
 function peerShareBadgeHtml(id) {
@@ -61,7 +72,8 @@ function peerShareBadgeHtml(id) {
     return `<span class="peer-share-slot" data-share-path="${peerShareAttr(id)}">${peerShareFlags ? peerShareBadgeInner(id) : ''}</span>`;
 }
 
-function peerShareMenuHtml(id) {
+// `isFolder` adds the tag filter button, shown while the folder is switched On
+function peerShareMenuHtml(id, isFolder = false) {
     if (!peerShareable(id)) return '';
     const parentHint = id.includes('/') ? 'Same as the folder it is in' : 'Off (the top of the library is not shared)';
     return `<div class="dropdown-item peer-share-row" onclick="event.stopPropagation()" data-share-path="${peerShareAttr(id)}">
@@ -72,7 +84,11 @@ function peerShareMenuHtml(id) {
             <button type="button" data-v="off" onclick="setPeerShareFromMenu(this, event)" title="Not shared, nor anything in it unless switched on there">Off</button>
             <button type="button" data-v="inherit" onclick="setPeerShareFromMenu(this, event)" title="${peerShareAttr(parentHint)}">As Parent</button>
         </span>
-    </div>`;
+    </div>${isFolder ? `
+    <button type="button" class="dropdown-item peer-share-tags-row" data-share-tags-path="${peerShareAttr(id)}" onclick="event.stopPropagation(); openPeerShareTags(this.dataset.shareTagsPath)" style="display: none;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+        <span class="peer-share-tags-label">Share Only Tagged…</span>
+    </button>` : ''}`;
 }
 
 // Bring the badges and menu buttons on screen up to date (a change to a folder changes
@@ -94,26 +110,116 @@ function refreshPeerShareUi() {
         const inheritBtn = row.querySelector('button[data-v="inherit"]');
         if (inheritBtn) inheritBtn.classList.toggle('inherits-on', !st.explicit && st.value === 'on');
     });
+    // The tag filter is for a folder switched On here
+    document.querySelectorAll('.peer-share-tags-row[data-share-tags-path]').forEach(btn => {
+        const p = btn.dataset.shareTagsPath;
+        btn.style.display = peerShareFlags[p] === 'on' ? '' : 'none';
+        const filter = peerShareTags[p];
+        btn.querySelector('.peer-share-tags-label').textContent = filter
+            ? `Only Tagged: ${filter.length ? filter.join(', ') : '(none)'}`
+            : 'Share Only Tagged…';
+        btn.title = filter ? `Shares ${peerShareTagText(filter)}. Click to change.` : 'Share only the files in this folder with one of the tags you choose';
+    });
+}
+
+function applyPeerShareData(data) {
+    peerShareFlags = data.flags || {};
+    peerShareTags = data.tags || {};
+    refreshPeerShareUi();
+    renderPeerShareList();
 }
 
 async function loadPeerShares() {
     try {
-        peerShareFlags = (await peerApi('/api/peer-shares')).flags || {};
-        refreshPeerShareUi();
-        renderPeerShareList();
+        applyPeerShareData(await peerApi('/api/peer-shares'));
     } catch (e) {
         console.warn('[PEER] Could not load sharing settings:', e.message);
     }
 }
 
-async function setPeerShare(id, value) {
+// `tags` (only with 'on'): the folder's tag filter, [] for none; left out, it's kept
+async function setPeerShare(id, value, tags) {
     try {
-        peerShareFlags = (await peerApi('/api/peer-shares', { method: 'POST', body: JSON.stringify({ path: id, value }) })).flags || {};
-        refreshPeerShareUi();
-        renderPeerShareList();
+        applyPeerShareData(await peerApi('/api/peer-shares', { method: 'POST', body: JSON.stringify({ path: id, value, tags }) }));
+        return true;
     } catch (e) {
         showToast(`Couldn't change sharing: ${e.message}`);
+        return false;
     }
+}
+
+// The tag filter of a folder switched on: tick the tags whose files are shared, none to share all
+async function openPeerShareTags(id) {
+    document.querySelectorAll('.dropdown-menu.show, .dropdown-menu.active').forEach(m => m.classList.remove('show', 'active'));
+    let all = [];
+    try {
+        all = (await peerApi('/api/tags')).tags || [];
+    } catch (e) {
+        return showToast(`Couldn't load tags: ${e.message}`);
+    }
+    const current = new Set(peerShareTags[id] || []);
+    // Tags in the filter that no file has any more still show, so they can be taken off
+    const names = [...new Set([...all, ...current])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    document.getElementById('peer-share-tags-modal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'peer-share-tags-modal';
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+        <div class="modal-content" style="max-width: 460px;">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <h2>Share Only Tagged</h2>
+                    <p class="modal-subtitle"></p>
+                </div>
+                <button class="btn-close" data-act="close" aria-label="Close">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <p class="settings-hint">Only files in this folder (and the folders in it) with at least one of the ticked
+                tags are shared. Tick none to share everything in it.</p>
+            <input type="search" class="peer-share-tags-search" placeholder="Find a tag">
+            <div class="peer-share-tags-list"></div>
+            <div class="peer-share-tags-actions">
+                <button class="btn-control" data-act="close">Cancel</button>
+                <button class="btn-control primary" data-act="save">Save</button>
+            </div>
+        </div>`;
+    overlay.querySelector('.modal-subtitle').textContent = id;
+    const list = overlay.querySelector('.peer-share-tags-list');
+    if (!names.length) {
+        list.innerHTML = '<p class="settings-hint">No files are tagged yet.</p>';
+    }
+    for (const tag of names) {
+        const label = document.createElement('label');
+        label.className = 'peer-share-tag-option';
+        label.innerHTML = '<input type="checkbox"><span></span>';
+        label.querySelector('input').value = tag;
+        label.querySelector('input').checked = current.has(tag);
+        label.querySelector('span').textContent = tag === 'fav' ? 'fav (favourites)' : tag;
+        list.appendChild(label);
+    }
+    overlay.querySelector('.peer-share-tags-search').addEventListener('input', e => {
+        const q = e.target.value.trim().toLowerCase();
+        list.querySelectorAll('.peer-share-tag-option').forEach(l => {
+            l.style.display = !q || l.querySelector('input').value.toLowerCase().includes(q) ? '' : 'none';
+        });
+    });
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', async e => {
+        if (e.target === overlay) return close();
+        const act = e.target.closest('[data-act]')?.dataset.act;
+        if (act === 'close') return close();
+        if (act === 'save') {
+            const tags = [...list.querySelectorAll('input:checked')].map(i => i.value);
+            if (await setPeerShare(id, 'on', tags)) {
+                close();
+                showToast(tags.length ? `Sharing only files tagged ${tags.join(', ')} in ${id}` : `Sharing everything in ${id}`);
+            }
+        }
+    });
+    document.body.appendChild(overlay);
 }
 
 function setPeerShareFromMenu(btn, event) {
@@ -140,12 +246,20 @@ function renderPeerShareList() {
         const li = document.createElement('li');
         li.className = 'peer-link-item';
         li.innerHTML = `<div class="peer-link-info"><b></b><span class="settings-hint"></span></div>
-            <div class="peer-link-actions"><button class="btn-control btn-small">Remove</button></div>`;
+            <div class="peer-link-actions">${value === 'on' ? '<button class="btn-control btn-small" data-act="tags">Tags…</button>' : ''}<button class="btn-control btn-small" data-act="remove">Remove</button></div>`;
         li.querySelector('b').textContent = p;
-        li.querySelector('.settings-hint').textContent = value === 'on'
-            ? 'Shared, with everything in it unless switched off there'
-            : 'Switched off, with everything in it unless switched on there';
-        const btn = li.querySelector('button');
+        const filter = value === 'on' ? peerShareTags[p] : null;
+        li.querySelector('.settings-hint').textContent = filter
+            ? `Shared: ${peerShareTagText(filter)}, unless switched off there`
+            : value === 'on'
+                ? 'Shared, with everything in it unless switched off there'
+                : 'Switched off, with everything in it unless switched on there';
+        const tagsBtn = li.querySelector('[data-act="tags"]');
+        if (tagsBtn) {
+            tagsBtn.title = 'Share only the files in it with one of the tags you choose (a filter on a single file only shares it if it has one)';
+            tagsBtn.onclick = () => openPeerShareTags(p);
+        }
+        const btn = li.querySelector('[data-act="remove"]');
         btn.title = 'Remove this setting, so it goes back to being the same as its folder';
         btn.onclick = () => setPeerShare(p, 'inherit');
         list.appendChild(li);
