@@ -143,7 +143,7 @@ It also adds:
 * **AMMUI Kiosk** in the applications menu and on the desktop, if Chrome, Chromium or Edge is installed: opens AMMUI full screen, for a dedicated display such as a Raspberry Pi with a touchscreen. Press Alt+F4 to close it.
 * **Uninstall AMMUI** in the applications menu (see [Uninstalling](#uninstalling)).
 
-It offers to trust the AMMUI certificate for Chrome/Chromium (this user's NSS database, using `certutil`) and for the system. Firefox keeps its own certificate list, so import `~/ammui/certs/ca.crt` in Firefox's settings if you use it (see [Getting rid of the browser warning](#getting-rid-of-the-browser-warning)).
+It offers to trust the AMMUI certificate for Chrome/Chromium (this user's NSS database, using `certutil`), for the system, and for Firefox, which keeps its own list: it adds the certificate to your existing Firefox profiles and adds a Firefox policy (`/etc/firefox/policies/policies.json`) that installs it in any profile, including new ones. Because of the policy, Firefox's settings say the browser is "managed by your organization". Restart Firefox afterwards if it was open.
 
 If a firewall (ufw or firewalld) is running, allow TCP ports 80 and 443 (or the ports the installer chose instead) and UPnP/mDNS discovery (UDP 1900 and 5353), otherwise your players and other devices can't connect.
 

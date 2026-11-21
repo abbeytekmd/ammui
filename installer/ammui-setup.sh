@@ -692,7 +692,31 @@ if command -v certutil >/dev/null 2>&1; then
     for db in "$HOME/.pki/nssdb" "$HOME/snap/chromium/current/.pki/nssdb"; do
         [ -d "$db" ] && certutil -d "sql:$db" -D -n 'AMMUI' 2>/dev/null && info "Removed the AMMUI certificate from $db"
     done
+    for db in "$HOME"/.mozilla/firefox/*/ "$HOME"/snap/firefox/common/.mozilla/firefox/*/ \
+              "$HOME"/.var/app/org.mozilla.firefox/.mozilla/firefox/*/; do
+        [ -f "$db/cert9.db" ] && certutil -d "sql:$db" -D -n 'AMMUI' 2>/dev/null && info "Removed the AMMUI certificate from $db"
+    done
 fi
+# The Firefox policy that installs it: take AMMUI's entry out, and the file if nothing else is left
+node_bin="$(command -v node || echo "$APP_DATA_DIR/node/bin/node")"
+for dir in /etc/firefox/policies /etc/firefox-esr/policies; do
+    [ -f "$dir/ammui-ca.crt" ] || continue
+    info "Removing the AMMUI certificate from Firefox's policy in $dir (you may be asked for your password)."
+    if [ -f "$dir/policies.json" ] && [ -x "$node_bin" ]; then
+        left="$(CERT="$dir/ammui-ca.crt" "$node_bin" -e '
+            const doc = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const c = doc.policies?.Certificates;
+            if (c?.Install) { c.Install = c.Install.filter(f => f !== process.env.CERT); if (!c.Install.length) delete c.Install; }
+            if (c && !Object.keys(c).length) delete doc.policies.Certificates;
+            if (doc.policies && !Object.keys(doc.policies).length) delete doc.policies;
+            process.stdout.write(Object.keys(doc).length ? JSON.stringify(doc, null, 2) + "\n" : "");
+        ' "$dir/policies.json" 2>/dev/null)" && {
+            if [ -n "$left" ]; then printf '%s' "$left" | as_root tee "$dir/policies.json" >/dev/null
+            else as_root rm -f "$dir/policies.json"; fi
+        }
+    fi
+    as_root rm -f "$dir/ammui-ca.crt"
+done
 if [ -f /usr/local/share/ca-certificates/ammui-ca.crt ]; then
     info 'Removing the AMMUI certificate from the system (you may be asked for your password).'
     as_root rm -f /usr/local/share/ca-certificates/ammui-ca.crt && as_root update-ca-certificates --fresh >/dev/null 2>&1
@@ -730,10 +754,11 @@ grant_certificate_trust() {
     # this user's NSS database; curl and other programs read the system store.
     local ca="$INSTALL_DIR/certs/ca.crt"
     [ -f "$ca" ] || return 0
-    local already=0
+    local already=0 firefox_done=0
     if [ -f /usr/local/share/ca-certificates/ammui-ca.crt ] && cmp -s "$ca" /usr/local/share/ca-certificates/ammui-ca.crt; then already=1
     elif [ -f "$APP_DATA_DIR/ca-trusted.crt" ] && cmp -s "$ca" "$APP_DATA_DIR/ca-trusted.crt"; then already=1; fi
-    [ "$already" = 1 ] && return 0
+    if ! firefox_installed || { [ -f "$APP_DATA_DIR/firefox-trusted.crt" ] && cmp -s "$ca" "$APP_DATA_DIR/firefox-trusted.crt"; }; then firefox_done=1; fi
+    [ "$already" = 1 ] && [ "$firefox_done" = 1 ] && return 0
     ask_yes 'Trust the AMMUI certificate on this computer, so browsers do not show a warning?' Y || {
         info 'Certificate not trusted: browsers will show a warning.'; return 0; }
 
@@ -741,6 +766,8 @@ grant_certificate_trust() {
         # shellcheck disable=SC2046
         pkg_install $(pkg_names certutil); hash -r
     fi
+    [ "$firefox_done" = 1 ] || trust_in_firefox "$ca"
+    [ "$already" = 1 ] && { info 'Certificate trusted. Restart Firefox if it was already open.'; return 0; }
     if have certutil; then
         local db
         for db in "$HOME/.pki/nssdb" "$HOME/snap/chromium/current/.pki/nssdb"; do
@@ -762,7 +789,53 @@ grant_certificate_trust() {
             as_root trust anchor --store "$ca" && cp "$ca" "$APP_DATA_DIR/ca-trusted.crt"
         fi || warn 'Could not add the certificate to the system store.'
     fi
-    info 'Certificate trusted. Restart any browser windows that were already open. Firefox keeps its own list: see the README.'
+    info 'Certificate trusted. Restart any browser windows that were already open.'
+}
+
+firefox_installed() {
+    have firefox || have firefox-esr || [ -d "$HOME/.mozilla/firefox" ] || [ -d "$HOME/snap/firefox" ] \
+        || [ -d "$HOME/.var/app/org.mozilla.firefox" ]
+}
+
+# Firefox keeps its own list of trusted certificates rather than the system's. The certificate goes
+# into the Firefox profiles there are already (certutil), and into a Firefox policy that installs it
+# in every profile, including ones made later (needs sudo). The policy is read from
+# /etc/<firefox name>/policies, by the snap too, so the certificate file is put beside it.
+trust_in_firefox() {   # trust_in_firefox CA-FILE
+    local ca="$1" db added=0 ok=0
+    if have certutil; then
+        for db in "$HOME"/.mozilla/firefox/*/ "$HOME"/snap/firefox/common/.mozilla/firefox/*/ \
+                  "$HOME"/.var/app/org.mozilla.firefox/.mozilla/firefox/*/; do
+            [ -f "$db/cert9.db" ] || continue
+            certutil -d "sql:$db" -D -n 'AMMUI' 2>/dev/null   # an older AMMUI certificate
+            certutil -d "sql:$db" -A -t 'C,,' -n 'AMMUI' -i "$ca" && added=$((added + 1))
+        done
+    fi
+    [ "$added" -gt 0 ] && { info "Added the certificate to $added Firefox profile(s)."; ok=1; }
+
+    if can_be_root; then
+        local dir names='firefox' tmp
+        have firefox-esr && names="$names firefox-esr"
+        tmp="$(mktemp)"
+        for dir in $names; do
+            dir="/etc/$dir/policies"
+            as_root mkdir -p "$dir" && as_root install -m 644 "$ca" "$dir/ammui-ca.crt" || continue
+            # Add it to the policies already there, if any
+            CERT="$dir/ammui-ca.crt" node -e '
+                const fs = require("fs");
+                let doc = {};
+                try { doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); } catch { }
+                const p = doc.policies = doc.policies || {};
+                const c = p.Certificates = p.Certificates || {};
+                c.Install = [...new Set([...(c.Install || []), process.env.CERT])];
+                process.stdout.write(JSON.stringify(doc, null, 2) + "\n");
+            ' "$dir/policies.json" > "$tmp" && as_root install -m 644 "$tmp" "$dir/policies.json" && ok=1
+        done
+        rm -f "$tmp"
+        [ "$ok" = 1 ] && info 'Added a Firefox policy that trusts the certificate (Firefox then says it is "managed by your organization").'
+    fi
+    if [ "$ok" = 1 ]; then cp "$ca" "$APP_DATA_DIR/firefox-trusted.crt"
+    else warn "Could not add the certificate to Firefox. Import $ca in Firefox's settings (Privacy & Security > Certificates)."; fi
 }
 
 listening_pid() {   # listening_pid PORT -> "pid name", or "? ?" when the owner is unknown, or nothing
@@ -892,10 +965,44 @@ open_if_unnamed() {
     green "AMMUI is running: $url"
     [ -n "$name" ] && return 0
     green 'Give this server a name there to finish setting it up.'
-    if [ "$IS_ROOT" -eq 0 ] && { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && have xdg-open; then
-        info 'Opening it in your browser.'
-        xdg-open "$url" >/dev/null 2>&1 &
+    local opened
+    if opened="$(open_on_desktop "$url")"; then
+        info "Opening it in $opened on the desktop."
+    else
+        warn 'No desktop session was found to open it on (or no browser), so open that address yourself:'
+        info "on this computer once you have logged in to the desktop, or from another device at $(https_url "$(hostname)")."
     fi
+}
+
+# The desktop session's variables (NAME=value lines), so a window can be opened on it: none when
+# this terminal is already on the desktop, else from this user's systemd manager, which the desktop
+# fills in when it starts (so this works over SSH too). Fails when no one is logged in to a desktop.
+desktop_env() {
+    { [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && return 0
+    have systemctl || return 1
+    local vars
+    vars="$(systemctl --user show-environment 2>/dev/null \
+        | grep -E '^(DISPLAY|WAYLAND_DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR|XDG_SESSION_TYPE|XDG_CURRENT_DESKTOP|XDG_DATA_DIRS)=' \
+        | sed "s/^\([A-Z_]*\)=\\\$\?'\(.*\)'\$/\1=\2/")"
+    printf '%s\n' "$vars" | grep -qE '^(DISPLAY|WAYLAND_DISPLAY)=' || return 1
+    printf '%s\n' "$vars"
+}
+
+# Opens URL in a browser on the desktop, in its own session so it stays open when this script and
+# its terminal end. Prints what opened it; fails when there's no desktop or no browser.
+open_on_desktop() {   # open_on_desktop URL
+    local env_lines opener='' b line
+    env_lines="$(desktop_env)" || return 1
+    for b in xdg-open firefox chromium chromium-browser google-chrome google-chrome-stable microsoft-edge microsoft-edge-stable; do
+        have "$b" && { opener="$b"; break; }
+    done
+    [ -n "$opener" ] || return 1
+    local -a envs=()
+    while IFS= read -r line; do [ -n "$line" ] && envs+=("$line"); done <<<"$env_lines"
+    if have setsid; then env ${envs[@]+"${envs[@]}"} setsid "$opener" "$1" </dev/null >/dev/null 2>&1 &
+    else env ${envs[@]+"${envs[@]}"} nohup "$opener" "$1" </dev/null >/dev/null 2>&1 &
+    fi
+    if [ "$opener" = xdg-open ]; then echo 'your browser'; else echo "$opener"; fi
 }
 
 start_server() {
