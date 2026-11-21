@@ -16189,6 +16189,7 @@ function healthPerson(p) {
             ${healthTodayTiles(p)}
             ${missing}
         </div>
+        ${healthLastDay(p)}
         ${healthActivity(p)}
         ${healthHeart(p)}
         ${healthSleep(p)}
@@ -16213,6 +16214,120 @@ function healthTodayTiles(p) {
         healthTile('Water', t.waterMl ? healthNumber(t.waterMl) : null, 'ml'),
     ].join('');
     return tiles ? `<div class="health-stats health-today">${tiles}</div>` : '';
+}
+
+// The last 24 hours on one chart: steps each hour (bars, right scale), heart rate (average line in
+// its low–high band, left scale) and time asleep shaded. The plot is an SVG stretched to the card
+// (x in minutes, y 0–100); the labels are HTML on top, so they stay readable at any width.
+function healthLastDay(p) {
+    const d = p.lastDay;
+    if (!d || (!d.heart?.length && !d.steps?.length)) return '';
+    const start = new Date(d.start).getTime();
+    const span = new Date(d.end).getTime() - start;
+    const minuteOf = iso => ((new Date(iso).getTime() - start) / span) * 1440;
+    const pct = m => `${Math.max(0, Math.min(100, (m / 1440) * 100))}%`;
+    const hourMs = 3600000;
+    const windowMin = d.heartWindowMinutes || 10;
+
+    // Heart rate scale: whole tens around the readings, with ticks every 10, 20 or 40 bpm
+    const heart = d.heart || [];
+    let hrLow = 40, hrHigh = 120;
+    if (heart.length) {
+        hrLow = Math.floor(Math.min(...heart.map(h => h.min ?? h.avg)) / 10) * 10;
+        hrHigh = Math.ceil(Math.max(...heart.map(h => h.max ?? h.avg)) / 10) * 10;
+        if (hrHigh - hrLow < 30) hrHigh = hrLow + 30;
+    }
+    const hrY = bpm => 100 - ((bpm - hrLow) / (hrHigh - hrLow)) * 100;
+    const step = [10, 20, 40].find(s => (hrHigh - hrLow) / s <= 5) || 40;
+    const hrTicks = [];
+    for (let v = Math.ceil(hrLow / step) * step; v <= hrHigh; v += step) hrTicks.push(v);
+
+    const steps = d.steps || [];
+    const stepPeak = Math.max(...steps.map(s => s.steps || 0), 1);
+    const stepY = n => 100 - (n / stepPeak) * 92; // bars stop a little under the top
+
+    // Heart rate in runs, broken where a reading is missing (watch off) rather than drawn across
+    const runs = [];
+    let last = null;
+    for (const h of heart) {
+        const m = minuteOf(h.start) + windowMin / 2;
+        if (!last || m - last > windowMin * 1.6) runs.push([]);
+        runs[runs.length - 1].push({ m, ...h });
+        last = m;
+    }
+    const band = runs.filter(r => r.length > 1 && r.every(h => h.min != null && h.max != null)).map(r =>
+        `<polygon class="health-24h-band" points="${[...r.map(h => `${h.m},${hrY(h.max)}`), ...r.slice().reverse().map(h => `${h.m},${hrY(h.min)}`)].join(' ')}"/>`).join('');
+    const line = runs.map(r => r.length > 1
+        ? `<polyline class="health-24h-line" points="${r.map(h => `${h.m},${hrY(h.avg)}`).join(' ')}"/>`
+        : `<line class="health-24h-line" x1="${r[0].m - 2}" x2="${r[0].m + 2}" y1="${hrY(r[0].avg)}" y2="${hrY(r[0].avg)}"/>`).join('');
+
+    // Asleep: each night (in the main sleep list) that overlaps the 24 hours
+    const sleeps = (p.sleep || []).filter(n => new Date(n.end).getTime() > start && new Date(n.start).getTime() < start + span);
+    const sleepRects = sleeps.map(n => {
+        const a = Math.max(0, minuteOf(n.start)), b = Math.min(1440, minuteOf(n.end));
+        return `<rect class="health-24h-sleep" x="${a}" y="0" width="${b - a}" height="100"><title>Asleep ${clockTime(n.start)}–${clockTime(n.end)}</title></rect>`;
+    }).join('');
+
+    const bars = steps.map(s => {
+        const m = minuteOf(s.start);
+        return `<rect class="health-24h-steps" x="${m + 4}" y="${stepY(s.steps)}" width="52" height="${100 - stepY(s.steps)}"/>`;
+    }).join('');
+    const grid = hrTicks.map(v => `<line class="health-24h-grid" x1="0" x2="1440" y1="${hrY(v)}" y2="${hrY(v)}"/>`).join('');
+
+    // One hover target per hour, saying what's in it
+    const hourTitle = i => {
+        const from = start + i * hourMs;
+        const s = steps.find(x => Math.abs(new Date(x.start).getTime() - from) < 60000);
+        const hs = heart.filter(h => { const t = new Date(h.start).getTime(); return t >= from && t < from + hourMs; });
+        const bits = [`${clockTime(new Date(from).toISOString())}–${clockTime(new Date(from + hourMs).toISOString())}`];
+        if (s) bits.push(`${healthNumber(s.steps)} steps`);
+        if (hs.length) {
+            const lo = Math.min(...hs.map(h => h.min ?? h.avg)), hi = Math.max(...hs.map(h => h.max ?? h.avg));
+            const avg = Math.round(hs.reduce((t, h) => t + h.avg, 0) / hs.length);
+            bits.push(`heart ${avg} bpm average (${lo}–${hi})`);
+        }
+        return bits.join(' · ');
+    };
+    const hover = Array.from({ length: 24 }, (_, i) =>
+        `<rect class="health-24h-hover" x="${i * 60}" y="0" width="60" height="100"><title>${escapeHtml(hourTitle(i))}</title></rect>`).join('');
+
+    // Hour labels every 3 hours, on the hour in local time
+    const hourLabels = [];
+    for (let t = start; t <= start + span; t += hourMs) {
+        if (new Date(t).getHours() % 3 === 0) {
+            const m = ((t - start) / span) * 1440;
+            hourLabels.push(`<span style="left:${pct(m)}">${String(new Date(t).getHours()).padStart(2, '0')}:00</span>`);
+        }
+    }
+    const hrLabels = heart.length ? hrTicks.map(v => `<span style="top:${hrY(v)}%">${v}</span>`).join('') : '';
+    const stepLabels = steps.length ? [stepPeak, Math.round(stepPeak / 2)].map(v => `<span style="top:${stepY(v)}%">${healthNumber(v)}</span>`).join('') : '';
+
+    const totalSteps = steps.reduce((t, s) => t + (s.steps || 0), 0);
+    const hrMin = heart.length ? Math.min(...heart.map(h => h.min ?? h.avg)) : null;
+    const hrMax = heart.length ? Math.max(...heart.map(h => h.max ?? h.avg)) : null;
+    const legend = [
+        heart.length ? `<span><i class="health-24h-key-line"></i>Heart rate (bpm)</span>` : '',
+        steps.length ? `<span><i style="background:${HEALTH_COLOURS.steps};opacity:.45"></i>Steps each hour</span>` : '',
+        sleeps.length ? `<span><i style="background:${HEALTH_COLOURS.sleep};opacity:.3"></i>Asleep</span>` : '',
+    ].filter(Boolean).join('');
+
+    const chart = `
+        <div class="health-24h">
+            <div class="health-24h-plot">
+                <div class="health-24h-axis left">${hrLabels}</div>
+                <svg viewBox="0 0 1440 100" preserveAspectRatio="none" aria-label="Heart rate and steps over the last 24 hours">
+                    ${sleepRects}${grid}${bars}${band}${line}${hover}
+                </svg>
+                <div class="health-24h-axis right">${stepLabels}</div>
+            </div>
+            <div class="health-24h-hours">${hourLabels.join('')}</div>
+            <div class="health-split-legend">${legend}</div>
+        </div>`;
+    const pane = healthPane(HEALTH_COLOURS.heart, 'Heart rate and steps',
+        steps.length ? `${healthNumber(totalSteps)} <small>steps</small>` : null,
+        hrMin != null ? `heart ${hrMin}–${hrMax} bpm` : '',
+        chart);
+    return healthSection('Last 24 hours', HEALTH_COLOURS.heart, [pane]);
 }
 
 function healthActivity(p) {

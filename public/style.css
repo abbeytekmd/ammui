@@ -14172,6 +14172,121 @@ button.word-result.mine {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
 }
 
+/* Last 24 hours chart: an SVG stretched to fit (lines keep their width), labels in HTML around it */
+.health-24h {
+    margin-top: 0.75rem;
+}
+
+.health-24h-plot {
+    position: relative;
+    height: 180px;
+    margin: 0 2.6rem 0 2rem;
+}
+
+.health-24h-plot svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.health-24h-plot svg * {
+    vector-effect: non-scaling-stroke;
+}
+
+.health-24h-sleep {
+    fill: #8b5cf6;
+    opacity: 0.16;
+}
+
+.health-24h-grid {
+    stroke: var(--text-muted);
+    stroke-opacity: 0.25;
+    stroke-width: 1;
+    stroke-dasharray: 3 4;
+}
+
+.health-24h-steps {
+    fill: var(--primary);
+    opacity: 0.4;
+}
+
+.health-24h-band {
+    fill: #ef4444;
+    opacity: 0.18;
+}
+
+.health-24h-line {
+    fill: none;
+    stroke: #ef4444;
+    stroke-width: 2;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+}
+
+.health-24h-hover {
+    fill: transparent;
+}
+
+.health-24h-hover:hover {
+    fill: var(--text-muted);
+    fill-opacity: 0.08;
+}
+
+.health-24h-axis {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    pointer-events: none;
+}
+
+.health-24h-axis.left {
+    right: 100%;
+    margin-right: 0.35rem;
+    text-align: right;
+}
+
+.health-24h-axis.right {
+    left: 100%;
+    margin-left: 0.35rem;
+}
+
+.health-24h-axis span {
+    position: absolute;
+    transform: translateY(-50%);
+    white-space: nowrap;
+}
+
+.health-24h-axis.left span {
+    right: 0;
+}
+
+.health-24h-hours {
+    position: relative;
+    height: 1.2rem;
+    margin: 0.3rem 2.6rem 0.4rem 2rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.health-24h-hours span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}
+
+.health-24h-key-line {
+    width: 0.9rem !important;
+    height: 3px !important;
+    vertical-align: middle;
+    border-radius: 2px;
+    background: #ef4444;
+}
+
 .health-today {
     grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
 }
