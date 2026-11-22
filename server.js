@@ -3255,41 +3255,88 @@ function peerListenerConfig() {
     return { enabled: !!s.enabled, port: s.port, salt: s.salt, key: peerListenerKeyCache.key };
 }
 
-// What the peer link shares: { "music/Artist": "on", "music/Artist/Live": "off" }. Anything
-// without a flag takes its folder's, and the top of the library is off (see ShareRules).
-const peerShareFlags = () => {
-    const flags = getSetting('peerShares', null);
-    return flags && typeof flags === 'object' ? flags : {};
+// What the peer link shares, in sets: everyone's (key ''), and one for each server linked to this
+// one, keyed by that server's id (its link's id for one that didn't send it). The sets add up: a
+// linked server sees what everyone's set shares and what its own set shares too.
+//
+// Each set is flags, { "music/Artist": "on", "music/Artist/Live": "off" } (anything without a flag
+// takes its folder's, and the top of the library is off; see ShareRules), and tag filters on
+// folders switched on, { "music/Party": ["dance"] } (only the files in it tagged with one of them).
+const PEER_SHARE_EVERYONE = '';
+const peerShareObject = v => v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+const peerLinkShareSets = () => peerShareObject(getSetting('peerLinkShares', null));
+const peerShareFlags = () => peerShareObject(getSetting('peerShares', null));
+const peerShareFilters = () => peerShareObject(getSetting('peerShareTags', null));
+
+// { flags, filters } of one set, copies that can be changed and saved back
+function peerShareSet(key = PEER_SHARE_EVERYONE) {
+    if (key === PEER_SHARE_EVERYONE) return { flags: peerShareFlags(), filters: peerShareFilters() };
+    const set = peerLinkShareSets()[key] || {};
+    return { flags: { ...peerShareObject(set.flags) }, filters: { ...peerShareObject(set.tags) } };
+}
+const peerShareKeys = () => [PEER_SHARE_EVERYONE, ...Object.keys(peerLinkShareSets())];
+
+const peerShareRulesCache = new Map(); // set key -> ShareRules
+const peerShareRulesFor = key => {
+    if (!peerShareRulesCache.has(key)) {
+        const { flags, filters } = peerShareSet(key);
+        peerShareRulesCache.set(key, new ShareRules(flags, filters));
+    }
+    return peerShareRulesCache.get(key);
 };
-// Tag filters on folders switched on: { "music/Party": ["dance"] } shares only the files in it
-// tagged with one of them (see ShareRules)
-const peerShareFilters = () => {
-    const filters = getSetting('peerShareTags', null);
-    return filters && typeof filters === 'object' ? filters : {};
-};
-let peerShareRules = new ShareRules(peerShareFlags(), peerShareFilters());
-function savePeerShareFlags(flags, filters = peerShareFilters()) {
+
+function savePeerShareSet(key, flags, filters) {
     // A filter only means something on a folder that's switched on
     for (const p of Object.keys(filters)) if (flags[p] !== 'on') delete filters[p];
-    setSetting('peerShares', flags);
-    setSetting('peerShareTags', filters);
-    peerShareRules = new ShareRules(flags, filters);
+    if (key === PEER_SHARE_EVERYONE) {
+        setSetting('peerShares', flags);
+        setSetting('peerShareTags', filters);
+    } else {
+        const sets = peerLinkShareSets();
+        if (Object.keys(flags).length) sets[key] = { flags, tags: filters };
+        else delete sets[key]; // nothing of its own left
+        setSetting('peerLinkShares', sets);
+    }
+    peerShareRulesCache.delete(key);
 }
-// The rules with the library's tags as they are now, when any filter needs them
-const currentPeerShareRules = () => peerShareRules.filtered
-    ? peerShareRules.withTags(libraryTagIndex(settings.fileTags, localMediaKey('')))
-    : peerShareRules;
+const savePeerShareFlags = (flags, filters = peerShareFilters()) => savePeerShareSet(PEER_SHARE_EVERYONE, flags, filters);
+
+function forgetPeerLinkShares(key) {
+    const sets = peerLinkShareSets();
+    if (!(key in sets)) return;
+    delete sets[key];
+    setSetting('peerLinkShares', sets);
+    peerShareRulesCache.delete(key);
+}
+
+// The key of the set belonging to a link made to this server
+const peerLinkShareKey = link => link.clientId || link.id;
+
+// The rules for whoever's asking (req.peerSession): everyone's set, and their link's own as well.
+// A server on an older version connects without a link and gets everyone's.
+function currentPeerShareRules(session) {
+    const link = session?.linkId ? peerListener.links().find(l => l.id === session.linkId) : null;
+    const rules = [peerShareRulesFor(PEER_SHARE_EVERYONE)];
+    const own = link && peerShareRulesFor(peerLinkShareKey(link));
+    if (own && own.onPaths.length) rules.push(own);
+    let tags = null; // the library's tags as they are now, when any filter needs them
+    const withTags = r => r.filtered ? r.withTags(tags ||= libraryTagIndex(settings.fileTags, localMediaKey(''))) : r;
+    return ShareRules.any(rules.map(withTags));
+}
+
 // A tag renamed (to `to`) or deleted (`to` null) everywhere: filters follow it. A filter left with
 // no tags stays, sharing nothing, rather than opening up to everything in the folder.
 function renamePeerShareTag(from, to) {
-    const filters = peerShareFilters();
-    let changed = false;
-    for (const [p, tags] of Object.entries(filters)) {
-        if (!tags.includes(from)) continue;
-        filters[p] = [...new Set(tags.map(t => t === from ? to : t).filter(Boolean))];
-        changed = true;
+    for (const key of peerShareKeys()) {
+        const { flags, filters } = peerShareSet(key);
+        let changed = false;
+        for (const [p, tags] of Object.entries(filters)) {
+            if (!tags.includes(from)) continue;
+            filters[p] = [...new Set(tags.map(t => t === from ? to : t).filter(Boolean))];
+            changed = true;
+        }
+        if (changed) savePeerShareSet(key, flags, filters);
     }
-    if (changed) savePeerShareFlags(peerShareFlags(), filters);
 }
 
 // Library path ("music/Artist") of a path on disk under local/, or null if it's not in a section
@@ -3299,27 +3346,28 @@ function peerShareRel(absPath) {
     try { return rel && !rel.startsWith('..') ? cleanLibraryPath(rel) || null : null; } catch (e) { return null; }
 }
 
-// Keep flags with what they're on when it's renamed or moved. With keepOwn false (a folder's
-// contents merged into another folder), only the flags inside it move; its own goes.
+// Keep flags with what they're on when it's renamed or moved, in every set. With keepOwn false (a
+// folder's contents merged into another folder), only the flags inside it move; its own goes.
 function movePeerShares(fromAbs, toAbs, { keepOwn = true } = {}) {
     const from = peerShareRel(fromAbs);
     if (!from) return;
     const to = toAbs ? peerShareRel(toAbs) : null;
-    const flags = peerShareFlags();
-    const filters = peerShareFilters();
-    let changed = false;
-    for (const map of [flags, filters]) {
-        for (const [key, value] of Object.entries(map)) {
-            const inside = key.startsWith(from + '/');
-            if (key !== from && !inside) continue;
-            delete map[key];
-            changed = true;
-            if (!to || (!inside && !keepOwn)) continue;
-            const moved = to + key.slice(from.length);
-            if (!(moved in map)) map[moved] = value;
+    for (const key of peerShareKeys()) {
+        const { flags, filters } = peerShareSet(key);
+        let changed = false;
+        for (const map of [flags, filters]) {
+            for (const [k, value] of Object.entries(map)) {
+                const inside = k.startsWith(from + '/');
+                if (k !== from && !inside) continue;
+                delete map[k];
+                changed = true;
+                if (!to || (!inside && !keepOwn)) continue;
+                const moved = to + k.slice(from.length);
+                if (!(moved in map)) map[moved] = value;
+            }
         }
+        if (changed) savePeerShareSet(key, flags, filters);
     }
-    if (changed) savePeerShareFlags(flags, filters);
 }
 
 const forgetPeerShares = absPath => movePeerShares(absPath, null);
@@ -3327,16 +3375,17 @@ const forgetPeerShares = absPath => movePeerShares(absPath, null);
 // Flags left on things that are no longer there (moved or deleted some other way) are dropped,
 // so they can't apply to something new that later turns up with the same name
 async function prunePeerShares() {
-    const flags = peerShareFlags();
     let dropped = 0;
-    for (const key of Object.keys(flags)) {
-        const exists = await fsp.stat(path.join(localLibraryRoot, ...key.split('/'))).then(() => true, () => false);
-        if (!exists) { delete flags[key]; dropped++; }
+    for (const key of peerShareKeys()) {
+        const { flags, filters } = peerShareSet(key);
+        let changed = false;
+        for (const k of Object.keys(flags)) {
+            const exists = await fsp.stat(path.join(localLibraryRoot, ...k.split('/'))).then(() => true, () => false);
+            if (!exists) { delete flags[k]; dropped++; changed = true; }
+        }
+        if (changed) savePeerShareSet(key, flags, filters);
     }
-    if (dropped) {
-        savePeerShareFlags(flags);
-        console.log(`[PEER] Dropped ${dropped} sharing setting(s) for things no longer in the library.`);
-    }
+    if (dropped) console.log(`[PEER] Dropped ${dropped} sharing setting(s) for things no longer in the library.`);
 }
 
 const peerListener = new PeerListener({
@@ -3356,7 +3405,7 @@ peerListener.addService({
     version: MEDIA_SERVICE_VERSION,
     router: mediaServiceRouter({
         libraryRoot: localLibraryRoot,
-        getShares: currentPeerShareRules,
+        getShares: currentPeerShareRules, // given req.peerSession
         listChildren: listLibraryChildren,
         resolveArt: dir => resolveFolderArt(dir, { findDiscogsArtUrl, getCachedArt }),
     }),
@@ -3494,33 +3543,46 @@ app.post('/api/settings/peer-listener', express.json(), async (req, res) => {
     res.json(peerListener.status());
 });
 
+// Everyone's set, each linked server's own (by its set key), and the servers linked now, to choose from
+function peerSharesResponse() {
+    const links = peerListener.links().map(l => ({ key: peerLinkShareKey(l), name: l.name }));
+    const sets = peerLinkShareSets();
+    return {
+        flags: peerShareFlags(), tags: peerShareFilters(),
+        links: links.map(l => ({ ...l, flags: peerShareObject(sets[l.key]?.flags), tags: peerShareObject(sets[l.key]?.tags) })),
+    };
+}
+
 app.get('/api/peer-shares', (req, res) => {
-    res.json({ flags: peerShareFlags(), tags: peerShareFilters() });
+    res.json(peerSharesResponse());
 });
 
-// { path: "music/Artist", value: "on" | "off" | "inherit", tags?: [...] }. `tags` (with "on")
-// sets the folder's tag filter, [] removes it; left out, an existing filter stays while it's on.
+// { path: "music/Artist", value: "on" | "off" | "inherit", tags?: [...], link?: key }. `tags` (with
+// "on") sets the folder's tag filter, [] removes it; left out, an existing filter stays while it's
+// on. `link` changes that linked server's own set; left out, everyone's.
 app.post('/api/peer-shares', express.json(), (req, res) => {
-    const { path: wanted, value, tags } = req.body || {};
+    const { path: wanted, value, tags, link } = req.body || {};
     if (!['on', 'off', 'inherit'].includes(value)) return res.status(400).json({ error: 'value must be on, off or inherit' });
     if (tags !== undefined && (!Array.isArray(tags) || tags.length > 200 || tags.some(t => typeof t !== 'string' || !t || t.length > 100))) {
         return res.status(400).json({ error: 'tags must be a list of tag names' });
     }
+    const key = link ? String(link) : PEER_SHARE_EVERYONE;
+    const linked = key && peerListener.links().find(l => peerLinkShareKey(l) === key);
+    if (key && !linked) return res.status(400).json({ error: 'That server is no longer linked to this one' });
     let rel;
     try { rel = cleanLibraryPath(wanted); } catch (e) { rel = ''; }
     if (!rel) return res.status(400).json({ error: 'Only folders and files in music, pictures and videos can be shared' });
-    const flags = peerShareFlags();
-    const filters = peerShareFilters();
+    const { flags, filters } = peerShareSet(key);
     if (value === 'inherit') delete flags[rel];
     else flags[rel] = value;
     if (value === 'on' && tags) {
         if (tags.length) filters[rel] = [...new Set(tags)];
         else delete filters[rel];
     }
-    savePeerShareFlags(flags, filters);
+    savePeerShareSet(key, flags, filters);
     const filterNote = filters[rel] ? ` (only files tagged ${filters[rel].map(t => `"${t}"`).join(' or ')})` : '';
-    console.log(`[PEER] Sharing of ${rel}: ${value === 'inherit' ? 'as its folder' : value}${filterNote}.`);
-    res.json({ flags, tags: filters });
+    console.log(`[PEER] Sharing of ${rel}${linked ? ` with "${linked.name}"` : ''}: ${value === 'inherit' ? 'as its folder' : value}${filterNote}.`);
+    res.json(peerSharesResponse());
 });
 
 app.get('/api/peer-links', (req, res) => {
@@ -3534,6 +3596,7 @@ app.get('/api/peer-links', (req, res) => {
 app.delete('/api/peer-incoming/:id', (req, res) => {
     const link = peerListener.removeLink(req.params.id);
     if (!link) return res.status(404).json({ error: 'That connection no longer exists' });
+    forgetPeerLinkShares(peerLinkShareKey(link)); // what was shared with it alone
     console.log(`[PEER] Removed the link from "${link.name}" (${link.ip}).`);
     res.json(peerListener.status());
 });

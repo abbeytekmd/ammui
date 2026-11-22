@@ -27,9 +27,17 @@ const peerAgo = ms => {
 // A folder switched On can also have a tag filter: then only the files in it with one of those
 // tags are shared.
 
+// There's a set of these for everyone, and one for each server linked to this one. They add up:
+// a linked server gets what's shared with everyone, and what's shared with it alone as well. The
+// set being changed is picked with "Share with" (in the ⋯ menu and in Settings → Peer Link).
+
 const PEER_SHARE_SECTIONS = ['music', 'pictures', 'videos'];
-let peerShareFlags = null; // { "music/Artist": "on" | "off" }, null until loaded
-let peerShareTags = {};    // { "music/Artist": ["tag", ...] }: tag filters on folders switched on
+let peerShareFlags = null; // everyone's: { "music/Artist": "on" | "off" }, null until loaded
+let peerShareTags = {};    // everyone's: { "music/Artist": ["tag", ...] }: tag filters on folders switched on
+let peerShareLinks = [];   // [{ key, name, flags, tags }]: each linked server's own set
+// The set being changed: '' for everyone, or a linked server's key. Remembered in this browser.
+const PEER_SHARE_SCOPE_KEY = 'peerShareScope';
+let peerShareScope = (() => { try { return localStorage.getItem(PEER_SHARE_SCOPE_KEY) || ''; } catch { return ''; } })();
 
 const peerShareTagText = tags => tags.length
     ? `only files tagged ${tags.map(t => `“${t}”`).join(' or ')}`
@@ -37,10 +45,14 @@ const peerShareTagText = tags => tags.length
 
 const peerShareable = id => typeof id === 'string' && PEER_SHARE_SECTIONS.includes(id.split('/')[0]);
 
-// { value: 'on' | 'off', explicit, from }: `from` is the path the setting comes from (null for
-// the default off at the top)
-function peerShareState(id) {
-    const flags = peerShareFlags || {};
+const peerShareScopeLink = () => peerShareScope ? peerShareLinks.find(l => l.key === peerShareScope) || null : null;
+const peerShareScopeName = () => peerShareScopeLink()?.name || 'Everyone';
+// { flags, tags } of the set being changed
+const peerShareScopeSet = () => peerShareScopeLink() || { flags: peerShareFlags || {}, tags: peerShareTags };
+
+// { value: 'on' | 'off', explicit, from } in one set's flags: `from` is the path the setting comes
+// from (null for the default off at the top)
+function peerShareState(id, flags = peerShareFlags || {}) {
     const parts = String(id).split('/').filter(Boolean);
     for (let i = parts.length; i > 0; i--) {
         const p = parts.slice(0, i).join('/');
@@ -57,7 +69,12 @@ function peerShareBadgeInner(id) {
     const st = peerShareState(id);
     // Only what's been set On or Off here is marked; As Parent (the default) isn't, so a shared
     // folder's contents don't each carry the icon
-    if (!st.explicit) return '';
+    if (!st.explicit) {
+        // Switched on for some linked servers alone
+        const names = peerShareLinks.filter(l => l.flags[id] === 'on').map(l => l.name);
+        if (!names.length || st.value === 'on') return '';
+        return `<span class="peer-share-badge on explicit links" title="${peerShareAttr(`Shared on the peer link with ${names.join(', ')} only`)}">${PEER_SHARE_ICON}</span>`;
+    }
     const filter = st.value === 'on' ? peerShareTags[st.from] : null;
     const title = filter
         ? `Shared on the peer link: ${peerShareTagText(filter)}`
@@ -72,18 +89,38 @@ function peerShareBadgeHtml(id) {
     return `<span class="peer-share-slot" data-share-path="${peerShareAttr(id)}">${peerShareFlags ? peerShareBadgeInner(id) : ''}</span>`;
 }
 
+// "Share with": everyone, or one of the servers linked to this one (shown only when there are some)
+function peerShareScopeSelectHtml() {
+    return `<select class="alarms-input peer-share-scope" onchange="setPeerShareScope(this.value)" onclick="event.stopPropagation()"
+        aria-label="Share with" title="Whose sharing to change: everyone's, or one linked server's own (on top of everyone's)"></select>`;
+}
+
+function fillPeerShareScopeSelect(select) {
+    select.innerHTML = '<option value="">Everyone</option>' + peerShareLinks
+        .map(l => `<option value="${peerShareAttr(l.key)}">${peerShareAttr(l.name)} only</option>`).join('');
+    select.value = peerShareScopeLink() ? peerShareScope : '';
+}
+
+function setPeerShareScope(key) {
+    peerShareScope = key || '';
+    try { localStorage.setItem(PEER_SHARE_SCOPE_KEY, peerShareScope); } catch { }
+    refreshPeerShareUi();
+    renderPeerShareList();
+}
+
 // `isFolder` adds the tag filter button, shown while the folder is switched On
 function peerShareMenuHtml(id, isFolder = false) {
     if (!peerShareable(id)) return '';
-    const parentHint = id.includes('/') ? 'Same as the folder it is in' : 'Off (the top of the library is not shared)';
     return `<div class="dropdown-item peer-share-row" onclick="event.stopPropagation()" data-share-path="${peerShareAttr(id)}">
         ${PEER_SHARE_ICON.replace('width="12" height="12"', 'width="14" height="14"')}
         <span class="peer-share-label">Peer Share</span>
         <span class="peer-share-seg" role="group" aria-label="Share on the peer link">
-            <button type="button" data-v="on" onclick="setPeerShareFromMenu(this, event)" title="Shared, with everything in it unless switched off there">On</button>
-            <button type="button" data-v="off" onclick="setPeerShareFromMenu(this, event)" title="Not shared, nor anything in it unless switched on there">Off</button>
-            <button type="button" data-v="inherit" onclick="setPeerShareFromMenu(this, event)" title="${peerShareAttr(parentHint)}">As Parent</button>
+            <button type="button" data-v="on" onclick="setPeerShareFromMenu(this, event)">On</button>
+            <button type="button" data-v="off" onclick="setPeerShareFromMenu(this, event)">Off</button>
+            <button type="button" data-v="inherit" onclick="setPeerShareFromMenu(this, event)">As Parent</button>
         </span>
+        <span class="peer-share-scope-wrap" hidden><span class="peer-share-scope-label">With</span>${peerShareScopeSelectHtml()}</span>
+        <span class="peer-share-scope-note settings-hint" hidden></span>
     </div>${isFolder ? `
     <button type="button" class="dropdown-item peer-share-tags-row" data-share-tags-path="${peerShareAttr(id)}" onclick="event.stopPropagation(); openPeerShareTags(this.dataset.shareTagsPath)" style="display: none;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
@@ -92,29 +129,51 @@ function peerShareMenuHtml(id, isFolder = false) {
 }
 
 // Bring the badges and menu buttons on screen up to date (a change to a folder changes
-// everything shown inside it)
+// everything shown inside it). The menu shows the set chosen in "Share with".
 function refreshPeerShareUi() {
     if (!peerShareFlags) return;
+    const link = peerShareScopeLink();
+    const set = peerShareScopeSet();
     document.querySelectorAll('.peer-share-slot[data-share-path]').forEach(slot => {
         slot.innerHTML = peerShareBadgeInner(slot.dataset.sharePath);
     });
     document.querySelectorAll('.peer-share-row[data-share-path]').forEach(row => {
-        const st = peerShareState(row.dataset.sharePath);
+        const id = row.dataset.sharePath;
+        const st = peerShareState(id, set.flags);
+        const everyone = link ? peerShareState(id) : null;
         const current = st.explicit ? st.value : 'inherit';
+        const who = link ? ` for ${link.name}` : '';
+        const titles = {
+            on: `Shared${who}, with everything in it unless switched off there`,
+            off: `Not shared${who}, nor anything in it unless switched on there`,
+            inherit: id.includes('/') ? `Same as the folder it is in${who}` : `Off${who} (the top of the library is not shared)`,
+        };
         row.querySelectorAll('button[data-v]').forEach(b => {
             const on = b.dataset.v === current;
             b.classList.toggle('active', on);
             b.setAttribute('aria-pressed', on ? 'true' : 'false');
+            b.title = titles[b.dataset.v];
         });
         // "As Parent" says what that comes to when it's on
         const inheritBtn = row.querySelector('button[data-v="inherit"]');
         if (inheritBtn) inheritBtn.classList.toggle('inherits-on', !st.explicit && st.value === 'on');
+        const wrap = row.querySelector('.peer-share-scope-wrap');
+        if (wrap) {
+            wrap.hidden = !peerShareLinks.length;
+            if (peerShareLinks.length) fillPeerShareScopeSelect(wrap.querySelector('select'));
+        }
+        // A linked server sees everyone's too, so its own Off can't hide what everyone gets
+        const note = row.querySelector('.peer-share-scope-note');
+        if (note) {
+            note.hidden = !(everyone?.value === 'on');
+            note.textContent = everyone?.value === 'on' ? `Already shared with everyone, so ${link.name} sees it whatever is set here.` : '';
+        }
     });
     // The tag filter is for a folder switched On here
     document.querySelectorAll('.peer-share-tags-row[data-share-tags-path]').forEach(btn => {
         const p = btn.dataset.shareTagsPath;
-        btn.style.display = peerShareFlags[p] === 'on' ? '' : 'none';
-        const filter = peerShareTags[p];
+        btn.style.display = set.flags[p] === 'on' ? '' : 'none';
+        const filter = set.tags[p];
         btn.querySelector('.peer-share-tags-label').textContent = filter
             ? `Only Tagged: ${filter.length ? filter.join(', ') : '(none)'}`
             : 'Share Only Tagged…';
@@ -125,6 +184,7 @@ function refreshPeerShareUi() {
 function applyPeerShareData(data) {
     peerShareFlags = data.flags || {};
     peerShareTags = data.tags || {};
+    peerShareLinks = Array.isArray(data.links) ? data.links : [];
     refreshPeerShareUi();
     renderPeerShareList();
 }
@@ -137,13 +197,18 @@ async function loadPeerShares() {
     }
 }
 
-// `tags` (only with 'on'): the folder's tag filter, [] for none; left out, it's kept
+// Changes the set chosen in "Share with". `tags` (only with 'on'): the folder's tag filter, [] for
+// none; left out, it's kept.
 async function setPeerShare(id, value, tags) {
+    const link = peerShareScopeLink();
     try {
-        applyPeerShareData(await peerApi('/api/peer-shares', { method: 'POST', body: JSON.stringify({ path: id, value, tags }) }));
+        applyPeerShareData(await peerApi('/api/peer-shares', {
+            method: 'POST', body: JSON.stringify({ path: id, value, tags, link: link?.key }),
+        }));
         return true;
     } catch (e) {
         showToast(`Couldn't change sharing: ${e.message}`);
+        loadPeerShares(); // a linked server may have gone
         return false;
     }
 }
@@ -157,7 +222,7 @@ async function openPeerShareTags(id) {
     } catch (e) {
         return showToast(`Couldn't load tags: ${e.message}`);
     }
-    const current = new Set(peerShareTags[id] || []);
+    const current = new Set(peerShareScopeSet().tags[id] || []);
     // Tags in the filter that no file has any more still show, so they can be taken off
     const names = [...new Set([...all, ...current])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
@@ -186,7 +251,7 @@ async function openPeerShareTags(id) {
                 <button class="btn-control primary" data-act="save">Save</button>
             </div>
         </div>`;
-    overlay.querySelector('.modal-subtitle').textContent = id;
+    overlay.querySelector('.modal-subtitle').textContent = `${id} · shared with ${peerShareScopeLink() ? `${peerShareScopeName()} only` : 'everyone'}`;
     const list = overlay.querySelector('.peer-share-tags-list');
     if (!names.length) {
         list.innerHTML = '<p class="settings-hint">No files are tagged yet.</p>';
@@ -228,17 +293,24 @@ function setPeerShareFromMenu(btn, event) {
     if (row) setPeerShare(row.dataset.sharePath, btn.dataset.v);
 }
 
-// Settings → Peer Link: everything with a setting of its own
+// Settings → Peer Link: everything with a setting of its own in the set chosen in "Share with"
 function renderPeerShareList() {
     const list = document.getElementById('peer-share-list');
     if (!list || !peerShareFlags) return;
-    const entries = Object.entries(peerShareFlags)
+    const scopeRow = document.getElementById('peer-share-scope-row');
+    if (scopeRow) {
+        scopeRow.hidden = !peerShareLinks.length;
+        if (peerShareLinks.length) fillPeerShareScopeSelect(scopeRow.querySelector('select'));
+    }
+    const link = peerShareScopeLink();
+    const set = peerShareScopeSet();
+    const entries = Object.entries(set.flags)
         .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
     list.innerHTML = '';
     if (!entries.length) {
         const li = document.createElement('li');
         li.className = 'settings-hint';
-        li.textContent = 'Nothing is shared yet.';
+        li.textContent = link ? `Nothing is shared with ${link.name} alone. It sees what's shared with everyone.` : 'Nothing is shared with everyone yet.';
         list.appendChild(li);
         return;
     }
@@ -248,7 +320,7 @@ function renderPeerShareList() {
         li.innerHTML = `<div class="peer-link-info"><b></b><span class="settings-hint"></span></div>
             <div class="peer-link-actions">${value === 'on' ? '<button class="btn-control btn-small" data-act="tags">Tags…</button>' : ''}<button class="btn-control btn-small" data-act="remove">Remove</button></div>`;
         li.querySelector('b').textContent = p;
-        const filter = value === 'on' ? peerShareTags[p] : null;
+        const filter = value === 'on' ? set.tags[p] : null;
         li.querySelector('.settings-hint').textContent = filter
             ? `Shared: ${peerShareTagText(filter)}, unless switched off there`
             : value === 'on'
@@ -295,6 +367,7 @@ setInterval(async () => {
         if (first) return;
         renderPeerListener(listener);
         renderPeerLinks(links.peers, links.droppedByOther || []);
+        loadPeerShares();
         if (typeof fetchDevices === 'function') fetchDevices();
     } catch (e) { }
 }, 10000);
@@ -357,6 +430,7 @@ async function removePeerIncoming(link) {
     if (!confirm(`Remove the connection from ${link.name}? It's removed there too, and has to be made again with the password.`)) return;
     try {
         renderPeerListener(await peerApi(`/api/peer-incoming/${encodeURIComponent(link.id)}`, { method: 'DELETE' }));
+        loadPeerShares(); // what was shared with it alone went with it
     } catch (e) {
         showToast(e.message);
         loadPeerListener();

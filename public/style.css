@@ -13374,6 +13374,51 @@ button.inventory-thumb {
     content: ' (On)';
     font-weight: 500;
 }
+/* Shared with some linked servers alone: a dashed outline round the badge */
+.peer-share-badge.links {
+    outline: 1px dashed currentColor;
+    outline-offset: 1px;
+    border-radius: 3px;
+}
+/* "Share with": everyone, or one linked server (in the ⋯ menu, and in Settings → Peer Link) */
+.peer-share-scope-wrap {
+    flex-basis: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.peer-share-scope-wrap[hidden],
+.peer-share-scope-row[hidden],
+.peer-share-scope-note[hidden] {
+    display: none;
+}
+.peer-share-scope-wrap .peer-share-scope {
+    flex: 1;
+    min-width: 0;
+}
+.peer-share-scope {
+    font-size: 0.85rem;
+    padding: 0.25rem 0.4rem;
+}
+.peer-share-scope-note {
+    flex-basis: 100%;
+    margin: 0;
+    font-size: 0.75rem;
+}
+.peer-share-scope-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.25rem 0 0.75rem;
+    font-size: 0.9rem;
+    color: var(--text-muted);
+}
+.peer-share-scope-row .peer-share-scope {
+    width: auto;
+    min-width: 12rem;
+}
 /* A folder shared only for some tags: a small dot on its badge, and the tag picker */
 .peer-share-badge.filtered {
     position: relative;

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=105">
+    <link rel="stylesheet" href="style.css?v=106">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -1938,6 +1938,12 @@
                                 folder it's in. A folder set to <b>On</b> can also <b>Share Only Tagged</b>
                                 files: only those with one of the tags you pick are shared. Other servers only see
                                 what's shared.</p>
+                            <p class="settings-hint">Sharing can be with everyone, or with just one of the servers
+                                connected to this one: pick it in <b>Share with</b> (here, or in the ⋯ menu). It adds to
+                                what's shared with everyone; it can't hide anything from it.</p>
+                            <label id="peer-share-scope-row" class="peer-share-scope-row" hidden>Share with
+                                <select class="alarms-input peer-share-scope" onchange="setPeerShareScope(this.value)"></select>
+                            </label>
                             <ul id="peer-share-list" class="peer-link-list"></ul>
                         </div>
                     </div>
@@ -3422,7 +3428,7 @@
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
     <script src="app.js?v=94"></script>
-    <script src="peers.js?v=3"></script>
+    <script src="peers.js?v=4"></script>
     <script src="slideshow.js?v=25"></script>
     <script src="timers.js?v=2"></script>
     <script src="faces.js?v=9"></script>
