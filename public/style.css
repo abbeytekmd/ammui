@@ -12564,6 +12564,54 @@ button.inventory-thumb {
     color: var(--text-muted);
 }
 
+/* A group: a holder row with its items indented under it */
+.passwords-table .inventory-group-row td {
+    background: rgba(99, 102, 241, 0.08);
+}
+
+.passwords-table .inventory-group-row:hover td {
+    background: rgba(99, 102, 241, 0.13);
+}
+
+.inventory-group-toggle {
+    gap: 0.1rem;
+    border-color: transparent;
+    background: none;
+    color: var(--primary);
+    cursor: pointer;
+}
+
+.inventory-group-toggle:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.inventory-chevron {
+    display: inline-flex;
+    transition: transform 0.15s;
+}
+
+.inventory-chevron svg {
+    width: 12px;
+    height: 12px;
+}
+
+.inventory-group-row.open .inventory-chevron {
+    transform: rotate(90deg);
+}
+
+/* Lines up with the item numbers, which have a button either side */
+.inventory-group-qty {
+    margin-left: 2rem;
+}
+
+.inventory-in-group .inventory-thumb-cell {
+    padding-left: 1.75rem;
+}
+
+.inventory-in-group td:first-child {
+    box-shadow: inset 3px 0 0 rgba(99, 102, 241, 0.35);
+}
+
 .inventory-lightbox {
     position: fixed;
     inset: 0;

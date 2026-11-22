@@ -65,6 +65,7 @@ import {
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
     listPasswords, getPassword, savePassword, deletePassword,
     listInventoryCategories, getInventoryCategory, saveInventoryCategory, deleteInventoryCategory,
+    listInventoryGroups, getInventoryGroup, saveInventoryGroup, deleteInventoryGroup,
     listInventoryItems, getInventoryItem, saveInventoryItem, setInventoryItemPicture, getInventoryItemPicture, deleteInventoryItem,
     getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans, getPhotoHash, setPhotoHash,
 } from './lib/db.js';
@@ -4432,6 +4433,7 @@ app.post('/api/passwords/:id/email', async (req, res) => {
 });
 
 // --- Inventory tab: categories of items, each with a quantity, where it's kept and an optional picture.
+// Items can be put in a group (a named holder, within their category).
 // A picture comes as a data: URL (made small in the browser), null to remove it, or is left out to keep it.
 const INVENTORY_LIMITS = { name: 200, location: 200, notes: 5000 };
 const INVENTORY_PICTURE_MAX = 3 * 1024 * 1024; // bytes, once decoded
@@ -4457,8 +4459,13 @@ function inventoryItemFields(body, existing = null) {
     if (!getInventoryCategory(categoryId)) throw new Error('Choose a category');
     let quantity = body?.quantity === undefined && existing ? existing.quantity : Number(body?.quantity ?? 1);
     if (!Number.isInteger(quantity) || quantity < 0 || quantity > 1e9) throw new Error('The number should be a whole number, 0 or more');
+    // null or left out of a new item: no group. Moving to another category without saying drops the group.
+    let groupId = body?.groupId === undefined ? (existing?.categoryId === categoryId ? existing.groupId : null)
+        : body.groupId === null || body.groupId === '' ? null : Number(body.groupId);
+    if (groupId !== null && getInventoryGroup(groupId)?.categoryId !== categoryId) throw new Error("That group isn't in this category");
     return {
         categoryId,
+        groupId,
         name: name ?? existing.name,
         quantity,
         location: inventoryText(body, 'location') ?? existing?.location ?? '',
@@ -4483,7 +4490,34 @@ const applyInventoryPicture = (id, picture) => {
 };
 
 app.get('/api/inventory', (req, res) => {
-    res.json({ categories: listInventoryCategories(), items: listInventoryItems() });
+    res.json({ categories: listInventoryCategories(), groups: listInventoryGroups(), items: listInventoryItems() });
+});
+
+app.post('/api/inventory/groups', express.json(), (req, res) => {
+    try {
+        const name = inventoryText(req.body, 'name', true);
+        const categoryId = Number(req.body?.categoryId);
+        if (!getInventoryCategory(categoryId)) return res.status(400).json({ error: 'Choose a category' });
+        res.json(getInventoryGroup(saveInventoryGroup({ categoryId, name })));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.put('/api/inventory/groups/:id', express.json(), (req, res) => {
+    try {
+        const id = saveInventoryGroup({ name: inventoryText(req.body, 'name', true) }, inventoryId(req));
+        if (id === null) return res.status(404).json({ error: 'No such group' });
+        res.json(getInventoryGroup(id));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Its items stay in the category, in no group
+app.delete('/api/inventory/groups/:id', (req, res) => {
+    if (!deleteInventoryGroup(inventoryId(req))) return res.status(404).json({ error: 'No such group' });
+    res.json({ ok: true });
 });
 
 app.post('/api/inventory/categories', express.json(), (req, res) => {
@@ -4505,7 +4539,7 @@ app.put('/api/inventory/categories/:id', express.json(), (req, res) => {
     }
 });
 
-// Deletes the category and every item in it
+// Deletes the category and every group and item in it
 app.delete('/api/inventory/categories/:id', (req, res) => {
     if (!deleteInventoryCategory(inventoryId(req))) return res.status(404).json({ error: 'No such category' });
     res.json({ ok: true });
