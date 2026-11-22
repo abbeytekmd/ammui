@@ -144,9 +144,8 @@ function renderInventoryItems() {
         .sort((a, b) => a.localeCompare(b)).map(l => `<option value="${escapeAttr(l)}">`).join('');
 }
 
-// A group's row: its name, how many kinds of item it holds, and the sum of their numbers
+// A group's row: its name and the sum of its items' numbers
 function inventoryGroupRow(g, open, showAll, categoryName) {
-    const kinds = `${g.itemCount} item${g.itemCount === 1 ? '' : 's'}`;
     return `
         <tr class="inventory-group-row${open ? ' open' : ''}${g.itemCount && !g.totalQuantity ? ' inventory-none-left' : ''}">
             <td class="inventory-thumb-cell">
@@ -155,7 +154,7 @@ function inventoryGroupRow(g, open, showAll, categoryName) {
                     <span class="inventory-chevron">${INVENTORY_ICONS.chevron}</span>${INVENTORY_ICONS.group}
                 </button>
             </td>
-            <td><div class="pw-name">${escapeHtml(g.name)}</div><div class="inventory-notes">${kinds}</div></td>
+            <td><div class="pw-name">${escapeHtml(g.name)}</div></td>
             ${showAll ? `<td class="inventory-category-cell">${escapeHtml(categoryName.get(g.categoryId) || '')}</td>` : ''}
             <td class="inventory-qty-cell"><span class="inventory-qty inventory-group-qty" title="All the items in ${escapeAttr(g.name)}">${g.totalQuantity}</span></td>
             <td></td>
