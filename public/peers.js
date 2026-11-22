@@ -274,6 +274,31 @@ async function loadPeerLinkSettings() {
     await Promise.all([loadPeerListener(), loadPeerLinks(), loadPeerShares()]);
 }
 
+// While Settings → Peer Link is open, keep both lists up to date: a connection made or removed by
+// the other server shows here without reopening it
+const peerLinkPanelOpen = () => document.getElementById('server-settings-modal')?.style.display === 'flex'
+    && document.getElementById('settings-peerlink')?.classList.contains('active');
+let peerLinkPollSig = '';
+setInterval(async () => {
+    // Each time it's opened, the first look only notes what was loaded with it
+    if (!peerLinkPanelOpen()) { peerLinkPollSig = ''; return; }
+    if (document.hidden) return;
+    // Not while typing in one of its fields (rendering clears the password boxes)
+    if (document.activeElement?.closest?.('#settings-peerlink') && document.activeElement.tagName === 'INPUT') return;
+    try {
+        const [listener, links] = await Promise.all([peerApi('/api/settings/peer-listener'), peerApi('/api/peer-links')]);
+        const sig = JSON.stringify([listener.links?.map(l => l.id), listener.sessions?.length,
+            links.peers.map(p => [p.id, p.name, p.error]), links.droppedByOther.length]);
+        if (sig === peerLinkPollSig) return;
+        const first = !peerLinkPollSig;
+        peerLinkPollSig = sig;
+        if (first) return;
+        renderPeerListener(listener);
+        renderPeerLinks(links.peers, links.droppedByOther || []);
+        if (typeof fetchDevices === 'function') fetchDevices();
+    } catch (e) { }
+}, 10000);
+
 async function loadPeerListener() {
     try {
         renderPeerListener(await peerApi('/api/settings/peer-listener'));
@@ -298,13 +323,43 @@ function renderPeerListener(s) {
 
     const list = document.getElementById('peer-session-list');
     list.innerHTML = '';
+    const links = s.links || [];
+    if (links.length || (s.sessions || []).length) {
+        const head = document.createElement('li');
+        head.className = 'settings-hint';
+        head.textContent = 'Servers connected to this one:';
+        list.appendChild(head);
+    }
+    for (const link of links) {
+        const li = document.createElement('li');
+        li.className = 'peer-link-item';
+        li.innerHTML = `<div class="peer-link-info"><b></b><span class="settings-hint"></span></div>
+            <div class="peer-link-actions"><button class="btn-control btn-small ghost" data-act="remove">Remove</button></div>`;
+        li.querySelector('b').textContent = link.name;
+        li.querySelector('.settings-hint').textContent = `From ${link.ip}, connected since ${new Date(link.since).toLocaleDateString()}`
+            + (link.lastUsed ? `, last active ${peerAgo(link.lastUsed)}` : '');
+        const btn = li.querySelector('[data-act="remove"]');
+        btn.title = 'End this connection. It is removed on the other server too, and has to be made again there with the password.';
+        btn.onclick = () => removePeerIncoming(link);
+        list.appendChild(li);
+    }
     for (const sess of s.sessions || []) {
         const li = document.createElement('li');
         li.className = 'peer-link-item';
         li.innerHTML = `<div class="peer-link-info"><b></b><span class="settings-hint"></span></div>`;
         li.querySelector('b').textContent = sess.name;
-        li.querySelector('.settings-hint').textContent = `Connected from ${sess.ip}, last active ${peerAgo(sess.lastUsed)}`;
+        li.querySelector('.settings-hint').textContent = `Connected from ${sess.ip}, last active ${peerAgo(sess.lastUsed)} (an older version: update it to manage this connection here)`;
         list.appendChild(li);
+    }
+}
+
+async function removePeerIncoming(link) {
+    if (!confirm(`Remove the connection from ${link.name}? It's removed there too, and has to be made again with the password.`)) return;
+    try {
+        renderPeerListener(await peerApi(`/api/peer-incoming/${encodeURIComponent(link.id)}`, { method: 'DELETE' }));
+    } catch (e) {
+        showToast(e.message);
+        loadPeerListener();
     }
 }
 
@@ -330,8 +385,8 @@ async function savePeerListener({ toggle = false } = {}) {
 
 async function loadPeerLinks() {
     try {
-        const { peers } = await peerApi('/api/peer-links');
-        renderPeerLinks(peers);
+        const { peers, droppedByOther } = await peerApi('/api/peer-links');
+        renderPeerLinks(peers, droppedByOther || []);
     } catch (e) { }
     // A connection added, removed or renamed changes the list of media servers
     if (typeof fetchDevices === 'function') fetchDevices();
@@ -347,9 +402,16 @@ async function openPeerInMedia(p) {
     selectServer(p.udn);
 }
 
-function renderPeerLinks(peers) {
+function renderPeerLinks(peers, droppedByOther = []) {
     const list = document.getElementById('peer-link-list');
     list.innerHTML = '';
+    // Removed at the other end, so removed here too: say so, as they've vanished from the list
+    for (const d of droppedByOther) {
+        const li = document.createElement('li');
+        li.className = 'settings-hint peer-link-dropped';
+        li.textContent = `${d.name} (${d.host}:${d.port}) removed the connection ${peerAgo(d.at)}, so it was removed here too. Connect again with its password to make it again.`;
+        list.appendChild(li);
+    }
     for (const p of peers) {
         const li = document.createElement('li');
         li.className = 'peer-link-item';

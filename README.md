@@ -51,7 +51,7 @@ I'd been using an Amazon Echo Show for a while. It was great but...
 * I'd get Adverts :-(
 * I never really got the on-this-day slideshow I wanted. It didn't seem to quite work.
 * It didn't hook in with my Google Calendars very well.
-* I didn't really get the UI. Settings seemed hard to find, if they were there at all. I,ve designed a lot of UI heavy products and wanted something that made sense to me.
+* I didn't really get the UI. Settings seemed hard to find, if they were there at all. I've designed a lot of UI heavy products and wanted something that made sense to me.
 Some of this stuff may have changed since then but I wanted a home hub that's not tied too much to one company's ecosystem, that covers a diverse range of functions, that is built with a decent UI, that can run on a wide range of hardware and that isn't too expensive to deploy. 
 ## Target Hardware
 

@@ -3339,6 +3339,11 @@ const peerListener = new PeerListener({
     certDir: certsDir,
     getConfig: peerListenerConfig,
     getName: () => settings.deviceName || 'AMMUI',
+    // Links other servers have made to this one (shown in Settings → Peer Link, and removable there)
+    linkStore: {
+        load: () => getSetting('peerIncomingLinks', null) || [],
+        save: list => setSetting('peerIncomingLinks', list),
+    },
 });
 // What this server offers other servers over the peer link (see lib/peer-services/)
 peerListener.addService({
@@ -3379,9 +3384,14 @@ const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
 const peerLinks = new PeerConnections({
     load: () => getSetting('peerLinks', null) || [],
     save: list => setSetting('peerLinks', list),
+    // Removed here, but the other server hasn't been told yet
+    loadGone: () => getSetting('peerLinksGone', null) || [],
+    saveGone: list => setSetting('peerLinksGone', list),
     encrypt: encryptSecret,
     decrypt: decryptSecret,
     clientName: () => settings.deviceName || 'AMMUI',
+    // Kept for good, so the other server knows a new link from here replaces the old one
+    clientId: () => gameServerId,
 });
 
 // Each server connected to over the peer link that shares media is one more media server in the
@@ -3497,7 +3507,18 @@ app.post('/api/peer-shares', express.json(), (req, res) => {
 });
 
 app.get('/api/peer-links', (req, res) => {
-    res.json({ peers: peerLinks.summary().map(p => ({ ...p, udn: PEER_UDN_PREFIX + p.id })) });
+    res.json({
+        peers: peerLinks.summary().map(p => ({ ...p, udn: PEER_UDN_PREFIX + p.id })),
+        droppedByOther: peerLinks.recentlyDropped(),
+    });
+});
+
+// A link another server made to this one: removed here, and it's removed there when it next checks
+app.delete('/api/peer-incoming/:id', (req, res) => {
+    const link = peerListener.removeLink(req.params.id);
+    if (!link) return res.status(404).json({ error: 'That connection no longer exists' });
+    console.log(`[PEER] Removed the link from "${link.name}" (${link.ip}).`);
+    res.json(peerListener.status());
 });
 
 // { address, port?, password }: connects, trusting the certificate it sees, and saves the connection
@@ -7696,6 +7717,8 @@ function startServices() {
     // What each connected server offers, and its name, can change when it's updated or renamed
     peerLinks.refreshAll();
     setInterval(() => peerLinks.refreshAll(), 60 * 60 * 1000).unref?.();
+    // ...and a connection removed at the other end is removed here within a few minutes
+    setInterval(() => peerLinks.checkAll(), 5 * 60 * 1000).unref?.();
     prunePeerShares().catch(err => console.warn('[PEER] Could not tidy the sharing settings:', err.message));
     // Index the local library in the background so the first search is already fast.
     setTimeout(() => {
