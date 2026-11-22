@@ -6101,7 +6101,7 @@ document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web fo
 // Calendar and Recipes tabs are full views that take the place of the browser/player
 // layout. appView is the one showing, or null for the normal layout.
 let appView = null;
-const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', health: 'health-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view' };
+const APP_VIEWS = { calendar: 'calendar-view', recipes: 'recipes-view', smarthome: 'smarthome-view', energy: 'energy-view', petrol: 'petrol-view', health: 'health-view', games: 'games-view', alarms: 'alarms-view', passwords: 'passwords-view', inventory: 'inventory-view' };
 
 function setAppView(view) {
     appView = view;
@@ -13606,6 +13606,7 @@ async function loadS3RestoreFolders() {
 const S3_MEDIA_LABELS = { music: 'Music', pictures: 'Photos', videos: 'Videos', '': 'Other files' };
 const S3_DATA_GROUPS = [
     { id: 'meals', label: 'Calendar, meals and items', hint: 'Meals on the calendar, the meal plan, items, the shopping list, family and their word games' },
+    { id: 'inventory', label: 'Inventory', hint: 'Categories, items, their numbers, locations and pictures' },
     { id: 'tags', label: 'Tags and photos', hint: 'Tags, favourites, photo rotations and deleted photos' },
     { id: 'settings', label: 'Settings', hint: 'Integrations, smart home, mail, slideshow and the rest' },
     { id: 'history', label: 'Play history', hint: '' },
@@ -16948,6 +16949,10 @@ function updateHiddenPhotosCount() {
     const deleteAll = document.getElementById('hidden-photos-delete-all');
     deleteAll.style.display = localCount ? '' : 'none';
     deleteAll.textContent = localCount === hiddenPhotos.length ? 'Delete All' : `Delete All Local (${localCount})`;
+    const otherCount = hiddenPhotos.filter(isOtherServerHiddenPhoto).length;
+    const forget = document.getElementById('hidden-photos-forget-others');
+    forget.style.display = otherCount ? '' : 'none';
+    forget.textContent = `Forget Others (${otherCount})`;
     if (hiddenPhotos.length === 0) {
         document.getElementById('hidden-photos-grid').innerHTML = '<div class="empty-state">No hidden photos</div>';
     }
@@ -17055,6 +17060,32 @@ async function deleteAllHiddenPhotos() {
         showToast(`Deleted ${d.deleted} photo${d.deleted === 1 ? '' : 's'}${d.failed ? `, ${d.failed} failed` : ''}`, d.failed ? 'error' : 'success', 4000);
     } catch (e) {
         showToast('Failed to delete: ' + e.message, 'error', 4000);
+    }
+    btn.disabled = false;
+    openHiddenPhotosModal(); // reload whatever is left
+}
+
+// The local library's hidden photos are saved by path alone ("/local-files/..."); any other key is another server's
+const isOtherServerHiddenPhoto = p => !p.key.startsWith('/');
+
+// Takes every hidden photo on other servers off the list; the photos themselves are left alone
+async function forgetNonLocalHiddenPhotos() {
+    const count = hiddenPhotos.filter(isOtherServerHiddenPhoto).length;
+    if (!count) return;
+    if (!confirm(`Forget ${count} hidden photo${count === 1 ? '' : 's'} on other servers?
+
+` +
+        `They'll be taken off this list and can show in the slideshow again. Nothing is deleted from those servers, ` +
+        `and hidden photos in the local library stay hidden.`)) return;
+    const btn = document.getElementById('hidden-photos-forget-others');
+    btn.disabled = true;
+    try {
+        const res = await fetch('/api/slideshow/hidden/forget-non-local', { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || res.statusText);
+        showToast(`Forgot ${d.forgotten} hidden photo${d.forgotten === 1 ? '' : 's'}`, 'success', 3000);
+    } catch (e) {
+        showToast('Failed to forget them: ' + e.message, 'error', 4000);
     }
     btn.disabled = false;
     openHiddenPhotosModal(); // reload whatever is left

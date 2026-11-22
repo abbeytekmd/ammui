@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=103">
+    <link rel="stylesheet" href="style.css?v=104">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
@@ -100,6 +100,15 @@
                         <path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
                     </svg>
                     <span>Passwords</span>
+                </button>
+                <button type="button" class="lib-tab" data-mode="inventory" onclick="showInventory()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 8 12 3 3 8v8l9 5 9-5Z"></path>
+                        <path d="m3 8 9 5 9-5"></path>
+                        <line x1="12" y1="13" x2="12" y2="21"></line>
+                    </svg>
+                    <span>Inventory</span>
                 </button>
             </nav>
 
@@ -863,6 +872,74 @@
                 <label for="passwords-email-input">Email entries to</label>
                 <input type="email" id="passwords-email-input" class="alarms-input" placeholder="you@example.com"
                     onchange="savePasswordsEmail()">
+            </div>
+        </section>
+
+        <!-- Inventory tab: categories of items, with how many of each, where they're kept and a picture (built by inventory.js) -->
+        <section id="inventory-view" class="smarthome-view inventory-view" hidden>
+            <div class="smarthome-header">
+                <h2 id="inventory-title">Inventory</h2>
+                <div class="smarthome-actions">
+                    <input type="search" id="inventory-search" class="alarms-input inventory-search" placeholder="Search"
+                        oninput="renderInventoryItems()" aria-label="Search the items">
+                    <button type="button" class="btn-control primary" onclick="editInventoryItem(null)">Add item</button>
+                </div>
+            </div>
+            <div class="inventory-layout">
+                <aside class="inventory-categories">
+                    <div class="inventory-categories-head">
+                        <span>Categories</span>
+                        <button type="button" class="pw-icon-btn" title="Add a category" aria-label="Add a category"
+                            onclick="addInventoryCategory()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                                stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                        </button>
+                    </div>
+                    <ul id="inventory-category-list" class="inventory-category-list"></ul>
+                </aside>
+                <div class="inventory-main">
+                    <form id="inventory-form" class="password-form inventory-form" hidden
+                        onsubmit="event.preventDefault(); saveInventoryForm()">
+                        <div class="inventory-form-body">
+                            <div class="inventory-picture-field">
+                                <button type="button" id="inventory-picture-preview" class="inventory-picture-preview"
+                                    onclick="document.getElementById('inventory-picture-input').click()"
+                                    title="Choose a picture">Add picture</button>
+                                <input type="file" id="inventory-picture-input" accept="image/*" hidden
+                                    onchange="pickInventoryPicture(this)">
+                                <button type="button" id="inventory-picture-remove" class="btn-control btn-small"
+                                    onclick="removeInventoryPicture()" hidden>Remove picture</button>
+                            </div>
+                            <div class="password-form-fields">
+                                <label>Name<input type="text" id="inventory-name" class="alarms-input" maxlength="200" required></label>
+                                <label>Category<select id="inventory-category" class="alarms-input" required></select></label>
+                                <label>Number<input type="number" id="inventory-quantity" class="alarms-input" min="0" step="1"
+                                    value="1" required></label>
+                                <label>Location<input type="text" id="inventory-location" class="alarms-input" maxlength="200"
+                                    list="inventory-locations" placeholder="e.g. Garage, top shelf"></label>
+                                <label class="password-notes-field">Notes<textarea id="inventory-notes" class="alarms-input"
+                                    rows="2" maxlength="5000"></textarea></label>
+                            </div>
+                        </div>
+                        <datalist id="inventory-locations"></datalist>
+                        <div class="password-form-actions">
+                            <button type="submit" class="btn-control primary">Save</button>
+                            <button type="button" class="btn-control" onclick="closeInventoryForm()">Cancel</button>
+                        </div>
+                    </form>
+                    <div class="passwords-table-wrap">
+                        <table class="passwords-table inventory-table">
+                            <thead>
+                                <tr><th></th><th>Item</th><th id="inventory-category-col">Category</th><th>Number</th><th>Location</th><th></th></tr>
+                            </thead>
+                            <tbody id="inventory-body"></tbody>
+                        </table>
+                        <div id="inventory-empty" class="passwords-empty" hidden></div>
+                    </div>
+                </div>
+            </div>
+            <div id="inventory-lightbox" class="inventory-lightbox" hidden onclick="this.hidden = true">
+                <img id="inventory-lightbox-img" alt="">
             </div>
         </section>
 
@@ -2666,6 +2743,8 @@
                     <h2>Hidden Photos <span id="hidden-photos-count" class="hidden-photos-count"></span></h2>
                     <button id="hidden-photos-delete-all" class="btn-delete" onclick="deleteAllHiddenPhotos()"
                         style="display: none;" title="Permanently delete every hidden photo in the local library">Delete All</button>
+                    <button id="hidden-photos-forget-others" class="btn-control" onclick="forgetNonLocalHiddenPhotos()"
+                        style="display: none;" title="Take every photo on other servers off this list (the photos themselves are left alone)">Forget Others</button>
                 </div>
                 <button class="btn-close" onclick="closeHiddenPhotosModal()">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -3339,13 +3418,14 @@
         import { splitShoppingLine, shoppingItemKey } from './shopping-items.js';
         Object.assign(window, { splitShoppingLine, shoppingItemKey });
     </script>
-    <script src="app.js?v=93"></script>
+    <script src="app.js?v=94"></script>
     <script src="peers.js?v=3"></script>
     <script src="slideshow.js?v=25"></script>
     <script src="timers.js?v=2"></script>
     <script src="faces.js?v=9"></script>
     <script src="duplicates.js?v=1"></script>
     <script src="passwords.js?v=2"></script>
+    <script src="inventory.js?v=1"></script>
     <script src="sky.js?v=15"></script>
 </body>
 

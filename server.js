@@ -18,7 +18,7 @@ import { getImageDate, extractDateFromString, isPhotoItem, isVideoItem, monthDay
 import { resolveVoiceCommand, parseControlCommand, voiceSongRequests, resolveDeviceCommand, matchScene } from './lib/voice-command.js';
 import { ensureHttpsCertificate, caCertificatePath, localHostNames } from './lib/https-cert.js';
 import { advertiseLocalName, localNameFor } from './lib/local-name.js';
-import { mediaKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer, localMediaKey } from './lib/media-key.js';
+import { mediaKey, hiddenPhotoKey, expandHiddenPhotoKey, mediaUrlFromKey, splitMediaKey, setLocalMediaServer, registerMediaOrigin, onNewMediaServer, localMediaKey } from './lib/media-key.js';
 import sonos from 'sonos';
 import fs from 'fs';
 import { setupLocalDlna, listLibraryChildren, getLocalIp, SERVER_UDN, updateLocalDlnaName, localDirForUri, folderArtUrl, resolveFolderArt, writeFolderArt, findArtSidecar, parseAlbumArtName, isPlaceholderImage } from './lib/local-dlna-server.js';
@@ -48,7 +48,7 @@ import {
     saveAllDevices, getAllDevices,
     setFileTags, addFileTag, removeFileTag, getAllFileTags, getAllTags, getPeopleTagNames, getTagUsage, renameTag, deleteTag, getKeysByTag,
     setPhotoRotation, getAllPhotoRotations,
-    markPhotoDeleted, unmarkPhotoDeleted, forgetMediaKey, getAllDeletedPhotos, resolveMediaKeys, renameMediaKeyServer,
+    markPhotoDeleted, unmarkPhotoDeleted, forgetNonLocalHiddenPhotos, forgetMediaKey, getAllDeletedPhotos, resolveMediaKeys, renameMediaKeyServer,
     getCachedArt, getCachedArtByKey, setCachedArt, artCacheKey,
     getCachedLyrics, setCachedLyrics,
     getCachedYoutubeVideo, setCachedYoutubeVideo,
@@ -64,6 +64,8 @@ import {
     listWordGamesSince, savePeerGameSnapshot, listPeerGameSnapshots,
     RESTORE_GROUPS, snapshotDatabase, restoreFromSnapshot,
     listPasswords, getPassword, savePassword, deletePassword,
+    listInventoryCategories, getInventoryCategory, saveInventoryCategory, deleteInventoryCategory,
+    listInventoryItems, getInventoryItem, saveInventoryItem, setInventoryItemPicture, getInventoryItemPicture, deleteInventoryItem,
     getFacePeople, getFaceSamples, addFaceSamples, deleteFaceSample, deleteFacePerson, getFaceScan, setFaceScans, getPhotoHash, setPhotoHash,
 } from './lib/db.js';
 import { useSecretKeyIn, encryptSecret, decryptSecret } from './lib/secret-box.js';
@@ -360,7 +362,8 @@ function loadSettings() {
     console.log('Loaded settings from DB.');
 }
 
-// Rotations, deleted markers and tags are keyed by mediaKey() ("<server name>/<path>").
+// Rotations and tags are keyed by mediaKey() ("<server name>/<path>"); hidden markers by
+// hiddenPhotoKey(), the same but with the local library's by path alone.
 // Resolve keys saved for servers identified since, then load them.
 function loadMediaKeyedSettings() {
     const changed = resolveMediaKeys();
@@ -4428,6 +4431,126 @@ app.post('/api/passwords/:id/email', async (req, res) => {
     }
 });
 
+// --- Inventory tab: categories of items, each with a quantity, where it's kept and an optional picture.
+// A picture comes as a data: URL (made small in the browser), null to remove it, or is left out to keep it.
+const INVENTORY_LIMITS = { name: 200, location: 200, notes: 5000 };
+const INVENTORY_PICTURE_MAX = 3 * 1024 * 1024; // bytes, once decoded
+const INVENTORY_PICTURE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+const inventoryId = req => Number.parseInt(req.params.id, 10);
+
+function inventoryText(body, key, required) {
+    if (typeof body?.[key] !== 'string') {
+        if (required) throw new Error(`Give it a ${key}`);
+        return undefined;
+    }
+    const value = body[key].trim();
+    if (required && !value) throw new Error(`Give it a ${key}`);
+    if (value.length > INVENTORY_LIMITS[key]) throw new Error(`The ${key} is too long`);
+    return value;
+}
+
+// The item fields in a request; with `existing`, fields left out keep what it had
+function inventoryItemFields(body, existing = null) {
+    const name = inventoryText(body, 'name', !existing);
+    if (existing && name === '') throw new Error('Give it a name');
+    const categoryId = body?.categoryId === undefined && existing ? existing.categoryId : Number(body?.categoryId);
+    if (!getInventoryCategory(categoryId)) throw new Error('Choose a category');
+    let quantity = body?.quantity === undefined && existing ? existing.quantity : Number(body?.quantity ?? 1);
+    if (!Number.isInteger(quantity) || quantity < 0 || quantity > 1e9) throw new Error('The number should be a whole number, 0 or more');
+    return {
+        categoryId,
+        name: name ?? existing.name,
+        quantity,
+        location: inventoryText(body, 'location') ?? existing?.location ?? '',
+        notes: inventoryText(body, 'notes') ?? existing?.notes ?? '',
+    };
+}
+
+// undefined: leave it; null: remove it; else { data, type }
+function inventoryPicture(body) {
+    if (!body || !('picture' in body)) return undefined;
+    if (body.picture === null || body.picture === '') return null;
+    const m = typeof body.picture === 'string' && /^data:([\w/+.-]+);base64,([A-Za-z0-9+/=\s]+)$/.exec(body.picture);
+    if (!m || !INVENTORY_PICTURE_TYPES.includes(m[1])) throw new Error('The picture should be a JPEG, PNG, WebP or GIF');
+    const data = Buffer.from(m[2], 'base64');
+    if (!data.length) throw new Error('The picture is empty');
+    if (data.length > INVENTORY_PICTURE_MAX) throw new Error('The picture is too big');
+    return { data, type: m[1] };
+}
+
+const applyInventoryPicture = (id, picture) => {
+    if (picture !== undefined) setInventoryItemPicture(id, picture?.data ?? null, picture?.type ?? '');
+};
+
+app.get('/api/inventory', (req, res) => {
+    res.json({ categories: listInventoryCategories(), items: listInventoryItems() });
+});
+
+app.post('/api/inventory/categories', express.json(), (req, res) => {
+    try {
+        const id = saveInventoryCategory(inventoryText(req.body, 'name', true));
+        res.json(getInventoryCategory(id));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.put('/api/inventory/categories/:id', express.json(), (req, res) => {
+    try {
+        const id = saveInventoryCategory(inventoryText(req.body, 'name', true), inventoryId(req));
+        if (id === null) return res.status(404).json({ error: 'No such category' });
+        res.json(getInventoryCategory(id));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Deletes the category and every item in it
+app.delete('/api/inventory/categories/:id', (req, res) => {
+    if (!deleteInventoryCategory(inventoryId(req))) return res.status(404).json({ error: 'No such category' });
+    res.json({ ok: true });
+});
+
+app.post('/api/inventory/items', express.json({ limit: '6mb' }), (req, res) => {
+    try {
+        const fields = inventoryItemFields(req.body);
+        const picture = inventoryPicture(req.body);
+        const id = saveInventoryItem(fields);
+        applyInventoryPicture(id, picture);
+        res.json(getInventoryItem(id));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.put('/api/inventory/items/:id', express.json({ limit: '6mb' }), (req, res) => {
+    const id = inventoryId(req);
+    const existing = getInventoryItem(id);
+    if (!existing) return res.status(404).json({ error: 'No such item' });
+    try {
+        const fields = inventoryItemFields(req.body, existing);
+        const picture = inventoryPicture(req.body);
+        saveInventoryItem(fields, id);
+        applyInventoryPicture(id, picture);
+        res.json(getInventoryItem(id));
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+app.delete('/api/inventory/items/:id', (req, res) => {
+    if (!deleteInventoryItem(inventoryId(req))) return res.status(404).json({ error: 'No such item' });
+    res.json({ ok: true });
+});
+
+// The URL carries the picture's time (?v=), so a changed picture is a new URL and this one can be cached
+app.get('/api/inventory/items/:id/picture', (req, res) => {
+    const picture = getInventoryItemPicture(inventoryId(req));
+    if (!picture) return res.status(404).end();
+    res.set('Cache-Control', 'private, max-age=31536000, immutable');
+    res.type(picture.type).send(picture.data);
+});
+
 // The product picture for one shopping list line: { product: { code, name, brand, image } | null, picked }.
 // A picture chosen by hand (picked) wins. Otherwise it's looked up once and kept: a match for
 // 90 days, no match for a week (Open Food Facts keeps growing).
@@ -5683,7 +5806,7 @@ app.get('/api/slideshow/random', async (req, res) => {
         // If cache is ready and has images, use it!
         if (peerImages || (cacheValid && screensaverCache.status === 'ready' && screensaverCache.images.length > 0)) {
             // Another AMMUI's slideshow skips what's hidden there, not here
-            let imagesToUse = peerImages || screensaverPool().filter(img => !settings.deletedPhotos[mediaKey(img.uri || img.res)]);
+            let imagesToUse = peerImages || screensaverPool().filter(img => !settings.deletedPhotos[hiddenPhotoKey(img.uri || img.res)]);
 
             if (mode === 'onThisDay') {
                 const today = new Date();
@@ -5780,7 +5903,7 @@ app.get('/api/slideshow/random', async (req, res) => {
                         if (containers.length === 0 || Math.random() > 0.4) {
                             const candidate = images[randomInt(images.length)];
                             const url = candidate.uri || candidate.res;
-                            if (!settings.deletedPhotos[mediaKey(url)]) {
+                            if (!settings.deletedPhotos[hiddenPhotoKey(url)]) {
                                 foundImage = candidate;
                                 foundImage.folderId = currentId;
                                 foundImage.folderTitle = currentTitle;
@@ -5911,7 +6034,7 @@ async function forwardSlideshowRequest(res, device, apiPath, mode) {
     const isList = apiPath === '/api/slideshow/list';
     const videos = settings.slideshowVideos.enabled ? '&videos=1' : '';
     const url = new URL(`${apiPath}?mode=${encodeURIComponent(mode || '')}&objectId=${encodeURIComponent(settings.screensaver.objectId)}${videos}`, device.location);
-    const isHidden = img => !!settings.deletedPhotos[mediaKey(img.url || img.uri || img.res)];
+    const isHidden = img => !!settings.deletedPhotos[hiddenPhotoKey(img.url || img.uri || img.res)];
     const withOurMarks = img => {
         const key = mediaKey(img.url || img.uri || img.res);
         return { ...img, key, manualRotation: settings.manualRotations?.[key] || 0, tags: settings.fileTags?.[key] || [] };
@@ -5951,7 +6074,7 @@ function favouritesOnAmmui(device, objectId) {
     const folder = !objectId || objectId === '0' ? '' : objectId.replace(/\/+$/, '') + '/';
     const images = [];
     for (const [key, tags] of Object.entries(settings.fileTags || {})) {
-        if (!key.startsWith(prefix) || !tags?.includes('fav') || settings.deletedPhotos[key]) continue;
+        if (!key.startsWith(prefix) || !tags?.includes('fav') || settings.deletedPhotos[hiddenPhotoKey(key)]) continue;
         let rel;
         try { rel = decodeURIComponent(key.slice(prefix.length).split('?')[0]); } catch (e) { continue; }
         const uri = mediaUrlFromKey(key);
@@ -6033,7 +6156,7 @@ async function slideshowList(req, res) {
     // Another AMMUI's slideshow leaves out what's hidden there, not here
     let images = peerObjectId ? source : source.filter(img => {
         const url = img.uri || img.res;
-        return !settings.deletedPhotos[mediaKey(url)];
+        return !settings.deletedPhotos[hiddenPhotoKey(url)];
     });
 
     let emptyError = 'No images found';
@@ -6108,7 +6231,7 @@ app.post('/api/slideshow/delete', (req, res) => {
 
     for (const u of list) {
         markPhotoDeleted(u);
-        settings.deletedPhotos[mediaKey(u)] = true;
+        settings.deletedPhotos[hiddenPhotoKey(u)] = true;
     }
     // Left in the scan cache (it's filtered out when served) so unhiding brings it straight back.
     slideshowDeleteVersion++;
@@ -6119,7 +6242,7 @@ app.post('/api/slideshow/delete', (req, res) => {
 
 // A hidden key's file in this app's own library, or null for anything else (or a path escaping it).
 function localFileForKey(key) {
-    const parts = splitMediaKey(key);
+    const parts = splitMediaKey(expandHiddenPhotoKey(key));
     if (!parts?.isLocal || !parts.path.startsWith('/local-files/')) return null;
     const localDir = path.join(__dirname, 'local');
     let rel = parts.path.slice('/local-files/'.length).split('?')[0];
@@ -6128,19 +6251,21 @@ function localFileForKey(key) {
     return filePath.startsWith(localDir + path.sep) ? filePath : null;
 }
 
-// Everything hidden from the slideshow, most recently hidden first.
+// Everything hidden from the slideshow, most recently hidden first. `key` is as saved (the local
+// library's by path alone, see hiddenPhotoKey), which is what unhiding and deleting take back.
 app.get('/api/slideshow/hidden', (req, res) => {
     const photos = Object.keys(getAllDeletedPhotos()).reverse().map(key => {
+        const fullKey = expandHiddenPhotoKey(key);
         const filePath = localFileForKey(key);
-        const parts = splitMediaKey(key);
+        const parts = splitMediaKey(fullKey);
         return {
             key,
-            url: mediaUrlFromKey(key),
+            url: mediaUrlFromKey(fullKey),
             title: decodeURIComponent((parts?.path || key).split('?')[0].split('/').pop() || key),
             server: parts?.server || '',
             isLocal: !!filePath,
             missing: filePath ? !fs.existsSync(filePath) : false,
-            manualRotation: settings.manualRotations?.[key] || 0,
+            manualRotation: settings.manualRotations?.[fullKey] || 0,
         };
     });
     res.json(photos);
@@ -6151,7 +6276,7 @@ app.post('/api/slideshow/unhide', (req, res) => {
     if (!key) return res.status(400).json({ error: 'key required' });
 
     unmarkPhotoDeleted(key);
-    delete settings.deletedPhotos[mediaKey(key)];
+    delete settings.deletedPhotos[hiddenPhotoKey(key)];
     slideshowDeleteVersion++;
 
     console.log(`[SCREENSAVER] Unhid photo: ${key}`);
@@ -6162,9 +6287,9 @@ app.post('/api/slideshow/unhide', (req, res) => {
 // already been reviewed) and forgets everything saved against it.
 async function deleteHiddenLocalPhoto(key, filePath) {
     await fs.promises.unlink(filePath).catch(err => { if (err.code !== 'ENOENT') throw err; });
-    const k = mediaKey(key);
+    const k = mediaKey(expandHiddenPhotoKey(key));
     forgetMediaKey(k);
-    delete settings.deletedPhotos[k];
+    delete settings.deletedPhotos[hiddenPhotoKey(k)];
     delete settings.fileTags[k];
     delete settings.manualRotations[k];
     removeFromScreensaverCache(k);
@@ -6175,7 +6300,7 @@ async function deleteHiddenLocalPhoto(key, filePath) {
 // Day/Recent slideshows and other AMMUIs read photos from there and would show them again.
 function dropDeletedPhotosFromIndex(keys) {
     if (keys.length === 0) return;
-    const removed = removeFromLibraryIndex(SERVER_UDN, keys);
+    const removed = removeFromLibraryIndex(SERVER_UDN, keys.map(expandHiddenPhotoKey));
     peerPhotoCache.clear();
     if (removed) console.log(`[SCREENSAVER] Removed ${removed} deleted photo(s) from the library index.`);
 }
@@ -6183,7 +6308,7 @@ function dropDeletedPhotosFromIndex(keys) {
 app.post('/api/slideshow/hidden/delete-file', async (req, res) => {
     const { key } = req.body;
     if (!key) return res.status(400).json({ error: 'key required' });
-    if (!settings.deletedPhotos[mediaKey(key)]) return res.status(400).json({ error: 'Photo is not hidden' });
+    if (!settings.deletedPhotos[hiddenPhotoKey(key)]) return res.status(400).json({ error: 'Photo is not hidden' });
     const filePath = localFileForKey(key);
     if (!filePath) return res.status(400).json({ error: 'Only photos in the local library can be deleted' });
 
@@ -6216,6 +6341,16 @@ app.post('/api/slideshow/hidden/delete-all-local', async (req, res) => {
     dropDeletedPhotosFromIndex(deletedKeys);
     console.log(`[SCREENSAVER] Delete all hidden local photos: deleted=${deleted} failed=${failed}`);
     res.json({ success: true, deleted, failed });
+});
+
+// Takes every photo on another server off the hidden list, so the slideshow can show them again.
+// The photos themselves are left alone; the local library's hidden photos stay hidden.
+app.post('/api/slideshow/hidden/forget-non-local', (req, res) => {
+    const forgotten = forgetNonLocalHiddenPhotos();
+    settings.deletedPhotos = getAllDeletedPhotos();
+    slideshowDeleteVersion++;
+    console.log(`[SCREENSAVER] Forgot ${forgotten} hidden photo(s) on other servers`);
+    res.json({ success: true, forgotten });
 });
 
 app.post('/api/slideshow/favourite', (req, res) => {
