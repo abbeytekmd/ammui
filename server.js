@@ -3339,6 +3339,7 @@ const peerListener = new PeerListener({
     certDir: certsDir,
     getConfig: peerListenerConfig,
     getName: () => settings.deviceName || 'AMMUI',
+    getServerId: () => gameServerId,
     // Links other servers have made to this one (shown in Settings → Peer Link, and removable there)
     linkStore: {
         load: () => getSetting('peerIncomingLinks', null) || [],
@@ -3369,12 +3370,24 @@ const localGameSnapshot = () => ({
     players: listGamePlayers(),
     games: listWordGamesSince(localGameDay() - SNAPSHOT_DAYS), // a day extra for a server a timezone behind
 });
-const linkedGamePlayers = () => listPeerGameSnapshots(Date.now() - PEER_GAMES_KEEP_MS)
+// Players from linked servers: only those still linked, at either end (a link removed takes its
+// players with it). Declared as functions: peerLinks is made further down.
+const linkedGameServerIds = () => new Set([...peerLinks.serverIds(), ...peerListener.serverIds()]);
+const linkedGameSnapshots = () => listPeerGameSnapshots(Date.now() - PEER_GAMES_KEEP_MS, linkedGameServerIds());
+const linkedGamePlayers = () => linkedGameSnapshots()
     .flatMap(s => s.players.map(p => ({ ...p, server: s.server })));
 peerListener.addService({
     name: GAMES_SERVICE,
     version: GAMES_SERVICE_VERSION,
-    router: gamesServiceRouter({ snapshot: localGameSnapshot, receive: savePeerGameSnapshot, ownId: () => gameServerId }),
+    router: gamesServiceRouter({
+        snapshot: localGameSnapshot,
+        receive: (s, session) => {
+            // A server on an older version has no link: its session says whose players these are
+            if (session && !session.linkId) session.serverId = s.server.id;
+            savePeerGameSnapshot(s);
+        },
+        ownId: () => gameServerId,
+    }),
 });
 let peerListenerQueue = Promise.resolve();
 const applyPeerListener = () => (peerListenerQueue = peerListenerQueue
@@ -4532,7 +4545,7 @@ app.get('/api/games/today', (req, res) => {
         const g = getWordGame(p.id, day);
         return { id: p.id, name: p.name, server: null, guesses: g.guesses, status: g.guesses.length ? g.status : 'none' };
     });
-    const linked = listPeerGameSnapshots(Date.now() - PEER_GAMES_KEEP_MS).flatMap(s => s.players.map(p => {
+    const linked = linkedGameSnapshots().flatMap(s => s.players.map(p => {
         const g = s.games.find(x => x.player === p.id && x.day === day);
         return { id: `${s.server.id}/${p.id}`, name: p.name, server: s.server.name, guesses: g?.guesses || [], status: g ? g.status : 'none' };
     }));
