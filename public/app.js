@@ -6095,6 +6095,44 @@ function updateTabOverflow() {
     bar.classList.toggle('more-right', bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1);
 }
 document.getElementById('library-mode-tabs')?.addEventListener('scroll', updateTabOverflow, { passive: true });
+
+// With a mouse the tab bar can be dragged sideways, or scrolled with the wheel (touch scrolls it natively)
+(function dragScrollTabs() {
+    const bar = document.getElementById('library-mode-tabs');
+    if (!bar) return;
+    let drag = null; // { x, left, moved }
+    let justDragged = false;
+    bar.addEventListener('pointerdown', e => {
+        if (e.pointerType !== 'mouse' || e.button !== 0 || bar.scrollWidth <= bar.clientWidth) return;
+        drag = { x: e.clientX, left: bar.scrollLeft, moved: false, id: e.pointerId };
+    });
+    bar.addEventListener('pointermove', e => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const dx = e.clientX - drag.x;
+        if (!drag.moved && Math.abs(dx) < 5) return; // a small wobble is still a click
+        if (!drag.moved) { drag.moved = true; bar.setPointerCapture(e.pointerId); bar.style.cursor = 'grabbing'; }
+        bar.scrollLeft = drag.left - dx;
+    });
+    const end = () => {
+        if (!drag) return;
+        justDragged = drag.moved;
+        drag = null;
+        bar.style.cursor = '';
+        setTimeout(() => { justDragged = false; }, 0);
+    };
+    bar.addEventListener('pointerup', end);
+    bar.addEventListener('pointercancel', end);
+    // Letting go after a drag shouldn't also switch to the tab under the mouse
+    bar.addEventListener('click', e => {
+        if (justDragged) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    bar.addEventListener('dragstart', e => e.preventDefault());
+    bar.addEventListener('wheel', e => {
+        if (bar.scrollWidth <= bar.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+        e.preventDefault();
+        bar.scrollLeft += e.deltaY;
+    }, { passive: false });
+})();
 window.addEventListener('resize', updateTabOverflow);
 document.fonts?.ready.then(updateTabOverflow); // the tabs widen once the web font arrives
 
